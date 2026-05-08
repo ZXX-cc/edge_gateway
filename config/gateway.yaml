@@ -1,0 +1,117 @@
+# ============================================================
+# 边缘网关配置 - 树莓派 + NanoMQ + MAVLink
+# ============================================================
+
+# --- 网关身份 ---
+gateway:
+  sn: "EDGE-GW-001"              # 网关序列号
+  name: "EdgeGateway-01"          # 网关名称
+  product_type: "edge-gateway"    # 产品类型
+
+# --- NanoMQ 本地Broker配置 ---
+nanomq:
+  enabled: true
+  host: "127.0.0.1"
+  port: 1883
+  ws_port: 8083                   # WebSocket端口(视频流分离)
+  max_clients: 100
+  keepalive: 60
+
+  # 控制信令Topic前缀
+  topic_prefix: "thing/product"
+
+  # SSL/TLS配置(生产环境启用)
+  ssl:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    ca_file: ""
+
+# --- 云端MQTT配置 ---
+cloud:
+  enabled: false                  # 默认关闭，配置后启用
+  broker_host: ""
+  broker_port: 8883
+  username: ""
+  password: ""
+  client_id: ""
+
+  # SSL配置
+  ssl: true
+  cert_file: ""
+  key_file: ""
+
+  # 心跳配置
+  keepalive: 60
+  reconnect_interval: 5
+
+# --- MAVLink配置 ---
+mavlink:
+  connection:
+    # type: "serial"               # serial/udp/tcp
+    # port: "/dev/ttyACM0"         # 串口设备
+    # baudrate: 921600
+    # udp配置示例:
+    type: "udp"
+    host: "127.0.0.1"
+    port: 14550
+
+  # 系统ID
+  system_id: 1
+  component_id: 190               # MAV_COMP_ID_MISSIONPLANNER
+
+  # 遥测推送频率(Hz)
+  telemetry_rate:
+    osd: 1                        # 定频遥测
+    state: 0                      # 状态变更(事件触发)
+    gps: 10
+    attitude: 10
+    battery: 1
+
+# --- 设备属性配置 ---
+device:
+  # 飞行限制
+  limits:
+    max_height: 120               # 最大飞行高度(m)
+    max_distance: 1000            # 最大飞行距离(m)
+    max_speed: 15                 # 最大速度(m/s)
+    return_home_power: 30         # 返航预留电量(%)
+
+  # 安全设置
+  safety:
+    geofence_enabled: true
+    obstacle_avoidance: true
+    airsense_enabled: false
+
+# --- 媒体配置 ---
+media:
+  storage_path: "/data/media"     # 本地存储路径
+  auto_upload: true
+  upload_quality: "original"      # original/high/medium/low
+
+  # OSS配置(上传凭证由云端下发)
+  oss:
+    provider: "minio"             # minio/aliyun/aws
+    endpoint: ""
+    bucket: ""
+
+# --- 直播配置 ---
+livestream:
+  protocols: ["webrtc", "rtmp"]
+  default_quality: "1080p"
+  default_bitrate: 4000           # kbps
+  default_framerate: 30
+
+# --- 日志配置 ---
+logging:
+  level: "INFO"                   # DEBUG/INFO/WARNING/ERROR
+  file: "/var/log/edge_gateway.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# --- 远程调试 ---
+debug:
+  enabled: true
+  websocket_port: 7681
+  auth_token: ""                  # 空表示不校验
+  session_timeout: 1800           # 30分钟

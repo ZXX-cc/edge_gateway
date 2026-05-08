@@ -1,0 +1,257 @@
+"""
+云台控制模块
+处理云台角度、模式、目标指向
+"""
+import math
+from typing import Optional
+from pymavlink import mavutil
+from src.utils.logger import get_logger
+from src.utils.config import Config
+from src.utils.message import MessageBuilder
+
+logger = get_logger("gimbal")
+
+
+class GimbalController:
+    """
+    云台控制器
+
+    职责:
+    1. 云台角度控制(pitch/roll/yaw)
+    2. 云台工作模式切换(FOLLOW/FREE/FPV/RESET)
+    3. 目标点指向(camera_look_at)
+    4. 角速度控制
+
+    API方法:
+    - gimbalRotate, camera_look_at, set_gimbal_mode
+    """
+
+    # 云台模式
+    MODE_FOLLOW = 0   # 跟随模式
+    MODE_FREE = 1     # 自由模式
+    MODE_FPV = 2      # FPV模式
+    MODE_RESET = 3    # 回中模式
+
+    def __init__(self):
+        self.gateway_sn = Config.get_gateway_sn()
+
+        # 当前云台状态
+        self._pitch = 0.0
+        self._roll = 0.0
+        self._yaw = 0.0
+        self._mode = self.MODE_FOLLOW
+
+        # MAVLink连接引用(由外部注入)
+        self._mavlink_conn = None
+
+    def set_mavlink_connection(self, mavlink_conn):
+        """注入MAVLink连接"""
+        self._mavlink_conn = mavlink_conn
+
+    def _send_mavlink_command(self, command: int, params: list) -> bool:
+        """发送MAVLink COMMAND_LONG"""
+        if not self._mavlink_conn or not self._mavlink_conn.master:
+            logger.warning("MAVLink not connected, cannot send gimbal command")
+            return False
+        try:
+            self._mavlink_conn.master.mav.command_long_send(
+                self._mavlink_conn.master.target_system,
+                self._mavlink_conn.master.target_component,
+                command,
+                0,
+                *params
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Gimbal command send failed: {e}")
+            return False
+
+    # ---- API处理器 ----
+
+    def handle_gimbal_rotate(self, msg: dict) -> dict:
+        """
+        云台角度控制
+
+        Request: { pitch, roll, yaw, pitch_speed, roll_speed, yaw_speed }
+        支持绝对角度控制和角速度控制
+        """
+        data = msg.get('data', {})
+
+        # 绝对角度
+        pitch = data.get('pitch')
+        roll = data.get('roll')
+        yaw = data.get('yaw')
+
+        # 角速度
+        pitch_speed = data.get('pitch_speed')
+        roll_speed = data.get('roll_speed')
+        yaw_speed = data.get('yaw_speed')
+
+        if pitch is not None:
+            self._pitch = max(-90, min(30, pitch))
+        if roll is not None:
+            self._roll = roll
+        if yaw is not None:
+            self._yaw = yaw
+
+        logger.info(f"Gimbal rotate: pitch={pitch}, roll={roll}, yaw={yaw}")
+        if pitch_speed is not None:
+            logger.info(f"Gimbal speed: p={pitch_speed}, r={roll_speed}, y={yaw_speed}")
+
+        # 通过MAVLink发送云台控制命令 (MAV_CMD_DO_MOUNT_CONTROL)
+        if pitch is not None or yaw is not None or roll is not None:
+            self._send_mavlink_command(
+                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
+                [
+                    self._pitch * 100,   # param1: pitch (centidegrees)
+                    self._roll * 100,    # param2: roll (centidegrees)
+                    self._yaw * 100,     # param3: yaw (centidegrees)
+                    0, 0, 0,
+                    2 if self._mode == self.MODE_FPV else 0  # param7: 2=FPV, 0=MAV_MOUNT_MODE_RETRACT
+                ]
+            )
+
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_camera_look_at(self, msg: dict) -> dict:
+        """
+        目标点指向 - 云台自动计算角度对准目标
+
+        Request: { latitude, longitude, height, aircraft_location }
+        """
+        data = msg.get('data', {})
+        target_lat = data.get('latitude', 0)
+        target_lon = data.get('longitude', 0)
+        target_alt = data.get('height', 0)
+
+        logger.info(f"Camera look at: lat={target_lat}, lon={target_lon}, alt={target_alt}")
+
+        # 通过MAVLink发送目标指向 (MAV_CMD_DO_SET_ROI_LOCATION)
+        self._send_mavlink_command(
+            mavutil.mavlink.MAV_CMD_DO_SET_ROI_LOCATION,
+            [0, 0, 0, 0, target_lat, target_lon, target_alt]
+        )
+
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_set_gimbal_mode(self, msg: dict) -> dict:
+        """
+        设置云台工作模式
+
+        Request: { mode: FOLLOW/FREE/FPV/RESET }
+        """
+        data = msg.get('data', {})
+        mode_str = data.get('mode', 'FOLLOW')
+
+        mode_map = {
+            'FOLLOW': self.MODE_FOLLOW,
+            'FREE': self.MODE_FREE,
+            'FPV': self.MODE_FPV,
+            'RESET': self.MODE_RESET
+        }
+        self._mode = mode_map.get(mode_str, self.MODE_FOLLOW)
+
+        logger.info(f"Gimbal mode: {mode_str}")
+
+        # 通过MAVLink设置云台模式
+        mount_mode = 0  # MAV_MOUNT_MODE_RETRACT
+        if self._mode == self.MODE_FPV:
+            mount_mode = 2  # MAV_MOUNT_MODE_FPV
+        elif self._mode == self.MODE_FREE:
+            mount_mode = 3  # MAV_MOUNT_MODE_RC_TARGETING
+        elif self._mode == self.MODE_FOLLOW:
+            mount_mode = 4  # MAV_MOUNT_MODE_GPS_POINT
+
+        self._send_mavlink_command(
+            mavutil.mavlink.MAV_CMD_DO_MOUNT_CONFIGURE,
+            [mount_mode, 0, 0, 0, 0, 0, 0]
+        )
+
+        # RESET模式下自动回中
+        if self._mode == self.MODE_RESET:
+            self._pitch = 0
+            self._roll = 0
+            self._yaw = 0
+            self._send_mavlink_command(
+                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
+                [0, 0, 0, 0, 0, 0, 0]
+            )
+
+        return MessageBuilder.build_reply(msg, result=0)
+
+    # ---- 云台扩展接口 ----
+
+    def handle_gimbal_reset(self, msg: dict) -> dict:
+        """云台回中"""
+        logger.info("Gimbal reset")
+        self._pitch = 0
+        self._roll = 0
+        self._yaw = 0
+
+        # 通过MAVLink发送回中命令
+        self._send_mavlink_command(
+            mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
+            [0, 0, 0, 0, 0, 0, 0]
+        )
+
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_gimbal_capability_query(self, msg: dict) -> dict:
+        """云台能力查询"""
+        logger.info("Gimbal capability query")
+        return MessageBuilder.build_reply(msg, result=0, data={
+            'supported_modes': ['FOLLOW', 'FREE', 'FPV', 'RESET'],
+            'max_pitch_speed': 180,
+            'max_yaw_speed': 180,
+            'pitch_range': [-90, 30],
+            'yaw_range': [-180, 180]
+        })
+
+    def handle_gimbal_status_query(self, msg: dict) -> dict:
+        """云台状态查询"""
+        logger.info("Gimbal status query")
+        return MessageBuilder.build_reply(msg, result=0, data={
+            'pitch': self._pitch,
+            'roll': self._roll,
+            'yaw': self._yaw,
+            'mode': self._mode
+        })
+
+    # ---- 红外相机接口 (IR) ----
+
+    def handle_ir_metering_mode_set(self, msg: dict) -> dict:
+        """IR测温模式设置"""
+        data = msg.get('data', {})
+        mode = data.get('mode', 0)
+        logger.info(f"IR metering mode: {mode}")
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_ir_color_palette_set(self, msg: dict) -> dict:
+        """IR色板设置"""
+        data = msg.get('data', {})
+        palette = data.get('palette', 'white_hot')
+        logger.info(f"IR color palette: {palette}")
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_ir_display_mode_set(self, msg: dict) -> dict:
+        """IR显示模式设置"""
+        data = msg.get('data', {})
+        mode = data.get('mode', 0)
+        logger.info(f"IR display mode: {mode}")
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_ir_isotherm_set(self, msg: dict) -> dict:
+        """IR等温线设置"""
+        data = msg.get('data', {})
+        enabled = data.get('enabled', False)
+        low = data.get('low_temperature', 0)
+        high = data.get('high_temperature', 100)
+        logger.info(f"IR isotherm: enabled={enabled}, range=({low}, {high})")
+        return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_ir_zoom_set(self, msg: dict) -> dict:
+        """IR变焦设置"""
+        data = msg.get('data', {})
+        ratio = data.get('zoom_ratio', 1.0)
+        logger.info(f"IR zoom: {ratio}x")
+        return MessageBuilder.build_reply(msg, result=0)

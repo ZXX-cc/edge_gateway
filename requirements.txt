@@ -1,0 +1,26 @@
+# ============================================================
+# 边缘网关依赖 - 树莓派 + NanoMQ + MAVLink
+# ============================================================
+
+# --- MQTT客户端 ---
+paho-mqtt>=1.6.0
+
+# --- MAVLink通信 ---
+pymavlink>=2.4.30
+
+# --- 配置管理 ---
+PyYAML>=6.0
+
+# --- Web框架(WebHook/REST API) ---
+flask>=2.3.0
+
+# --- WebSocket服务(视频流/调试通道) ---
+websocket-server>=0.6.4
+websockets>=11.0
+
+# --- 工具库 ---
+requests>=2.31.0
+
+# --- 可选: GPIO控制(树莓派) ---
+# RPi.GPIO>=0.7.1; platform_machine=='armv7l' or platform_machine=='aarch64'
+# gpiozero>=1.6.2; platform_machine=='armv7l' or platform_machine=='aarch64'

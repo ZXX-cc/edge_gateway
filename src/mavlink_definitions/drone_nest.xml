@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<mavlink>
+    <version>3</version>
+    <dialect>1</dialect>
+
+    <messages>
+        <!-- 12003: 地面站发给机巢的指令 -->
+        <message id="12003" name="DRONE_NEST_COMMAND">
+            <description>Command sent to drone nest</description>
+            <field type="uint16_t" name="ordinary_order">Ordinary order</field>
+            <field type="uint8_t" name="takeoff_land_order">Auto takeoff/land order</field>
+        </message>
+
+        <!-- 12004: 机巢状态回复（27字节）-->
+        <message id="12004" name="DRONE_NEST_RESPONSE">
+            <description>Status response from drone nest</description>
+            <field type="uint16_t" name="ac_temp">AC temperature (×10 °C)</field>
+            <field type="uint16_t" name="nest_temperature">Nest temperature (×10 °C)</field>
+            <field type="uint16_t" name="env_temperature">Environment temperature (×10 °C)</field>
+            <field type="uint16_t" name="wind_direction">Wind direction (×10 °)</field>
+            <field type="uint16_t" name="wind_speed">Wind speed (×10 m/s)</field>
+            <field type="uint16_t" name="atmospheric_pressure">Atmospheric pressure (×10 kPa)</field>
+            <field type="uint16_t" name="rainfall">Rainfall (mm/m²)</field>
+            <field type="uint16_t" name="charge_volt">Charge voltage (×10 V)</field>
+            <field type="uint16_t" name="charge_current">Charge current (×10 A)</field>
+            <field type="uint16_t" name="error_code">Error code</field>
+            <field type="uint16_t" name="boolstate1">Boolean state 1</field>
+            <field type="uint16_t" name="boolstate2">Boolean state 2</field>
+            <field type="uint8_t" name="clamp_state">Clamp state</field>
+            <field type="uint8_t" name="gate_state">Gate state</field>
+            <field type="uint8_t" name="landing_light_state">Landing light state</field>
+        </message>
+
+        <!-- 12005: 指令执行回复（8字节）-->
+        <message id="12005" name="DRONE_NEST_ORDER_RESPONSE">
+            <description>Order execution response</description>
+            <field type="uint32_t" name="ordinary_order_response">Ordinary order response</field>
+            <field type="uint32_t" name="takeoff_land_order_response">Takeoff/land order response</field>
+        </message>
+    </messages>
+</mavlink>

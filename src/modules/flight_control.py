@@ -1,0 +1,1014 @@
+"""
+飞行控制模块 - 参考ModeControl设计（核心功能）
+modules/flight_control.py
+"""
+from typing import Optional, Dict
+from pymavlink import mavutil
+from pymavlink.mavutil import mavlink
+import time
+from enum import Enum
+from threading import Event
+from src.modules.base_module import BaseModule
+from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from threading import Event, Thread
+
+# ① 枚举新增 ENDED
+class AutoTakeoffState(Enum):
+    """一键启航状态机"""
+    IDLE = 0
+    WAITING_NEST_READY = 1
+    EXECUTING = 3
+    WAITING_MANUAL_CONFIRM = 4
+    COMPLETED = 5
+    FAILED = 6
+    ENDED = 7
+
+
+
+class FlightControl(BaseModule):
+    """
+    飞行控制模块（参考ModeControl设计）
+
+    核心功能：
+    - 一键启航（切换AUTO模式）
+    - 一键返航（切换RTL模式）
+    - 解锁/上锁
+    - 模式切换（支持ArduPlane所有模式）
+    """
+
+    def __init__(self, target_system: int = 1, target_component: int = 1):
+        super().__init__("FlightControl")
+
+        self.target_system = target_system
+        self.target_component = target_component
+        self.dispatcher: Optional[MessageDispatcher] = None
+
+        # ✅ 当前状态（明确初始化为None）
+        self.current_mode = None
+        self.current_mode_name = None
+        self.is_armed = False  # ⭐ 默认为False
+        self.last_command_ack = None
+
+        # 任务信息
+        self.mission_count = 0
+        self.current_waypoint = 0
+
+        # ✅ ArduPlane完整模式映射
+        self.mode_mapping = {
+            "MANUAL": 0, "CIRCLE": 1, "STABILIZE": 2, "TRAINING": 3,
+            "ACRO": 4, "FBWA": 5, "FBWB": 6, "CRUISE": 7,
+            "AUTOTUNE": 8, "AUTO": 10, "RTL": 11, "LOITER": 12,
+            "TAKEOFF": 13, "AVOID_ADSB": 14, "GUIDED": 15,
+            "INITIALISING": 16, "QSTABILIZE": 17, "QHOVER": 18,
+            "QLOITER": 19, "QLAND": 20, "QRTL": 21, "QAUTOTUNE": 22,
+            "QACRO": 23, "THERMAL": 24, "LOITER_ALT_QLAND": 25,
+        }
+
+        # 反向映射
+        self.mode_id_to_name = {v: k for k, v in self.mode_mapping.items()}
+
+        # ⭐ 机巢通信
+        self.auto_takeoff_state = AutoTakeoffState.IDLE
+        self.auto_takeoff_event = Event()
+        self.auto_takeoff_error = None
+        self.nest_module = None
+
+        # ✅ 记录任务起止时间
+        self.auto_takeoff_started_at = None
+        self.auto_takeoff_completed_at = None
+        self.auto_takeoff_ended_at = None
+
+        # ✅ 模式防抖
+        self._last_raw_mode = None
+        self._stable_mode_count = 0
+        self._STABLE_MODE_THRESHOLD = 3
+
+        self.auto_arm_mode = None
+        # ✅ 解锁状态防抖
+        self._last_raw_armed = None
+        self._stable_armed_count = 0
+        self._STABLE_ARMED_THRESHOLD = 3
+
+        # ✅ 新增：连接监控
+        self._last_heartbeat_time = 0
+        self._connection_monitor_thread = None
+        self._connection_monitor_running = False
+        self._heartbeat_timeout = 10.0  # 10秒无心跳视为断开
+
+        # ✅ 起飞模式：True=自动，False=手动确认
+        self.auto_arm_mode = True
+
+        # ✅ 手动确认事件
+        self.manual_confirm_event = Event()
+        self.manual_confirm_result = None  # True=允许, False=拒绝
+
+    def set_nest_module(self, nest_module):
+        """注入机巢模块（用于发送响应消息）"""
+        self.nest_module = nest_module
+        self.log("✅ 已关联机巢模块")
+
+    def on_start(self):
+        super().on_start()
+        self.log("飞行控制模块已启动（ArduPlane完整模式支持）")
+
+        # ✅ 启动连接监控线程
+        self._start_connection_monitor()
+    def on_stop(self):
+        """模块停止时清理资源"""
+        self._stop_connection_monitor()
+        super().on_stop()
+
+    def on_message(self, message: MAVLinkMessage):
+        msg_type = message.msg_type
+        msg = message.msg
+
+        if msg_type == 'HEARTBEAT':
+            if message.sysid == self.target_system:
+                self._handle_heartbeat(msg)
+        elif msg_type == 'COMMAND_ACK':
+            self._handle_command_ack(msg)
+        elif msg_type == 'MISSION_CURRENT':
+            self.current_waypoint = msg.seq
+        elif msg_type == 'MISSION_COUNT':
+            self.mission_count = msg.count
+            self.log(f"航线总数: {self.mission_count}")
+
+    def idle_task(self, dispatcher: MessageDispatcher):
+        if self.dispatcher is None:
+            self.dispatcher = dispatcher
+
+    def _save_takeoff_location(self):
+        # 从遥测模块获取当前位置
+        if self.dispatcher:
+            for module in self.dispatcher.get_modules():
+                if hasattr(module, 'latitude') and hasattr(module, 'longitude'):
+                    takeoff_data = {
+                        "lng": module.longitude,
+                        "lat": module.latitude,
+                        "timestamp": time.time()
+                    }
+                    # 写入数据库或文件
+                    self.log(f"保存起飞点: {takeoff_data}")
+                    return takeoff_data
+
+        self.log("无法获取起飞点信息", "WARNING")
+        return None
+
+    def handle_nest_environment_from_callback(self, env_data: dict):
+        """
+        ⭐ 关键方法：由 DroneNestModule 调用此方法传递机巢环境数据
+
+        新的二代机巢协议：
+        - 检查 takeoff_allowed 状态
+        - 当机巢允许起飞且飞机已解锁时进入EXECUTING状态
+        """
+        # 检查是否在等待机巢准备状态
+        if self.auto_takeoff_state == AutoTakeoffState.WAITING_NEST_READY:
+            takeoff_allowed = env_data.get("takeoff_allowed", False)
+
+            if takeoff_allowed:
+                self.log("🚀 检测到机巢允许起飞信号")
+
+                # 检查飞机是否已解锁
+                if self.is_armed:
+                    # 根据auto_arm_mode决定下一步
+                    if self.auto_arm_mode:
+                        # 自动解锁模式：直接进入执行状态
+                        self.auto_takeoff_state = AutoTakeoffState.EXECUTING
+                        self.log("✅ 飞机已解锁，自动模式直接进入EXECUTING状态")
+                        self._execute_auto_takeoff()
+                    else:
+                        # 手动确认模式：等待前端确认
+                        self.auto_takeoff_state = AutoTakeoffState.WAITING_MANUAL_CONFIRM
+                        self.log("✅ 飞机已解锁，手动确认模式等待前端确认")
+                        self._execute_auto_takeoff()
+                        # 不在这里调用_execute_auto_takeoff，等待confirm_manual_takeoff()调用
+                else:
+                    self.log("⏳ 等待飞机解锁...")
+                    # 保持在WAITING_NEST_READY状态，等待解锁后进入EXECUTING
+
+    def _execute_auto_takeoff(self):
+        """执行实际的起飞流程"""
+        try:
+            if self.mission_count == 0:
+                raise Exception("航线为空,无法启航")
+
+            # 判断起飞模式
+            if self.auto_arm_mode:
+                self.log("🔓 自动解锁模式,解锁飞机...")
+                self._perform_arm_and_takeoff()
+            else:
+                self.log("👤 手动确认模式,等待前端确认起飞...")
+                self.auto_takeoff_state = AutoTakeoffState.WAITING_MANUAL_CONFIRM
+                self.manual_confirm_event.clear()
+
+                if not self.manual_confirm_event.wait(timeout=1000.0):
+                    raise Exception("等待前端确认超时(1000秒)")
+
+                if self.manual_confirm_result is False:
+                    raise Exception("用户拒绝起飞")
+
+                self.log("✅ 前端已确认,开始解锁...")
+                self.auto_takeoff_state = AutoTakeoffState.EXECUTING
+                self._perform_arm_and_takeoff()
+
+            # 完成
+            self.auto_takeoff_state = AutoTakeoffState.COMPLETED
+            self.auto_takeoff_completed_at = time.time()
+            self.auto_takeoff_event.set()
+            self.log("✅ 一键启航完成!")
+
+        except Exception as e:
+            self.log(f"❌ 一键启航失败: {e}", "ERROR")
+            self.auto_takeoff_state = AutoTakeoffState.FAILED
+            self.auto_takeoff_error = str(e)
+            self.auto_takeoff_event.set()
+
+    def _perform_arm_and_takeoff(self):
+        """执行解锁和起飞动作"""
+        # 解锁飞机
+        if not self.arm():
+            raise Exception("解锁命令发送失败")
+
+        # 等待解锁完成
+        arm_result = self._wait_for_armed(target_state=True, timeout=10.0)
+        if not arm_result["success"]:
+            raise Exception(f"解锁失败: {arm_result['message']}")
+
+        self.log("✅ 飞机已解锁，准备起飞")
+
+    def confirm_manual_takeoff(self, allow: bool):
+        """
+        ✅ 手动确认起飞
+
+        Args:
+            allow: True=允许起飞, False=拒绝起飞
+
+        Returns:
+            dict: 确认结果
+        """
+        if self.auto_takeoff_state != AutoTakeoffState.WAITING_MANUAL_CONFIRM:
+            return {
+                "success": False,
+                "message": f"当前状态不是等待手动确认 (当前: {self.auto_takeoff_state.name})"
+            }
+
+        self.manual_confirm_result = allow
+        self.manual_confirm_event.set()  # ✅ 唤醒阻塞的 _execute_auto_takeoff
+
+        if allow:
+            self.log("✅ 前端确认允许起飞")
+            return {
+                "success": True,
+                "message": "已确认起飞，飞机将开始解锁"
+            }
+        else:
+            self.log("❌ 前端拒绝起飞，任务取消")
+            self.auto_takeoff_state = AutoTakeoffState.FAILED
+            self.auto_takeoff_error = "用户拒绝起飞"
+            self.auto_takeoff_event.set()
+            return {
+                "success": True,
+                "message": "已拒绝起飞，任务已取消"
+            }
+
+    def start_auto_takeoff_flow(self, auto_arm: bool = False):
+        """
+        ⭐ API调用入口：启动一键启航流程
+
+        Args:
+            auto_arm: 是否自动解锁模式
+                - False: 原流程（等待机巢信号 -> 确定航线 -> 切换AUTO）
+                - True: 新流程（等待机巢信号 -> 确定航线 -> 切换AUTO -> 等待 -> 解锁）
+
+        Returns:
+            dict: 启动结果
+        """
+        # ✅ 修复：允许从 ENDED 状态重新启动任务
+        if self.auto_takeoff_state not in [AutoTakeoffState.IDLE,
+                                           AutoTakeoffState.COMPLETED,
+                                           AutoTakeoffState.FAILED,
+                                           AutoTakeoffState.ENDED]:  # ⭐ 添加 ENDED
+            return {
+                "success": False,
+                "message": f"一键启航正在进行中 (状态: {self.auto_takeoff_state.name})"
+            }
+
+        # 检查航线
+        if self.mission_count == 0:
+            return {
+                "success": False,
+                "message": "航线为空，请先上传航线"
+            }
+
+        # 重置状态
+        self.auto_takeoff_error = None
+        self.auto_takeoff_event.clear()
+        self.auto_arm_mode = auto_arm
+        self.auto_takeoff_started_at = time.time()
+        self.auto_takeoff_completed_at = None
+        self.auto_takeoff_ended_at = None  # ⭐ 重置 ended_at
+
+        self.log("🔄 切换到AUTO模式...")
+        mode_result = self.set_mode("AUTO")
+        if not mode_result["success"]:
+            raise Exception(f"AUTO模式切换失败: {mode_result['message']}")
+
+        # 启动等待机巢信号
+        self.auto_takeoff_state = AutoTakeoffState.WAITING_NEST_READY
+        self.log("🎯 一键启航流程已启动，等待机巢信号...")
+
+        return {
+            "success": True,
+            "message": f"一键启航流程已启动，等待机巢发送准备信号 (gcs_order=3)，模式: {'自动解锁' if auto_arm else '默认'}",
+            "state": self.auto_takeoff_state.name,
+            "auto_arm": auto_arm
+        }
+
+    def wait_for_auto_takeoff_complete(self, timeout: float = 60.0):
+        """
+        ⭐ 阻塞等待一键启航完成（用于同步API）
+
+        Args:
+            timeout: 超时时间（秒）
+
+        Returns:
+            dict: 执行结果
+        """
+        if not self.auto_takeoff_event.wait(timeout):
+            self.auto_takeoff_state = AutoTakeoffState.FAILED
+            self.auto_takeoff_error = "等待机巢响应超时"
+            return {
+                "success": False,
+                "message": "等待机巢响应超时",
+                "state": self.auto_takeoff_state.name
+            }
+
+        # 检查结果
+        if self.auto_takeoff_state in (AutoTakeoffState.COMPLETED, AutoTakeoffState.ENDED):  # ✅
+            return {
+                "success": True,
+                "message": "一键启航完成" if self.auto_takeoff_state == AutoTakeoffState.COMPLETED else "一键启航已结束",
+                "state": self.auto_takeoff_state.name
+            }
+        else:
+            return {
+                "success": False,
+                "message": self.auto_takeoff_error or "一键启航失败",
+                "state": self.auto_takeoff_state.name
+            }
+
+    def get_auto_takeoff_status(self):
+        """获取当前一键启航状态"""
+        return {
+            "state": self.auto_takeoff_state.name,
+            "error": self.auto_takeoff_error,
+            "mission_count": self.mission_count,
+            # ✅ 附带任务时间信息（秒级 Unix 时间戳，方便前端做耗时/倒计时）
+            "started_at": self.auto_takeoff_started_at,
+            "completed_at": self.auto_takeoff_completed_at,
+            "ended_at": self.auto_takeoff_ended_at,
+        }
+
+    def is_armed_status(self) -> bool:
+        """✅ 统一接口：获取解锁状态"""
+        return self.is_armed
+
+    def _handle_command_ack(self, msg):
+        """处理命令确认"""
+        self.last_command_ack = {
+            'command': msg.command,
+            'result': msg.result,
+            'result_text': self._get_ack_result_text(msg.result),
+            'timestamp': time.time()
+        }
+        self.log(f"命令确认: {msg.command} -> {self.last_command_ack['result_text']}")
+
+    def _get_ack_result_text(self, result: int) -> str:
+        ack_results = {0: "接受", 1: "临时拒绝", 2: "拒绝", 3: "不支持", 4: "失败", 5: "执行中", 6: "已取消"}
+        return ack_results.get(result, f"未知({result})")
+
+    # ========== MAVLink通信 ==========
+
+    def _send_message(self, msg) -> bool:
+        if self.dispatcher and self.dispatcher.connection:
+            self.dispatcher.connection.send_message(msg)
+            return True
+        self.log("未连接到MAVLink设备", "ERROR")
+        return False
+
+    def _send_command_long(self, command: int, param1=0, param2=0, param3=0,
+                          param4=0, param5=0, param6=0, param7=0) -> bool:
+        msg = mavutil.mavlink.MAVLink_command_long_message(
+            self.target_system, self.target_component, command, 0,
+            param1, param2, param3, param4, param5, param6, param7
+        )
+        return self._send_message(msg)
+
+    # ========== 模式管理（参考ModeControl） ==========
+
+    def set_mode(self, mode: str) -> Dict:
+        """
+        设置飞行模式（支持ArduPlane所有模式）
+
+        Args:
+            mode: 模式名称（如 "AUTO", "RTL", "FBWA"）或模式ID（如 "10", "11"）
+
+        Returns:
+            dict: 执行结果
+        """
+        result = {"success": False, "message": "", "mode": mode}
+
+        # 如果是数字，直接作为模式ID
+        if mode.isdigit():
+            modenum = int(mode)
+            mode_name = self.mode_id_to_name.get(modenum, f"MODE_{modenum}")
+        else:
+            # 转换为大写并查找
+            mode_upper = mode.upper()
+            if mode_upper not in self.mode_mapping:
+                result["message"] = f"未知模式: {mode}。可用模式: {', '.join(self.get_available_modes())}"
+                self.log(result["message"], "ERROR")
+                return result
+
+            modenum = self.mode_mapping[mode_upper]
+            mode_name = mode_upper
+
+        # 发送模式切换命令
+        self.log(f"切换模式: {mode_name} (ID={modenum})")
+
+        msg = mavutil.mavlink.MAVLink_set_mode_message(
+            self.target_system,
+            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            modenum
+        )
+
+        if not self._send_message(msg):
+            result["message"] = "模式切换命令发送失败"
+            self.log(result["message"], "ERROR")
+            return result
+
+        # 等待模式切换完成
+        mode_result = self._wait_for_mode(modenum, timeout=10.0)
+        if not mode_result["success"]:
+            result["message"] = mode_result["message"]
+            return result
+
+        result["success"] = True
+        result["message"] = f"成功切换到 {mode_name} 模式"
+        result["mode_id"] = modenum
+        result["mode_name"] = mode_name
+        self.log(result["message"])
+
+        return result
+
+    def _wait_for_mode(self, target_mode: int, timeout: float = 10.0) -> Dict:
+        """等待模式切换完成"""
+        start_time = time.time()
+        last_mode = self.current_mode
+
+        self.log(f"开始等待模式切换: 当前={self.current_mode_name}({self.current_mode}), 目标={self.mode_id_to_name.get(target_mode, target_mode)}({target_mode})")
+
+        while time.time() - start_time < timeout:
+            if self.current_mode == target_mode:
+                elapsed = round(time.time() - start_time, 2)
+                self.log(f"✅ 模式切换成功: {self.mode_id_to_name.get(last_mode, last_mode)} → {self.current_mode_name} (耗时 {elapsed}s)")
+                return {
+                    "success": True,
+                    "message": f"模式切换成功（耗时 {elapsed} 秒）",
+                    "elapsed_time": elapsed
+                }
+
+            if self.current_mode != last_mode:
+                self.log(f"模式变化: {self.mode_id_to_name.get(last_mode, last_mode)} → {self.current_mode_name}")
+                last_mode = self.current_mode
+
+            time.sleep(0.1)
+
+        elapsed = round(timeout, 2)
+        self.log(f"❌ 模式切换超时: 当前={self.current_mode_name}, 目标={self.mode_id_to_name.get(target_mode)}")
+        return {
+            "success": False,
+            "message": f"模式切换超时，当前模式: {self.current_mode_name}",
+            "elapsed_time": elapsed
+        }
+
+    def get_available_modes(self) -> list:
+        """获取所有可用模式（按分类排序）"""
+        basic_modes = ["MANUAL", "CIRCLE", "STABILIZE", "TRAINING", "ACRO",
+                      "FBWA", "FBWB", "CRUISE", "AUTOTUNE"]
+        auto_modes = ["AUTO", "RTL", "LOITER", "TAKEOFF", "AVOID_ADSB", "GUIDED"]
+        quadplane_modes = ["QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "QRTL",
+                          "QAUTOTUNE", "QACRO"]
+        special_modes = ["THERMAL", "LOITER_ALT_QLAND"]
+
+        return basic_modes + auto_modes + quadplane_modes + special_modes
+
+    def get_current_mode(self) -> Dict:
+        """✅ 获取当前模式（统一接口）"""
+        return {
+            "mode_id": self.current_mode,
+            "mode_name": self.current_mode_name or "UNKNOWN"
+        }
+
+    # ========== 航线管理 ==========
+
+    def _request_mission_count(self):
+        """请求航线总数"""
+        msg = mavutil.mavlink.MAVLink_mission_request_list_message(
+            self.target_system, self.target_component, mavlink.MAV_MISSION_TYPE_MISSION
+        )
+        self._send_message(msg)
+
+    # ========== 🚀 一键启航/返航 ==========
+
+    def one_click_takeoff_auto(self) -> Dict:
+        """
+        一键启航（先TAKEOFF再AUTO）
+
+        执行步骤：
+        1. 检查航线
+        2. 获取第一个航点高度
+        3. 切换到TAKEOFF模式
+        4. 起飞到第一个航点高度
+        5. 切换到AUTO模式执行航线任务
+        """
+        self.log(f"🚀 执行一键启航 (TAKEOFF→AUTO, sysid={self.target_system})")
+
+        result = {"success": False, "steps": [], "message": "", "target_system": self.target_system}
+
+        # 步骤1: 检查航线
+        self.log("步骤1: 检查航线...")
+        self._request_mission_count()
+
+        wait_start = time.time()
+        while time.time() - wait_start < 1.0:
+            if self.mission_count > 0:
+                break
+            time.sleep(0.1)
+
+        if self.mission_count == 0:
+            result["message"] = "航线为空，无法启航。请先上传航线。"
+            result["steps"].append({"step": "check_mission", "status": "failed", "reason": "no_mission"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        self.log(f"检测到 {self.mission_count} 个航点")
+        result["steps"].append({"step": "check_mission", "status": "completed", "mission_count": self.mission_count})
+
+        # 步骤2: 获取第一个航点高度（从航线获取）
+        self.log("步骤2: 获取起飞高度...")
+        takeoff_altitude = self._get_first_waypoint_altitude()
+
+        result["steps"].append({
+            "step": "get_takeoff_altitude",
+            "status": "completed",
+            "altitude": takeoff_altitude
+        })
+
+        # 步骤3: 切换到TAKEOFF模式
+        self.log("步骤3: 切换到TAKEOFF模式...")
+        mode_result = self.set_mode("TAKEOFF")
+
+        if not mode_result["success"]:
+            result["message"] = mode_result["message"]
+            result["steps"].append({"step": "set_takeoff_mode", "status": "failed"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["steps"].append({
+            "step": "set_takeoff_mode",
+            "status": "completed",
+            "elapsed_time": mode_result.get("elapsed_time", 0)
+        })
+
+        # 步骤4: 发送起飞命令
+        self.log(f"步骤4: 起飞到 {takeoff_altitude}m...")
+        if not self._send_command_long(
+                mavlink.MAV_CMD_NAV_TAKEOFF,
+                param7=takeoff_altitude
+        ):
+            result["message"] = "起飞命令发送失败"
+            result["steps"].append({"step": "takeoff", "status": "failed"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        time.sleep(1.0)  # 等待起飞命令处理
+
+        result["steps"].append({
+            "step": "takeoff",
+            "status": "completed",
+            "altitude": takeoff_altitude
+        })
+
+        # 步骤5: 等待一段时间让飞机开始起飞，然后切换到AUTO模式
+        self.log("步骤5: 等待起飞稳定后切换到AUTO模式...")
+        time.sleep(3.0)  # 等待3秒让飞机开始起飞
+
+        mode_result = self.set_mode("AUTO")
+
+        if not mode_result["success"]:
+            result["message"] = f"切换AUTO模式失败: {mode_result['message']}"
+            result["steps"].append({"step": "set_auto_mode", "status": "failed"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["steps"].append({
+            "step": "set_auto_mode",
+            "status": "completed",
+            "elapsed_time": mode_result.get("elapsed_time", 0)
+        })
+
+        # 成功
+        result["success"] = True
+        result["message"] = f"一键启航成功！飞机已起飞到{takeoff_altitude}m，将自动执行{self.mission_count}个航点任务"
+        self.log(result["message"])
+
+        return result
+
+    def _get_first_waypoint_altitude(self) -> float:
+        """
+        从航线获取第一个航点的高度
+
+        Returns:
+            float: 第一个航点高度（米），如果无法获取则返回默认值50米
+        """
+        # 如果有航点管理器，尝试从中获取
+        if self.dispatcher:
+            for module in self.dispatcher.get_modules():
+                if hasattr(module, 'waypoints') and len(module.waypoints) > 0:
+                    # 获取第一个航点
+                    first_waypoint = module.waypoints[0]
+
+                    # 检查是否是TAKEOFF类型（命令ID 22）或普通航点（命令ID 16）
+                    if isinstance(first_waypoint, dict):
+                        altitude = first_waypoint.get('z', 50.0)
+                        self.log(f"从航线获取起飞高度: {altitude}m")
+                        return altitude
+                    elif hasattr(first_waypoint, 'z'):
+                        altitude = getattr(first_waypoint, 'z', 50.0)
+                        self.log(f"从航线获取起飞高度: {altitude}m")
+                        return altitude
+
+        # 默认返回50米
+        self.log("无法从航线获取起飞高度，使用默认值: 50.0m", "WARNING")
+        return 50.0
+
+    def one_click_return(self) -> Dict:
+        """
+        一键返航（智能选择RTL或QRTL）
+
+        逻辑参考Mission Planner：
+        - 固定翼模式（RTL/AUTO/FBWA/CRUISE/GUIDED等） → 切换到RTL
+        - 垂直起降模式（QRTL/QSTABILIZE/QHOVER/QLOITER等） → 切换到QRTL
+        """
+        self.log(f"🏠 执行一键返航 (sysid={self.target_system}, 当前模式={self.current_mode_name})")
+
+        result = {
+            "success": False,
+            "steps": [],
+            "message": "",
+            "target_system": self.target_system,
+            "original_mode": self.current_mode_name
+        }
+
+        # 判断当前模式类型，智能选择返航模式
+        current_mode_upper = self.current_mode_name.upper() if self.current_mode_name else ""
+
+        # 定义QuadPlane模式（垂直起降）
+        quadplane_modes = ["QRTL", "QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "QACRO", "QAUTOTUNE"]
+
+        # 定义固定翼模式
+        fixed_wing_modes = ["RTL", "AUTO", "FBWA", "FBWB", "CRUISE", "GUIDED",
+                            "LOITER", "CIRCLE", "MANUAL", "STABILIZE", "TRAINING", "ACRO"]
+
+        # 根据当前模式选择返航模式
+        if current_mode_upper in quadplane_modes:
+            target_mode = "QRTL"
+            mode_type = "QuadPlane"
+            self.log(f"检测到垂直起降模式 ({current_mode_upper})，切换到QRTL")
+        elif current_mode_upper in fixed_wing_modes:
+            target_mode = "RTL"
+            mode_type = "固定翼"
+            self.log(f"检测到固定翼模式 ({current_mode_upper})，切换到RTL")
+        else:
+            # 未知模式，默认使用RTL
+            target_mode = "RTL"
+            mode_type = "未知"
+            self.log(f"未识别模式 ({current_mode_upper})，默认切换到RTL", "WARNING")
+
+        result["target_mode"] = target_mode
+        result["mode_type"] = mode_type
+
+        # 执行模式切换
+        self.log(f"切换到{target_mode}模式...")
+        mode_result = self.set_mode(target_mode)
+
+        if not mode_result["success"]:
+            result["message"] = f"切换{target_mode}模式失败: {mode_result['message']}"
+            result["steps"].append({
+                "step": f"set_{target_mode.lower()}_mode",
+                "status": "failed",
+                "reason": mode_result['message']
+            })
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["steps"].append({
+            "step": f"set_{target_mode.lower()}_mode",
+            "status": "completed",
+            "elapsed_time": mode_result.get("elapsed_time", 0)
+        })
+
+        result["success"] = True
+        result["message"] = f"一键返航成功！已从{current_mode_upper}切换到{target_mode}模式，飞机将返回起飞点"
+        self.log(result["message"])
+
+        return result
+
+    # ========== 解锁/上锁 ==========
+
+    def arm(self) -> bool:
+        """解锁飞机"""
+        self.log(f"发送解锁命令 (sysid={self.target_system})")
+        return self._send_command_long(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, param1=1)
+
+    def disarm(self, force: bool = False) -> bool:
+        """上锁飞机"""
+        self.log(f"发送上锁命令 (sysid={self.target_system})")
+        return self._send_command_long(
+            mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+            param1=0,
+            param2=21196 if force else 0
+        )
+
+    # ========== 🛫 起飞和降落控制 ==========
+
+    def takeoff(self, altitude: float = 50.0) -> Dict:
+        """
+        起飞到指定高度
+
+        执行步骤：
+        1. 切换到TAKEOFF模式
+        2. 发送起飞命令
+
+        Args:
+            altitude: 起飞高度（米，相对于起飞点，范围5-500米）
+
+        Returns:
+            dict: 执行结果
+        """
+        self.log(f"🛫 执行起飞 (sysid={self.target_system}, alt={altitude}m)")
+
+        result = {
+            "success": False,
+            "steps": [],
+            "message": "",
+            "target_system": self.target_system,
+            "altitude": altitude
+        }
+
+        # 步骤1: 切换到TAKEOFF模式
+        self.log("步骤1: 切换到TAKEOFF模式...")
+        mode_result = self.set_mode("TAKEOFF")
+
+        if not mode_result["success"]:
+            result["message"] = f"切换TAKEOFF模式失败: {mode_result['message']}"
+            result["steps"].append({"step": "set_takeoff_mode", "status": "failed"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["steps"].append({
+            "step": "set_takeoff_mode",
+            "status": "completed",
+            "elapsed_time": mode_result.get("elapsed_time", 0)
+        })
+
+        # 步骤2: 发送起飞命令
+        self.log(f"步骤2: 发送起飞命令（高度 {altitude}m）...")
+        if not self._send_command_long(
+                mavlink.MAV_CMD_NAV_TAKEOFF,
+                param7=altitude
+        ):
+            result["message"] = "起飞命令发送失败"
+            result["steps"].append({"step": "send_takeoff_command", "status": "failed"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        time.sleep(0.5)
+
+        result["steps"].append({
+            "step": "send_takeoff_command",
+            "status": "completed",
+            "altitude": altitude
+        })
+
+        result["success"] = True
+        result["message"] = f"起飞成功！已切换到TAKEOFF模式，目标高度: {altitude}m"
+        self.log(result["message"])
+
+        return result
+
+    def land(self) -> Dict:
+        """
+        降落到当前位置
+
+        Returns:
+            dict: 执行结果
+        """
+        self.log(f"🛬 执行降落 (sysid={self.target_system})")
+
+        result = {"success": False, "message": "", "target_system": self.target_system}
+
+        # 切换到LAND模式
+        mode_result = self.set_mode("QLAND")
+
+        if not mode_result["success"]:
+            result["message"] = mode_result["message"]
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["success"] = True
+        result["message"] = "降落命令已发送，飞机将在当前位置降落"
+        self.log(result["message"])
+
+        return result
+
+    def _wait_for_armed(self, target_state: bool, timeout: float = 10.0) -> Dict:
+        """
+        等待解锁/上锁状态
+
+        Args:
+            target_state: 目标状态（True=解锁, False=上锁）
+            timeout: 超时时间（秒）
+
+        Returns:
+            dict: 等待结果
+        """
+        state_text = "解锁" if target_state else "上锁"
+        start_time = time.time()
+
+        self.log(f"开始等待{state_text}...")
+
+        while time.time() - start_time < timeout:
+            if self.is_armed == target_state:
+                elapsed = round(time.time() - start_time, 2)
+                self.log(f"✅ {state_text}成功 (耗时 {elapsed}s)")
+                return {
+                    "success": True,
+                    "message": f"{state_text}成功（耗时 {elapsed} 秒）",
+                    "elapsed_time": elapsed
+                }
+            time.sleep(0.1)
+
+        elapsed = round(timeout, 2)
+        self.log(f"❌ {state_text}超时")
+        return {
+            "success": False,
+            "message": f"{state_text}超时（{timeout}秒内未完成）",
+            "elapsed_time": elapsed
+        }
+
+    # ========== 状态查询 ==========
+
+    def get_status(self) -> Dict:
+        """获取飞行控制状态"""
+        return {
+            "armed": self.is_armed,
+            "current_mode_id": self.current_mode,
+            "current_mode_name": self.current_mode_name,
+            "mission_count": self.mission_count,
+            "current_waypoint": self.current_waypoint,
+            "available_modes": self.get_available_modes(),
+            "last_command_ack": self.last_command_ack,
+            "module_enabled": self.enabled,
+            "target_system": self.target_system,
+            "target_component": self.target_component,
+            # ✅ 让 /api/flight/status 也能看到任务状态
+            "auto_takeoff_state": self.auto_takeoff_state.name,
+            "auto_takeoff_started_at": self.auto_takeoff_started_at,
+            "auto_takeoff_completed_at": self.auto_takeoff_completed_at,
+            "auto_takeoff_ended_at": self.auto_takeoff_ended_at,
+        }
+
+    def _start_connection_monitor(self):
+        """启动连接监控线程"""
+        if self._connection_monitor_thread is None or not self._connection_monitor_thread.is_alive():
+            self._connection_monitor_running = True
+            self._connection_monitor_thread = Thread(
+                target=self._connection_monitor_loop,
+                daemon=True
+            )
+            self._connection_monitor_thread.start()
+            self.log("✅ 连接监控已启动")
+
+    def _stop_connection_monitor(self):
+        """停止连接监控线程"""
+        self._connection_monitor_running = False
+        if self._connection_monitor_thread:
+            self._connection_monitor_thread.join(timeout=2.0)
+            self.log("🛑 连接监控已停止")
+
+    def _connection_monitor_loop(self):
+        """连接监控循环"""
+        while self._connection_monitor_running:
+            try:
+                # 检查心跳超时
+                if self._last_heartbeat_time > 0:
+                    elapsed = time.time() - self._last_heartbeat_time
+
+                    if elapsed > self._heartbeat_timeout:
+                        self.log(f"⚠️ 连接超时 ({elapsed:.1f}秒未收到心跳)", "WARNING")
+                        self._handle_connection_lost()
+                        break  # 退出监控循环
+
+                time.sleep(2.0)  # 每2秒检查一次
+
+            except Exception as e:
+                self.log(f"❌ 连接监控异常: {e}", "ERROR")
+
+    def _handle_connection_lost(self):
+        """处理连接丢失"""
+        self.log("🔌 检测到连接断开，正在恢复任务状态...", "WARNING")
+
+        try:
+            current_state = self.auto_takeoff_state
+
+            self.log(f"📊 连接断开前状态: {current_state.name}")
+
+            # 只有在执行中的任务才需要恢复
+            if current_state in [AutoTakeoffState.EXECUTING,
+                                 AutoTakeoffState.WAITING_NEST_READY,
+                                 AutoTakeoffState.WAITING_MANUAL_CONFIRM]:
+                # 重置状态为 IDLE
+                self.auto_takeoff_state = AutoTakeoffState.IDLE
+                self.auto_takeoff_error = "连接断开，任务已取消"
+                self.auto_takeoff_ended_at = time.time()
+                self.auto_takeoff_event.set()
+
+                self.log("✅ 任务状态已恢复到 IDLE")
+
+        except Exception as e:
+            self.log(f"❌ 处理连接丢失失败: {e}", "ERROR")
+
+    def _handle_heartbeat(self, msg):
+        """
+        ✅ 处理心跳 - 更新最后心跳时间
+        """
+        # 更新心跳时间
+        self._last_heartbeat_time = time.time()
+
+        # ... 保持原有心跳处理逻辑 ...
+
+        raw_mode = msg.custom_mode
+        raw_armed = bool(msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+        # ========== 模式防抖 ==========
+        if raw_mode == self._last_raw_mode:
+            self._stable_mode_count += 1
+        else:
+            self._stable_mode_count = 0
+            self._last_raw_mode = raw_mode
+
+        if self._stable_mode_count >= self._STABLE_MODE_THRESHOLD:
+            if raw_mode != self.current_mode:
+                old_mode_name = self.current_mode_name or "NONE"
+                self.current_mode = raw_mode
+                self.current_mode_name = self.mode_id_to_name.get(
+                    self.current_mode,
+                    f"UNKNOWN({self.current_mode})"
+                )
+
+                if old_mode_name != "NONE":
+                    self.log(f"📡 模式切换: {old_mode_name} → {self.current_mode_name}", "INFO")
+                else:
+                    self.log(f"📡 初始模式: {self.current_mode_name}", "INFO")
+
+                self._stable_mode_count = 0
+
+        # ========== 解锁状态防抖 ==========-
+        if raw_armed == self._last_raw_armed:
+            self._stable_armed_count += 1
+        else:
+            self._stable_armed_count = 0
+            self._last_raw_armed = raw_armed
+
+        if self._stable_armed_count >= self._STABLE_ARMED_THRESHOLD:
+            if raw_armed != self.is_armed:
+                old_armed = self.is_armed
+                self.is_armed = raw_armed
+
+                if old_armed is not None:
+                    status = "✅ 已解锁" if self.is_armed else "🔒 已上锁"
+                    self.log(f"🔄 解锁状态变更: {status}", "INFO")
+                else:
+                    status = "✅ 已解锁" if self.is_armed else "🔒 已上锁"
+                    self.log(f"📡 初始解锁状态: {status}", "INFO")
+
+                self._stable_armed_count = 0
+
+            # ✅ 当已完成(COMPLETED)且检测到"已上锁"→ 标记任务 ENDED
+            if (self.auto_takeoff_state == AutoTakeoffState.COMPLETED) and (self.is_armed is False):
+                self.auto_takeoff_state = AutoTakeoffState.ENDED
+                self.auto_takeoff_ended_at = time.time()
+                self.log("🏁 一键启航任务已结束（检测到上锁），状态: ENDED")

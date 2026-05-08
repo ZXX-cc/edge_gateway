@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<mavlink>
+    <dialect>1</dialect>
+    <messages>
+        <!-- 消息 ID 12003: 机巢控制指令 -->
+        <message id="12003" name="DRONE_NEST_COMMAND">
+            <description>Command sent to drone nest.</description>
+            <field type="uint16_t" name="ordinary_order">Ordinary order (e.g. door control)</field>
+            <field type="uint8_t" name="takeoff_land_order">Auto takeoff and land order</field>
+        </message>
+
+        <!-- 消息 ID 12004: 机巢状态反馈 -->
+        <message id="12004" name="DRONE_NEST_RESPONSE">
+          <description>Status response from drone nest.</description>
+          <field type="int16_t" name="ac_temp">Air conditioner temperature (×10 °C)</field>
+          <field type="int16_t" name="nest_temperature">Internal nest temperature (deprecated)</field>
+          <field type="int16_t" name="env_temperature">Environment temperature (×10 °C)</field>
+          <field type="uint16_t" name="wind_direction">Wind direction (×100 °)</field>
+          <field type="uint16_t" name="wind_speed">Wind speed (×10 m/s)</field>
+          <field type="uint16_t" name="atmospheric_pressure">Atmospheric pressure (×10 kPa)</field>
+          <field type="uint16_t" name="rainfall">Rainfall (×10 mm/m²)</field>
+          <field type="uint16_t" name="charge_volt">Charging voltage (×100 V)</field>
+          <field type="uint16_t" name="charge_current">Charging current (×100 A)</field>
+          <field type="uint16_t" name="error_code">System error code</field>
+          <field type="uint16_t" name="boolstate1">Bitmask state 1 (心跳状态)</field>
+          <field type="uint16_t" name="boolstate2">Bitmask state 2 (流程状态)</field>
+          <field type="uint8_t" name="clamp_state">Clamp mechanism state</field>
+          <field type="uint8_t" name="gate_state">Gate/Door state</field>
+          <field type="uint8_t" name="landing_light_state">Landing light state</field>
+        </message>
+
+
+        <!-- 消息 ID 12005: 指令执行确认 -->
+        <message id="12005" name="DRONE_NEST_ORDER_RESPONSE">
+            <description>Response specifically for order execution status.</description>
+            <field type="uint32_t" name="ordinary_order_response">Response for ordinary order</field>
+            <field type="uint32_t" name="takeoff_land_order_response">Response for takeoff/land order</field>
+        </message>
+    </messages>
+</mavlink>

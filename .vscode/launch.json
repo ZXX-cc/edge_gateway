@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Edge Gateway",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "args": ["-c", "${workspaceFolder}/config/gateway.yaml"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/home/ran/miniconda3/envs/webhd_env/bin/python"
+        }
+    ]
+}
