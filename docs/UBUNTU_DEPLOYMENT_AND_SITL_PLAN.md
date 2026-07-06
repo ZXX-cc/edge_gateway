@@ -33,6 +33,31 @@
 | 兼容策略 | 不默认认为 Dock1 字段与 Dock3 完全兼容 | 对每个 topic、method、payload、reply、event 做 Dock1/Dock3 差异审计 |
 | 验收重点 | 云端看到的行为要像 DJI Dock 3 | MQTT topic、属性、状态、服务回包、事件结构必须匹配 Dock3 |
 
+## 2026-07-06 多人协同当前阶段
+
+当前项目进入多人并行联调阶段。阶段目标不是补全所有业务逻辑，而是先把上云 API 模拟器、网关、MAVLink/SITL、机巢模拟器之间的全链路调通。
+
+| 角色 | 负责范围 | 当前输入 | 当前输出 | 验收标准 |
+|---|---|---|---|---|
+| 人员1 | 上云 API 与网关之间的相互通信 | Dock3 官方文档、MQTT broker、网关 method 路由 | Dock3 method 矩阵、云端模拟 payload、reply 验收规则 | services/requests/events/osd/state/drc topic 可按 Dock3 语义验证 |
+| 人员2 | MAVLink 与网关之间的相互通信 | ArduPilot SITL、MAVLink 机巢模拟器、网关 core/modules | MAVLink 遥测映射、飞控命令状态、机巢状态映射 | 网关可稳定收到遥测并能下发模拟飞控/机巢命令 |
+| 人员3 | 模拟器和联调环境部署 | Ubuntu、MQTT broker、ArduPilot、Web 调试台 | 可重复启动的模拟环境和 smoke test | 新环境按文档可启动 broker、网关、SITL、Web 调试台和机巢模拟器 |
+
+当前总体进度固定为：
+
+| 模块 | 当前状态 |
+|---|---|
+| Ubuntu 基础部署 | 基本完成 |
+| MQTT 本地链路 | 基本完成，当前用 Mosquitto 替代 NanoMQ |
+| SITL 与网关 MAVLink 链路 | 基本完成 |
+| MQTT osd/state/events/services_reply 基础链路 | 基本完成 |
+| Dock3 协议矩阵 | 待建立 |
+| 上云 API 模拟器 | 待固化 |
+| MAVLink 机巢模拟器合流 | 待固化 |
+| MongoDB 服务型 NoSQL | 目标架构，当前未接入 |
+
+MongoDB 说明：当前代码仍使用 SQLite + SQLAlchemy/aiosqlite。MongoDB 是后续目标架构，用于承接 telemetry、operation_record、alarm、media_file、device_state、request_trace 等集合。本阶段只在文档中定义目标，不把 MongoDB 写为已完成部署项。
+
 ## 当前状态与目标
 
 | 类别 | 当前结论 | 后续要求 |
