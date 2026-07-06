@@ -61,17 +61,18 @@
 |---|---|---|---|---|---|---|
 | P1-CLOUD-001 | `dock_status_query` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.result=0` | services 链路闭环成功 | 继续 Dock3 字段校验 |
 | P1-CLOUD-002 | `airport_bind_status` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.output.bind_status=[]` | services 链路闭环成功 | 对照 Dock3 组织管理文档校验字段 |
-| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | 实际收到 `services_reply`，`data={"result":0,"results":{}}` | 网关能处理请求，但回包 topic 与测试脚本预期不一致 | 对照 Dock3 properties 文档确认正确 reply topic |
-| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 实际收到 `events` 的 `drc_status_notify`，以及 `services_reply` 的 `drc_mode_enter` 回包 | 网关能处理 DRC 请求，但未按测试脚本预期回 `drc/up` | 对照 Dock3 DRC 文档确认响应 topic、事件和 session 规则 |
+| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | 修复前实际收到 `services_reply`，`data={"result":0,"results":{}}` | 代码已改为按 `property/set` 来源回 `property/set_reply` | 待 Ubuntu 服务器复测 |
+| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 修复前实际收到 `events` 的 `drc_status_notify`，以及 `services_reply` 的 `drc_mode_enter` 回包 | 代码已改为按 `drc/down` 来源回 `drc/up`，事件仍继续上报 | 待 Ubuntu 服务器复测，并继续校验 Dock3 DRC 语义 |
 | P1-CLOUD-005 | `osd` 上报 | 无 | `thing/product/EDGE-GW-001/osd` | 持续收到经纬度、高度、姿态、电池、GPS | 设备遥测上报链路成功 | 对照 Dock3 properties/osd 字段校验名称、单位、枚举 |
 
 ### 3.3 关键发现
 
 | 编号 | 问题 | 证据 | 影响 | 负责人 |
 |---|---|---|---|---|
-| P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 云端查询机场/无人机状态时会看到过期或模拟静态状态 | 人员1记录字段要求，人员2/业务逻辑补状态同步 |
-| P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 人员1无法用当前工具直接判断 property 通道闭环；Dock3 topic 规则待确认 | 人员1确认 Dock3 规则，后续决定修工具还是修网关 |
-| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | DRC 测试不能仅以 smoke timeout 判失败，需要按 Dock3 文档确定上行语义 | 人员1确认 Dock3 规则，人员2确认设备侧执行状态 |
+| P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 已改为查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`，不在 OSD 热路径频繁写状态 | 待 Ubuntu 服务器复测 |
+| P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 已改为按下行来源 topic 分流回包 | 待 Ubuntu 服务器复测 |
+| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 已改为按下行来源 topic 分流回包；`drc_status_notify` 事件保留 | 待 Ubuntu 服务器复测 |
+| P1-ISSUE-004 | 网关可能处理自己发布的 `services_reply/events_reply` | 网关订阅了 reply topic，发布回包后可能再次进入 method 路由，造成重复业务日志 | 已加保护：`services_reply/events_reply` 只记录，不再路由到业务 handler | 待 Ubuntu 服务器复测 |
 
 ### 3.4 当前判定
 
@@ -79,9 +80,9 @@
 |---|---|
 | `services -> services_reply` | 已通 |
 | `property/set` 下行接收 | 已通 |
-| `property/set` 标准 reply | 待 Dock3 校验 |
+| `property/set` 标准 reply | 已做 topic-aware 代码修复，待服务器复测 |
 | `drc/down` 下行接收 | 已通 |
-| `drc/up` 标准上行 | 待 Dock3 校验 |
+| `drc/up` 标准上行 | 已做 topic-aware 代码修复，待服务器复测 |
 | `events` 上报 | 已通 |
 | `osd` 上报 | 已通 |
 | Dock3 字段合规 | 未完成 |

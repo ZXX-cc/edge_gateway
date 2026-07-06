@@ -85,6 +85,7 @@ class DockManager:
 
         # 遥测上报器引用
         self._telemetry_reporter = None
+        self._telemetry_processor = None
 
         # 当前执行的操作
         self._current_operations: Dict[str, dict] = {}
@@ -113,6 +114,10 @@ class DockManager:
     def set_telemetry_reporter(self, reporter):
         """注入遥测上报器"""
         self._telemetry_reporter = reporter
+
+    def set_telemetry_processor(self, telemetry_processor):
+        """注入遥测处理器，用于查询时获取实时无人机状态快照"""
+        self._telemetry_processor = telemetry_processor
 
     # ---- 状态更新接口（供内部模块调用） ----
 
@@ -174,9 +179,43 @@ class DockManager:
         logger.info("Dock status query")
         return MessageBuilder.build_reply(msg, result=0, data={
             'dock_status': self._dock_status.copy(),
-            'drone_status': self._drone_status.copy(),
+            'drone_status': self._build_live_drone_status(),
             'timestamp': int(time.time() * 1000)
         })
+
+    def _build_live_drone_status(self) -> Dict[str, Any]:
+        """构建实时无人机状态快照，不触发 state 上报。"""
+        status = self._drone_status.copy()
+        if not self._telemetry_processor:
+            return status
+
+        try:
+            telemetry = self._telemetry_processor.get_current_data()
+        except Exception as exc:
+            logger.warning(f"Failed to read telemetry snapshot for dock status: {exc}")
+            return status
+
+        if not telemetry:
+            return status
+
+        connection_status = telemetry.get('connection_status', 'disconnected')
+        timestamp = telemetry.get('timestamp', 0.0) or 0.0
+        status.update({
+            'online': connection_status == 'connected' or timestamp > 0,
+            'armed': bool(telemetry.get('armed', status.get('armed', False))),
+            'flight_mode': telemetry.get('flight_mode', status.get('flight_mode', 'UNKNOWN')),
+            'battery_percent': telemetry.get('batteryRemaining', status.get('battery_percent', 100)),
+            'longitude': telemetry.get('longitude', status.get('longitude', 0.0)),
+            'latitude': telemetry.get('latitude', status.get('latitude', 0.0)),
+            'altitude': telemetry.get('altitude', status.get('altitude', 0.0)),
+            'height': telemetry.get('altitudeRelative', telemetry.get('altitudeAGL', status.get('height', 0.0))),
+            'speed': telemetry.get('groundSpeed', status.get('speed', 0.0)),
+            'vertical_speed': telemetry.get('climbRate', status.get('vertical_speed', 0.0)),
+            'heading': telemetry.get('yaw', status.get('heading', 0.0)),
+            'satellite_number': telemetry.get('satelliteNumber', status.get('satellite_number', 0)),
+            'gps_signal_level': 5 if telemetry.get('gps_fixed', 0) else 0,
+        })
+        return status
 
     def handle_dock_control(self, msg: dict) -> dict:
         """

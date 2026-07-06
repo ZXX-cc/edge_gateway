@@ -151,6 +151,20 @@ class MQTTClient:
         topic = TopicBuilder.drc_up(self.gateway_sn)
         self.publish(topic, data, qos=1)
 
+    def _publish_reply_for_downstream_topic(self, source_topic: str, data: dict) -> bool:
+        """
+        按下行Topic选择对应响应Topic。
+
+        services        -> services_reply
+        property/set    -> property/set_reply
+        drc/down        -> drc/up
+        """
+        if source_topic.endswith('/property/set'):
+            return self.publish(TopicBuilder.property_set_reply(self.gateway_sn), data, qos=1)
+        if source_topic.endswith('/drc/down'):
+            return self.publish(TopicBuilder.drc_up(self.gateway_sn), data, qos=1)
+        return self.publish(TopicBuilder.services_reply(self.gateway_sn), data, qos=1)
+
     def publish_status(self, data: dict):
         """发布设备状态/拓扑上报 (sys/product/{sn}/status)"""
         topic = TopicBuilder.status(self.gateway_sn)
@@ -252,17 +266,35 @@ class MQTTClient:
                     logger.info(f"Requests reply received: method={method}, result={result}")
                 return
 
+            # services_reply/events_reply 是网关上行后的云端确认或本客户端自发回包，
+            # 不能再次路由到业务handler，否则会造成重复执行。
+            if msg.topic.endswith('/services_reply') or msg.topic.endswith('/events_reply'):
+                result = payload.get('data', {}).get('result', -1)
+                logger.info(f"Upstream reply received: topic={msg.topic}, method={method}, result={result}")
+                return
+
             handler = self._topic_handlers.get(method)
             if handler:
                 try:
                     result = handler(payload)
                     # 如果需要响应，自动发送
                     if payload.get('need_reply') == 1 and result:
-                        self.publish_service_reply(result)
+                        self._publish_reply_for_downstream_topic(msg.topic, result)
                 except Exception as e:
                     logger.error(f"Handler error for {method}: {e}")
             else:
                 logger.warning(f"No handler registered for method: {method}")
+                if payload.get('need_reply') == 1:
+                    error_reply = {
+                        "bid": payload.get("bid", ""),
+                        "data": {"result": -2},
+                        "gateway": payload.get("gateway", self.gateway_sn),
+                        "tid": payload.get("tid", ""),
+                        "timestamp": int(time.time() * 1000),
+                        "method": method,
+                        "msg": f"No handler registered for method: {method}"
+                    }
+                    self._publish_reply_for_downstream_topic(msg.topic, error_reply)
 
         except Exception as e:
             logger.error(f"Message processing error: {e}")

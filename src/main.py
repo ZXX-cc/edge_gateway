@@ -494,6 +494,7 @@ class EdgeGateway:
             self.mqtt.publish_state(gateway_sn, state)
         self.dock.set_callbacks(dock_event_cb, dock_state_cb)
         self.dock.set_telemetry_reporter(self.telemetry_reporter)
+        self.dock.set_telemetry_processor(self.telemetry)
 
         # 云端连接状态回调
         def cloud_status_cb(connected: bool):
