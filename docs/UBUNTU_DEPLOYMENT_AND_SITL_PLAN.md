@@ -176,7 +176,7 @@ mode LAND
 | 主线程流畅 | 核心状态机、MQTT 回调、MAVLink 分发不能被耗时操作卡住 | 下载、上传、数据库写入、日志刷盘、文件扫描、固件升级、外部命令全部后台化 |
 | IO 异步化 | MQTT、MAVLink、SQLite、文件上传、日志归档、云端请求都可能阻塞 | 使用异步任务、线程池或队列；禁止在热路径直接长时间等待 |
 | 状态机稳定 | 任务执行、起飞、返航、机巢开关盖/充电必须可追踪 | 每个动作要有状态、进度、超时、失败原因、恢复路径 |
-| 日志完善 | 部署、启动、MQTT、MAVLink、任务、机巢、负载、媒体都要可追溯 | 日志落盘、轮转、按模块区分；关键操作同步写 operation record |
+| 日志完善 | 部署、启动、MQTT、MAVLink、任务、机巢、负载、媒体都要可追溯 | 已实现按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘、后台队列写入、旧 `print` 捕获、关键 MQTT 字段中文标注；后续补 operation record |
 | `drone_nest.py` 映射 | 它是 MAVLink 自定义消息定义/编解码基础 | 字段映射见 `docs/DRONE_NEST_MAVLINK_MAPPING.md` |
 | Dock3 上云协议一致性 | MQTT topic、method、reply、event、state、osd 格式必须和 DJI Dock 3 对齐 | 每个 method 验证请求体、响应体、错误码、`need_reply` 行为；禁止继续按 Dock1 推断字段 |
 | 部署可恢复 | 服务异常退出、SITL 重启、NanoMQ 重启后要能恢复 | 后续使用 systemd、日志、健康检查、重启策略 |
@@ -190,5 +190,5 @@ mode LAND
 | MQTT 验收 | 已通过：订阅下行 topic，发布 osd/state/events/reply，method 路由命中正确模块 |
 | Dock3 协议验收 | 待完成：按 DJI Dock 3 官方文档验证 properties、services、events、state、osd、reply |
 | 命令验收 | `take_off`、`flyto`、`return_home`、`dock_control` 或 Dock3 等价 method 有明确执行结果 |
-| 日志验收 | 每次命令有 request、dispatch、execute、reply、error/timeout 的完整记录 |
+| 日志验收 | 每次命令有 request、dispatch、execute、reply、error/timeout 的完整记录；关键字段以 `字段名(中文名)` 形式辅助排查 |
 | 性能验收 | 主循环持续运行；耗时任务不阻塞 MQTT 回调和 MAVLink 接收线程 |

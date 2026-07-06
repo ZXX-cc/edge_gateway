@@ -11,6 +11,7 @@ from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.field_labels import format_with_labels
 
 logger = get_logger("drc")
 
@@ -140,7 +141,7 @@ class DrcController:
                 self.gateway_sn
             )
             self._event_callback(event)
-            logger.info(f"DRC status reported: state={drc_state}")
+            logger.info("DRC status reported: %s", format_with_labels({'drc_state': drc_state, 'result': result}))
 
     def report_flyto_progress(self, fly_to_id: str, status: str, result: int = 0,
                               way_point_index: int = 0, remaining_distance: float = 0,
@@ -388,10 +389,7 @@ class DrcController:
         # 8. 写入审计日志
         self._write_audit_log("mode_enter", f"session={self._session_id}")
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "drc_session_id": self._session_id,
-            "status": "enabled"
-        })
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_drc_mode_exit(self, msg: dict) -> dict:
         """

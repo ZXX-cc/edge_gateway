@@ -117,6 +117,7 @@ class EdgeGateway:
             log_config = Config.get('logging', {})
             init_logger(log_config)
             logger.info("Logger initialized")
+            logger.info("Configuration loaded: path=%s", config_path)
 
             # 3. 初始化MQTT客户端
             logger.info("Initializing MQTT client...")
@@ -182,6 +183,7 @@ class EdgeGateway:
             except RuntimeError:
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
+            self.loop.set_exception_handler(self._handle_async_exception)
 
             # 注入事件循环到需要异步操作的模块
             if self.device:
@@ -299,9 +301,7 @@ class EdgeGateway:
                 self.drc.set_telemetry_module(self.telemetry_module)
                 self.drc.set_gimbal_control(self.gimbal_control)
                 self.drc.set_camera_controller(self.camera)
-                def drc_event_cb(event):
-                    self.mqtt.publish_event(event)
-                self.drc.set_event_callback(drc_event_cb)
+                self.drc.set_event_callback(self._handle_drc_event)
 
                 # 注入 DeviceManager 依赖（数据源联动）
                 self.device.set_nest_module(self.nest_module)
@@ -374,6 +374,19 @@ class EdgeGateway:
             self.cloud_sync_manager.stop_sync()
 
         logger.info("Edge Gateway stopped")
+
+    def _handle_async_exception(self, loop, context):
+        """记录 asyncio 后台任务未处理异常。"""
+        message = context.get("message", "Async task exception")
+        exception = context.get("exception")
+        if exception:
+            logger.error(
+                "Async exception: %s",
+                message,
+                exc_info=(type(exception), exception, exception.__traceback__)
+            )
+        else:
+            logger.error("Async exception: %s, context=%s", message, context)
 
     async def stop_async(self):
         """异步停止网关"""
@@ -483,9 +496,7 @@ class EdgeGateway:
         self.media.set_request_sender(self.cloud_conn.send_request)
 
         # DRC事件回调
-        def drc_event_cb(event):
-            self.mqtt.publish_event(event)
-        self.drc.set_event_callback(drc_event_cb)
+        self.drc.set_event_callback(self._handle_drc_event)
 
         # 机场管理回调
         def dock_event_cb(event):
@@ -527,6 +538,14 @@ class EdgeGateway:
         def third_party_event_cb(event):
             self.mqtt.publish_event(event)
         self.third_party.set_event_callback(third_party_event_cb)
+
+    def _handle_drc_event(self, event: dict):
+        """同步 DRC 状态到物模型后再上报事件。"""
+        if event.get('method') == 'drc_status_notify' and self.device:
+            data = event.get('data', {})
+            if 'drc_state' in data:
+                self.device.update_properties({'drc_state': data['drc_state']})
+        self.mqtt.publish_event(event)
 
     def _register_handlers(self):
         """注册所有API处理器到路由器"""

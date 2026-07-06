@@ -1150,25 +1150,21 @@ class DeviceManager:
         """
         处理属性设置请求 (property/set)
 
-        Request: { properties: {name: value, ...} }
-        Response: { result: 0/1, results: {name: 0/-1, ...} }
+        Dock3 Request: { property_name: property_value, ... }
+        Legacy Request: { properties: {name: value, ...} }
+        Dock3 Response: { property_name: { state: { result: 0/1/2 } } }
         """
         data = msg.get('data', {})
-        properties = data.get('properties', {})
+        properties = data.get('properties', data)
+        if not isinstance(properties, dict):
+            properties = {}
 
         results = {}
         for name, value in properties.items():
             success = self.set_property(name, value)
-            results[name] = 0 if success else -1
+            results[name] = 0 if success else 1
 
-        failed = [k for k, v in results.items() if v != 0]
-        result = 0 if not failed else -1
-
-        return MessageBuilder.build_reply(
-            msg, result=result,
-            data={'results': results},
-            msg_str='' if result == 0 else f"Failed: {failed}"
-        )
+        return MessageBuilder.build_property_set_reply(msg, results)
 
     def handle_property_get(self, msg: dict) -> dict:
         """
@@ -2449,4 +2445,3 @@ class DeviceManager:
 
         self.report_update_topo()
         return MessageBuilder.build_reply(msg, result=0)
-

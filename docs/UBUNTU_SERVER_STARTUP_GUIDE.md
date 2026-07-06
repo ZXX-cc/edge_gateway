@@ -48,7 +48,86 @@
 
 注意：项目日志里可能仍写着 `Connecting to NanoMQ`，这是代码里的命名历史。只要连接的是 `127.0.0.1:1883`，当前实际 Broker 可以是 Mosquitto。
 
-## 三、启动前检查
+## 三、日志落盘规则
+
+网关启动后会在项目目录下自动创建日志目录：
+
+```text
+~/lxz/edge_gateway/logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log
+```
+
+示例：
+
+```text
+~/lxz/edge_gateway/logs/2026-07/edge_gateway_2026-07-06.log
+```
+
+日志配置在 `config/gateway.yaml`：
+
+```yaml
+logging:
+  level: "INFO"
+  dir: "./logs"
+  filename_prefix: "edge_gateway"
+  console: true
+  capture_print: true
+  daily_files: true
+  monthly_dirs: true
+```
+
+日志实现要求：
+
+| 项目 | 当前规则 |
+|---|---|
+| 月份目录 | 自动按 `YYYY-MM` 创建 |
+| 每日日志 | 每天一个 `edge_gateway_YYYY-MM-DD.log` |
+| 终端输出 | 保留 |
+| 文件落盘 | 保留 |
+| 旧模块 `print` | 自动捕获到日志 |
+| 写文件方式 | 后台日志队列写入，避免 MQTT/MAVLink 热路径直接刷盘 |
+| 异常记录 | 未捕获异常、线程异常、handler 异常会带 traceback |
+| 字段标注 | 关键 MQTT payload/reply/state/event 会输出 `字段名(中文名)` |
+
+常用查看命令：
+
+```bash
+cd ~/lxz/edge_gateway
+
+# 查看当天日志目录
+ls -lh logs/$(date +%Y-%m)/
+
+# 实时跟踪当天日志
+tail -f logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+
+# 只看错误和警告
+grep -E 'ERROR|WARNING|CRITICAL' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+
+# 按 tid 追踪一次 MQTT 请求
+grep '你的tid' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+
+# 查找带中文标注的关键字段
+grep -E 'drc_state\\(DRC链路状态\\)|capacity_percent\\(电量百分比\\)|longitude\\(经度\\)' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+```
+
+重点应能在日志中看到：
+
+- 网关启动、配置加载、模块初始化。
+- MQTT 连接、异常断线、自动重连、订阅 topic。
+- MAVLink 连接、心跳、Dispatcher 启动、模块启动。
+- 每次 MQTT 下行命令的 `topic/method/tid/bid/need_reply`。
+- 每次 handler 执行结果和回包 `reply_topic/result`，并带关键字段中文标注，例如 `capacity_percent(电量百分比)`、`drc_state(DRC链路状态)`。
+- 任务、航线、DRC、机巢、媒体、日志上传等关键业务过程。
+- warning/error/critical 级别 traceback。
+
+示例日志片段：
+
+```text
+MQTT command received: ... payload={"method(方法)":"property_get","data(数据)":{"properties":["drc_state"]}}
+MQTT handler completed: ... reply={"data(数据)":{"result(结果码)":0,"drc_state(DRC链路状态)":2}}
+MQTT state publish: ... data={"property(属性)":{"silent_mode(静音模式)":1}}
+```
+
+## 四、启动前检查
 
 每次新开发人员接手 Ubuntu 服务器时，先在服务器上运行：
 
@@ -98,7 +177,7 @@ bash tools/ubuntu_preflight.sh
 
 `tools/ubuntu_preflight.sh` 只检查文件和系统状态，不下载、不安装、不启动服务。
 
-## 四、每日标准启动顺序
+## 五、每日标准启动顺序
 
 推荐至少开 4 个终端。下面命令默认服务器目录为 `~/lxz/edge_gateway` 和 `~/lxz/ardupilot`。
 
@@ -214,7 +293,7 @@ thing/product/EDGE-GW-001/events {... "method": "heartbeat" ...}
 thing/product/EDGE-GW-001/state {...}
 ```
 
-## 五、最小可用验收流程
+## 六、最小可用验收流程
 
 完整启动后，按以下顺序验收。
 
@@ -285,7 +364,7 @@ mode LAND
 - 降落后 `osd.height` 回到 0 附近。
 - MQTT `state` 出现 `armed` 或 `flight_mode` 变化。
 
-## 六、Web 调试台怎么用
+## 七、Web 调试台怎么用
 
 Web 调试台是独立程序，不嵌入主网关。它适合替代大段 JSON 终端输出。
 
@@ -320,7 +399,7 @@ source .venv/bin/activate
 SITL_PYTHON=/usr/bin/python3 ARDUPILOT_DIR=$HOME/lxz/ardupilot python web/app.py
 ```
 
-## 七、机巢模拟器启动方式
+## 八、机巢模拟器启动方式
 
 当前有 `src/nest_simulator.py`，用于模拟 MAVLink 自定义机巢消息：
 
@@ -356,7 +435,7 @@ python src/nest_simulator.py
 | Dock-only | Mosquitto + `nest_simulator.py` + Edge Gateway | 验证机巢自定义 MAVLink 消息 |
 | Combined | Mosquitto + SITL + 机巢模拟器 + MAVLink Router/多连接方案 | 后续目标，当前还未固化 |
 
-## 八、停止和重启
+## 九、停止和重启
 
 停止 Edge Gateway：
 
@@ -395,7 +474,7 @@ ss -tulnp | grep -E ':1883|:14550|:8090' || true
 pgrep -af 'mosquitto|sim_vehicle.py|mavproxy.py|src/main.py|web/app.py|nest_simulator.py'
 ```
 
-## 九、哪些可以直接使用，哪些需要修改
+## 十、哪些可以直接使用，哪些需要修改
 
 ### 可以直接使用
 
@@ -419,7 +498,7 @@ pgrep -af 'mosquitto|sim_vehicle.py|mavproxy.py|src/main.py|web/app.py|nest_simu
 | SITL + 机巢模拟器同时运行 | 默认端口会冲突 | 后续用 MAVLink Router 或网关多连接方案 |
 | MongoDB | 目前只是目标架构 | 当前代码仍使用 SQLite，不要把 MongoDB 当作已接入依赖 |
 
-## 十、常见故障处理
+## 十一、常见故障处理
 
 ### 1. `nanomq --version` 报 glibc 错误
 
@@ -500,7 +579,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t 'thing/product/EDGE-GW-001/#' -v
 
 这是当前已知状态。链路已经通，但部分业务 API、飞行模式映射、Dock3 字段还未完成适配。人员1和人员2需要按 Dock3 文档和 MAVLink 状态模型继续补齐。
 
-## 十一、开发人员分工提醒
+## 十二、开发人员分工提醒
 
 | 人员 | 启动后重点看什么 |
 |---|---|

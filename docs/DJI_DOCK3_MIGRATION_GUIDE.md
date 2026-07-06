@@ -152,15 +152,18 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 | D3-AUDIT-002 | Services | `dock_status_query` 和 `airport_bind_status` 可收到 `services_reply` | services 闭环可作为后续 Dock3 method 验收基础 |
 | D3-AUDIT-003 | 状态一致性 | `dock_status_query` 返回的 `drone_status` 未同步 OSD 实时遥测 | 已修复并通过 Ubuntu 服务器复测：`online`、经纬度、高度、电量、飞行模式、GPS 已来自实时遥测快照 |
 | D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 已修复并通过 Ubuntu 服务器复测：`property/set` 来源回 `property/set_reply`；仍需对照 Dock3 properties 文档确认 payload 结构 |
-| D3-AUDIT-005 | DRC | `drc_mode_enter` 下行到 `drc/down` 后实际上报 `events:drc_status_notify`，并回 `services_reply:drc_mode_enter`，没有回 `drc/up` | 已修复并通过 Ubuntu 服务器复测：`drc_mode_enter/exit` 均回 `drc/up`，事件保留；仍需对照 Dock3 DRC 文档确认 session 和上行语义 |
-| D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0` 且上报 `drc_state=2`，但复测期间 OSD `mode_code=0`、`gear=0` | MQTT 协议链路已通，飞控是否真正切到可控模式和 `mode_code` 映射交由人员2继续核对 |
+| D3-AUDIT-005 | DRC | 前一轮将 `drc_mode_enter/exit` 当作 `drc/down -> drc/up` 测试 | 官方对照后已修正并通过 Ubuntu 复测：`drc_mode_enter/exit` 走 `services -> services_reply`；误发到 `drc/down` 返回 `result=-3` |
+| D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0`，并可通过 `property_get` 读到 `drc_state=2`；`drc_mode_exit` 后 `drc_state=0` | MQTT 协议链路和状态同步已通，飞控是否真正切到可控模式和 `mode_code/gear` 映射交由人员2继续核对 |
+| D3-AUDIT-007 | Properties | Dock3 `property/set_reply` 示例按属性名逐项返回 `{state:{result}}`，不是通用 `data.result/results` | 代码已改为 Dock3 property reply 结构，同时兼容旧 `{properties:{...}}` 请求体 |
+| D3-AUDIT-008 | DRC 状态 | Dock3 文档提示 `drc_status_notify` 已废弃，更准确状态来自机场属性 `drc_state` 或 DRC 心跳 | 代码保留兼容事件，同时在事件触发时同步更新 `drc_state` 属性并上报 state；Ubuntu 复测 enter=2、exit=0 |
+| D3-AUDIT-009 | 日志可追踪性 | 协议迁移需要按 tid/bid 追踪 request、handler、reply、state/event | 日志已改为 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log`，关键 MQTT payload/reply/state/event 输出 `字段名(中文名)`，便于按 Dock3 字段审计 |
 
 下一步由人员1优先完成：
 
 1. 建立 properties 的 topic/reply/payload 对照表。
-2. 建立 DRC 的 `drc/down`、`drc/up`、`events`、`services_reply` 关系表。
+2. 建立 DRC 的 `services/services_reply`、`drc/down/drc/up`、`events`、`state.drc_state` 关系表。
 3. 将 `property_set`、`drc_mode_enter`、`dock_status_query` 标为 P0 审计项。
-4. 将 DRC MQTT 状态与 MAVLink 飞控模式、解锁状态、`mode_code` 映射交给人员2继续核对。
+4. DRC enter/exit 的 services 路径已通过 Ubuntu 复测；下一步用 `--channel drc --method stick_control` 或后续控制 payload 复测 DRC 数据路径。
 
 ## 10. 当前禁止事项
 

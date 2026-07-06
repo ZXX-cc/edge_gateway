@@ -61,6 +61,33 @@ class MessageBuilder:
         }
 
     @staticmethod
+    def build_property_set_reply(original_msg: dict, results: Dict[str, int] = None) -> dict:
+        """
+        构造 Dock3 property/set_reply。
+
+        Dock3 属性设置回包的 data 直接按属性名返回每项设置状态：
+        {
+            "data": {
+                "distance_limit_status": {
+                    "state": {"result": 0}
+                }
+            }
+        }
+        """
+        data = {}
+        for name, result in (results or {}).items():
+            data[name] = {"state": {"result": result}}
+        return {
+            "bid": str(uuid.uuid4()),
+            "data": data,
+            "gateway": original_msg.get("gateway", ""),
+            "tid": original_msg.get("tid", ""),
+            "timestamp": int(time.time() * 1000),
+            "method": original_msg.get("method", ""),
+            "msg": ""
+        }
+
+    @staticmethod
     def build_event(method: str, data: dict, gateway_sn: str) -> dict:
         """构造事件上报消息"""
         return MessageBuilder.build(method, data, gateway_sn, need_reply=False)

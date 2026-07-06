@@ -111,9 +111,12 @@ livestream:
 # --- 日志配置 ---
 logging:
   level: "INFO"                   # DEBUG/INFO/WARNING/ERROR
-  file: "/var/log/edge_gateway.log"
-  max_size: "10MB"
-  backup_count: 5
+  dir: "./logs"                   # 日志根目录；会自动按 YYYY-MM 创建月份目录
+  filename_prefix: "edge_gateway" # 每日日志文件名：edge_gateway_YYYY-MM-DD.log
+  console: true                   # 同时输出到终端
+  capture_print: true             # 捕获旧模块 print/stdout/stderr 到日志文件
+  daily_files: true               # 每日独立日志文件
+  monthly_dirs: true              # 每月独立日志目录
 
 # --- RTK/NTRIP配置 ---
 rtk:

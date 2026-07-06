@@ -61,9 +61,11 @@ Dock3 上云 API 模拟器
 | `services -> services_reply` | 已验证可闭环，`dock_status_query`、`airport_bind_status` 均能收到 `result=0` 回包 | 对照 Dock3 设备管理/组织管理文档校验字段 |
 | `osd` 上报 | 已验证持续输出 SITL 遥测 | 对照 Dock3 properties/osd 字段名、单位和枚举 |
 | `property/set` | 已通过 Ubuntu 服务器复测，`property_set` 返回 `property/set_reply`，`result=0` | 继续对照 Dock3 properties payload 结构 |
-| `drc/down` | 已通过 Ubuntu 服务器复测，`drc_mode_enter/exit` 均返回 `drc/up`，并上报 `drc_status_notify` 事件 | 人员1继续校验 Dock3 DRC topic/payload；人员2核对 MAVLink 执行状态 |
+| `drc_mode_enter/exit` | Ubuntu 复测通过 Dock3 `services -> services_reply`；错误发送到 `drc/down` 会返回 `result=-3` | 人员2继续核对 MAVLink 执行状态和飞控模式映射 |
+| `drc/down` | Dock3 中用于 DRC 建链后的控制数据，例如 `stick_control`、`drone_control`、`payload_control` | 人员1补 DRC 控制 payload；人员2核对 MAVLink 控制执行 |
 | 状态一致性 | `dock_status_query.drone_status` 已同步 OSD 实时遥测，包含 `online=true`、经纬度、高度、电量、模式和 GPS | 继续对照 Dock3 机场/无人机状态字段 |
-| DRC 交接项 | MQTT 层 `drc_mode_enter` 已成功，但复测期间 OSD `mode_code=0`、`gear=0` | 人员2核对 DRC 进入后飞控模式切换、解锁状态和 `mode_code` 映射 |
+| DRC 状态交接项 | Ubuntu 复测通过：`drc_mode_enter` 后 `property_get(drc_state)=2`，`drc_mode_exit` 后 `property_get(drc_state)=0`；飞控 OSD `mode_code/gear` 仍需核对 | 人员2核对 DRC 进入后飞控模式切换、解锁状态和 `mode_code` 映射 |
+| 日志追踪 | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，关键 MQTT 字段带 `字段名(中文名)` | 人员1按 `tid/bid` 追踪协议字段，人员2按任务/飞控关键日志追踪执行过程 |
 
 ## 4. 人员2：MAVLink 与网关
 
@@ -198,6 +200,6 @@ Dock3 上云 API 模拟器
 
 - 今天验证了哪些 topic/method。
 - 成功的输入 payload 和输出 reply。
-- 失败的 tid/bid、错误日志和复现命令。
+- 失败的 tid/bid、错误日志和复现命令。日志中字段应优先保留 `字段名(中文名)`，例如 `drc_state(DRC链路状态)`、`capacity_percent(电量百分比)`。
 - 是否影响其他人员的数据契约。
 - 是否需要更新文档。

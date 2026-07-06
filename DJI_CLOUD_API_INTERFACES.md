@@ -61,9 +61,9 @@
 |---|---|---|---|---|---|---|
 | P1-CLOUD-001 | `dock_status_query` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.result=0` | services 链路闭环成功 | 继续 Dock3 字段校验 |
 | P1-CLOUD-002 | `airport_bind_status` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.output.bind_status=[]` | services 链路闭环成功 | 对照 Dock3 组织管理文档校验字段 |
-| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | 复测收到 `property/set_reply`，`data.result=0`，`data.results={}` | 已修复并通过 Ubuntu 服务器复测 | 继续对照 Dock3 properties payload 结构 |
-| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 复测收到 `drc/up`，`data.result=0`，含 `drc_session_id` 和 `status=enabled`；同时上报 `events:drc_status_notify`，`drc_state=2` | 已修复并通过 Ubuntu 服务器复测 | 继续校验 Dock3 DRC session、事件和上行语义 |
-| P1-CLOUD-006 | `drc_mode_exit` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 复测收到 `drc/up`，`data.result=0`；同时上报 `events:drc_status_notify`，`drc_state=0` | DRC 退出链路通过 Ubuntu 服务器复测 | 继续校验 Dock3 DRC 退出事件语义 |
+| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | Ubuntu 复测收到 `property/set_reply`，`data.silent_mode.state.result=0`；空 payload 返回 `data={}` | 已修复并通过 Ubuntu 服务器复测，回包结构已按 Dock3 property/set_reply 收敛 | 继续补齐 Dock3 全量 rw 属性矩阵 |
+| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | Ubuntu 复测收到 `services_reply`，`data.result=0`；随后 `property_get` 返回 `drc_state=2` | 已通过 Dock3 services 路径复测；误发到 `drc/down` 会返回 `result=-3` | 人员2继续核对 MAVLink 飞控模式/gear 映射 |
+| P1-CLOUD-006 | `drc_mode_exit` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | Ubuntu 复测收到 `services_reply`，`data.result=0`；随后 `property_get` 返回 `drc_state=0` | 已通过 Dock3 services 路径复测 | 人员2继续核对退出 DRC 后飞控模式恢复 |
 | P1-CLOUD-005 | `osd` 上报 | 无 | `thing/product/EDGE-GW-001/osd` | 持续收到经纬度、高度、姿态、电池、GPS | 设备遥测上报链路成功 | 对照 Dock3 properties/osd 字段校验名称、单位、枚举 |
 
 ### 3.3 关键发现
@@ -72,9 +72,12 @@
 |---|---|---|---|---|
 | P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但修复前 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 已改为查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`，不在 OSD 热路径频繁写状态 | Ubuntu 复测通过：`online=true`，经纬度、高度、电量、模式、GPS 已同步 |
 | P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后修复前实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 已改为按下行来源 topic 分流回包 | Ubuntu 复测通过：收到 `property/set_reply` |
-| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后修复前实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 已改为按下行来源 topic 分流回包；`drc_status_notify` 事件保留 | Ubuntu 复测通过：`drc_mode_enter` 和 `drc_mode_exit` 均收到 `drc/up` |
+| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后修复前实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 历史测试已证明网关能处理 DRC 请求；Dock3 官方对照后确认 enter/exit 应改回 services 路径 | 已由 P1-ISSUE-006 修正最终口径 |
 | P1-ISSUE-004 | 网关可能处理自己发布的 `services_reply/events_reply` | 网关订阅了 reply topic，发布回包后可能再次进入 method 路由，造成重复业务日志 | 已加保护：`services_reply/events_reply` 只记录，不再路由到业务 handler | 待继续观察网关日志 |
 | P1-ISSUE-005 | DRC MQTT 状态与飞控 OSD 模式状态需要进一步核对 | `drc_mode_enter` 已返回 `result=0` 且事件 `drc_state=2`，但复测期间 OSD 中 `mode_code` 仍为 `0`、`gear` 仍为 `0` | MQTT/DRC 协议链路已通，但飞控是否真正切到可控模式需要 MAVLink 侧验证 | 交给人员2核对 MAVLink 模式切换、解锁状态和 `mode_code` 映射 |
+| P1-ISSUE-006 | Dock3 官方对照修正 DRC enter/exit topic | Dock3 文档中 `drc_mode_enter`、`drc_mode_exit` 都是 `services -> services_reply`；`drc/down/up` 用于进入 DRC 后的控制数据 | 代码已改为 method-aware topic 校验；`tools/mqtt_smoke_test.py` 新增 `auto` 通道，`drc_mode_enter/exit` 默认走 services | Ubuntu 复测通过；错误通道 `--channel drc --method drc_mode_enter` 返回 `result=-3` |
+| P1-ISSUE-007 | DRC 状态事件未同步到 `property_get` | 日志中 `drc_status_notify` 已上报 `drc_state=2`，但修复前 `property_get` 仍返回 `drc_state=0` | 统一 `DrcController` 事件回调，避免 MAVLink 初始化块覆盖状态同步回调；事件先更新 DeviceManager 再上报 MQTT | Ubuntu 复测通过：enter 后 `drc_state=2`，exit 后 `drc_state=0` |
+| P1-ISSUE-008 | 启动日志未按文件落盘且字段难读 | 早期 `get_logger()` 在 `init_logger()` 前创建 logger，导致文件 handler 未配置；日志字段为英文 key | 重构日志系统：后台队列写入，按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，关键 MQTT 字段输出 `字段名(中文名)` | 待 Ubuntu 重启后观察当天日志文件 |
 
 ### 3.4 当前判定
 
@@ -84,7 +87,7 @@
 | `property/set` 下行接收 | 已通 |
 | `property/set` 标准 reply | 已修复并通过 Ubuntu 服务器复测 |
 | `drc/down` 下行接收 | 已通 |
-| `drc/up` 标准上行 | 已修复并通过 Ubuntu 服务器复测 |
+| `drc/up` 标准上行 | 仅用于 `stick_control`、`drone_control` 等 DRC 控制数据；`drc_mode_enter/exit` 已改回 services |
 | `events` 上报 | 已通 |
 | `osd` 上报 | 已通 |
 | `dock_status_query` 实时状态 | 已修复并通过 Ubuntu 服务器复测 |
@@ -148,6 +151,8 @@
 说明：
 
 - DRC 是人员1和人员2的交界点：人员1定义 Dock3 MQTT 语义，人员2保证 MAVLink/SITL 执行路径。
+- Dock3 中 `drc_mode_enter`、`drc_mode_exit`、`takeoff_to_point` 是 services 方法，应通过 `services/services_reply` 验收。
+- Dock3 中 `drc/down/drc/up` 用于 DRC 建链后的控制数据，例如 `stick_control`、`drone_control`、`payload_control`。
 - 当前不得在 DRC 热路径里阻塞等待长时间 ACK。
 
 ### 4.6 Dock：8 个

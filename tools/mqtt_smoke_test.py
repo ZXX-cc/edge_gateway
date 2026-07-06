@@ -20,6 +20,16 @@ CHANNELS = {
     "drc": ("thing/product/{sn}/drc/down", "thing/product/{sn}/drc/up"),
 }
 
+METHOD_CHANNEL_HINTS = {
+    "property_set": "property",
+    "drc_mode_enter": "services",
+    "drc_mode_exit": "services",
+    "takeoff_to_point": "services",
+    "stick_control": "drc",
+    "drone_control": "drc",
+    "payload_control": "drc",
+}
+
 
 def build_client(client_id):
     if hasattr(mqtt, "CallbackAPIVersion"):
@@ -44,14 +54,18 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--sn", default="EDGE-GW-001")
-    parser.add_argument("--channel", choices=sorted(CHANNELS), default="services")
+    parser.add_argument("--channel", choices=["auto", *sorted(CHANNELS)], default="auto")
     parser.add_argument("--method", default="dock_status_query")
     parser.add_argument("--payload", type=parse_payload, default={})
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     args = parser.parse_args()
 
-    publish_tpl, reply_tpl = CHANNELS[args.channel]
+    channel = args.channel
+    if channel == "auto":
+        channel = METHOD_CHANNEL_HINTS.get(args.method, "services")
+
+    publish_tpl, reply_tpl = CHANNELS[channel]
     publish_topic = publish_tpl.format(sn=args.sn)
     reply_topic = reply_tpl.format(sn=args.sn)
     done = Event()
