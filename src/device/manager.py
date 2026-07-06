@@ -1497,12 +1497,11 @@ class DeviceManager:
             bool: 命令是否成功发送
         """
         if not self._nest_module:
-            logger.warning(f"{command_name}: Nest module not available, updating property only")
-            self.update_properties({prop_name: prop_value})
-            return True
+            logger.warning(f"{command_name}: Nest module not available, MAVLink command not sent")
+            return False
 
         try:
-            from generated_dialect.gcs_order_protocol import GCSCommand
+            from src.generated_dialect.gcs_order_protocol import GCSCommand
 
             cmd_map = {
                 ('cover_state', 1): GCSCommand.DOOR_OPEN,
@@ -1519,6 +1518,7 @@ class DeviceManager:
                 logger.info(f"{command_name}: Nest command sent -> {cmd.name}")
             else:
                 logger.warning(f"{command_name}: No nest command mapping for {prop_name}={prop_value}")
+                return False
 
             # 先更新属性（实际项目中应等待机巢响应确认后再更新）
             self.update_properties({prop_name: prop_value})
@@ -1528,15 +1528,25 @@ class DeviceManager:
             logger.error(f"{command_name}: Failed to send nest command: {e}")
             return False
 
+    def _build_nest_command_reply(self, msg: dict, command_name: str, sent: bool) -> dict:
+        if sent:
+            return MessageBuilder.build_reply(msg, result=0, data={'action': command_name})
+        return MessageBuilder.build_reply(
+            msg,
+            result=-1,
+            msg_str=f"{command_name}: MAVLink nest command not sent",
+            data={'action': command_name}
+        )
+
     def handle_cover_open(self, msg: dict) -> dict:
         """打开舱盖 - 通过机巢协议真实下发"""
-        self._send_nest_command('cover_open', 'cover_state', 1)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'cover_open'})
+        sent = self._send_nest_command('cover_open', 'cover_state', 1)
+        return self._build_nest_command_reply(msg, 'cover_open', sent)
 
     def handle_cover_close(self, msg: dict) -> dict:
         """关闭舱盖 - 通过机巢协议真实下发"""
-        self._send_nest_command('cover_close', 'cover_state', 0)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'cover_close'})
+        sent = self._send_nest_command('cover_close', 'cover_state', 0)
+        return self._build_nest_command_reply(msg, 'cover_close', sent)
 
     def handle_cover_force_close(self, msg: dict) -> dict:
         """
@@ -1550,28 +1560,28 @@ class DeviceManager:
                 msg, result=-1,
                 msg_str="Drone in dock, cannot force close cover"
             )
-        self._send_nest_command('cover_force_close', 'cover_state', 0)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'cover_force_close'})
+        sent = self._send_nest_command('cover_force_close', 'cover_state', 0)
+        return self._build_nest_command_reply(msg, 'cover_force_close', sent)
 
     def handle_charge_open(self, msg: dict) -> dict:
         """开启充电 - 通过机巢协议真实下发"""
-        self._send_nest_command('charge_open', 'charging_state', 1)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'charge_open'})
+        sent = self._send_nest_command('charge_open', 'charging_state', 1)
+        return self._build_nest_command_reply(msg, 'charge_open', sent)
 
     def handle_charge_close(self, msg: dict) -> dict:
         """关闭充电 - 通过机巢协议真实下发"""
-        self._send_nest_command('charge_close', 'charging_state', 0)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'charge_close'})
+        sent = self._send_nest_command('charge_close', 'charging_state', 0)
+        return self._build_nest_command_reply(msg, 'charge_close', sent)
 
     def handle_putter_open(self, msg: dict) -> dict:
         """打开推杆 - 通过机巢协议真实下发"""
-        self._send_nest_command('putter_open', 'putter_state', 1)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'putter_open'})
+        sent = self._send_nest_command('putter_open', 'putter_state', 1)
+        return self._build_nest_command_reply(msg, 'putter_open', sent)
 
     def handle_putter_close(self, msg: dict) -> dict:
         """关闭推杆 - 通过机巢协议真实下发"""
-        self._send_nest_command('putter_close', 'putter_state', 0)
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'putter_close'})
+        sent = self._send_nest_command('putter_close', 'putter_state', 0)
+        return self._build_nest_command_reply(msg, 'putter_close', sent)
 
     def handle_device_lock(self, msg: dict) -> dict:
         """设备锁定"""
