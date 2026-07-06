@@ -46,6 +46,7 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/TEAM_COLLABORATION_GUIDE.md` | 三人协同边界、交接接口、冲突规避 |
 | `docs/DJI_DOCK3_MIGRATION_GUIDE.md` | Dock1 -> DJI Dock 3 迁移索引和工作方法 |
 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
+| `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 自定义机巢 MAVLink 消息字段映射 |
 | `DJI_CLOUD_API_INTERFACES.md` | 当前 MQTT method 分组和 Dock3 验收状态 |
 | `ARCHITECTURE_DESIGN.md` | 面向 Dock3 纯模拟目标的系统架构说明 |
@@ -53,7 +54,7 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 
 ## 快速启动顺序
 
-Ubuntu 首次部署和依赖安装见 `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md`。日常联调时按以下顺序启动：
+Ubuntu 首次部署和依赖安装见 `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md`。开发人员接手服务器、从开机状态启动完整链路时，优先看 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。日常联调时按以下顺序启动：
 
 ```bash
 # 1. MQTT Broker
@@ -125,4 +126,3 @@ http://Ubuntu服务器IP:8090
 - 对齐当前 223 个已注册 method 的 Dock3 状态
 - 固化上云 API 模拟器和机巢模拟器
 - 补齐 request trace、MongoDB 目标架构和自动化 smoke test
-

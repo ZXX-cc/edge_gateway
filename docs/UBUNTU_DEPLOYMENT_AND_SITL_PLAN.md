@@ -2,6 +2,8 @@
 
 本文档是当前仓库的部署推进基线。目标是在 Ubuntu 服务器内跑通“适配大疆上云 API 协议的边缘网关”模拟链路，不接实体无人机、飞控、机巢或负载设备。
 
+开发人员日常接手服务器、从开机状态启动完整链路、排查端口和进程时，使用 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。本文档保留阶段计划、部署背景和验收推进。
+
 当前协议目标已调整为 **DJI Dock 3**：
 
 - 原 DJI Dock/Dock1 属性参考：https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/properties.html
