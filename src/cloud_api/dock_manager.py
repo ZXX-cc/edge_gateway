@@ -257,9 +257,9 @@ class DockManager:
                 elif action == 'cover_close':
                     self._nest_module.manual_close_door()
                 elif action == 'charge_start':
-                    self._nest_module.start_charge()
+                    self._nest_module.start_charging()
                 elif action == 'charge_stop':
-                    self._nest_module.stop_charge()
+                    self._nest_module.stop_charging()
                 elif action == 'putter_push':
                     # 推杆推出近似为夹紧释放 (CLAMP_RELEASE)
                     from generated_dialect.gcs_order_protocol import GCSCommand

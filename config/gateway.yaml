@@ -4,16 +4,16 @@
 
 # --- 网关身份 ---
 gateway:
-  sn: "EDGE-GW-001"              # 网关序列号
-  name: "EdgeGateway-01"          # 网关名称
-  product_type: "edge-gateway"    # 产品类型
+  sn: "EDGE-GW-001" # 网关序列号
+  name: "EdgeGateway-01" # 网关名称
+  product_type: "edge-gateway" # 产品类型
 
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
-  host: "127.0.0.1"
+  host: "192.168.2.188"
   port: 1883
-  ws_port: 8083                   # WebSocket端口(视频流分离)
+  ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
   keepalive: 60
 
@@ -29,7 +29,7 @@ nanomq:
 
 # --- 云端MQTT配置 ---
 cloud:
-  enabled: false                  # 默认关闭，配置后启用
+  enabled: false # 默认关闭，配置后启用
   broker_host: ""
   broker_port: 8883
   username: ""
@@ -58,27 +58,37 @@ mavlink:
 
   # 系统ID
   system_id: 1
-  component_id: 190               # MAV_COMP_ID_MISSIONPLANNER
+  component_id: 190 # MAV_COMP_ID_MISSIONPLANNER
 
   # 遥测推送频率(Hz)
   telemetry_rate:
-    osd: 1                        # 定频遥测
-    state: 0                      # 状态变更(事件触发)
+    osd: 1 # 定频遥测
+    state: 0 # 状态变更(事件触发)
     gps: 10
     attitude: 10
     battery: 1
 
+# --- 机巢MAVLink配置（可选，开启后与飞控MAVLink分离） ---
+nest_mavlink:
+  enabled: true # true 时 DroneNestModule 使用独立连接
+  connection:
+    type: "udp"
+    host: "127.0.0.1"
+    port: 14550
+  system_id: 1
+  component_id: 190
+
 # --- 设备属性配置 ---
 device:
-  firmware_version: "1.0.0"       # 固件版本
-  storage_capacity: 64000         # 存储容量(MB)
+  firmware_version: "1.0.0" # 固件版本
+  storage_capacity: 64000 # 存储容量(MB)
 
   # 飞行限制
   limits:
-    max_height: 120               # 最大飞行高度(m)
-    max_distance: 1000            # 最大飞行距离(m)
-    max_speed: 15                 # 最大速度(m/s)
-    return_home_power: 30         # 返航预留电量(%)
+    max_height: 120 # 最大飞行高度(m)
+    max_distance: 1000 # 最大飞行距离(m)
+    max_speed: 15 # 最大速度(m/s)
+    return_home_power: 30 # 返航预留电量(%)
 
   # 安全设置
   safety:
@@ -88,16 +98,16 @@ device:
 
 # --- 媒体配置 ---
 media:
-  storage_path: "/data/media"     # 本地存储路径
+  storage_path: "/data/media" # 本地存储路径
   auto_upload: true
-  upload_quality: "original"      # original/high/medium/low
-  video_sources:                  # 视频源配置
+  upload_quality: "original" # original/high/medium/low
+  video_sources: # 视频源配置
     main: "camera_main"
     thermal: "camera_thermal"
 
   # OSS配置(上传凭证由云端下发)
   oss:
-    provider: "minio"             # minio/aliyun/aws
+    provider: "minio" # minio/aliyun/aws
     endpoint: ""
     bucket: ""
 
@@ -105,41 +115,41 @@ media:
 livestream:
   protocols: ["webrtc", "rtmp"]
   default_quality: "1080p"
-  default_bitrate: 4000           # kbps
+  default_bitrate: 4000 # kbps
   default_framerate: 30
 
 # --- 日志配置 ---
 logging:
-  level: "INFO"                   # DEBUG/INFO/WARNING/ERROR
-  dir: "./logs"                   # 日志根目录；会自动按 YYYY-MM 创建月份目录
+  level: "INFO" # DEBUG/INFO/WARNING/ERROR
+  dir: "./logs" # 日志根目录；会自动按 YYYY-MM 创建月份目录
   filename_prefix: "edge_gateway" # 每日日志文件名：edge_gateway_YYYY-MM-DD.log
-  console: true                   # 同时输出到终端
-  capture_print: true             # 捕获旧模块 print/stdout/stderr 到日志文件
-  daily_files: true               # 每日独立日志文件
-  monthly_dirs: true              # 每月独立日志目录
+  console: true # 同时输出到终端
+  capture_print: true # 捕获旧模块 print/stdout/stderr 到日志文件
+  daily_files: true # 每日独立日志文件
+  monthly_dirs: true # 每月独立日志目录
 
 # --- RTK/NTRIP配置 ---
 rtk:
-  enabled: false                  # 是否启用RTK差分定位
-  host: ""                        # NTRIP服务器地址
-  port: 8002                      # NTRIP服务器端口
-  mountpoint: ""                  # NTRIP挂载点
-  username: ""                    # NTRIP用户名
-  password: ""                    # NTRIP密码
+  enabled: false # 是否启用RTK差分定位
+  host: "" # NTRIP服务器地址
+  port: 8002 # NTRIP服务器端口
+  mountpoint: "" # NTRIP挂载点
+  username: "" # NTRIP用户名
+  password: "" # NTRIP密码
 
 # --- 数据保留策略 ---
 retention:
-  telemetry_hours: 2              # 遥测数据保留时长(小时)
-  operation_days: 3               # 操作记录保留时长(天)
-  alarm_days: 1                   # 告警记录保留时长(天)
-  media_uploaded_days: 7          # 已上传媒体保留时长(天)
-  cleanup_interval_hours: 1       # 清理间隔(小时)
-  vacuum_interval_hours: 24       # 数据库压缩间隔(小时)
-  max_db_size_mb: 50              # 最大数据库大小(MB)
+  telemetry_hours: 2 # 遥测数据保留时长(小时)
+  operation_days: 3 # 操作记录保留时长(天)
+  alarm_days: 1 # 告警记录保留时长(天)
+  media_uploaded_days: 7 # 已上传媒体保留时长(天)
+  cleanup_interval_hours: 1 # 清理间隔(小时)
+  vacuum_interval_hours: 24 # 数据库压缩间隔(小时)
+  max_db_size_mb: 50 # 最大数据库大小(MB)
 
 # --- 远程调试 ---
 debug:
   enabled: true
   websocket_port: 7681
-  auth_token: ""                  # 空表示不校验
-  session_timeout: 1800           # 30分钟
+  auth_token: "" # 空表示不校验
+  session_timeout: 1800 # 30分钟

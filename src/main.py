@@ -61,6 +61,10 @@ from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
 from src.database.retention_manager import DataRetentionManager
 from src.database.cloud_sync_manager import CloudSyncManager
+from src.device.nest_property_mapper import (
+    filter_dock_status_fields,
+    map_nest_to_cloud_properties,
+)
 
 logger = get_logger("main")
 
@@ -80,6 +84,8 @@ class EdgeGateway:
         # MAVLink新架构（core + modules）
         self.mavlink_conn = None
         self.dispatcher = None
+        self.nest_mavlink_conn = None
+        self.nest_dispatcher = None
         self.flight_control = None
         self.mode_control = None
         self.telemetry_module = None
@@ -205,6 +211,8 @@ class EdgeGateway:
             # 连接MAVLink（新架构：Connection + Dispatcher + Modules）
             logger.info("Connecting to MAVLink...")
             mavlink_config = Config.get_mavlink_config()
+            nest_mavlink_config = Config.get_nest_mavlink_config()
+            use_separate_nest_mavlink = bool(nest_mavlink_config.get('enabled'))
             conn_type = mavlink_config['connection_type']
 
             if conn_type == 'serial':
@@ -242,9 +250,11 @@ class EdgeGateway:
                 self.dispatcher.add_module(self.flight_control)
                 self.dispatcher.add_module(self.mode_control)
                 self.dispatcher.add_module(self.telemetry_module)
-                self.dispatcher.add_module(self.nest_module)
                 self.dispatcher.add_module(self.waypoint_manager)
                 self.dispatcher.add_module(self.rtk_module)
+                if not use_separate_nest_mavlink:
+                    self.dispatcher.add_module(self.nest_module)
+                    self.nest_module.dispatcher = self.dispatcher
 
                 # 注册消息钩子：功能模块通过 on_message 接收消息
                 self.dispatcher.register_hook('*', self.flight_control)
@@ -252,8 +262,9 @@ class EdgeGateway:
                 self.dispatcher.register_hook('*', self.telemetry_module)
                 self.dispatcher.register_hook('*', self.waypoint_manager)
                 self.dispatcher.register_hook('*', self.rtk_module)
-                self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
-                self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
+                if not use_separate_nest_mavlink:
+                    self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
+                    self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
 
                 # 连接TelemetryModule到TelemetryProcessor（统一数据流）
                 # TelemetryModule已通过通配符'*'订阅所有消息，无需单独注册钩子
@@ -311,7 +322,16 @@ class EdgeGateway:
                 # 机巢数据同步到 DeviceManager
                 def nest_env_cb(nest_data):
                     self.device.update_from_nest(nest_data)
+                    if self.dock:
+                        dock_updates = filter_dock_status_fields(
+                            map_nest_to_cloud_properties(nest_data)
+                        )
+                        if dock_updates:
+                            self.dock.update_dock_status(dock_updates)
                 self.nest_module.env_callbacks.append(nest_env_cb)
+
+                if use_separate_nest_mavlink:
+                    self._start_nest_mavlink(nest_mavlink_config)
 
                 # 启动分发器
                 self.dispatcher.start()
@@ -342,6 +362,49 @@ class EdgeGateway:
             logger.error(f"Start failed: {e}", exc_info=True)
             return False
 
+    def _start_nest_mavlink(self, nest_config: dict) -> bool:
+        """启动独立机巢 MAVLink 连接。"""
+        try:
+            if not self.nest_module:
+                logger.warning("Nest module not initialized, skip nest MAVLink")
+                return False
+
+            conn_type = nest_config.get('connection_type', 'udp')
+            if conn_type == 'serial':
+                conn_str = nest_config['port']
+            elif conn_type == 'udp':
+                conn_str = f"udp:{nest_config['host']}:{nest_config['udp_port']}"
+            elif conn_type == 'tcp':
+                conn_str = f"tcp:{nest_config['host']}:{nest_config['port']}"
+            else:
+                conn_str = f"udp:{nest_config['host']}:{nest_config['udp_port']}"
+
+            logger.info(f"Connecting to nest MAVLink: {conn_str}")
+            self.nest_mavlink_conn = MAVLinkConnection(
+                connection_string=conn_str,
+                source_system=nest_config['system_id'],
+                source_component=nest_config['component_id'],
+                baudrate=nest_config['baudrate'],
+                use_custom_dialect=True
+            )
+
+            if not self.nest_mavlink_conn.connect():
+                logger.warning("Failed to connect to nest MAVLink")
+                return False
+
+            self.nest_dispatcher = MessageDispatcher(self.nest_mavlink_conn)
+            self.nest_dispatcher.add_module(self.nest_module)
+            self.nest_dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
+            self.nest_dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
+            self.nest_module.dispatcher = self.nest_dispatcher
+            self.nest_dispatcher.start()
+            logger.info("Nest MAVLink dispatcher started")
+            return True
+
+        except Exception as e:
+            logger.error(f"Nest MAVLink start failed: {e}", exc_info=True)
+            return False
+
     def stop(self):
         """停止网关"""
         logger.info("Stopping Edge Gateway...")
@@ -356,8 +419,12 @@ class EdgeGateway:
             self.telemetry.stop()
         if self.dispatcher:
             self.dispatcher.stop()
+        if self.nest_dispatcher:
+            self.nest_dispatcher.stop()
         if self.mavlink_conn:
             self.mavlink_conn.disconnect()
+        if self.nest_mavlink_conn:
+            self.nest_mavlink_conn.disconnect()
         if self.mqtt:
             self.mqtt.disconnect()
         if self.device:
@@ -401,8 +468,12 @@ class EdgeGateway:
             self.telemetry.stop()
         if self.dispatcher:
             self.dispatcher.stop()
+        if self.nest_dispatcher:
+            self.nest_dispatcher.stop()
         if self.mavlink_conn:
             self.mavlink_conn.disconnect()
+        if self.nest_mavlink_conn:
+            self.nest_mavlink_conn.disconnect()
         if self.mqtt:
             self.mqtt.disconnect()
         if self.device:

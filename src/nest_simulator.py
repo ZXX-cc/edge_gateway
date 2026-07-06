@@ -8,8 +8,12 @@ import time
 import socket
 import threading
 import struct
+import argparse
+from pathlib import Path
 
-sys.path.insert(0, './generated_dialect')
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+GENERATED_DIALECT_DIR = PROJECT_ROOT / 'src' / 'generated_dialect'
+sys.path.insert(0, str(GENERATED_DIALECT_DIR))
 import drone_nest
 
 
@@ -106,28 +110,41 @@ class NestSimulator:
         self._send_raw(msg.pack(self.mav))
         print(f"已发送 DRONE_NEST_ORDER_RESPONSE: ordinary=0x{ordinary_response:08X}")
 
-    def _update_state_from_command(self, ordinary_order, _):
-        cmd_code = ordinary_order & 0xFF
-        if cmd_code == 0x01:
+    def _update_state_from_command(self, ordinary_order, takeoff_land_order):
+        if ordinary_order == 0x1101:
             self.env_data['gate_state'] = 1
             print("模拟器：舱门打开")
-        elif cmd_code == 0x02:
+        elif ordinary_order == 0x1102:
             self.env_data['gate_state'] = 2
             print("模拟器：舱门关闭")
-        elif cmd_code == 0x03:
+        elif ordinary_order == 0x1402:
             self.env_data['clamp_state'] = 1
-            print("模拟器：推杆推出")
-        elif cmd_code == 0x04:
+            print("模拟器：夹紧释放")
+        elif ordinary_order == 0x1401:
             self.env_data['clamp_state'] = 2
-            print("模拟器：推杆收回")
-        elif cmd_code == 0x05:
+            print("模拟器：夹紧")
+        elif ordinary_order == 0x0F01:
             self.env_data['charge_current'] = 50
             self.env_data['boolstate1'] |= (1 << 4)
             print("模拟器：开始充电")
-        elif cmd_code == 0x06:
+        elif ordinary_order == 0x0F02:
             self.env_data['charge_current'] = 0
             self.env_data['boolstate1'] &= ~(1 << 4)
             print("模拟器：停止充电")
+        elif ordinary_order:
+            print(f"模拟器：未识别普通命令 0x{ordinary_order:04X}")
+
+        if takeoff_land_order == 0x01:
+            self.env_data['boolstate2'] |= (1 << 0)
+            print("模拟器：起飞流程开始")
+        elif takeoff_land_order == 0x02:
+            self.env_data['boolstate2'] &= ~(1 << 0)
+            print("模拟器：起飞流程终止")
+        elif takeoff_land_order == 0x04:
+            self.env_data['boolstate2'] &= ~(1 << 1)
+            print("模拟器：降落流程终止")
+        elif takeoff_land_order:
+            print(f"模拟器：未识别起降命令 0x{takeoff_land_order:02X}")
 
     def _handle_message(self, msg):
         msg_type = msg.get_type()
@@ -155,7 +172,7 @@ class NestSimulator:
                 data, addr = self.sock.recvfrom(4096)
                 if not data:
                     continue
-                if self.client_addr is None:
+                if self.client_addr != addr:
                     self.client_addr = addr
                     print(f"已注册客户端地址: {addr}")
                     self._send_heartbeat()   # 立即回复心跳
@@ -196,7 +213,12 @@ class NestSimulator:
 
 
 if __name__ == '__main__':
-    sim = NestSimulator()
+    parser = argparse.ArgumentParser(description="MAVLink drone nest simulator")
+    parser.add_argument("--host", default="0.0.0.0", help="UDP bind host")
+    parser.add_argument("--port", type=int, default=14550, help="UDP bind port")
+    args = parser.parse_args()
+
+    sim = NestSimulator(host=args.host, port=args.port)
     try:
         sim.start()
     except KeyboardInterrupt:

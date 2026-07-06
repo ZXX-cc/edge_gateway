@@ -68,6 +68,94 @@ class MAVLinkConnection:
 
             print(f"[Connection] 等待连接: {self.connection_string}")
 
+            # ⭐⭐⭐ 对于自定义dialect的UDP连接，手动创建 ⭐⭐⭐
+            if self.use_custom_dialect and self.connection_string.startswith('udp:'):
+                import socket
+                import threading
+                from src.generated_dialect import drone_nest
+
+                parts = self.connection_string.replace('udp:', '').split(':')
+                host = parts[0]
+                port = int(parts[1])
+
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.bind(('0.0.0.0', 0))
+                sock.settimeout(1.0)
+
+                class UDPWriter:
+                    def __init__(self, sock_obj, target_addr):
+                        self._sock = sock_obj
+                        self._target = target_addr
+
+                    def write(self, data):
+                        self._sock.sendto(data, self._target)
+
+                class CustomUDPMAVLinkWrapper:
+                    def __init__(self, mav_instance, sock_obj):
+                        self.mav = mav_instance
+                        self._sock = sock_obj
+                        self.target_system = 0
+                        self.target_component = 0
+                        self._message_queue = []
+                        self._running = True
+                        self._receiver_thread = threading.Thread(
+                            target=self._receiver_loop,
+                            daemon=True,
+                            name="UDP_Nest_MAVLink_Receiver"
+                        )
+                        self._receiver_thread.start()
+
+                    def _receiver_loop(self):
+                        while self._running:
+                            try:
+                                data, _ = self._sock.recvfrom(4096)
+                                for byte in data:
+                                    try:
+                                        msg = self.mav.parse_char(bytes([byte]))
+                                        if msg:
+                                            self._message_queue.append(msg)
+                                    except Exception as e:
+                                        error_str = str(e).lower()
+                                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                                            print(f"[Connection] UDP解析异常: {e}")
+                            except socket.timeout:
+                                continue
+                            except Exception as e:
+                                if self._running:
+                                    print(f"[Connection] UDP recv错误: {e}")
+                                break
+
+                    def recv_match(self, blocking=True, timeout=None):
+                        if self._message_queue:
+                            return self._message_queue.pop(0)
+                        if blocking and timeout:
+                            end_time = time.time() + timeout
+                            while time.time() < end_time:
+                                if self._message_queue:
+                                    return self._message_queue.pop(0)
+                                time.sleep(0.01)
+                        return None
+
+                    def close(self):
+                        self._running = False
+                        try:
+                            self._sock.close()
+                        except:
+                            pass
+
+                writer = UDPWriter(sock, (host, port))
+                mav_instance = drone_nest.MAVLink(
+                    writer,
+                    srcSystem=self.source_system,
+                    srcComponent=self.source_component
+                )
+                self.master = CustomUDPMAVLinkWrapper(mav_instance, sock)
+
+                print(f"[Connection] ✅ UDP自定义dialect连接已建立: {host}:{port}")
+                self.status = ConnectionStatus.CONNECTED
+                self.last_heartbeat_time = time.time()
+                return True
+
             # ⭐⭐⭐ 对于自定义dialect的TCP连接，手动创建 ⭐⭐⭐
             if self.use_custom_dialect and self.connection_string.startswith('tcp:'):
                 import socket

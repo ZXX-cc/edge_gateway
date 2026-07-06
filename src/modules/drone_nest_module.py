@@ -51,6 +51,7 @@ class DroneNestModule(BaseModule):
             "ac_temp": 0,                 # 空调温度
             "gcs_order": 0,               # 地面站指令（原始值）
             "gcs_order_decoded": None,    # ⭐ 解码后的 gcs_order（GCSOrderDecoded对象）
+            "cloud_properties": {},       # MAVLink 状态转换后的上云 API 属性字段
             "last_update": 0.0,           # 最后更新时间
             "data_valid": False           # 数据有效性
         }
@@ -91,6 +92,10 @@ class DroneNestModule(BaseModule):
 
         # 操作事件回调
         self._operation_callback: Optional[Callable] = None
+
+        # 最近一次机巢命令执行回复，已转换为上层 API 可直接使用的结构
+        self.last_order_response: Dict[str, Any] = {}
+        self.last_cloud_order_response: Dict[str, Any] = {}
 
     # ========== 模块关联 ==========
 
@@ -222,6 +227,122 @@ class DroneNestModule(BaseModule):
 
         return GCSOrderResult(decoded, gcs_order)
 
+    @staticmethod
+    def _map_rainfall(raw_rainfall: float) -> int:
+        """机巢降雨量转换为上云属性降雨等级。"""
+        if raw_rainfall <= 0:
+            return 0
+        if raw_rainfall < 2.5:
+            return 1
+        if raw_rainfall < 8:
+            return 2
+        return 3
+
+    @staticmethod
+    def _map_gate_state(gate_state: int) -> int:
+        """gate_state -> cover_state。"""
+        if gate_state == 1:
+            return 1
+        if gate_state in (0, 2):
+            return 0
+        if gate_state in (3, 4, 5):
+            return 2
+        return 3
+
+    @staticmethod
+    def _map_clamp_state(clamp_state: int) -> int:
+        """clamp_state -> putter_state。"""
+        if clamp_state == 1:
+            return 1
+        if clamp_state in (0, 2):
+            return 0
+        if clamp_state in (3, 4, 5):
+            return 2
+        return 3
+
+    def _build_cloud_properties(self, nest_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将 DRONE_NEST_RESPONSE 解析结果转换为上云 API 属性字段。
+
+        这里只负责 MAVLink 层字段构造，不发布 MQTT。
+        """
+        if not nest_data.get("data_valid", False):
+            return {}
+
+        properties: Dict[str, Any] = {}
+
+        if "env_temperature" in nest_data:
+            properties["environment_temperature"] = nest_data["env_temperature"]
+        if "nest_temperature" in nest_data:
+            properties["temperature"] = nest_data["nest_temperature"]
+            properties["nest_temperature"] = nest_data["nest_temperature"]
+        if "wind_speed" in nest_data:
+            properties["wind_speed"] = nest_data["wind_speed"]
+        if "rainfall" in nest_data:
+            properties["rainfall"] = self._map_rainfall(nest_data["rainfall"])
+        if "charge_volt" in nest_data:
+            properties["working_voltage"] = int(nest_data["charge_volt"] * 1000)
+        if "charge_current" in nest_data:
+            properties["working_current"] = nest_data["charge_current"] * 1000
+        if "estop_state" in nest_data:
+            properties["emergency_stop_state"] = 1 if nest_data["estop_state"] else 0
+        if "charging_state" in nest_data:
+            charging_state = 1 if nest_data["charging_state"] else 0
+            properties["charging_state"] = charging_state
+            properties["drone_charge_state"] = {"state": charging_state}
+        if "gate_state" in nest_data:
+            properties["cover_state"] = self._map_gate_state(nest_data["gate_state"])
+        if "clamp_state" in nest_data:
+            properties["putter_state"] = self._map_clamp_state(nest_data["clamp_state"])
+        if "landing_light_state" in nest_data:
+            properties["supplement_light_state"] = 1 if nest_data["landing_light_state"] == 1 else 0
+        if "ac_temp" in nest_data:
+            properties["air_conditioner"] = {
+                "air_conditioner_state": 1 if nest_data["ac_temp"] > 0 else 0,
+                "switch_time": 0,
+            }
+
+        return properties
+
+    @staticmethod
+    def _decode_ordinary_order_response(raw_value: int) -> Dict[str, Any]:
+        """解析 ordinary_order_response 位域。"""
+        return {
+            "raw": raw_value,
+            "reply_status": raw_value & 0xFF,
+            "reject_reason_code": (raw_value >> 8) & 0xFF,
+            "command_code": (raw_value >> 16) & 0xFF,
+            "device_code": (raw_value >> 24) & 0xFF,
+        }
+
+    @staticmethod
+    def _decode_takeoff_land_order_response(raw_value: int) -> Dict[str, Any]:
+        """解析 takeoff_land_order_response 位域。"""
+        return {
+            "raw": raw_value,
+            "reply_status": raw_value & 0xFF,
+            "reject_reason_code": (raw_value >> 8) & 0xFF,
+            "reserved": (raw_value >> 16) & 0xFF,
+            "command_code": (raw_value >> 24) & 0xFF,
+        }
+
+    def _build_cloud_order_response(self, order_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将 DRONE_NEST_ORDER_RESPONSE 解析结果转换为上层 API 可用结构。
+
+        result=0 表示机巢未拒绝；非 0 表示存在拒绝原因。
+        """
+        rejections = order_result.get("rejections") or []
+        first_rejection = rejections[0] if rejections else {}
+        return {
+            "result": 0 if not rejections else int(first_rejection.get("reason_code") or -1),
+            "status": "success" if not rejections else "rejected",
+            "ordinary_order_response": order_result.get("ordinary_response"),
+            "takeoff_land_order_response": order_result.get("takeoff_land_response"),
+            "rejections": rejections,
+            "timestamp": int(order_result.get("timestamp", time.time()) * 1000),
+        }
+
     def _send_reset_command(self):
         """
         发送复位指令
@@ -338,6 +459,8 @@ class DroneNestModule(BaseModule):
                 "landing_light_state": msg.landing_light_state
             })
 
+            self.environment_data["cloud_properties"] = self._build_cloud_properties(self.environment_data)
+
             # 构造 gcs_order（兼容现有API）
             # 从解析出的状态位构造 gcs_order 值
             try:
@@ -413,69 +536,53 @@ class DroneNestModule(BaseModule):
             }
 
             # ==================== 解析普通命令回复 (字节10-13) ====================
-            if msg.ordinary_order_response != 0:
-                reply_status = msg.ordinary_order_response & 0xFF
-                reject_reason_code = (msg.ordinary_order_response >> 8) & 0xFF
-                command_code = (msg.ordinary_order_response >> 16) & 0xFF
-                device_code = (msg.ordinary_order_response >> 24) & 0xFF
+            ordinary_info = self._decode_ordinary_order_response(msg.ordinary_order_response)
+            ordinary_info.update({
+                "type": "ordinary",
+                "reject_reason": None,
+            })
 
-                ordinary_info = {
-                    "type": "ordinary",
-                    "reply_status": reply_status,
-                    "reject_reason_code": reject_reason_code,
-                    "command_code": command_code,
-                    "device_code": device_code,
-                    "reject_reason": None
-                }
+            if ordinary_info["reject_reason_code"] != 0:
+                reason_text = REJECT_REASONS.get(11, {}).get(
+                    ordinary_info["reject_reason_code"],
+                    f"未知拒绝原因({ordinary_info['reject_reason_code']})"
+                )
+                ordinary_info["reject_reason"] = reason_text
+                result["rejections"].append({
+                    "source": "机巢主控",
+                    "reason_code": ordinary_info["reject_reason_code"],
+                    "reason": reason_text,
+                    "command_type": "ordinary",
+                    "command_code": ordinary_info["command_code"]
+                })
 
-                if reject_reason_code != 0:
-                    reason_text = REJECT_REASONS.get(11, {}).get(reject_reason_code,
-                                                                 f"未知拒绝原因({reject_reason_code})")
-                    ordinary_info["reject_reason"] = reason_text
-                    result["rejections"].append({
-                        "source": "机巢主控",  # 可根据实际来源动态判断
-                        "reason_code": reject_reason_code,
-                        "reason": reason_text,
-                        "command_type": "ordinary",
-                        "command_code": command_code
-                    })
+            result["ordinary_response"] = ordinary_info
+            self.log(f"检测到常规回复: {result['ordinary_response']}", "INFO")
 
-                result["ordinary_response"] = ordinary_info
-                if result["ordinary_response"]:
-                    self.log(f"检测到常规回复: {result['ordinary_response']}", "WARNING")
-                else:
-                    self.log("✅ 命令执行未成功（已拒绝）", "INFO")
             # ==================== 解析起飞/降落命令回复 (字节14-17) ====================
-            if msg.takeoff_land_order_response != 0:
-                reply_status = msg.takeoff_land_order_response & 0xFF
-                reject_reason_code = (msg.takeoff_land_order_response >> 8) & 0xFF
-                command_code = (msg.takeoff_land_order_response >> 24) & 0xFF
+            takeoff_info = self._decode_takeoff_land_order_response(msg.takeoff_land_order_response)
+            takeoff_info.update({
+                "type": "takeoff_land",
+                "reject_reason": None,
+            })
 
-                takeoff_info = {
-                    "type": "takeoff_land",
-                    "reply_status": reply_status,
-                    "reject_reason_code": reject_reason_code,
-                    "command_code": command_code,
-                    "reject_reason": None
-                }
+            if takeoff_info["reject_reason_code"] != 0:
+                reason_text = REJECT_REASONS.get(15, {}).get(
+                    takeoff_info["reject_reason_code"],
+                    f"未知拒绝原因({takeoff_info['reject_reason_code']})"
+                )
+                takeoff_info["reject_reason"] = reason_text
+                result["rejections"].append({
+                    "source": "机巢主控",
+                    "reason_code": takeoff_info["reject_reason_code"],
+                    "reason": reason_text,
+                    "command_type": "takeoff_land",
+                    "command_code": takeoff_info["command_code"]
+                })
 
-                if reject_reason_code != 0:
-                    reason_text = REJECT_REASONS.get(15, {}).get(reject_reason_code,
-                                                                 f"未知拒绝原因({reject_reason_code})")
-                    takeoff_info["reject_reason"] = reason_text
-                    result["rejections"].append({
-                        "source": "机巢主控",
-                        "reason_code": reject_reason_code,
-                        "reason": reason_text,
-                        "command_type": "takeoff_land",
-                        "command_code": command_code
-                    })
+            result["takeoff_land_response"] = takeoff_info
+            self.log(f"检测到起飞回复: {result['takeoff_land_response']}", "INFO")
 
-                result["takeoff_land_response"] = takeoff_info
-                if result["takeoff_land_response"]:
-                    self.log(f"检测到起飞回复: {result['takeoff_land_response']}", "WARNING")
-                else:
-                    self.log("✅ 命令执行未成功（已拒绝）", "INFO")
             # ==================== 多拒绝优先级处理 ====================
             if len(result["rejections"]) > 1:
                 # 按优先级排序：机巢主控 > PLC > 无人机（当前仅支持机巢主控，可后续扩展）
@@ -484,16 +591,17 @@ class DroneNestModule(BaseModule):
 
             # ==================== 记录日志 + 存储到模块（供API读取） ====================
             self.last_order_response = result  # ⭐ 新增成员变量，供API查询
+            self.last_cloud_order_response = self._build_cloud_order_response(result)
 
             # 上报命令执行结果事件
             if result["rejections"]:
                 self.log(f"⚠️ 检测到拒绝: {result['rejections']}", "WARNING")
                 self._report_operation_event('failed', 'gcs_command_response',
-                                             {'rejections': result['rejections']})
+                                             self.last_cloud_order_response)
             else:
                 self.log("✅ 命令执行成功（无拒绝）", "INFO")
                 self._report_operation_event('completed', 'gcs_command_response',
-                                             {'result': 'success'})
+                                             self.last_cloud_order_response)
 
         except Exception as e:
             self.log(f"处理指令回复时出错: {e}", "ERROR")
@@ -703,6 +811,14 @@ class DroneNestModule(BaseModule):
     def get_environment_data(self) -> Dict[str, Any]:
         """获取机巢环境数据（包含解码后的 gcs_order）"""
         return self.environment_data.copy()
+
+    def get_cloud_properties(self) -> Dict[str, Any]:
+        """获取最近一次 DRONE_NEST_RESPONSE 转换出的上云属性字段。"""
+        return dict(self.environment_data.get("cloud_properties") or {})
+
+    def get_cloud_order_response(self) -> Dict[str, Any]:
+        """获取最近一次 DRONE_NEST_ORDER_RESPONSE 转换出的执行结果字段。"""
+        return dict(self.last_cloud_order_response or {})
 
     def get_gcs_order_decoded(self) -> Optional[GCSOrderDecoded]:
         """⭐ 获取解码后的 gcs_order"""

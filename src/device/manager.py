@@ -28,6 +28,7 @@ from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.device.nest_property_mapper import map_nest_to_cloud_properties
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.device_db import DeviceDB
 from src.database.alarm_db import AlarmDB
@@ -702,85 +703,13 @@ class DeviceManager:
         从机巢模块接收机巢环境/状态数据，更新OSD属性
         由 main.py 在 DroneNestModule 收到 DRONE_NEST_RESPONSE 后调用
         """
-        if not nest_data.get('data_valid', False):
-            return
+        updates = map_nest_to_cloud_properties(nest_data)
 
-        updates = {}
-
-        # 环境数据
-        if 'env_temperature' in nest_data:
-            updates['environment_temperature'] = nest_data['env_temperature']
-        if 'nest_temperature' in nest_data:
-            updates['temperature'] = nest_data['nest_temperature']
-        if 'wind_speed' in nest_data:
-            updates['wind_speed'] = nest_data['wind_speed']
-        if 'rainfall' in nest_data:
-            # rainfall: 0=无, >0 映射到 1/2/3
-            raw_rain = nest_data['rainfall']
-            if raw_rain <= 0:
-                updates['rainfall'] = 0
-            elif raw_rain < 2.5:
-                updates['rainfall'] = 1
-            elif raw_rain < 8:
-                updates['rainfall'] = 2
-            else:
-                updates['rainfall'] = 3
-        if 'humidity' in nest_data:
-            updates['humidity'] = nest_data['humidity']
-
-        # 电气数据
-        if 'charge_volt' in nest_data:
-            updates['working_voltage'] = int(nest_data['charge_volt'] * 1000)  # V -> mV
-        if 'charge_current' in nest_data:
-            updates['working_current'] = nest_data['charge_current'] * 1000  # A -> mA
-        if 'electric_supply_voltage' in nest_data:
-            updates['electric_supply_voltage'] = nest_data['electric_supply_voltage']
-
-        # 状态位（从 boolstate 解析）
-        if 'estop_state' in nest_data:
-            updates['emergency_stop_state'] = 1 if nest_data['estop_state'] else 0
-        if 'charging_state' in nest_data:
-            updates['charging_state'] = 1 if nest_data['charging_state'] else 0
+        if 'charging_state' in updates:
             # 联动更新无人机充电状态
             charge_state = self._properties.get('drone_charge_state', {}).copy()
-            charge_state['state'] = 1 if nest_data['charging_state'] else 0
+            charge_state['state'] = updates['charging_state']
             updates['drone_charge_state'] = charge_state
-
-        # 舱门/推杆状态（从 gate_state/clamp_state 映射）
-        if 'gate_state' in nest_data:
-            gate = nest_data['gate_state']
-            # 0=默认/关闭, 1=打开, 3=开启中, 4=关闭中, 5=暂停, 6=故障
-            if gate == 1:
-                updates['cover_state'] = 1
-            elif gate in (0, 2):
-                updates['cover_state'] = 0
-            elif gate in (3, 4, 5):
-                updates['cover_state'] = 2  # 半开/进行中
-            elif gate == 6:
-                updates['cover_state'] = 3  # 异常
-
-        if 'clamp_state' in nest_data:
-            clamp = nest_data['clamp_state']
-            # 0=默认, 1=放开, 2=夹紧, 3=放开打开中, 4=夹紧关闭中, 5=暂停, 6=故障
-            if clamp == 1:
-                updates['putter_state'] = 1
-            elif clamp in (0, 2):
-                updates['putter_state'] = 0
-            elif clamp in (3, 4, 5):
-                updates['putter_state'] = 2
-            elif clamp == 6:
-                updates['putter_state'] = 3
-
-        # 着陆灯状态
-        if 'landing_light_state' in nest_data:
-            light = nest_data['landing_light_state']
-            updates['supplement_light_state'] = 1 if light == 1 else 0
-
-        # 空调状态
-        if 'ac_temp' in nest_data:
-            ac_state = self._properties.get('air_conditioner', {}).copy()
-            ac_state['air_conditioner_state'] = 1 if nest_data['ac_temp'] > 0 else 0
-            updates['air_conditioner'] = ac_state
 
         # 一键起飞允许状态
         if 'takeoff_allowed' in nest_data:

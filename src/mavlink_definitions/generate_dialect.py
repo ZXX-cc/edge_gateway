@@ -124,8 +124,9 @@ def generate_dialect():
 
                 # 检查关键类
                 checks = [
-                    ('MAVLink_drone_nest_environment_message', 'DRONE_NEST_ENVIRONMENT'),
-                    ('MAVLink_uav_and_nest_message', 'UAV_AND_NEST'),
+                    ('MAVLink_drone_nest_command_message', 'DRONE_NEST_COMMAND'),
+                    ('MAVLink_drone_nest_response_message', 'DRONE_NEST_RESPONSE'),
+                    ('MAVLink_drone_nest_order_response_message', 'DRONE_NEST_ORDER_RESPONSE'),
                 ]
 
                 print(f"\n🔍 验证消息定义:")
@@ -139,8 +140,9 @@ def generate_dialect():
                 try:
                     mav = drone_nest.MAVLink(None)
                     methods = [
-                        'drone_nest_environment_send',
-                        'uav_and_nest_send'
+                        'drone_nest_command_send',
+                        'drone_nest_response_send',
+                        'drone_nest_order_response_send',
                     ]
                     for method in methods:
                         if hasattr(mav, method):

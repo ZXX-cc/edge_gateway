@@ -81,6 +81,20 @@ class Config:
             'component_id': cls.get('mavlink.component_id', 190)
         }
 
+    @classmethod
+    def get_nest_mavlink_config(cls):
+        """获取机巢MAVLink配置"""
+        return {
+            'enabled': cls.get('nest_mavlink.enabled', False),
+            'connection_type': cls.get('nest_mavlink.connection.type', 'udp'),
+            'port': cls.get('nest_mavlink.connection.port', 14550),
+            'baudrate': cls.get('nest_mavlink.connection.baudrate', 57600),
+            'host': cls.get('nest_mavlink.connection.host', '127.0.0.1'),
+            'udp_port': cls.get('nest_mavlink.connection.port', 14550),
+            'system_id': cls.get('nest_mavlink.system_id', 1),
+            'component_id': cls.get('nest_mavlink.component_id', 190)
+        }
+
 
 # 便捷函数
 def load_config(path="/etc/edge_gateway/gateway.yaml"):
