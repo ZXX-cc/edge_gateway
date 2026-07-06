@@ -22,6 +22,7 @@ import sys
 import time
 import signal
 import threading
+import asyncio
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -39,6 +40,7 @@ from src.modules.flight_control import FlightControl
 from src.modules.mode_control import ModeControl
 from src.modules.telemetry_module import TelemetryModule
 from src.modules.drone_nest_module import DroneNestModule
+from src.modules.waypoint_manager import WaypointManager
 from src.mavlink.telemetry import TelemetryProcessor
 from src.device.manager import DeviceManager
 from src.mission.manager import MissionManager
@@ -55,6 +57,10 @@ from src.modules.log_manager import LogManager
 from src.modules.flysafe_manager import FlySafeManager
 from src.modules.flight_area_manager import FlightAreaManager
 from src.modules.custom_data_manager import CustomDataManager
+from src.modules.rtk_module import RTKModule
+from src.modules.gimbal_control import GimbalControl
+from src.database.retention_manager import DataRetentionManager
+from src.database.cloud_sync_manager import CloudSyncManager
 
 logger = get_logger("main")
 
@@ -65,6 +71,7 @@ class EdgeGateway:
     def __init__(self):
         self.running = False
         self.config = None
+        self.loop = None
 
         # 核心组件
         self.mqtt: MQTTClient = None
@@ -76,6 +83,8 @@ class EdgeGateway:
         self.flight_control = None
         self.mode_control = None
         self.telemetry_module = None
+        self.nest_module = None
+        self.gimbal_control = None
 
         # 遥测处理
         self.telemetry: TelemetryProcessor = None
@@ -94,6 +103,8 @@ class EdgeGateway:
         self.flysafe: FlySafeManager = None
         self.flight_area: FlightAreaManager = None
         self.custom_data: CustomDataManager = None
+        self.waypoint_manager: WaypointManager = None
+        self.rtk_module: RTKModule = None
 
     def initialize(self, config_path: str = "./config/gateway.yaml") -> bool:
         """初始化网关"""
@@ -134,6 +145,14 @@ class EdgeGateway:
             self.flight_area = FlightAreaManager()
             self.custom_data = CustomDataManager()
 
+            # 6.1 初始化数据保留管理器（边缘端专用）
+            self.retention_manager = DataRetentionManager()
+
+            # 6.2 初始化云端同步管理器（混合存储架构）
+            self.cloud_sync_manager = CloudSyncManager()
+
+            # 7. 初始化RTK模块（延迟到start中，因为需要telemetry_module）
+
             # 8. 初始化云端连接管理
             self.cloud_conn = CloudConnectionManager(self.mqtt)
             self.telemetry_reporter = TelemetryReporter(self.mqtt)
@@ -157,6 +176,21 @@ class EdgeGateway:
     def start(self) -> bool:
         """启动网关"""
         try:
+            # 提前获取事件循环（供异步数据库操作使用）
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+
+            # 注入事件循环到需要异步操作的模块
+            if self.device:
+                self.device.set_event_loop(self.loop)
+            if self.mission:
+                self.mission.set_event_loop(self.loop)
+            if self.media:
+                self.media.set_event_loop(self.loop)
+
             # 连接NanoMQ
             logger.info("Connecting to NanoMQ...")
             if self.mqtt.connect():
@@ -176,7 +210,7 @@ class EdgeGateway:
             elif conn_type == 'udp':
                 conn_str = f"udp:{mavlink_config['host']}:{mavlink_config['udp_port']}"
             elif conn_type == 'tcp':
-                conn_str = f"tcp:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+                conn_str = f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
             else:
                 conn_str = f"udp:{mavlink_config['host']}:{mavlink_config['udp_port']}"
 
@@ -196,43 +230,49 @@ class EdgeGateway:
                 self.mode_control = ModeControl()
                 self.telemetry_module = TelemetryModule(mode="real")
                 self.nest_module = DroneNestModule()
+                self.waypoint_manager = WaypointManager()
+
+                # 初始化RTK模块（需要telemetry_module）
+                rtk_config = Config.get('rtk', {})
+                self.rtk_module = RTKModule(ntrip_config=rtk_config, telemetry_module=self.telemetry_module)
 
                 # 注册模块到分发器（idle_task + on_message）
                 self.dispatcher.add_module(self.flight_control)
                 self.dispatcher.add_module(self.mode_control)
                 self.dispatcher.add_module(self.telemetry_module)
                 self.dispatcher.add_module(self.nest_module)
+                self.dispatcher.add_module(self.waypoint_manager)
+                self.dispatcher.add_module(self.rtk_module)
 
                 # 注册消息钩子：功能模块通过 on_message 接收消息
                 self.dispatcher.register_hook('*', self.flight_control)
                 self.dispatcher.register_hook('*', self.mode_control)
                 self.dispatcher.register_hook('*', self.telemetry_module)
-                self.dispatcher.register_hook('*', self.nest_module)
+                self.dispatcher.register_hook('*', self.waypoint_manager)
+                self.dispatcher.register_hook('*', self.rtk_module)
                 self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
                 self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
 
-                # 注册遥测钩子（替代adapter的register_telemetry_callback）
-                self.dispatcher.register_hook('GLOBAL_POSITION_INT',
-                    lambda msg: self.telemetry.on_position(msg.msg))
-                self.dispatcher.register_hook('ATTITUDE',
-                    lambda msg: self.telemetry.on_attitude(msg.msg))
-                self.dispatcher.register_hook('SYS_STATUS',
-                    lambda msg: self.telemetry.on_battery(msg.msg))
-                self.dispatcher.register_hook('BATTERY_STATUS',
-                    lambda msg: self.telemetry.on_battery(msg.msg))
-                self.dispatcher.register_hook('GPS_RAW_INT',
-                    lambda msg: self.telemetry.on_gps(msg.msg))
-                self.dispatcher.register_hook('HEARTBEAT',
-                    lambda msg: self.telemetry.on_heartbeat(msg.msg))
-                self.dispatcher.register_hook('VFR_HUD',
-                    lambda msg: self.telemetry.on_vfr_hud(msg.msg))
-                self.dispatcher.register_hook('WIND',
-                    lambda msg: self.telemetry.on_wind(msg.msg))
+                # 连接TelemetryModule到TelemetryProcessor（统一数据流）
+                # TelemetryModule已通过通配符'*'订阅所有消息，无需单独注册钩子
+                self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
+
+                # 设置TelemetryProcessor回调到TelemetryReporter（上报出口）
+                # 注意：完整回调已在 _setup_callbacks() 中设置，此处仅确保 reporter 已初始化
 
                 # 注入模块依赖到业务层
                 self.mission.set_flight_control(self.flight_control)
                 self.mission.set_mode_control(self.mode_control)
                 self.mission.set_mavlink_connection(self.mavlink_conn)
+                self.mission.set_waypoint_manager(self.waypoint_manager)
+                self.mission.set_nest_module(self.nest_module)
+                self.mission.set_gimbal_control(self.gimbal)
+                self.mission.set_camera_controller(self.camera)
+                self.mission.set_telemetry_module(self.telemetry_module)
+                self.mission.set_telemetry_reporter(self.telemetry_reporter)
+
+                # 恢复上次中断的任务
+                self.mission.recover_missions()
                 self.drc.set_flight_control(self.flight_control)
                 self.drc.set_mode_control(self.mode_control)
                 self.camera.set_mavlink_connection(self.mavlink_conn)
@@ -240,6 +280,28 @@ class EdgeGateway:
                 self.third_party.set_mavlink_connection(self.mavlink_conn)
                 self.dock.set_nest_module(self.nest_module)
                 self.nest_module.set_flight_control(self.flight_control)
+
+                # 负载模块依赖注入
+                self.gimbal_control = GimbalControl()
+                self.camera.set_gimbal_control(self.gimbal_control)
+                self.camera.set_telemetry_module(self.telemetry_module)
+                def camera_event_cb(event):
+                    self.mqtt.publish_event(event)
+                self.camera.set_event_callback(camera_event_cb)
+
+                self.gimbal.set_gimbal_control(self.gimbal_control)
+                def gimbal_event_cb(event):
+                    self.mqtt.publish_event(event)
+                self.gimbal.set_event_callback(gimbal_event_cb)
+
+                # DRC 模块依赖注入
+                self.drc.set_mission_manager(self.mission)
+                self.drc.set_telemetry_module(self.telemetry_module)
+                self.drc.set_gimbal_control(self.gimbal_control)
+                self.drc.set_camera_controller(self.camera)
+                def drc_event_cb(event):
+                    self.mqtt.publish_event(event)
+                self.drc.set_event_callback(drc_event_cb)
 
                 # 注入 DeviceManager 依赖（数据源联动）
                 self.device.set_nest_module(self.nest_module)
@@ -263,7 +325,14 @@ class EdgeGateway:
                 logger.info("Starting cloud connection manager...")
                 self.cloud_conn.report_device_online()
                 self.cloud_conn.start_heartbeat()
-                self.cloud_conn._start_request_cleaner()
+
+                # 设置 DeviceManager 的云端连接（无论MAVLink是否连接）
+                if self.device:
+                    self.device.set_cloud_connection(self.cloud_conn)
+
+                    # 边缘端：设备上线后自动查询绑定状态（requests/requests_reply 模式）
+                    # Direction: up → 设备主动发送 airport_bind_status 到云端
+                    self.device.auto_query_bind_status_on_startup()
 
             self.running = True
             logger.info("Edge Gateway started successfully")
@@ -293,20 +362,76 @@ class EdgeGateway:
             self.mqtt.disconnect()
         if self.device:
             self.device.stop()
+        if self.rtk_module:
+            self.rtk_module.stop_ntrip()
+        if self.retention_manager and self.loop:
+            self.loop.call_soon_threadsafe(asyncio.create_task, self.retention_manager.stop())
+        elif self.retention_manager:
+            self.retention_manager.stop_sync()
+        if self.cloud_sync_manager and self.loop:
+            self.loop.call_soon_threadsafe(asyncio.create_task, self.cloud_sync_manager.stop())
+        elif self.cloud_sync_manager:
+            self.cloud_sync_manager.stop_sync()
 
         logger.info("Edge Gateway stopped")
 
-    def run(self):
-        """主循环"""
-        logger.info("Entering main loop...")
+    async def stop_async(self):
+        """异步停止网关"""
+        logger.info("Stopping Edge Gateway (async)...")
+        self.running = False
+
+        if self.cloud_conn:
+            self.cloud_conn.stop_heartbeat()
+            self.cloud_conn.report_device_offline()
+
+        if self.telemetry:
+            self.telemetry.stop()
+        if self.dispatcher:
+            self.dispatcher.stop()
+        if self.mavlink_conn:
+            self.mavlink_conn.disconnect()
+        if self.mqtt:
+            self.mqtt.disconnect()
+        if self.device:
+            self.device.stop()
+        if self.rtk_module:
+            self.rtk_module.stop_ntrip()
+
+        if self.retention_manager:
+            await self.retention_manager.stop()
+        if self.cloud_sync_manager:
+            await self.cloud_sync_manager.stop()
+
+        logger.info("Edge Gateway stopped (async)")
+
+    async def run_async(self):
+        """异步主循环"""
+        logger.info("Entering async main loop...")
+
+        if self.retention_manager:
+            await self.retention_manager.start()
+
+        if self.cloud_sync_manager:
+            await self.cloud_sync_manager.start()
+
         try:
             while self.running:
-                # 主循环可扩展心跳、监控等逻辑
-                time.sleep(1)
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.info("Main loop cancelled")
+        finally:
+            await self.stop_async()
+
+    def run(self):
+        """主循环（同步入口）"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self.run_async())
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received")
         finally:
-            self.stop()
+            loop.close()
 
     def _setup_callbacks(self):
         """设置各模块的回调函数"""
@@ -347,6 +472,8 @@ class EdgeGateway:
         # 任务管理回调
         def mission_event_cb(event):
             self.mqtt.publish_event(event)
+            # 同步 mission 状态到 DeviceManager
+            self.device.update_from_mission(event)
         self.mission.set_event_callback(mission_event_cb)
 
         # 媒体管理回调
@@ -366,6 +493,7 @@ class EdgeGateway:
         def dock_state_cb(state):
             self.mqtt.publish_state(gateway_sn, state)
         self.dock.set_callbacks(dock_event_cb, dock_state_cb)
+        self.dock.set_telemetry_reporter(self.telemetry_reporter)
 
         # 云端连接状态回调
         def cloud_status_cb(connected: bool):
@@ -436,6 +564,7 @@ class EdgeGateway:
             'device_reset': self.device.handle_device_reset,
             'workspace_bind_status': self.device.handle_workspace_bind_status,
             'workspace_get': self.device.handle_workspace_get,
+            'airport_bind_status': self.device.handle_airport_bind_status,
             'hms_get': self.device.handle_hms_get,
             'hms_clear': self.device.handle_hms_clear,
             'device_log_list_get': self.device.handle_device_log_list_get,
@@ -453,9 +582,6 @@ class EdgeGateway:
             'battery_store_mode_switch': self.device.handle_battery_store_mode_switch,
             'config': self.device.handle_config,
             'update_topo': self.device.handle_update_topo,
-            'airport_bind_status': self.device.handle_airport_bind_status,
-            'airport_organization_get': self.device.handle_airport_organization_get,
-            'airport_organization_bind': self.device.handle_airport_organization_bind,
             'airsense_warning': self.device.handle_airsense_warning,
         }, category='device')
 
@@ -486,7 +612,14 @@ class EdgeGateway:
         }, category='mission')
 
         # ---- 航线管理API (Wayline Management) ----
+        # DJI Cloud API Wayline 接口参考:
+        # https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html
+        #
+        # Services (down): 云端下发 -> 设备响应 services_reply
+        # Events (up): 设备上报 -> 云端响应 events_reply
+        # Requests (up): 设备请求 -> 云端响应 requests_reply
         self.router.register_batch({
+            # 航线任务管理 (Services)
             'wayline_task_create': self.mission.handle_wayline_task_create,
             'wayline_task_execute': self.mission.handle_wayline_task_execute,
             'wayline_task_pause': self.mission.handle_wayline_task_pause,
@@ -497,20 +630,18 @@ class EdgeGateway:
             'wayline_mission_download': self.mission.handle_wayline_mission_download,
             'wayline_mission_delete': self.mission.handle_wayline_mission_delete,
             'wayline_mission_query': self.mission.handle_wayline_mission_query,
+            # DJI标准FlightTask (Services)
             'flighttask_prepare': self.mission.handle_flighttask_prepare,
             'flighttask_execute': self.mission.handle_flighttask_execute,
             'flighttask_undo': self.mission.handle_flighttask_undo,
             'flighttask_return': self.mission.handle_flighttask_return,
-            'flighttask_progress': self.mission.handle_flighttask_progress,
+            'flighttask_progress': self.mission.handle_flighttask_progress,  # 兼做查询
             'flighttask_pause': self.mission.handle_flighttask_pause,
             'flighttask_resume': self.mission.handle_flighttask_resume,
-            'flighttask_ready': self.mission.handle_flighttask_ready,
-            'return_home_info': self.mission.handle_return_home_info,
             'flight_setup_abort': self.mission.handle_flight_setup_abort,
             'flighttask_create': self.mission.handle_flighttask_create,
             'flighttask_recovery': self.mission.handle_flighttask_recovery,
             'return_home_cancel': self.mission.handle_return_home_cancel,
-            'flighttask_resource_get': self.mission.handle_flighttask_resource_get,
         }, category='mission')
 
         # ---- 作业管理API (Job Management) ----
@@ -697,8 +828,8 @@ class EdgeGateway:
         logger.info(f"Registered {len(self.router._routes)} API handlers")
 
 
-def main():
-    """主入口"""
+async def main_async():
+    """异步主入口"""
     import argparse
     parser = argparse.ArgumentParser(description='Edge Gateway')
     parser.add_argument('-c', '--config', default='./config/gateway.yaml',
@@ -707,10 +838,8 @@ def main():
                        help='Run as daemon')
     args = parser.parse_args()
 
-    # 创建网关实例
     gateway = EdgeGateway()
 
-    # 信号处理（调试模式下不注册，避免与 debugpy 冲突）
     if sys.gettrace() is None:
         def signal_handler(signum, frame):
             logger.info(f"Received signal {signum}")
@@ -718,21 +847,29 @@ def main():
             sys.exit(0)
 
         signal.signal(signal.SIGINT, signal_handler)
-        # Windows 不完全支持 SIGTERM，跳过注册
         if hasattr(signal, 'SIGTERM'):
             signal.signal(signal.SIGTERM, signal_handler)
     else:
         logger.info("Running in debug mode, signal handlers disabled")
 
-    # 初始化并启动
     if not gateway.initialize(args.config):
         sys.exit(1)
 
     if not gateway.start():
         sys.exit(1)
 
-    # 运行主循环
-    gateway.run()
+    await gateway.run_async()
+
+def main():
+    """主入口"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main_async())
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
+    finally:
+        loop.close()
 
 
 if __name__ == '__main__':

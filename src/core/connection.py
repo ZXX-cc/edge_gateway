@@ -71,7 +71,7 @@ class MAVLinkConnection:
             # ⭐⭐⭐ 对于自定义dialect的TCP连接，手动创建 ⭐⭐⭐
             if self.use_custom_dialect and self.connection_string.startswith('tcp:'):
                 import socket
-                import drone_nest
+                from src.generated_dialect import drone_nest
 
                 # 解析连接字符串
                 parts = self.connection_string.replace('tcp:', '').split(':')
@@ -94,11 +94,48 @@ class MAVLinkConnection:
                         self.mav = mav_instance
                         self.file = file_obj
                         self._sock = sock_obj
+                        self._sock.settimeout(1.0)
                         self.target_system = 0
                         self.target_component = 0
 
                         # ⭐ 新增：消息队列缓冲
                         self._message_queue = []
+                        self._running = True
+
+                        # ⭐ 新增：启动receiver线程持续读取数据
+                        import threading
+                        self._receiver_thread = threading.Thread(
+                            target=self._receiver_loop,
+                            daemon=True,
+                            name="TCP_MAVLink_Receiver"
+                        )
+                        self._receiver_thread.start()
+
+                    def _receiver_loop(self):
+                        """后台receiver线程：持续读取socket数据并解析消息"""
+                        while self._running:
+                            try:
+                                data = self._sock.recv(4096)
+                                if not data:
+                                    print("[Connection] TCP连接被关闭")
+                                    break
+
+                                for byte in data:
+                                    try:
+                                        msg = self.mav.parse_char(bytes([byte]))
+                                        if msg:
+                                            self._message_queue.append(msg)
+                                    except Exception as e:
+                                        error_str = str(e).lower()
+                                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                                            print(f"[Connection] 解析异常: {e}")
+                                        continue
+                            except socket.timeout:
+                                continue
+                            except Exception as e:
+                                if "timeout" not in str(e).lower():
+                                    print(f"[Connection] recv错误: {e}")
+                                break
 
                     def recv_match(self, blocking=True, timeout=None):
                         """
@@ -108,39 +145,24 @@ class MAVLinkConnection:
                         if self._message_queue:
                             return self._message_queue.pop(0)
 
-                        # ⭐ 2. 队列空时，读取新数据并解析所有消息
-                        if timeout:
-                            self._sock.settimeout(timeout)
+                        # ⭐ 2. 阻塞模式下等待消息
+                        if blocking and timeout:
+                            import time
+                            end_time = time.time() + timeout
+                            while time.time() < end_time:
+                                if self._message_queue:
+                                    return self._message_queue.pop(0)
+                                time.sleep(0.01)
 
+                        return None
+
+                    def close(self):
+                        """关闭连接"""
+                        self._running = False
                         try:
-                            data = self._sock.recv(4096)
-                            if not data:
-                                return None
-
-                            # ⭐ 3. 解析这批数据中的所有消息
-                            for byte in data:
-                                try:
-                                    msg = self.mav.parse_char(bytes([byte]))
-                                    if msg:
-                                        self._message_queue.append(msg)
-                                except Exception as e:
-                                    error_str = str(e).lower()
-                                    if 'invalid' not in error_str and 'prefix' not in error_str:
-                                        print(f"[Connection] 解析异常: {e}")
-                                    continue
-
-                            # ⭐ 4. 返回队列中的第一条消息（如果有）
-                            if self._message_queue:
-                                return self._message_queue.pop(0)
-
-                            return None
-
-                        except socket.timeout:
-                            return None
-                        except Exception as e:
-                            if "timeout" not in str(e).lower():
-                                print(f"[Connection] recv错误: {e}")
-                            return None
+                            self._sock.close()
+                        except:
+                            pass
 
                 # 使用自定义dialect
                 mav_instance = drone_nest.MAVLink(

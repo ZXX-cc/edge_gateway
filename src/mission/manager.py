@@ -5,11 +5,17 @@
 import math
 import time
 import threading
+import asyncio
 from typing import List, Dict, Optional, Callable
+from uuid import UUID
 from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.database.connection import get_async_session_local, init_database_async
+from src.database.mission_db import MissionDB
+from src.database.waypoint_db import WaypointDB
+from src.database.schemas import MissionCreate, WaypointCreate
 
 logger = get_logger("mission")
 
@@ -39,6 +45,163 @@ class MissionManager:
     MISSION_FAILED = 5
     MISSION_CANCELED = 6
 
+    # DJI wayline_mission_state 枚举映射
+    # 参考: https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html
+    WAYLINE_MISSION_STATE_MAP = {
+        0: '断连',
+        1: '不支持该航点',
+        2: '航线准备状态,可上传文件,可执行已有文件',
+        3: '航线文件上传中',
+        4: '触发开始命令，飞行器触发读航线等逻辑，还未开始任务，处于准备状态',
+        5: '进入航线,到第一个航点',
+        6: '航线执行',
+        7: '航线中断，触发条件：1.用户主动暂停 2.飞控异常',
+        8: '航线恢复',
+        9: '航线停止',
+    }
+
+    # DJI break_reason 枚举映射
+    BREAK_REASON_MAP = {
+        0: '无异常',
+        1: 'Mission ID 不存在，该航线任务未执行',
+        2: '不常见错误，建议联系技术支持',
+        4: '请求开始/恢复航线任务时，航线文件加载出错，请重新尝试上传文件开始或联系技术支持',
+        5: '请求查询断点信息时，查询断点文件失败。请求恢复航线任务时，解析断点类型失败',
+        6: '请求开始/结束航线任务时，cmd参数有误，协议请求的指令有误。请求恢复航线任务时，解析断点类型失败',
+        7: '请求开始/恢复航线任务时，解析 wpmz 文件超时，请重试',
+        257: '航线已经开始，不能再次开始',
+        258: '此状态下无法中断航线，只允许在航线执行状态时暂停航线',
+        259: '航线未开始，不能结束航线',
+        261: '飞行任务冲突，无法获取飞行器控制权，不允许在降落和返航中开始航线',
+        262: '该状态下无法恢复航线，只允许在航线暂停状态时恢复航线',
+        513: '飞行器超过限高高度',
+        514: '飞行器超过限远距离',
+        515: '航线穿过限飞区，机场无法执行飞行任务',
+        516: '飞行器触发限低',
+        517: '飞行器触发避障',
+        518: 'RTK 信号差',
+        519: '接近禁飞区边界',
+        521: '超过机场限飞区限高',
+        522: '航线请求起飞失败',
+        523: '起飞任务执行失败',
+        524: '请求航线任务失败',
+        526: '请求航线 RTK 收敛任务失败',
+        527: '航线 RTK 收敛任务运行失败',
+        528: '接近用户自定义飞行区边界',
+        769: 'GPS 信号弱',
+        770: '遥控器档位不在 N 档，无法开始任务',
+        771: '返航点未刷新',
+        772: '当前电量过低无法开始任务',
+        773: '低电量返航导致航线中断',
+        775: '遥控器与飞行器失联',
+        778: '飞行器在地面起桨，不允许开始航线',
+        779: '实时仿地过程中，视觉状态异常（如过亮，过暗，两侧亮度不一致）',
+        780: '实时仿地用户设置的仿地高度不合法（大于 200 m 或者小于 30 m）',
+        781: '实时仿地过程中全局地图计算出错',
+        784: '大风返航导致航线中断',
+        1281: '用户退出',
+        1282: '用户中断',
+        1283: '用户触发返航',
+        1539: '开始信息（航点 index 或者 progress）错误',
+        1540: '使用不支持的坐标系',
+        1541: '使用不支持的高度模式',
+        1542: '使用不支持的过渡航线模式',
+        1543: '使用不支持的 yaw 模式',
+        1544: '使用不支持的 yaw 方向调转模式',
+        1545: '使用不支持的航点类型',
+        1546: '首尾点不能使用协调转弯类型',
+        1547: '航线全局速度超过合理范围',
+        1548: '航点数量异常',
+        1549: '经纬度数据异常',
+        1550: '转弯截距异常',
+        1551: '航段最大速度超过合理范围',
+        1552: '航段目标速度超过合理范围',
+        1553: '航点 yaw 角度超过合理范围',
+        1555: '断点续飞的 mission_id 输入错误',
+        1556: '断点续飞的 progress 信息输入错误',
+        1557: '断点续飞的任务状态异常',
+        1558: '断点续飞的航点 index 信息输入错误',
+        1559: '断点续飞的经纬度信息输入错误',
+        1560: '断点续飞的航点 yaw 输入错误',
+        1561: '断点续飞的标志位设置错误',
+        1563: '航线生成失败',
+        1564: '航线运行失败',
+        1565: '航线避障紧急刹停',
+        1588: '无法识别的动作类型',
+        1595: '同一动作组内动作 ID 不能重复',
+        1598: '动作 ID 值不能为 65535',
+        1602: '动作组数量超过合理范围',
+        1603: '动作组生效范围错误',
+        1606: '断点续飞中动作 index 超过合理范围',
+        1608: '断点信息中触发器运行结果异常',
+        1609: '断点续飞中动作组 ID 信息不能重复',
+        1610: '断点续飞中动作组位置不能重复',
+        1611: '断点续飞中动作组位置超过合理范围',
+        1612: '续飞中动作 ID 不在断点信息中',
+        1613: '续飞中不能修改动作状态为中断',
+        1614: '断点信息错误导致续飞失败',
+        1634: '无法识别的动作类型',
+        1649: '无法识别的触发器类型',
+        65534: '未知错误',
+        65535: '未知错误',
+    }
+
+    # DJI current_step 枚举映射
+    CURRENT_STEP_MAP = {
+        0: '初始状态',
+        1: '启动前检查，飞行器是否在执行航线中',
+        2: '启动前检查，机场是否退出工作模式',
+        3: '启动前检查，航线执行中',
+        4: '启动前检查，返航中',
+        5: '航线执行进入准备状态，开始等待任务下发',
+        6: '机场进入工作状态',
+        7: '进入开机检查准备工作和开盖准备工作',
+        8: '等待飞行系统准备就绪，推送连接建立',
+        9: '等待 RTK 源监听有值上报',
+        10: '检查 RTK 源是否是机场源，如果不是要重新设置',
+        11: '等待飞行控制权通知',
+        12: '机场无控制权，抢夺飞行器控制权',
+        13: '自定义飞行区一致性检查',
+        14: '离线地图一致性检查',
+        15: '获取最新 KMZ URL',
+        16: '下载 KMZ',
+        17: 'KMZ 上传中',
+        18: '染色配置',
+        19: '飞行器起飞参数设置，备降点设置，起飞高度设置，染色设置',
+        20: '飞行器 flyto 起飞参数设置',
+        21: 'Home 点设置',
+        22: '触发执行航线',
+        23: '航线执行中',
+        24: '进入返航的检查准备工作',
+        25: '飞行器降落机场',
+        26: '降落以后的关盖',
+        27: '机场退出工作模式',
+        28: '机场异常恢复',
+        29: '机场上传飞行系统日志',
+        30: '相机录像状态检查',
+        31: '获取媒体文件数量',
+        32: '机场起飞开盖的异常恢复',
+        33: '通知任务结果',
+        34: '任务执行完成，通过配置文件配置，是否进行主动 log 拉取',
+        35: '日志列表拉取 - 飞行器列表',
+        36: '日志列表拉取 - 拉取机场列表',
+        37: '日志列表拉取 - 上传日志列表结果',
+        38: '日志拉取-拉取飞行器日志',
+        39: '日志拉取-拉取机场日志',
+        40: '日志拉取-压缩飞行器日志',
+        41: '日志拉取-压缩机场日志',
+        42: '日志拉取-上传飞行器日志',
+        43: '日志拉取-上传机场日志',
+        44: '日志拉取-通知结果',
+        45: '自定义飞行区文件更新准备中',
+        46: '自定义飞行区更新中',
+        47: '离线地图更新准备中',
+        48: '离线地图更新中',
+        65533: '结束后等待服务回包',
+        65534: '无具体状态',
+        65535: 'UNKNOWN',
+    }
+
     def __init__(self):
         self.gateway_sn = Config.get_gateway_sn()
 
@@ -49,10 +212,27 @@ class MissionManager:
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0  # 断点航点索引（用于断点续飞）
 
+        # DJI标准航线任务属性 (flighttask_prepare 下发)
+        self._task_type = 0  # 0=立即 1=定时 2=条件
+        self._execute_time = 0
+        self._task_file = {}  # {url, fingerprint}
+        self._ready_conditions = {}
+        self._executable_conditions = {}
+        self._break_point = {}
+        self._rth_altitude = 100
+        self._out_of_control_action = 0
+        self._exit_wayline_when_rc_lost = 0
+        self._simulate_mission = {}
+
+        # DJI航线任务状态 (wayline_mission_state)
+        self._wayline_mission_state = 2  # 默认: 2=航线准备状态
+        self._current_step = 0  # 默认: 0=初始状态
+
         # MAVLink模块引用(由外部注入)
         self._flight_control = None
         self._mode_control = None
         self._mavlink_conn = None  # MAVLinkConnection 引用
+        self._waypoint_manager = None  # WaypointManager 引用
 
         # 回调
         self._event_callback: Optional[Callable] = None
@@ -60,6 +240,17 @@ class MissionManager:
         # 航点监控线程
         self._mission_monitor_thread: Optional[threading.Thread] = None
         self._monitor_running = False
+
+        # 数据库相关
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._db_initialized = False
+
+        # 关联模块
+        self._nest_module = None
+        self._gimbal_control = None
+        self._camera_controller = None
+        self._telemetry_module = None
+        self._telemetry_reporter = None
 
     def set_flight_control(self, flight_control):
         """注入飞行控制模块"""
@@ -73,9 +264,205 @@ class MissionManager:
         """注入MAVLink连接"""
         self._mavlink_conn = mavlink_conn
 
+    def set_waypoint_manager(self, waypoint_manager):
+        """注入航点管理模块"""
+        self._waypoint_manager = waypoint_manager
+
     def set_event_callback(self, callback: Callable):
         """设置事件上报回调"""
         self._event_callback = callback
+
+    def set_nest_module(self, nest_module):
+        """注入机巢模块"""
+        self._nest_module = nest_module
+
+    def set_gimbal_control(self, gimbal_control):
+        """注入云台控制模块"""
+        self._gimbal_control = gimbal_control
+
+    def set_camera_controller(self, camera_controller):
+        """注入相机控制模块"""
+        self._camera_controller = camera_controller
+
+    def set_telemetry_module(self, telemetry_module):
+        """注入遥测模块"""
+        self._telemetry_module = telemetry_module
+
+    def set_telemetry_reporter(self, telemetry_reporter):
+        """注入遥测上报模块"""
+        self._telemetry_reporter = telemetry_reporter
+
+    def set_event_loop(self, loop):
+        """注入异步事件循环引用"""
+        self._main_loop = loop
+        logger.info("MissionManager event loop set")
+
+    def _ensure_event_loop(self):
+        """确保事件循环已设置"""
+        if self._main_loop is None:
+            try:
+                self._main_loop = asyncio.get_running_loop()
+                logger.info("MissionManager captured main event loop")
+            except RuntimeError:
+                logger.warning("No running event loop detected")
+
+    async def _init_database(self):
+        """初始化数据库"""
+        if self._db_initialized:
+            return
+        await init_database_async()
+        self._db_initialized = True
+        logger.info("MissionManager database initialized")
+
+    async def _save_mission_to_database(self, task_id: str, wayline: List[dict]):
+        """保存任务和航点到数据库"""
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+
+            async with AsyncSessionLocal() as session:
+                mission_create = MissionCreate(
+                    name=task_id,
+                    device_id=self.gateway_sn,
+                    status="uploaded",
+                    execution_conditions={}
+                )
+                mission = await MissionDB.create_mission(session, mission_create)
+
+                if wayline:
+                    waypoints_create = []
+                    for wp in wayline:
+                        waypoint_create = WaypointCreate(
+                            mission_id=mission.id,
+                            sequence=wp.get('seq', 0),
+                            command=wp.get('command', 16),
+                            frame=wp.get('frame', 3),
+                            latitude=wp.get('latitude', 0.0),
+                            longitude=wp.get('longitude', 0.0),
+                            altitude=wp.get('altitude', 50.0),
+                            param1=wp.get('param1', 0.0),
+                            param2=wp.get('param2', 0.0),
+                            param3=wp.get('param3', 0.0),
+                            param4=wp.get('param4', 0.0),
+                            autocontinue=wp.get('autocontinue', 1),
+                            action_type=wp.get('action_type', 'waypoint'),
+                            flight_speed=wp.get('speed'),
+                            photo_interval=None
+                        )
+                        waypoints_create.append(waypoint_create)
+
+                    await WaypointDB.batch_create_waypoints_for_mission(
+                        session, mission.id, waypoints_create
+                    )
+
+                await session.commit()
+                logger.info(f"Mission saved to database: {task_id}")
+                return str(mission.id)
+        except Exception as e:
+            logger.error(f"Save mission to database failed: {e}")
+            return None
+
+    async def _update_mission_status(self, task_id: str, status: str):
+        """更新任务状态到数据库"""
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+
+            async with AsyncSessionLocal() as session:
+                mission = await MissionDB.get_mission_by_external_id(session, task_id)
+                if mission:
+                    await MissionDB.update_mission_status(session, UUID(mission.id), status)
+                    await session.commit()
+                    logger.info(f"Mission status updated: {task_id} -> {status}")
+        except Exception as e:
+            logger.error(f"Update mission status failed: {e}")
+
+    def _run_db_coroutine(self, coro):
+        """在主事件循环中运行数据库协程（非阻塞版）"""
+        self._ensure_event_loop()
+        if self._main_loop:
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+            except Exception as e:
+                logger.error(f"Failed to schedule DB coroutine: {e}")
+        else:
+            logger.warning("Cannot schedule DB coroutine: no event loop available")
+
+    async def _recover_pending_missions(self):
+        """恢复上次中断的任务"""
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+
+            async with AsyncSessionLocal() as session:
+                pending_missions = await MissionDB.get_pending_missions(session)
+                if pending_missions:
+                    logger.info(f"Found {len(pending_missions)} pending missions for recovery")
+                    for mission in pending_missions:
+                        logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
+                        if mission.status == 'running':
+                            self._current_task_id = mission.name
+                            self._status = self.MISSION_PAUSED
+                            self._wayline_mission_state = 7
+
+                            waypoints = await WaypointDB.get_waypoints_by_mission(session, UUID(mission.id))
+                            self._current_wayline = []
+                            for wp in waypoints:
+                                self._current_wayline.append({
+                                    'seq': wp.sequence,
+                                    'latitude': wp.latitude,
+                                    'longitude': wp.longitude,
+                                    'altitude': wp.altitude,
+                                    'command': wp.command,
+                                    'frame': wp.frame,
+                                    'param1': wp.param1,
+                                    'param2': wp.param2,
+                                    'param3': wp.param3,
+                                    'param4': wp.param4,
+                                    'autocontinue': wp.autocontinue,
+                                    'action_type': wp.action_type,
+                                    'speed': wp.flight_speed,
+                                })
+                            self._current_waypoint_idx = 0
+                            self._breakpoint_waypoint_idx = 0
+
+                            logger.info(f"Mission {mission.name} recovered with {len(self._current_wayline)} waypoints")
+
+                            if self._event_callback:
+                                event = MessageBuilder.build_event(
+                                    'flighttask_progress',
+                                    {
+                                        'result': 0,
+                                        'output': {
+                                            'status': 'paused',
+                                            'progress': {
+                                                'current_step': 33,
+                                                'percent': 0
+                                            },
+                                            'ext': {
+                                                'flight_id': mission.name,
+                                                'current_waypoint_index': 0,
+                                                'wayline_mission_state': 7,
+                                                'media_count': 0,
+                                                'track_id': '',
+                                                'wayline_id': 0,
+                                                'break_point': {}
+                                            }
+                                        }
+                                    },
+                                    self.gateway_sn
+                                )
+                                self._event_callback(event)
+        except Exception as e:
+            logger.error(f"Recover pending missions failed: {e}")
+
+    def recover_missions(self):
+        """启动时恢复任务"""
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._recover_pending_missions(),),
+            daemon=True
+        ).start()
 
     def _get_mavlink_master(self):
         """获取MAVLink master对象"""
@@ -99,6 +486,41 @@ class MissionManager:
     @property
     def is_busy(self) -> bool:
         return self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING)
+
+    # ---- 参数校验工具 ----
+
+    @staticmethod
+    def _check_enum(name: str, value, allowed: set, errors: list):
+        """校验枚举值"""
+        if value is not None and value not in allowed:
+            errors.append(f"{name}={value} 不在允许值 {allowed} 中")
+
+    @staticmethod
+    def _check_range(name: str, value, min_val, max_val, errors: list):
+        """校验数值范围"""
+        if value is not None:
+            try:
+                v = float(value)
+                if min_val is not None and v < min_val:
+                    errors.append(f"{name}={value} 小于最小值 {min_val}")
+                if max_val is not None and v > max_val:
+                    errors.append(f"{name}={value} 大于最大值 {max_val}")
+            except (TypeError, ValueError):
+                errors.append(f"{name}={value} 不是有效数值")
+
+    @staticmethod
+    def _check_length(name: str, value, length: int, errors: list):
+        """校验字符串/数字长度"""
+        if value is not None:
+            s = str(value)
+            if len(s) != length:
+                errors.append(f"{name} 长度应为 {length}，实际为 {len(s)}")
+
+    @staticmethod
+    def _check_type(name: str, value, expected_type, errors: list):
+        """校验类型"""
+        if value is not None and not isinstance(value, expected_type):
+            errors.append(f"{name} 类型错误，应为 {expected_type.__name__}，实际为 {type(value).__name__}")
 
     # ---- 航线任务API ----
 
@@ -132,12 +554,45 @@ class MissionManager:
 
         logger.info(f"Wayline loaded: {len(self._current_wayline)} waypoints")
 
+        # 上传航点到飞控
+        if self._waypoint_manager and self._current_wayline:
+            self._waypoint_manager.clear_waypoints()
+            for wp in self._current_wayline:
+                wp_dict = {
+                    'seq': wp.get('seq', 0),
+                    'lat': wp.get('latitude', 0.0),
+                    'lon': wp.get('longitude', 0.0),
+                    'alt': wp.get('altitude', 50.0),
+                    'command': wp.get('command', 16),
+                    'frame': wp.get('frame', 3),
+                    'param1': wp.get('param1', 0.0),
+                    'param2': wp.get('param2', 0.0),
+                    'param3': wp.get('param3', 0.0),
+                    'param4': wp.get('param4', 0.0),
+                    'autocontinue': wp.get('autocontinue', 1),
+                }
+                self._waypoint_manager.add_waypoint_from_dict(wp_dict)
+
+            upload_ok = self._waypoint_manager.upload_mission(timeout=15.0)
+            if upload_ok:
+                logger.info(f"Waypoint uploaded to FC: {len(self._current_wayline)} waypoints")
+            else:
+                logger.warning("Waypoint upload to FC failed")
+
+        # 保存到数据库
+        task_id = data.get('task_id', str(int(time.time())))
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._save_mission_to_database(task_id, self._current_wayline),),
+            daemon=True
+        ).start()
+
         # 上报任务准备就绪
         if self._event_callback:
             event = MessageBuilder.build_event(
                 'task_ready_notify',
                 {
-                    'task_id': data.get('task_id', ''),
+                    'task_id': task_id,
                     'status': 'ready',
                     'waypoint_count': len(self._current_wayline)
                 },
@@ -199,8 +654,24 @@ class MissionManager:
         data = msg.get('data', {})
         self._current_task_id = data.get('task_id', str(int(time.time())))
         self._status = self.MISSION_RUNNING
+        self._wayline_mission_state = 6  # 航线执行
+        self._current_step = 23  # 航线执行中
 
-        logger.info(f"Task started: {self._current_task_id}")
+        logger.info(f"Task started: {self._current_task_id}, wayline_state=6(航线执行)")
+
+        # 启动航点监控线程
+        self.start_mission_monitor()
+
+        # 更新数据库状态
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._update_mission_status(self._current_task_id, 'running'),),
+            daemon=True
+        ).start()
+
+        # 机巢联动：如果有机巢模块，请求起飞
+        if self._nest_module:
+            self._nest_module.request_takeoff()
 
         # 通过飞行控制模块启动航线任务
         if self._flight_control:
@@ -221,8 +692,41 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="No active mission")
 
         self._status = self.MISSION_CANCELED
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 33  # 通知任务结果
         self.stop_mission_monitor()
-        logger.info(f"Task canceled: {self._current_task_id}")
+        logger.info(f"Task canceled: {self._current_task_id}, wayline_state=9(航线停止)")
+
+        # 更新数据库状态
+        if self._current_task_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(self._current_task_id, 'canceled'),),
+                daemon=True
+            ).start()
+
+        # 上报任务取消事件
+        if self._event_callback:
+            event = MessageBuilder.build_event(
+                'flighttask_progress',
+                {
+                    'result': 0,
+                    'output': {
+                        'status': 'canceled',
+                        'progress': {
+                            'current_step': 33,
+                            'percent': 0
+                        }
+                    }
+                },
+                self.gateway_sn
+            )
+            self._event_callback(event)
+
+        # 机巢联动：如果有机巢模块，终止起飞或降落
+        if self._nest_module:
+            self._nest_module.abort_takeoff()
+            self._nest_module.abort_landing()
 
         # 发送返航指令
         if self._flight_control:
@@ -243,11 +747,20 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Mission not running")
 
         self._status = self.MISSION_PAUSED
+        self._wayline_mission_state = 7  # 航线中断
         self.stop_mission_monitor()
-        logger.info("Mission paused")
+        logger.info("Mission paused, wayline_state=7(航线中断)")
 
         # 记录断点
         self._breakpoint_waypoint_idx = self._current_waypoint_idx
+
+        # 更新数据库状态
+        if self._current_task_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                daemon=True
+            ).start()
 
         # 发送悬停指令
         if self._flight_control:
@@ -268,17 +781,28 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Mission not paused")
 
         self._status = self.MISSION_RUNNING
-        logger.info(f"Mission resumed from breakpoint: waypoint {self._breakpoint_waypoint_idx}")
+        self._wayline_mission_state = 8  # 航线恢复
+        self._current_step = 22  # 触发执行航线
+        logger.info(f"Mission resumed from breakpoint: waypoint {self._breakpoint_waypoint_idx}, wayline_state=8(航线恢复)")
 
-        # 断点续飞：从断点航点重新上传并执行
-        if self._current_wayline and self._breakpoint_waypoint_idx > 0:
-            logger.info(f"Breakpoint resume: re-uploading from waypoint {self._breakpoint_waypoint_idx}")
-            upload_ok = self.upload_waypoints_to_fc(self._current_wayline, self._breakpoint_waypoint_idx)
-            if not upload_ok:
-                logger.warning("Breakpoint re-upload failed, continuing with existing mission")
+        # 更新数据库状态
+        if self._current_task_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(self._current_task_id, 'running'),),
+                daemon=True
+            ).start()
+
+        # 断点续飞：使用 WaypointManager 设置当前航点
+        if self._waypoint_manager and self._breakpoint_waypoint_idx > 0:
+            logger.info(f"Breakpoint resume: set current waypoint to {self._breakpoint_waypoint_idx}")
+            ok = self._waypoint_manager.set_current_waypoint(self._breakpoint_waypoint_idx)
+            if not ok:
+                logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
 
         # 启动监控并切换到AUTO模式
         self.start_mission_monitor()
+        self._wayline_mission_state = 6  # 航线执行
         if self._flight_control:
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
@@ -426,7 +950,21 @@ class MissionManager:
 
         文档格式：
         { sn, flight_id, flight_type, timeout_time, timestamp }
+
+        Constraint:
+            flight_type: 1~2
+            timeout_time: 2~10, step=2
         """
+        # 参数校验
+        errors = []
+        self._check_enum('flight_type', flight_type, {1, 2}, errors)
+        self._check_range('timeout_time', timeout_time, 2, 10, errors)
+        if timeout_time is not None and timeout_time % 2 != 0:
+            errors.append(f"timeout_time={timeout_time} 应为 2 的倍数")
+        if errors:
+            logger.warning(f"report_setup_exception validation failed: {'; '.join(errors)}")
+            return
+
         if self._event_callback:
             data = {
                 'sn': self.gateway_sn,
@@ -441,14 +979,49 @@ class MissionManager:
             self._event_callback(event)
             logger.info(f"Setup exception reported: flight={flight_id}, type={flight_type}")
 
+    # DJI设备返航退出状态枚举映射
+    _EXIT_HOMING_ACTION_MAP = {
+        0: '退出返航退出状态',
+        1: '进入返航退出状态',
+    }
+    _EXIT_HOMING_REASON_MAP = {
+        0: '操纵杆油门添加',
+        1: '操纵杆间距添加',
+        2: '行为树初始化失败',
+        3: '被障碍物包围',
+        4: '触发限飞限制',
+        5: '障碍物距离太近',
+        6: '无GPS信号',
+        7: 'GPS和VIO位置输出标志为false',
+        8: 'GPS和VIO融合位置误差太大',
+        9: '短距离回溯',
+        10: '近距离触发返航',
+    }
+
     def report_device_exit_homing(self, action: int, reason: int):
         """
         上报设备返航退出状态 (device_exit_homing_notify)
 
+        Direction: up (events)
+        Data: {
+            sn: str,
+            action: enum_int,  # 0=退出返航退出状态, 1=进入返航退出状态
+            reason: enum_int    # 见_EXIT_HOMING_REASON_MAP
+        }
+
         Args:
             action: 0=退出返航退出状态, 1=进入返航退出状态
-            reason: 退出返航原因枚举
+            reason: 退出返航原因枚举值(0-10)
         """
+        # 参数有效性校验与映射
+        if action not in self._EXIT_HOMING_ACTION_MAP:
+            logger.warning(f"Invalid exit homing action: {action}, using raw value")
+        if reason not in self._EXIT_HOMING_REASON_MAP:
+            logger.warning(f"Invalid exit homing reason: {reason}, using raw value")
+
+        action_desc = self._EXIT_HOMING_ACTION_MAP.get(action, f'未知({action})')
+        reason_desc = self._EXIT_HOMING_REASON_MAP.get(reason, f'未知({reason})')
+
         if self._event_callback:
             data = {
                 'sn': self.gateway_sn,
@@ -459,7 +1032,12 @@ class MissionManager:
                 'device_exit_homing_notify', data, self.gateway_sn
             )
             self._event_callback(event)
-            logger.info(f"Exit homing reported: action={action}, reason={reason}")
+            logger.info(f"Exit homing reported: action={action}({action_desc}), "
+                       f"reason={reason}({reason_desc})")
+
+    # DJI status 枚举允许值
+    _STATUS_ENUM = {'canceled', 'failed', 'in_progress', 'ok', 'partially_done',
+                    'paused', 'rejected', 'sent', 'timeout'}
 
     def report_flighttask_progress(self, flight_id: str, status: str,
                                    current_step: int, percent: int,
@@ -469,7 +1047,23 @@ class MissionManager:
 
         文档格式：
         { result: 0, output: { status, progress: {current_step, percent}, ext: {...} } }
+
+        Constraint:
+            status: enum_string {canceled, failed, in_progress, ok, partially_done, paused, rejected, sent, timeout}
+            current_step: enum_int {0-48, 65533, 65534, 65535}
+            percent: 0~100
         """
+        # 参数校验
+        errors = []
+        if status not in self._STATUS_ENUM:
+            errors.append(f"status={status} 不在允许值 {self._STATUS_ENUM} 中")
+        valid_steps = set(range(49)) | {65533, 65534, 65535}
+        self._check_enum('current_step', current_step, valid_steps, errors)
+        self._check_range('percent', percent, 0, 100, errors)
+        if errors:
+            logger.warning(f"report_flighttask_progress validation failed: {'; '.join(errors)}")
+            return
+
         if self._event_callback:
             output = {
                 'status': status,
@@ -486,6 +1080,88 @@ class MissionManager:
                 self.gateway_sn
             )
             self._event_callback(event)
+
+    def report_flighttask_ready(self, flight_ids: list):
+        """
+        任务就绪通知 (flighttask_ready)
+
+        Direction: up (events)
+        当条件任务的就绪条件满足后，设备主动上报云端。
+
+        Data: { flight_ids: [str] }
+        """
+        # 参数校验
+        errors = []
+        if not isinstance(flight_ids, list):
+            errors.append("flight_ids 应为数组")
+        else:
+            for i, fid in enumerate(flight_ids):
+                if not isinstance(fid, str):
+                    errors.append(f"flight_ids[{i}] 应为字符串")
+        if errors:
+            logger.warning(f"report_flighttask_ready validation failed: {'; '.join(errors)}")
+            return
+
+        if self._event_callback:
+            event = MessageBuilder.build_event(
+                'flighttask_ready',
+                {'flight_ids': flight_ids},
+                self.gateway_sn
+            )
+            self._event_callback(event)
+            logger.info(f"Flighttask ready reported: {flight_ids}")
+
+    def report_return_home_info(self, planned_path_points: list,
+                                last_point_type: int = 0,
+                                flight_id: str = None):
+        """
+        返航信息 (return_home_info)
+
+        Direction: up (events)
+        飞行器实时规划返航路线后，设备主动上报云端。
+
+        Data: {
+            planned_path_points: [{latitude, longitude, height}, ...],
+            last_point_type: 0=在返航点上空 1=不在返航点上空,
+            flight_id: str
+        }
+
+        Constraint:
+            planned_path_points[].latitude: -90~90
+            planned_path_points[].longitude: -180~180
+            last_point_type: {0, 1}
+        """
+        # 参数校验
+        errors = []
+        self._check_enum('last_point_type', last_point_type, {0, 1}, errors)
+        if isinstance(planned_path_points, list):
+            for i, pt in enumerate(planned_path_points):
+                if not isinstance(pt, dict):
+                    errors.append(f"planned_path_points[{i}] 应为对象")
+                    continue
+                lat = pt.get('latitude')
+                lon = pt.get('longitude')
+                if lat is not None:
+                    self._check_range(f'planned_path_points[{i}].latitude', lat, -90, 90, errors)
+                if lon is not None:
+                    self._check_range(f'planned_path_points[{i}].longitude', lon, -180, 180, errors)
+        else:
+            errors.append("planned_path_points 应为数组")
+        if errors:
+            logger.warning(f"report_return_home_info validation failed: {'; '.join(errors)}")
+            return
+
+        if self._event_callback:
+            data = {
+                'planned_path_points': planned_path_points,
+                'last_point_type': last_point_type,
+                'flight_id': flight_id or self._current_task_id or ''
+            }
+            event = MessageBuilder.build_event(
+                'return_home_info', data, self.gateway_sn
+            )
+            self._event_callback(event)
+            logger.info(f"Return home info reported: points={len(planned_path_points)}")
 
     # ---- 航线管理 (大疆标准Wayline接口) ----
 
@@ -555,6 +1231,8 @@ class MissionManager:
     def handle_go_home(self, msg: dict) -> dict:
         """返航"""
         logger.info("Go home")
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 24  # 进入返航的检查准备工作
         if self._flight_control:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
@@ -588,10 +1266,6 @@ class MissionManager:
         logger.info(f"Takeoff to point: ({lat}, {lon}, {alt})")
         return MessageBuilder.build_reply(msg, result=0)
 
-    def handle_return_home(self, msg: dict) -> dict:
-        """返航（另一个接口名）"""
-        return self.handle_go_home(msg)
-
     def handle_go_to_altitude(self, msg: dict) -> dict:
         """上升至指定高度"""
         data = msg.get('data', {})
@@ -600,103 +1274,6 @@ class MissionManager:
         return MessageBuilder.build_reply(msg, result=0)
 
     # ---- 航点上传到飞控 ----
-
-    def upload_waypoints_to_fc(self, waypoints: List[dict], start_from: int = 0) -> bool:
-        """
-        上传航点到飞控 (MAVLink Mission Protocol)
-
-        Args:
-            waypoints: 航点列表
-            start_from: 从第几个航点开始上传（断点续飞用）
-
-        Returns:
-            bool: 是否上传成功
-        """
-        master = self._get_mavlink_master()
-        if not master:
-            logger.warning("MAVLink not connected, cannot upload waypoints")
-            return False
-
-        try:
-            # 1. 清除现有任务
-            master.mav.mission_clear_all_send(
-                master.target_system,
-                master.target_component,
-                mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-            )
-            time.sleep(0.5)
-
-            # 2. 发送任务数量
-            upload_list = waypoints[start_from:]
-            count = len(upload_list)
-            if count == 0:
-                logger.warning("No waypoints to upload")
-                return False
-
-            logger.info(f"Uploading {count} waypoints to FC (start_from={start_from})")
-
-            master.mav.mission_count_send(
-                master.target_system,
-                master.target_component,
-                count,
-                mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-            )
-
-            # 3. 等待飞控请求并逐个发送航点
-            uploaded = 0
-            timeout = time.time() + 30.0
-            while uploaded < count and time.time() < timeout:
-                msg = master.recv_match(
-                    type=['MISSION_REQUEST', 'MISSION_ACK', 'MISSION_REQUEST_INT'],
-                    blocking=True,
-                    timeout=5.0
-                )
-                if not msg:
-                    logger.warning("Waypoint upload timeout waiting for request")
-                    break
-
-                if msg.get_type() == 'MISSION_ACK':
-                    if msg.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                        logger.info(f"Waypoint upload accepted: {uploaded}/{count}")
-                        return True
-                    else:
-                        logger.error(f"Waypoint upload rejected: {msg.type}")
-                        return False
-
-                # 飞控请求第 seq 个航点
-                seq = msg.seq
-                if seq >= count:
-                    continue
-
-                wp = upload_list[seq]
-                master.mav.mission_item_int_send(
-                    master.target_system,
-                    master.target_component,
-                    seq,
-                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-                    0, 1,  # current, autocontinue
-                    0, 0, 0, 0,  # param1-4
-                    int(wp['latitude'] * 1e7),
-                    int(wp['longitude'] * 1e7),
-                    wp['altitude'],
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-                )
-                uploaded += 1
-                logger.debug(f"Uploaded waypoint {seq}: lat={wp['latitude']}, lon={wp['longitude']}, alt={wp['altitude']}")
-
-            # 4. 等待最终ACK
-            ack = master.recv_match(type='MISSION_ACK', blocking=True, timeout=5.0)
-            if ack and ack.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                logger.info(f"Waypoint upload complete: {uploaded}/{count}")
-                return True
-            else:
-                logger.warning("Waypoint upload final ACK missing or rejected")
-                return False
-
-        except Exception as e:
-            logger.error(f"Waypoint upload failed: {e}")
-            return False
 
     # ---- 航点监控线程 ----
 
@@ -741,9 +1318,24 @@ class MissionManager:
                             # 检测任务完成
                             if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
                                 self._status = self.MISSION_COMPLETED
+                                self._wayline_mission_state = 9  # 航线停止
+                                self._current_step = 33  # 通知任务结果
                                 self._report_mission_progress(status='completed')
+
+                                # 更新数据库状态
+                                if self._current_task_id:
+                                    threading.Thread(
+                                        target=self._run_db_coroutine,
+                                        args=(self._update_mission_status(self._current_task_id, 'completed'),),
+                                        daemon=True
+                                    ).start()
+
+                                # 机巢联动：如果有机巢模块，请求降落
+                                if self._nest_module:
+                                    self._nest_module.request_landing()
+
                                 self.stop_mission_monitor()
-                                logger.info("Mission completed!")
+                                logger.info("Mission completed!, wayline_state=9(航线停止)")
                 else:
                     time.sleep(1.0)
             except Exception as e:
@@ -751,10 +1343,53 @@ class MissionManager:
                 time.sleep(1.0)
 
     def _report_mission_progress(self, status: str = 'executing'):
-        """上报航线任务进度"""
+        """上报航线任务进度 (flighttask_progress)"""
         total = len(self._current_wayline)
         current = self._current_waypoint_idx
         percent = int(current / total * 100) if total > 0 else 0
+
+        # 状态映射到DJI标准status枚举
+        status_map = {
+            'executing': 'in_progress',
+            'completed': 'ok',
+            'failed': 'failed',
+            'paused': 'paused',
+            'canceled': 'canceled',
+        }
+        dji_status = status_map.get(status, 'in_progress')
+
+        # 使用精确的 wayline_mission_state (0-9)
+        wayline_state = self._wayline_mission_state
+        wayline_state_desc = self.WAYLINE_MISSION_STATE_MAP.get(
+            wayline_state, f'未知({wayline_state})'
+        )
+
+        # 使用动态的 current_step
+        current_step = self._current_step
+        current_step_desc = self.CURRENT_STEP_MAP.get(
+            current_step, f'未知({current_step})'
+        )
+
+        # 构建ext字段
+        ext = {
+            'current_waypoint_index': current,
+            'wayline_mission_state': wayline_state,
+            'media_count': 0,
+            'track_id': '',
+            'flight_id': self._current_task_id or '',
+            'wayline_id': 0,
+        }
+
+        # 断点信息（暂停或失败时上报）
+        if status in ('paused', 'failed') and self._break_point:
+            bp = self._break_point.copy()
+            # break_reason 映射
+            break_reason = bp.get('break_reason')
+            if break_reason is not None:
+                bp['break_reason_desc'] = self.BREAK_REASON_MAP.get(
+                    break_reason, f'未知({break_reason})'
+                )
+            ext['break_point'] = bp
 
         if self._event_callback:
             event = MessageBuilder.build_event(
@@ -762,19 +1397,12 @@ class MissionManager:
                 {
                     'result': 0,
                     'output': {
-                        'ext': {
-                            'current_waypoint_index': current,
-                            'wayline_mission_state': 6 if status == 'executing' else 5,
-                            'media_count': 0,
-                            'track_id': '',
-                            'flight_id': self._current_task_id or '',
-                            'wayline_id': 0,
-                        },
+                        'ext': ext,
                         'progress': {
-                            'current_step': 23,
+                            'current_step': current_step,
                             'percent': percent
                         },
-                        'status': status
+                        'status': dji_status
                     }
                 },
                 self.gateway_sn
@@ -787,71 +1415,211 @@ class MissionManager:
         """
         飞行任务准备 (flighttask_prepare)
 
+        Direction: down (services)
         Request: {
-            flighttask_id: str,
-            wayline_type: 0=普通航线 1=全景 2=扫描,
-            wayline_info: { waypoints: [...] }
+            flight_id: str,
+            execute_time: int,          # 开始执行时间(毫秒时间戳)
+            task_type: int,             # 0=立即 1=定时 2=条件
+            file: { url, fingerprint }, # 航线文件对象
+            ready_conditions: { battery_capacity, begin_time, end_time },
+            executable_conditions: { storage_capacity },
+            break_point: { index, state, progress, wayline_id },
+            rth_altitude: int,
+            out_of_control_action: int,      # 0=返航 1=悬停 2=降落
+            exit_wayline_when_rc_lost: int,  # 0=继续 1=退出
+            simulate_mission: { is_enable, latitude, longitude }
         }
         Response: { result }
-        Events: flighttask_prepare_progress
         """
         data = msg.get('data', {})
-        task_id = data.get('flighttask_id', '')
-        wayline_info = data.get('wayline_info', {})
-        logger.info(f"Flighttask prepare: {task_id}")
+        flight_id = data.get('flight_id', '')
+        task_type = data.get('task_type', 0)
+        execute_time = data.get('execute_time', 0)
+        file_info = data.get('file', {})
+        ready_conditions = data.get('ready_conditions', {})
+        executable_conditions = data.get('executable_conditions', {})
+        break_point = data.get('break_point', {})
+        rth_altitude = data.get('rth_altitude', 100)
+        out_of_control_action = data.get('out_of_control_action', 0)
+        exit_wayline_when_rc_lost = data.get('exit_wayline_when_rc_lost', 0)
+        simulate_mission = data.get('simulate_mission', {})
+
+        # ---- 参数校验（根据DJI文档 constraint） ----
+        errors = []
+
+        # flight_id: text, 必填
+        if not flight_id or not isinstance(flight_id, str):
+            errors.append("flight_id 必填且应为字符串")
+
+        # task_type: enum_int {0,1,2}
+        self._check_enum('task_type', task_type, {0, 1, 2}, errors)
+
+        # execute_time: int, length=13, 立即/定时任务必填
+        if task_type in (0, 1):
+            if not execute_time:
+                errors.append("execute_time 在立即/定时任务时必填")
+            else:
+                self._check_length('execute_time', execute_time, 13, errors)
+        elif task_type == 2 and execute_time:
+            self._check_length('execute_time', execute_time, 13, errors)
+
+        # file: struct, url和fingerprint为text
+        if file_info:
+            if not isinstance(file_info.get('url'), str):
+                errors.append("file.url 应为字符串")
+            if not isinstance(file_info.get('fingerprint'), str):
+                errors.append("file.fingerprint 应为字符串")
+
+        # ready_conditions: 条件任务(task_type=2)时必填
+        if task_type == 2:
+            if not ready_conditions:
+                errors.append("ready_conditions 在条件任务时必填")
+            else:
+                bc = ready_conditions.get('battery_capacity')
+                if bc is not None and (not isinstance(bc, int) or bc < 0 or bc > 100):
+                    errors.append("ready_conditions.battery_capacity 应为 0~100 的整数")
+                bt = ready_conditions.get('begin_time')
+                et = ready_conditions.get('end_time')
+                if bt:
+                    self._check_length('ready_conditions.begin_time', bt, 13, errors)
+                if et:
+                    self._check_length('ready_conditions.end_time', et, 13, errors)
+                if bt and et and bt >= et:
+                    errors.append("ready_conditions.begin_time 应小于 end_time")
+
+        # executable_conditions.storage_capacity: int
+        sc = executable_conditions.get('storage_capacity') if executable_conditions else None
+        if sc is not None and (not isinstance(sc, int) or sc < 0):
+            errors.append("executable_conditions.storage_capacity 应为非负整数")
+
+        # break_point: 可选
+        if break_point:
+            self._check_enum('break_point.state', break_point.get('state'), {0, 1}, errors)
+            self._check_range('break_point.progress', break_point.get('progress'), 0, 1.0, errors)
+            bp_lat = break_point.get('latitude')
+            bp_lon = break_point.get('longitude')
+            if bp_lat is not None:
+                self._check_range('break_point.latitude', bp_lat, -90, 90, errors)
+            if bp_lon is not None:
+                self._check_range('break_point.longitude', bp_lon, -180, 180, errors)
+
+        # rth_altitude: int, max=1500, min=20
+        self._check_range('rth_altitude', rth_altitude, 20, 1500, errors)
+
+        # out_of_control_action: enum_int {0,1,2}
+        self._check_enum('out_of_control_action', out_of_control_action, {0, 1, 2}, errors)
+
+        # exit_wayline_when_rc_lost: enum_int {0,1}
+        self._check_enum('exit_wayline_when_rc_lost', exit_wayline_when_rc_lost, {0, 1}, errors)
+
+        # simulate_mission: 可选
+        if simulate_mission:
+            self._check_enum('simulate_mission.is_enable', simulate_mission.get('is_enable'), {0, 1}, errors)
+            sm_lat = simulate_mission.get('latitude')
+            sm_lon = simulate_mission.get('longitude')
+            if sm_lat is not None:
+                self._check_range('simulate_mission.latitude', sm_lat, -90.0, 90.0, errors)
+            if sm_lon is not None:
+                self._check_range('simulate_mission.longitude', sm_lon, -180.0, 180.0, errors)
+
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask prepare validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+
+        logger.info(f"Flighttask prepare: flight_id={flight_id}, type={task_type}, "
+                   f"execute_time={execute_time}")
+
+        # 保存任务属性
+        self._current_task_id = flight_id
+        self._task_type = task_type
+        self._execute_time = execute_time
+        self._task_file = file_info
+        self._ready_conditions = ready_conditions
+        self._executable_conditions = executable_conditions
+        self._break_point = break_point
+        self._rth_altitude = rth_altitude
+        self._out_of_control_action = out_of_control_action
+        self._exit_wayline_when_rc_lost = exit_wayline_when_rc_lost
+        self._simulate_mission = simulate_mission
 
         self._status = self.MISSION_PREPARING
-        self._current_task_id = task_id
+        self._wayline_mission_state = 2  # 航线准备状态
+        self._current_step = 5  # 航线执行进入准备状态
 
-        # 1. 加载航线
-        if wayline_info.get('waypoints'):
-            parsed = []
-            for i, wp in enumerate(wayline_info['waypoints']):
-                p = self._parse_waypoint(wp, i)
-                if p:
-                    parsed.append(p)
-            self._current_wayline = parsed
-            logger.info(f"Parsed {len(parsed)} waypoints for task {task_id}")
+        # ---- 实际航线上传到飞控 ----
+        if self._current_wayline and self._waypoint_manager:
+            self._waypoint_manager.clear_waypoints()
+            for wp in self._current_wayline:
+                wp_dict = {
+                    'seq': wp.get('seq', 0),
+                    'lat': wp.get('latitude', 0.0),
+                    'lon': wp.get('longitude', 0.0),
+                    'alt': wp.get('altitude', 50.0),
+                    'command': wp.get('command', 16),
+                    'frame': wp.get('frame', 3),
+                    'param1': wp.get('param1', 0.0),
+                    'param2': wp.get('param2', 0.0),
+                    'param3': wp.get('param3', 0.0),
+                    'param4': wp.get('param4', 0.0),
+                    'autocontinue': wp.get('autocontinue', 1),
+                }
+                self._waypoint_manager.add_waypoint_from_dict(wp_dict)
 
-        # 2. 上传航点到飞控
-        upload_ok = False
-        if self._current_wayline:
-            upload_ok = self.upload_waypoints_to_fc(self._current_wayline)
+            upload_ok = self._waypoint_manager.upload_mission(timeout=15.0)
+            if not upload_ok:
+                self._status = self.MISSION_FAILED
+                self._wayline_mission_state = 1  # 不支持该航点
+                logger.error("Waypoint upload to FC failed")
+                return MessageBuilder.build_reply(msg, result=-1, msg_str="航线上传到飞控失败")
+            logger.info(f"Waypoint uploaded to FC: {len(self._current_wayline)} waypoints")
+        elif self._waypoint_manager and file_info.get('url'):
+            # TODO: 从 file.url 下载KMZ航线文件并解析航点
+            logger.info(f"KMZ download pending: {file_info.get('url', '')[:60]}...")
 
-        self._status = self.MISSION_IDLE if upload_ok else self.MISSION_FAILED
+        # 断点续飞设置
+        if break_point:
+            self._breakpoint_waypoint_idx = break_point.get('index', 0)
+            logger.info(f"Breakpoint set: index={break_point.get('index')}, "
+                       f"state={break_point.get('state')}, progress={break_point.get('progress')}")
 
-        # 上报准备进度
-        if self._event_callback:
-            event = MessageBuilder.build_event(
-                'flighttask_prepare_progress',
-                {
-                    'flighttask_id': task_id,
-                    'status': 'ready' if upload_ok else 'failed',
-                    'progress': 100 if upload_ok else 0
-                },
-                self.gateway_sn
-            )
-            self._event_callback(event)
+        # 返航高度设置（如飞控支持）
+        if rth_altitude and self._flight_control:
+            logger.info(f"RTH altitude configured: {rth_altitude}m")
 
-        return MessageBuilder.build_reply(msg, result=0 if upload_ok else -1, data={
-            'flighttask_id': task_id,
-            'status': 'ready' if upload_ok else 'failed'
-        })
+        # 模拟器任务
+        if simulate_mission and simulate_mission.get('is_enable') == 1:
+            logger.info(f"Simulate mission enabled: lat={simulate_mission.get('latitude')}, "
+                       f"lon={simulate_mission.get('longitude')}")
+
+        self._status = self.MISSION_IDLE
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flighttask_execute(self, msg: dict) -> dict:
         """
         飞行任务执行 (flighttask_execute)
 
-        Request: { flighttask_id: str }
+        Direction: down (services)
+        Request: { flight_id: str }
         Response: { result }
-        Events: flighttask_execute_progress
         """
         data = msg.get('data', {})
-        task_id = data.get('flighttask_id', '')
-        logger.info(f"Flighttask execute: {task_id}")
+        flight_id = data.get('flight_id', '')
 
-        self._current_task_id = task_id
+        # 参数校验
+        errors = []
+        if not flight_id or not isinstance(flight_id, str):
+            errors.append("flight_id 必填且应为字符串")
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask execute validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+
+        logger.info(f"Flighttask execute: {flight_id}")
+        self._current_task_id = flight_id
         self._status = self.MISSION_RUNNING
+        self._wayline_mission_state = 6  # 航线执行
+        self._current_step = 23  # 航线执行中
 
         # 启动航点监控线程
         self.start_mission_monitor()
@@ -864,30 +1632,50 @@ class MissionManager:
                 self._status = self.MISSION_FAILED
                 return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flighttask_id': task_id,
-            'status': 'executing'
-        })
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flighttask_undo(self, msg: dict) -> dict:
         """
-        飞行任务撤销 (flighttask_undo)
+        取消任务 (flighttask_undo)
 
-        Request: { flighttask_id: str }
+        Direction: down (services)
+        Request: { flight_ids: [str] }
         Response: { result }
         """
         data = msg.get('data', {})
-        task_id = data.get('flighttask_id', '')
-        logger.info(f"Flighttask undo: {task_id}")
+        flight_ids = data.get('flight_ids', [])
 
-        self._status = self.MISSION_CANCELED
+        # 参数校验
+        errors = []
+        if not isinstance(flight_ids, list):
+            errors.append("flight_ids 应为数组")
+        elif not flight_ids:
+            errors.append("flight_ids 不能为空")
+        else:
+            for i, fid in enumerate(flight_ids):
+                if not isinstance(fid, str):
+                    errors.append(f"flight_ids[{i}] 应为字符串")
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask undo validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
 
-        # TODO: 撤销任务，返航或降落
+        logger.info(f"Flighttask undo: {flight_ids}")
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flighttask_id': task_id,
-            'status': 'undone'
-        })
+        # 如果当前任务在取消列表中，则执行取消逻辑
+        if self._current_task_id and self._current_task_id in flight_ids:
+            self._status = self.MISSION_CANCELED
+            self._wayline_mission_state = 9  # 航线停止
+            self.stop_mission_monitor()
+            logger.info(f"Current task {self._current_task_id} canceled, wayline_state=9(航线停止)")
+
+            # 执行返航
+            if self._flight_control:
+                result = self._flight_control.one_click_return()
+                if not result.get("success"):
+                    logger.warning(f"返航指令失败: {result.get('message')}")
+
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flighttask_return(self, msg: dict) -> dict:
         """
@@ -899,9 +1687,19 @@ class MissionManager:
         data = msg.get('data', {})
         task_id = data.get('flighttask_id', '')
         return_type = data.get('return_type', 0)
-        logger.info(f"Flighttask return: {task_id}, type={return_type}")
 
-        # TODO: 执行返航或降落
+        # 参数校验
+        errors = []
+        if not isinstance(return_type, int) or return_type not in {0, 1}:
+            errors.append("return_type 应为 0(返航) 或 1(降落)")
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask return validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+
+        logger.info(f"Flighttask return: {task_id}, type={return_type}")
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 24  # 进入返航的检查准备工作
         if self._flight_control:
             if return_type == 0:
                 result = self._flight_control.one_click_return()
@@ -913,6 +1711,36 @@ class MissionManager:
         return MessageBuilder.build_reply(msg, result=0, data={
             'flighttask_id': task_id,
             'return_type': return_type
+        })
+
+    def handle_return_home(self, msg: dict) -> dict:
+        """
+        一键返航 (return_home)
+
+        Direction: down (services)
+        Request: null
+        Response: { result, output: { status } }
+        """
+        logger.info("Return home (one-key)")
+
+        # 参数校验: data 应为 null 或空对象
+        data = msg.get('data', {})
+        if data and not isinstance(data, dict):
+            logger.warning(f"Return home validation failed: data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
+
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 24  # 进入返航的检查准备工作
+        if self._flight_control:
+            result = self._flight_control.one_click_return()
+            if not result.get("success"):
+                logger.warning(f"一键返航失败: {result.get('message')}")
+                return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
+
+        return MessageBuilder.build_reply(msg, result=0, data={
+            'output': {
+                'status': 'in_progress'
+            }
         })
 
     def handle_flighttask_progress(self, msg: dict) -> dict:
@@ -939,27 +1767,39 @@ class MissionManager:
         })
 
     def handle_flighttask_pause(self, msg: dict) -> dict:
-        """飞行任务暂停（标准名）"""
+        """
+        航线暂停 (flighttask_pause)
+
+        Direction: down (services)
+        Request: {} / null
+        Response: { result }
+        """
+        logger.info("Flighttask pause")
         return self.handle_pause_wayline(msg)
 
     def handle_flighttask_resume(self, msg: dict) -> dict:
-        """飞行任务恢复（标准名）"""
+        """
+        航线恢复 (flighttask_resume)
+
+        Direction: down (services)
+        注意: 功能等同于 flighttask_recovery / resume_wayline
+        """
+        logger.info("Flighttask resume")
         return self.handle_resume_wayline(msg)
 
     def handle_flighttask_ready(self, msg: dict) -> dict:
         """
-        飞行任务准备就绪查询/通知 (flighttask_ready)
+        任务就绪通知 (flighttask_ready)
 
-        Direction: down/up
+        ⚠️ 注意: 此接口 Direction 为 up (events)，由设备主动上报云端。
+        此处保留仅为处理可能的 services 调用（如查询），正常情况下不应由云端下发。
+
         Request: { flight_ids: [...] }
         Response: { result }
         """
         data = msg.get('data', {})
         flight_ids = data.get('flight_ids', [])
-        logger.info(f"Flighttask ready: {flight_ids}")
-
-        # TODO: 实现具体逻辑
-
+        logger.info(f"Flighttask ready (services, unusual): {flight_ids}")
         return MessageBuilder.build_reply(msg, result=0, data={
             'flight_ids': flight_ids
         })
@@ -968,7 +1808,9 @@ class MissionManager:
         """
         返航信息 (return_home_info)
 
-        Direction: down/up
+        ⚠️ 注意: 此接口 Direction 为 up (events)，由设备主动上报云端。
+        此处保留仅为处理可能的 services 调用，正常情况下不应由云端下发。
+
         Request: { planned_path_points, last_point_type, flight_id }
         Response: { result }
         """
@@ -976,36 +1818,46 @@ class MissionManager:
         flight_id = data.get('flight_id', '')
         planned_path_points = data.get('planned_path_points', [])
         last_point_type = data.get('last_point_type', 0)
-        logger.info(f"Return home info: flight_id={flight_id}, points={len(planned_path_points)}, last_point_type={last_point_type}")
-
-        # TODO: 实现具体逻辑
-
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flight_id': flight_id
-        })
+        logger.info(f"Return home info (services, unusual): flight_id={flight_id}")
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flight_setup_abort(self, msg: dict) -> dict:
         """
-        飞行准备中止 (flight_setup_abort)
+        取消准备中的任务 (flight_setup_abort)
 
-        Direction: down
-        仅支持航线任务和指令飞行任务准备阶段调用。
+        Direction: down (services)
+        仅支持航线任务和指令飞行任务准备阶段，在Home点设置状态（current_step为21）进行调用。
 
         Request: null
         Response: { result }
+        错误码: 326108=当前状态不支持, 326109=飞行器已起飞不支持取消
         """
         logger.info("Flight setup abort")
 
-        # TODO: 实现具体逻辑
+        # 参数校验: data 应为 null 或空对象
+        data = msg.get('data', {})
+        if data and not isinstance(data, dict):
+            logger.warning(f"Flight setup abort validation failed: data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
 
+        # 状态检查：仅允许在准备阶段取消
+        if self._status not in (self.MISSION_PREPARING, self.MISSION_IDLE):
+            logger.warning(f"Flight setup abort rejected: current status={self._status}")
+            return MessageBuilder.build_reply(msg, result=326108, msg_str="当前状态不支持取消准备")
+
+        self._status = self.MISSION_CANCELED
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 28  # 机场异常恢复
+        self._current_task_id = None
+        logger.info("Flight setup aborted, wayline_state=9(航线停止)")
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flighttask_create(self, msg: dict) -> dict:
         """
-        飞行任务创建 (flighttask_create) - 已废弃
+        创建航线任务 (flighttask_create) - 已废弃
 
-        Direction: down
-        注意: 功能等同于 wayline_task_create
+        Direction: down (services)
+        已被 flighttask_prepare 替代。
 
         Request: { flight_id, type, file: { url, sign } }
         Response: { result }
@@ -1013,9 +1865,32 @@ class MissionManager:
         data = msg.get('data', {})
         flight_id = data.get('flight_id', '')
         file_info = data.get('file', {})
-        logger.info(f"Flighttask create (deprecated): {flight_id}, type={data.get('type', '')}")
+        task_type = data.get('type', '')
 
-        # TODO: 实现具体逻辑
+        # 参数校验
+        errors = []
+        if not flight_id or not isinstance(flight_id, str):
+            errors.append("flight_id 必填且应为字符串")
+        if not isinstance(task_type, str):
+            errors.append("type 应为字符串")
+        if file_info:
+            if not isinstance(file_info.get('url'), str):
+                errors.append("file.url 应为字符串")
+            if not isinstance(file_info.get('sign'), str):
+                errors.append("file.sign 应为字符串")
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask create validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+
+        logger.info(f"Flighttask create (deprecated): {flight_id}, type={task_type}")
+
+        # 保存文件信息兼容处理
+        self._current_task_id = flight_id
+        self._task_file = {
+            'url': file_info.get('url', ''),
+            'fingerprint': file_info.get('sign', '')
+        }
 
         return MessageBuilder.build_reply(msg, result=0, data={'flight_id': flight_id})
 
@@ -1036,28 +1911,61 @@ class MissionManager:
         """
         取消返航 (return_home_cancel)
 
-        Direction: down
-        注意: 功能等同于 cancel_return_home
+        Direction: down (services)
+        返航后，飞行器会退出航线模式，此时取消返航，飞行器会悬停。
 
         Request: null
         Response: { result }
         """
         logger.info("Return home cancel")
-        return self.handle_cancel_return_home(msg)
+
+        # 参数校验: data 应为 null 或空对象
+        data = msg.get('data', {})
+        if data and not isinstance(data, dict):
+            logger.warning(f"Return home cancel validation failed: data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
+
+        # 切换到悬停模式
+        if self._flight_control:
+            result = self._flight_control.set_mode("LOITER")
+            if not result.get("success"):
+                logger.warning(f"取消返航失败: {result.get('message')}")
+        return MessageBuilder.build_reply(msg, result=0)
 
     def handle_flighttask_resource_get(self, msg: dict) -> dict:
         """
-        获取飞行任务资源 (flighttask_resource_get)
+        任务资源获取 (flighttask_resource_get)
 
-        Direction: down
+        ⚠️ 注意: 此接口 Direction 为 up (requests)，应由设备主动请求云端获取资源。
+        此处保留仅为兼容可能的 services 调用。
+
         Request: { flight_id }
         Response: { result, output: { file: { url, fingerprint } } }
         """
         data = msg.get('data', {})
         flight_id = data.get('flight_id', '')
-        logger.info(f"Flighttask resource get: {flight_id}")
 
-        # TODO: 实现具体逻辑
+        # 参数校验
+        errors = []
+        if not flight_id or not isinstance(flight_id, str):
+            errors.append("flight_id 必填且应为字符串")
+        if errors:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask resource get validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+
+        logger.info(f"Flighttask resource get (services, unusual): {flight_id}")
+
+        # 如果本地已有该任务的文件信息，直接返回
+        if self._current_task_id == flight_id and self._task_file:
+            return MessageBuilder.build_reply(msg, result=0, data={
+                'output': {
+                    'file': {
+                        'url': self._task_file.get('url', ''),
+                        'fingerprint': self._task_file.get('fingerprint', '')
+                    }
+                }
+            })
 
         return MessageBuilder.build_reply(msg, result=0, data={
             'output': {

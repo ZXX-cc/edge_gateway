@@ -140,6 +140,7 @@ class GimbalControl:
         self._is_recording = False
         self._current_record_mode = VLKRecordMode.NONE
         self._lib: Optional[ctypes.CDLL] = None
+        self._sdk_available = False  # SDK是否可用（优雅降级标志）
 
         # 连接状态
         self._conn_status = None
@@ -215,15 +216,22 @@ class GimbalControl:
                 return result
 
             self._initialized = True
+            self._sdk_available = True
             result["success"] = True
             result["message"] = "SDK 初始化成功"
             self.log(result["message"], "OK")
 
         except Exception as e:
             result["message"] = f"初始化异常: {str(e)}"
+            self._sdk_available = False
             self.log(result["message"], "ERROR")
+            self.log("SDK 不可用，将使用 MAVLink 作为降级方案", "WARN")
 
         return result
+
+    def is_sdk_available(self) -> bool:
+        """SDK是否可用"""
+        return self._sdk_available
 
     def _define_function_signatures(self):
         """定义 SDK 函数签名"""

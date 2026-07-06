@@ -102,7 +102,7 @@ class TelemetryModule(BaseModule):
             self.telemetry_data["windSpeed"] = msg.speed
             is_updated = True
 
-        # ✅ 解析全球位置数据（增强版）
+        # ✅ 新增：解析全球位置数据（增强版）
         elif msg_type == "GLOBAL_POSITION_INT":
             # 经纬度（单位：度 * 1e7）
             if hasattr(msg, 'lat'):
@@ -124,6 +124,36 @@ class TelemetryModule(BaseModule):
                 self.telemetry_data["altitudeRelative"] = msg.relative_alt / 1000.0
                 # print(f'altitudeRelative = {self.telemetry_data["altitudeRelative"]}')
                 is_updated = True
+
+            # ✅ 航向（单位：厘度）
+            if hasattr(msg, 'hdg'):
+                self.telemetry_data["yaw"] = msg.hdg / 100.0
+                is_updated = True
+
+        # ✅ 新增：解析GPS原始数据
+        elif msg_type == "GPS_RAW_INT":
+            if hasattr(msg, 'satellites_visible'):
+                self.telemetry_data["satelliteNumber"] = msg.satellites_visible
+                is_updated = True
+
+            if hasattr(msg, 'fix_type'):
+                self.telemetry_data["gps_fixed"] = 1 if msg.fix_type >= 3 else 0
+                is_updated = True
+
+        # ✅ 新增：解析心跳数据（飞行模式、上锁状态）
+        elif msg_type == "HEARTBEAT":
+            base_mode = msg.base_mode
+            custom_mode = msg.custom_mode
+
+            # 解析上锁状态
+            armed = bool(base_mode & 0x80) if base_mode else False
+            self.telemetry_data["armed"] = armed
+            is_updated = True
+
+            # 解析飞行模式
+            flight_mode = self._parse_flight_mode(custom_mode)
+            self.telemetry_data["flight_mode"] = flight_mode
+            is_updated = True
 
         # ✅ 新增：解析地形报告数据
         elif msg_type == "TERRAIN_REPORT":
@@ -320,6 +350,20 @@ class TelemetryModule(BaseModule):
             except Exception as e:
                 self.log(f"回调执行错误: {e}", "ERROR")
 
+    @staticmethod
+    def _parse_flight_mode(custom_mode: int) -> str:
+        """解析MAVLink飞行模式为字符串（ArduPlane/QuadPlane）"""
+        mode_map = {
+            0: 'MANUAL', 1: 'CIRCLE', 2: 'STABILIZE', 3: 'TRAINING',
+            4: 'ACRO', 5: 'FBWA', 6: 'FBWB', 7: 'CRUISE',
+            8: 'AUTOTUNE', 10: 'AUTO', 11: 'RTL', 12: 'LOITER',
+            13: 'TAKEOFF', 14: 'AVOID_ADSB', 15: 'GUIDED', 16: 'INITIALISING',
+            17: 'QSTABILIZE', 18: 'QHOVER', 19: 'QLOITER', 20: 'QLAND',
+            21: 'QRTL', 22: 'QAUTOTUNE', 23: 'QACRO', 24: 'THERMAL',
+            25: 'LOITER_ALT_QLAND',
+        }
+        return mode_map.get(custom_mode, f'UNKNOWN({custom_mode})')
+
     def get_telemetry_data(self) -> Dict[str, Any]:
         """
         获取当前遥测数据
@@ -340,6 +384,22 @@ class TelemetryModule(BaseModule):
             "connection_status": self.telemetry_data["connection_status"],
             "data_mode": self.mode,
             "timestamp": self.telemetry_data["timestamp"]
+        }
+
+    def get_flight_status(self) -> Dict[str, Any]:
+        """
+        获取飞行状态（DRC模块调用）
+
+        Returns:
+            飞行状态字典，包含 is_flying, altitude 等关键字段
+        """
+        data = self.telemetry_data
+        return {
+            "is_flying": data.get("altitude", 0) > 1.0 or data.get("groundSpeed", 0) > 0.5,
+            "altitude": data.get("altitude", 0),
+            "ground_speed": data.get("groundSpeed", 0),
+            "battery": data.get("batteryRemaining", 0),
+            "connection_status": data.get("connection_status", "disconnected")
         }
 
     def get_last_telemetry(self) -> Dict[str, Any]:

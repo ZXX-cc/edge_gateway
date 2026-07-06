@@ -4,12 +4,17 @@
 """
 import time
 import os
+import glob
 import subprocess
 import threading
-from typing import Dict, Optional, Callable
+import asyncio
+import requests
+from typing import Dict, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.database.connection import get_async_session_local, init_database_async
+from src.database.media_db import MediaDB
 
 logger = get_logger("media")
 
@@ -20,7 +25,7 @@ class MediaManager:
 
     职责:
     1. 媒体文件管理(列表、删除)
-    2. 上传控制(优先级调整、断点续传)
+    2. 上传控制(优先级调整、断点续传、云端凭证请求、HTTP上传)
     3. 直播控制(开始/停止/画质/镜头切换)
     4. 存储管理(容量监控)
 
@@ -48,6 +53,8 @@ class MediaManager:
         # 上传队列
         self._upload_queue = []
         self._uploading = False
+        self._upload_thread: Optional[threading.Thread] = None
+        self._upload_lock = threading.Lock()
 
         # 直播状态
         self._live_streaming = False
@@ -70,6 +77,13 @@ class MediaManager:
         self._event_callback: Optional[Callable] = None
         self._request_sender: Optional[Callable] = None
 
+        # 数据库相关
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._db_initialized = False
+
+        # 上传重试配置
+        self._max_retry_count = 3
+
     def set_event_callback(self, callback: Callable):
         """设置事件上报回调"""
         self._event_callback = callback
@@ -77,6 +91,39 @@ class MediaManager:
     def set_request_sender(self, sender: Callable):
         """设置请求发送器（用于 requests 通道）"""
         self._request_sender = sender
+
+    def set_event_loop(self, loop):
+        """注入异步事件循环引用"""
+        self._main_loop = loop
+        logger.info("MediaManager event loop set")
+
+    def _ensure_event_loop(self):
+        """确保事件循环已设置"""
+        if self._main_loop is None:
+            try:
+                self._main_loop = asyncio.get_running_loop()
+                logger.info("MediaManager captured main event loop")
+            except RuntimeError:
+                logger.warning("No running event loop detected")
+
+    async def _init_database(self):
+        """初始化数据库"""
+        if self._db_initialized:
+            return
+        await init_database_async()
+        self._db_initialized = True
+        logger.info("MediaManager database initialized")
+
+    def _run_db_coroutine(self, coro):
+        """在主事件循环中运行数据库协程（非阻塞版）"""
+        self._ensure_event_loop()
+        if self._main_loop:
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+            except Exception as e:
+                logger.error(f"Failed to schedule DB coroutine: {e}")
+        else:
+            logger.warning("Cannot schedule DB coroutine: no event loop available")
 
     # ---- 媒体文件管理 ----
 
@@ -182,6 +229,221 @@ class MediaManager:
                 self.gateway_sn
             )
             self._event_callback(event)
+
+    # ---- 文件上传管理 ----
+
+    def _scan_local_files(self) -> List[dict]:
+        """扫描本地媒体文件"""
+        files = []
+        try:
+            if not os.path.exists(self.storage_path):
+                os.makedirs(self.storage_path, exist_ok=True)
+                return files
+
+            # 扫描常见媒体文件格式
+            extensions = ['*.jpg', '*.jpeg', '*.png', '*.mp4', '*.mov', '*.avi']
+            for ext in extensions:
+                pattern = os.path.join(self.storage_path, ext)
+                for filepath in glob.glob(pattern):
+                    filename = os.path.basename(filepath)
+                    filesize = os.path.getsize(filepath)
+                    filetype = filename.split('.')[-1].lower()
+                    files.append({
+                        'file_name': filename,
+                        'file_path': filepath,
+                        'file_size': filesize,
+                        'file_type': filetype,
+                        'capture_time': int(os.path.getmtime(filepath))
+                    })
+        except Exception as e:
+            logger.error(f"Scan local files failed: {e}")
+
+        return files
+
+    async def _get_pending_files_for_upload(self) -> List[dict]:
+        """获取待上传的文件列表（与数据库比对）"""
+        await self._init_database()
+        AsyncSessionLocal = get_async_session_local()
+
+        async with AsyncSessionLocal() as session:
+            db_files = await MediaDB.get_pending_uploads(session, self.gateway_sn)
+            db_file_names = {f.file_name for f in db_files}
+
+            local_files = self._scan_local_files()
+            pending_files = []
+
+            for local_file in local_files:
+                if local_file['file_name'] not in db_file_names:
+                    pending_files.append(local_file)
+
+            return pending_files
+
+    def _request_upload_credentials(self, files: List[dict]) -> Optional[dict]:
+        """向云端请求上传凭证"""
+        if not self._request_sender:
+            logger.warning("Request sender not set, cannot request upload credentials")
+            return None
+
+        # 构建请求参数
+        request_data = {
+            'module': 0,
+            'files': [{'name': f['file_name'], 'size': f['file_size']} for f in files]
+        }
+
+        # 同步等待响应
+        result = {}
+
+        def callback(response):
+            nonlocal result
+            result = response
+
+        request_id = self._request_sender('storage_config_get', request_data, callback)
+
+        # 等待响应（最多等待10秒）
+        for _ in range(20):
+            if result:
+                break
+            time.sleep(0.5)
+
+        return result.get('data') if result else None
+
+    def _upload_file_http(self, filepath: str, upload_url: str) -> bool:
+        """通过HTTP上传文件到对象存储"""
+        try:
+            with open(filepath, 'rb') as f:
+                response = requests.put(upload_url, data=f, timeout=300)
+                return response.status_code == 200
+        except Exception as e:
+            logger.error(f"HTTP upload failed: {e}")
+            return False
+
+    def _update_upload_progress(self, file_id: str, progress: int, status: str):
+        """更新上传进度"""
+        self._run_db_coroutine(MediaDB.update_upload_status(file_id, status))
+
+        # 上报进度事件
+        if self._event_callback:
+            event = MessageBuilder.build_event(
+                'fileupload_progress',
+                {
+                    'result': 0,
+                    'output': {
+                        'status': 'in_progress' if status == 'uploading' else status,
+                        'ext': {
+                            'files': [{
+                                'device_sn': self.gateway_sn,
+                                'module': 'media',
+                                'size': 0,
+                                'key': file_id,
+                                'fingerprint': '',
+                                'progress': {
+                                    'progress': progress,
+                                    'finish_time': 0,
+                                    'upload_rate': 0,
+                                    'status': status,
+                                    'result': 0
+                                }
+                            }]
+                        }
+                    }
+                },
+                self.gateway_sn
+            )
+            self._event_callback(event)
+
+    def _upload_files(self):
+        """上传文件主循环"""
+        while True:
+            with self._upload_lock:
+                if not self._upload_queue:
+                    self._uploading = False
+                    break
+
+                file_info = self._upload_queue.pop(0)
+
+            filepath = file_info.get('file_path')
+            file_name = file_info.get('file_name')
+            file_size = file_info.get('file_size')
+            file_type = file_info.get('file_type')
+
+            logger.info(f"Starting upload: {file_name}")
+
+            # 请求上传凭证
+            credentials = self._request_upload_credentials([file_info])
+            if not credentials:
+                logger.warning(f"Failed to get credentials for {file_name}")
+                time.sleep(5)
+                continue
+
+            upload_url = credentials.get('upload_url', '')
+            if not upload_url:
+                logger.warning(f"No upload URL for {file_name}")
+                time.sleep(5)
+                continue
+
+            # 执行上传
+            success = False
+            for retry in range(self._max_retry_count):
+                success = self._upload_file_http(filepath, upload_url)
+                if success:
+                    break
+                logger.warning(f"Upload attempt {retry + 1} failed for {file_name}")
+                time.sleep(2)
+
+            # 更新状态
+            if success:
+                logger.info(f"Upload completed: {file_name}")
+                self._update_upload_progress(file_name, 100, 'completed')
+                self.report_upload_complete({
+                    'object_key': upload_url,
+                    'path': filepath,
+                    'name': file_name,
+                    'ext': {},
+                    'metadata': {}
+                })
+            else:
+                logger.error(f"Upload failed after {self._max_retry_count} attempts: {file_name}")
+                self._update_upload_progress(file_name, 0, 'failed')
+
+    def start_upload(self, flight_id: str = None):
+        """开始上传任务（异步触发）"""
+        self._run_db_coroutine(self._async_start_upload())
+
+    async def _async_start_upload(self):
+        """异步获取待上传文件并启动上传"""
+        pending_files = await self._get_pending_files_for_upload()
+
+        if not pending_files:
+            logger.info("No pending files to upload")
+            return
+
+        logger.info(f"Found {len(pending_files)} pending files for upload")
+
+        with self._upload_lock:
+            self._upload_queue.extend(pending_files)
+            self._uploading = True
+
+        if not self._upload_thread or not self._upload_thread.is_alive():
+            self._upload_thread = threading.Thread(
+                target=self._upload_files, daemon=True
+            )
+            self._upload_thread.start()
+
+    def handle_upload_flighttask_media_prioritize(self, msg: dict) -> dict:
+        """
+        上传飞行任务媒体优先化 (upload_flighttask_media_prioritize)
+
+        Request: { flighttask_id: str }
+        Response: { result }
+        """
+        data = msg.get('data', {})
+        flighttask_id = data.get('flighttask_id', '')
+        logger.info(f"Upload flighttask media prioritize: {flighttask_id}")
+
+        # 开始上传
+        self.start_upload(flighttask_id)
+
+        return MessageBuilder.build_reply(msg, result=0)
 
     # ---- 直播控制 ----
 
@@ -531,19 +793,6 @@ class MediaManager:
         flighttask_id = data.get('flighttask_id', '')
         logger.info(f"Highest priority upload: {flighttask_id}")
         self.report_priority_media(flighttask_id)
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_upload_flighttask_media_prioritize(self, msg: dict) -> dict:
-        """
-        上传飞行任务媒体优先化 (upload_flighttask_media_prioritize)
-
-        Request: { flighttask_id: str }
-        Response: { result }
-        """
-        data = msg.get('data', {})
-        flighttask_id = data.get('flighttask_id', '')
-        logger.info(f"Upload flighttask media prioritize: {flighttask_id}")
-        # TODO: 将指定任务的媒体设为最高上传优先级
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_live_lens_change(self, msg: dict) -> dict:

@@ -6,14 +6,19 @@ DJI Dock 机场管理模块
 - 机场控制（一键开关盖、充电控制等）
 - 机场告警查询
 - 机场任务调度状态
+- 命令执行状态跟踪与事件上报
 
 参考：DJI Cloud API Dock Feature Set
 """
 import time
+import uuid
+import asyncio
 from typing import Dict, Any, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.database.connection import get_async_session_local
+from src.database.operation_db import OperationDB
 
 logger = get_logger("dock")
 
@@ -27,6 +32,7 @@ class DockManager:
     2. 机场控制指令处理
     3. 机场告警管理
     4. 机场任务调度
+    5. 命令执行状态跟踪
     """
 
     def __init__(self):
@@ -77,9 +83,23 @@ class DockManager:
         # 机巢模块引用(由外部注入)
         self._nest_module = None
 
+        # 遥测上报器引用
+        self._telemetry_reporter = None
+
+        # 当前执行的操作
+        self._current_operations: Dict[str, dict] = {}
+
         # 回调
         self._event_callback: Optional[Callable] = None
         self._state_callback: Optional[Callable] = None
+
+    def _schedule_async(self, coro):
+        """安全调度异步任务"""
+        try:
+            loop = asyncio.get_running_loop()
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            logger.warning("Cannot schedule async task: no running event loop")
 
     def set_callbacks(self, event_cb: Callable, state_cb: Callable):
         """设置事件和状态回调"""
@@ -89,6 +109,10 @@ class DockManager:
     def set_nest_module(self, nest_module):
         """注入机巢通信模块"""
         self._nest_module = nest_module
+
+    def set_telemetry_reporter(self, reporter):
+        """注入遥测上报器"""
+        self._telemetry_reporter = reporter
 
     # ---- 状态更新接口（供内部模块调用） ----
 
@@ -162,11 +186,14 @@ class DockManager:
             action: 'cover_open'|'cover_close'|'putter_push'|'putter_pull'|
                     'charge_start'|'charge_stop'|'light_on'|'light_off'
         }
-        Response: { result }
+        Response: { result, operation_id }
         """
         data = msg.get('data', {})
         action = data.get('action', '')
         logger.info(f"Dock control: {action}")
+
+        # 开始操作跟踪
+        operation_id = self._start_operation('dock_control', {'action': action})
 
         # 执行机场物理控制
         action_map = {
@@ -202,10 +229,21 @@ class DockManager:
                     # 推杆收回近似为夹紧 (CLAMP_TIGHTEN)
                     from generated_dialect.gcs_order_protocol import GCSCommand
                     self._nest_module.send_gcs_command(GCSCommand.CLAMP_TIGHTEN)
+
+                # 标记操作完成
+                self._complete_operation(operation_id, {'action': action, 'success': True})
+
             except Exception as e:
                 logger.error(f"Dock control failed: {e}")
+                self._fail_operation(operation_id, str(e))
+                return MessageBuilder.build_reply(msg, result=-1,
+                                                 data={'action': action, 'operation_id': operation_id})
+        else:
+            # 标记操作完成（模拟模式）
+            self._complete_operation(operation_id, {'action': action, 'success': True})
 
-        return MessageBuilder.build_reply(msg, result=0, data={'action': action})
+        return MessageBuilder.build_reply(msg, result=0,
+                                         data={'action': action, 'operation_id': operation_id})
 
     def handle_dock_alarm_query(self, msg: dict) -> dict:
         """
@@ -339,3 +377,161 @@ class DockManager:
         wind = self._dock_status.get('wind_speed', 0)
         rain = self._dock_status.get('rainfall', 0)
         return wind <= 10.0 and rain == 0
+
+    # ---- 操作跟踪与事件上报 ----
+
+    def _start_operation(self, command: str, params: dict = None) -> str:
+        """
+        开始一个新操作
+
+        Args:
+            command: 命令名称
+            params: 命令参数
+
+        Returns:
+            operation_id: 操作ID
+        """
+        operation_id = str(uuid.uuid4())
+        self._current_operations[operation_id] = {
+            'command': command,
+            'status': 'running',
+            'progress': 0,
+            'params': params,
+            'start_time': int(time.time() * 1000)
+        }
+
+        # 异步保存操作记录到数据库
+        self._schedule_async(self._save_operation_record(operation_id, command, params))
+
+        # 上报操作开始事件
+        self._report_operation_event(operation_id, 'started', command, params)
+
+        return operation_id
+
+    def _update_operation_progress(self, operation_id: str, progress: int):
+        """
+        更新操作进度
+
+        Args:
+            operation_id: 操作ID
+            progress: 进度百分比 (0-100)
+        """
+        if operation_id in self._current_operations:
+            self._current_operations[operation_id]['progress'] = progress
+
+            # 上报进度事件
+            op = self._current_operations[operation_id]
+            self._report_operation_event(operation_id, 'progress', op['command'],
+                                         {'progress': progress})
+
+    def _complete_operation(self, operation_id: str, result: dict = None):
+        """
+        完成操作
+
+        Args:
+            operation_id: 操作ID
+            result: 操作结果
+        """
+        if operation_id in self._current_operations:
+            op = self._current_operations[operation_id]
+            op['status'] = 'completed'
+            op['progress'] = 100
+            op['result'] = result
+            op['end_time'] = int(time.time() * 1000)
+
+            # 异步更新数据库记录
+            self._schedule_async(self._complete_operation_record(operation_id, result))
+
+            # 上报操作完成事件
+            self._report_operation_event(operation_id, 'completed', op['command'],
+                                         {'result': result})
+
+            # 清理已完成的操作（保留最近的）
+            if len(self._current_operations) > 10:
+                oldest = min(self._current_operations.keys(),
+                            key=lambda k: self._current_operations[k]['start_time'])
+                del self._current_operations[oldest]
+
+    def _fail_operation(self, operation_id: str, error_message: str):
+        """
+        操作失败
+
+        Args:
+            operation_id: 操作ID
+            error_message: 错误信息
+        """
+        if operation_id in self._current_operations:
+            op = self._current_operations[operation_id]
+            op['status'] = 'failed'
+            op['error_message'] = error_message
+            op['end_time'] = int(time.time() * 1000)
+
+            # 异步更新数据库记录
+            self._schedule_async(self._fail_operation_record(operation_id, error_message))
+
+            # 上报操作失败事件
+            self._report_operation_event(operation_id, 'failed', op['command'],
+                                         {'error': error_message})
+
+    def _report_operation_event(self, operation_id: str, event_type: str,
+                                command: str, data: dict = None):
+        """
+        上报操作事件到云端
+
+        Args:
+            operation_id: 操作ID
+            event_type: 事件类型 (started/progress/completed/failed)
+            command: 命令名称
+            data: 事件数据
+        """
+        event_data = {
+            'operation_id': operation_id,
+            'event_type': event_type,
+            'command': command,
+            'timestamp': int(time.time() * 1000),
+        }
+        if data:
+            event_data.update(data)
+
+        # 通过TelemetryReporter上报事件
+        if self._telemetry_reporter:
+            self._telemetry_reporter.report_event('dock_operation', event_data)
+
+        # 同时通过事件回调上报
+        if self._event_callback:
+            try:
+                self._event_callback(event_data)
+            except Exception as e:
+                logger.error(f"Event callback error: {e}")
+
+    async def _save_operation_record(self, operation_id: str, command: str, params: dict):
+        """异步保存操作记录到数据库"""
+        try:
+            session_factory = get_async_session_local()
+            async with session_factory() as session:
+                async with session.begin():
+                    await OperationDB.create_operation_async(
+                        session, self.gateway_sn, command, params
+                    )
+        except Exception as e:
+            logger.error(f"Failed to save operation record: {e}")
+
+    async def _complete_operation_record(self, operation_id: str, result: dict):
+        """异步完成操作记录"""
+        try:
+            session_factory = get_async_session_local()
+            async with session_factory() as session:
+                async with session.begin():
+                    await OperationDB.complete_operation_async(session, operation_id, result)
+        except Exception as e:
+            logger.error(f"Failed to complete operation record: {e}")
+
+    async def _fail_operation_record(self, operation_id: str, error_message: str):
+        """异步标记操作失败"""
+        try:
+            session_factory = get_async_session_local()
+            async with session_factory() as session:
+                async with session.begin():
+                    await OperationDB.fail_operation_async(session, operation_id, error_message)
+        except Exception as e:
+            logger.error(f"Failed to fail operation record: {e}")

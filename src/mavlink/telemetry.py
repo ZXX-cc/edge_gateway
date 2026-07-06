@@ -1,6 +1,15 @@
 """
 遥测数据处理模块
-将MAVLink遥测数据转换为OSD/State格式
+将TelemetryModule采集的数据转换为OSD/State格式，是遥测上报的核心处理层
+
+架构定位：
+- 上游：TelemetryModule（数据采集）
+- 下游：TelemetryReporter（云端上报）、Database（本地持久化）
+
+三类数据输出：
+1. OSD：定频上报（0.5Hz），包含位置、姿态、电量等实时数据
+2. State：触发式上报，仅在状态变更时上报
+3. Event：事件上报，用于异常、告警等
 """
 import time
 import math
@@ -17,43 +26,42 @@ class TelemetryProcessor:
     遥测数据处理器
 
     职责:
-    1. 收集MAVLink遥测数据(GPS、姿态、电量等)
+    1. 接收TelemetryModule的原始数据
     2. 转换为OSD格式(定频推送, 0.5Hz)
     3. 检测状态变更并触发state推送
     4. 数据平滑和滤波
+    5. 持久化遥测数据到数据库
     """
 
     def __init__(self):
         self.gateway_sn = Config.get_gateway_sn()
 
-        # 最新遥测缓存
-        self._latest: Dict[str, any] = {
-            'position': None,
-            'attitude': None,
-            'battery': None,
-            'gps': None,
-            'heartbeat': None,
-            'vfr_hud': None,
-            'wind': None,
-        }
+        # 最新遥测数据缓存（来自TelemetryModule）
+        self._telemetry_data: Dict[str, any] = {}
 
         # 状态缓存(用于变更检测)
         self._last_state: Dict[str, any] = {}
         self._last_osd_time = 0
-        self._osd_interval = 2.0  # OSD推送间隔: 2秒 = 0.5Hz (DJI规范)
+        self._osd_interval = 2.0
 
         # 回调
         self._osd_callback: Optional[Callable] = None
         self._state_callback: Optional[Callable] = None
+        self._event_callback: Optional[Callable] = None
 
         # 定时推送线程
         self._osd_thread: Optional[threading.Thread] = None
         self._running = False
 
-    def set_callbacks(self, osd_cb: Callable, state_cb: Callable):
+        # 飞行时间累计
+        self._flight_start_time = None
+        self._total_flight_time = 0
+
+    def set_callbacks(self, osd_cb: Callable = None, state_cb: Callable = None, event_cb: Callable = None):
         """设置数据推送回调"""
         self._osd_callback = osd_cb
         self._state_callback = state_cb
+        self._event_callback = event_cb
 
     def start(self):
         """启动OSD定时推送线程"""
@@ -78,167 +86,147 @@ class TelemetryProcessor:
             try:
                 osd_data = self.build_osd_data()
                 if self._osd_callback and osd_data:
+                    osd_data['timestamp'] = int(time.time() * 1000)
                     self._osd_callback(osd_data)
             except Exception as e:
                 logger.error(f"OSD push error: {e}")
             time.sleep(self._osd_interval)
 
-    # ---- MAVLink消息处理器 ----
+    # ---- 数据输入接口（来自TelemetryModule） ----
 
-    def on_position(self, msg):
-        """处理GLOBAL_POSITION_INT"""
-        self._latest['position'] = {
-            'lat': msg.lat / 1e7,      # 度
-            'lon': msg.lon / 1e7,
-            'alt': msg.relative_alt / 1000.0,  # 相对高度(m)
-            'abs_alt': msg.alt / 1000.0,       # 绝对高度(m)
-            'vx': msg.vx / 100.0,      # 速度(m/s)
-            'vy': msg.vy / 100.0,
-            'vz': msg.vz / 100.0,
-            'hdg': msg.hdg / 100.0 if msg.hdg != 0 else 0,  # 航向(度)
-        }
-        self._check_osd_push()
+    def on_telemetry_update(self, telemetry_data: Dict[str, any]):
+        """
+        接收TelemetryModule的数据更新
 
-    def on_attitude(self, msg):
-        """处理ATTITUDE"""
-        self._latest['attitude'] = {
-            'roll': math.degrees(msg.roll),
-            'pitch': math.degrees(msg.pitch),
-            'yaw': math.degrees(msg.yaw),
-            'roll_speed': msg.rollspeed,
-            'pitch_speed': msg.pitchspeed,
-            'yaw_speed': msg.yawspeed,
-        }
+        Args:
+            telemetry_data: 遥测数据字典
+        """
+        self._telemetry_data = telemetry_data
 
-    def on_battery(self, msg):
-        """处理SYS_STATUS或BATTERY_STATUS"""
-        if msg.get_type() == 'SYS_STATUS':
-            battery_remaining = msg.battery_remaining
-            voltage = msg.voltage_battery / 1000.0  # mV -> V
-            current = msg.current_battery / 100.0    # cA -> A
-            self._latest['battery'] = {
-                'remaining': battery_remaining,
-                'voltage': voltage,
-                'current': current,
-            }
-        elif msg.get_type() == 'BATTERY_STATUS':
-            self._latest['battery'] = {
-                'remaining': msg.battery_remaining,
-                'voltage': sum(msg.voltages[:10]) / 1000.0,
-                'temperature': msg.temperature / 100.0 if msg.temperature != 0 else 0,
-            }
-
-    def on_gps(self, msg):
-        """处理GPS_RAW_INT"""
-        self._latest['gps'] = {
-            'fix_type': msg.fix_type,           # 0-1:无 2:2D 3:3D
-            'satellites_visible': msg.satellites_visible,
-            'eph': msg.eph,                      # 水平精度
-            'epv': msg.epv,                      # 垂直精度
-        }
-
-    def on_heartbeat(self, msg):
-        """处理HEARTBEAT"""
-        base_mode = msg.base_mode
-        custom_mode = msg.custom_mode
-        system_status = msg.system_status
-
-        # 解析飞行模式
-        flight_mode = self._parse_flight_mode(custom_mode)
-
-        # 解析上锁状态
-        armed = bool(base_mode & 0x80) if base_mode else False
-
-        self._latest['heartbeat'] = {
-            'flight_mode': flight_mode,
-            'armed': armed,
-            'system_status': system_status,
-        }
+        # 更新飞行时间
+        self._update_flight_time()
 
         # 检测状态变更
-        self._check_state_change('heartbeat', {
-            'flight_mode': flight_mode,
-            'armed': armed,
-        })
+        self._check_all_state_changes()
 
-    def on_vfr_hud(self, msg):
-        """处理VFR_HUD"""
-        self._latest['vfr_hud'] = {
-            'airspeed': msg.airspeed,
-            'groundspeed': msg.groundspeed,
-            'heading': msg.heading,
-            'throttle': msg.throttle,
-            'alt': msg.alt,
-            'climb': msg.climb,
-        }
+    def _update_flight_time(self):
+        """更新飞行时间"""
+        connection_status = self._telemetry_data.get('connection_status', 'disconnected')
+        armed = self._telemetry_data.get('armed', False)
 
-    def on_wind(self, msg):
-        """处理WIND"""
-        self._latest['wind'] = {
-            'speed': msg.speed,
-            'direction': msg.direction,
-            'speed_z': msg.speed_z,
-        }
+        if connection_status == 'connected' and armed and self._flight_start_time is None:
+            self._flight_start_time = time.time()
+        elif (connection_status != 'connected' or not armed) and self._flight_start_time is not None:
+            self._total_flight_time += int(time.time() - self._flight_start_time)
+            self._flight_start_time = None
+
+        if self._flight_start_time is not None:
+            current_flight_time = self._total_flight_time + int(time.time() - self._flight_start_time)
+            self._telemetry_data['flight_time'] = current_flight_time
+        else:
+            self._telemetry_data['flight_time'] = self._total_flight_time
+
+    def _check_all_state_changes(self):
+        """检测所有状态变更"""
+        # 飞行模式变更
+        flight_mode = self._telemetry_data.get('flight_mode', 'UNKNOWN')
+        self._check_state_change('flight_mode', flight_mode)
+
+        # 上锁状态变更
+        armed = self._telemetry_data.get('armed', False)
+        self._check_state_change('armed', armed)
+
+        # 连接状态变更
+        connection_status = self._telemetry_data.get('connection_status', 'disconnected')
+        self._check_state_change('connection_status', connection_status)
+
+        # 电池状态变更（电量变化超过5%才上报）
+        battery = self._telemetry_data.get('batteryRemaining', 0)
+        self._check_state_change('battery', battery, threshold=5)
+
+        # GPS状态变更
+        gps_fixed = self._telemetry_data.get('gps_fixed', 0)
+        self._check_state_change('gps_fixed', gps_fixed)
+
+    def _check_state_change(self, category: str, current: any, threshold: int = None):
+        """
+        检测状态变更
+
+        Args:
+            category: 状态类别
+            current: 当前值
+            threshold: 阈值（用于数值类型的状态变更检测）
+        """
+        last = self._last_state.get(category)
+
+        if threshold is not None:
+            if isinstance(last, (int, float)) and isinstance(current, (int, float)):
+                if abs(current - last) >= threshold:
+                    self._last_state[category] = current
+                    if self._state_callback:
+                        self._state_callback(self.build_state_data({category: current}))
+            elif last != current:
+                self._last_state[category] = current
+                if self._state_callback:
+                    self._state_callback(self.build_state_data({category: current}))
+        else:
+            if last != current:
+                self._last_state[category] = current
+                if self._state_callback:
+                    self._state_callback(self.build_state_data({category: current}))
 
     # ---- 数据转换 ----
 
     def build_osd_data(self) -> dict:
         """构建OSD定频数据（对齐DJI Cloud API规范）"""
         osd = {}
+        data = self._telemetry_data
 
         # 位置
-        pos = self._latest.get('position')
-        if pos:
-            osd['latitude'] = pos['lat']
-            osd['longitude'] = pos['lon']
-            osd['height'] = pos['alt']
-            osd['altitude'] = pos.get('abs_alt', pos['alt'])
-            osd['horizontal_speed'] = math.sqrt(pos['vx']**2 + pos['vy']**2)
-            osd['vertical_speed'] = -pos['vz']  # NED坐标系，向上为正
+        osd['latitude'] = data.get('latitude', 0.0)
+        osd['longitude'] = data.get('longitude', 0.0)
+        osd['height'] = data.get('altitudeRelative', 0.0)
+        osd['altitude'] = data.get('altitude', 0.0)
+
+        # 速度
+        ground_speed = data.get('groundSpeed', 0.0)
+        climb_rate = data.get('climbRate', 0.0)
+        osd['horizontal_speed'] = ground_speed
+        osd['vertical_speed'] = climb_rate
 
         # 姿态
-        att = self._latest.get('attitude')
-        if att:
-            osd['attitude_pitch'] = att['pitch']
-            osd['attitude_roll'] = att['roll']
-            osd['attitude_head'] = att.get('yaw', 0)
+        osd['attitude_pitch'] = data.get('pitch', 0.0)
+        osd['attitude_roll'] = data.get('roll', 0.0)
+        osd['attitude_head'] = data.get('yaw', 0.0)
 
         # 电量
-        bat = self._latest.get('battery')
-        if bat:
-            osd['battery'] = {
-                'capacity_percent': bat.get('remaining', 0),
-                'voltage': int(bat.get('voltage', 0) * 1000),  # mV
-            }
-            if 'temperature' in bat:
-                osd['battery']['temperature'] = bat['temperature']
-            if 'current' in bat:
-                osd['battery']['current'] = int(bat.get('current', 0) * 1000)  # mA
+        voltage = data.get('voltage', 0.0)
+        current = data.get('current', 0.0)
+        battery_remaining = data.get('batteryRemaining', 0)
+
+        osd['battery'] = {
+            'capacity_percent': battery_remaining,
+            'voltage': int(voltage * 1000),
+        }
+        if current > 0:
+            osd['battery']['current'] = int(current * 1000)
 
         # GPS/定位状态
-        gps = self._latest.get('gps')
-        hb = self._latest.get('heartbeat')
-        position_state = {}
-        if gps:
-            position_state['gps_number'] = gps.get('satellites_visible', 0)
-            position_state['is_fixed'] = 1 if gps.get('fix_type', 0) >= 3 else 0
-        if position_state:
-            osd['position_state'] = position_state
+        osd['position_state'] = {
+            'gps_number': data.get('satelliteNumber', 0),
+            'is_fixed': data.get('gps_fixed', 0),
+        }
 
         # 风速
-        wind = self._latest.get('wind')
-        if wind:
-            osd['wind_speed'] = wind.get('speed', 0)
-            osd['wind_direction'] = wind.get('direction', 0)
+        osd['wind_speed'] = data.get('windSpeed', 0.0)
 
-        # 飞行模式
-        if hb:
-            osd['mode_code'] = self._mode_to_code(hb.get('flight_mode', 'UNKNOWN'))
-            osd['gear'] = 1 if hb.get('armed', False) else 0
+        # 飞行模式和状态
+        flight_mode = data.get('flight_mode', 'UNKNOWN')
+        osd['mode_code'] = self._mode_to_code(flight_mode)
+        osd['gear'] = 1 if data.get('armed', False) else 0
 
-        # 航向（如果没有attitude数据，从position中获取）
-        if pos and 'attitude_head' not in osd:
-            osd['attitude_head'] = pos.get('hdg', 0)
+        # 飞行时间
+        osd['flight_time'] = data.get('flight_time', 0)
 
         return osd
 
@@ -265,37 +253,6 @@ class TelemetryProcessor:
             'changes': changed_fields
         }
 
-    # ---- 内部方法 ----
-
-    def _check_osd_push(self):
-        """检查是否需要推送OSD"""
-        now = time.time()
-        if now - self._last_osd_time >= self._osd_interval:
-            self._last_osd_time = now
-            osd_data = self.build_osd_data()
-            if self._osd_callback:
-                self._osd_callback(osd_data)
-
-    def _check_state_change(self, category: str, current: dict):
-        """检测状态变更"""
-        last = self._last_state.get(category)
-        if last != current:
-            self._last_state[category] = current.copy()
-            if self._state_callback:
-                self._state_callback(self.build_state_data({category: current}))
-
-    @staticmethod
-    def _parse_flight_mode(custom_mode: int) -> str:
-        """解析MAVLink飞行模式为字符串"""
-        # ArduPilot模式映射(根据实际飞控调整)
-        mode_map = {
-            0: 'STABILIZE', 1: 'ACRO', 2: 'ALT_HOLD', 3: 'AUTO',
-            4: 'GUIDED', 5: 'LOITER', 6: 'RTL', 7: 'CIRCLE',
-            9: 'LAND', 11: 'DRIFT', 13: 'SPORT', 14: 'FLIP',
-            15: 'AUTOTUNE', 16: 'POSHOLD', 17: 'BRAKE',
-            18: 'THROW', 19: 'AVOID_ADSB', 20: 'GUIDED_NOGPS',
-            21: 'SMART_RTL', 22: 'FLOWHOLD', 23: 'FOLLOW',
-            24: 'ZIGZAG', 25: 'SYSTEMID', 26: 'AUTOROTATE',
-            27: 'AUTO_RTL',
-        }
-        return mode_map.get(custom_mode, f'UNKNOWN({custom_mode})')
+    def get_current_data(self) -> Dict[str, any]:
+        """获取当前遥测数据"""
+        return self._telemetry_data.copy()

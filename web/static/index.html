@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>边缘网关联调台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>边缘网关联调台</h1>
+          <p>独立 Web 工具，用于查看 MQTT 遥测并控制 ArduPilot SITL。</p>
+        </div>
+        <div class="status-strip">
+          <span id="mqttStatus" class="status-pill is-warn">MQTT 未连接</span>
+          <span id="sitlStatus" class="status-pill">SITL 未托管</span>
+          <span id="mavlinkStatus" class="status-pill">MAVLink 待命</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="command-panel">
+          <div class="panel-title">
+            <h2>飞控操作</h2>
+            <span>替代 MAVProxy 常用输入</span>
+          </div>
+
+          <div class="button-grid">
+            <button class="cmd primary" data-action="guided">切到 GUIDED</button>
+            <button class="cmd" data-action="arm">解锁电机</button>
+            <button class="cmd takeoff" data-action="takeoff">起飞 10 米</button>
+            <button class="cmd danger" data-action="land">降落 LAND</button>
+            <button class="cmd warn" data-action="rtl">返航 RTL</button>
+            <button class="cmd" data-action="loiter">悬停 LOITER</button>
+          </div>
+
+          <div class="custom-row">
+            <label for="takeoffAlt">起飞高度</label>
+            <input id="takeoffAlt" type="number" min="1" max="100" value="10" />
+            <span>米</span>
+          </div>
+
+          <div class="sitl-controls">
+            <button id="startSitl" class="cmd small">启动 SITL</button>
+            <button id="stopSitl" class="cmd small danger">停止 SITL</button>
+          </div>
+
+          <div class="panel-title compact">
+            <h2>API 冒烟</h2>
+            <span>模拟云端 services</span>
+          </div>
+          <div class="mqtt-form">
+            <input id="apiMethod" value="dock_status_query" />
+            <textarea id="apiPayload" rows="4">{}</textarea>
+            <button id="sendApi" class="cmd primary">发送 API</button>
+          </div>
+
+          <div class="command-log">
+            <div class="panel-title compact">
+              <h2>操作记录</h2>
+              <span id="commandCount">0 条</span>
+            </div>
+            <div id="commandLog" class="mini-list"></div>
+          </div>
+        </section>
+
+        <section class="main-panel">
+          <div class="telemetry-grid">
+            <article class="metric-card large">
+              <span>相对高度</span>
+              <strong id="heightValue">--</strong>
+              <em>m</em>
+            </article>
+            <article class="metric-card">
+              <span>垂直速度</span>
+              <strong id="verticalSpeedValue">--</strong>
+              <em>m/s</em>
+            </article>
+            <article class="metric-card">
+              <span>水平速度</span>
+              <strong id="horizontalSpeedValue">--</strong>
+              <em>m/s</em>
+            </article>
+            <article class="metric-card">
+              <span>电量</span>
+              <strong id="batteryValue">--</strong>
+              <em>%</em>
+            </article>
+            <article class="metric-card">
+              <span>卫星数</span>
+              <strong id="gpsValue">--</strong>
+              <em>颗</em>
+            </article>
+          </div>
+
+          <div class="flight-board">
+            <div class="panel-title">
+              <h2>飞行状态</h2>
+              <span id="lastUpdate">等待数据</span>
+            </div>
+            <div class="state-grid">
+              <div><span>纬度</span><strong id="latValue">--</strong></div>
+              <div><span>经度</span><strong id="lonValue">--</strong></div>
+              <div><span>海拔</span><strong id="altValue">--</strong></div>
+              <div><span>航向</span><strong id="headValue">--</strong></div>
+              <div><span>模式码</span><strong id="modeValue">--</strong></div>
+              <div><span>起落架/解锁</span><strong id="gearValue">--</strong></div>
+            </div>
+            <canvas id="heightChart" width="820" height="220" aria-label="高度趋势"></canvas>
+          </div>
+
+          <div class="sitl-log-panel">
+            <div class="panel-title">
+              <h2>SITL 输出</h2>
+              <span>托管启动时显示</span>
+            </div>
+            <pre id="sitlLogs">如果你在终端 1 手动启动 SITL，这里不会接管输出；遥测仍会正常显示。</pre>
+          </div>
+        </section>
+
+        <aside class="stream-panel">
+          <div class="panel-title">
+            <h2>MQTT 消息流</h2>
+            <span id="messageCount">0 条</span>
+          </div>
+          <div class="topic-filters">
+            <button class="filter is-active" data-filter="all">全部</button>
+            <button class="filter" data-filter="osd">遥测</button>
+            <button class="filter" data-filter="state">状态</button>
+            <button class="filter" data-filter="event">事件</button>
+            <button class="filter" data-filter="service_reply">回包</button>
+          </div>
+          <div id="messageList" class="message-list"></div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

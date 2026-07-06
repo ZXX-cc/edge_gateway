@@ -778,12 +778,12 @@ class RTKModule(BaseModule):
         """获取当前NTRIP配置"""
         return self.ntrip_config.copy()
 
-    def idle_task(self, delta_time: float):
+    def idle_task(self, dispatcher):
         """
         空闲任务:监控连接状态
 
         Args:
-            delta_time: 距离上次调用的时间间隔(秒)
+            dispatcher: MessageDispatcher实例
         """
         if self.ntrip_client:
             if not self.ntrip_client.connected:

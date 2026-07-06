@@ -10,16 +10,9 @@ from pymavlink import mavutil
 import sys
 import os
 
-# 添加自定义 dialect 路径
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-dialect_path = os.path.join(project_root, 'generated_dialect')
-
-if dialect_path not in sys.path:
-    sys.path.insert(0, dialect_path)
-
 # 导入自定义 dialect（包含你的自定义消息）
-import generated_dialect.drone_nest as drone_nest
-from generated_dialect.gcs_order_protocol import (
+from src.generated_dialect.drone_nest import *
+from src.generated_dialect.gcs_order_protocol import (
     GCSOrderCodec,
     GCSCommand,
     DoorState,
@@ -96,6 +89,9 @@ class DroneNestModule(BaseModule):
         self.last_allow_takeoff = None
         self.last_estop = None
 
+        # 操作事件回调
+        self._operation_callback: Optional[Callable] = None
+
     # ========== 模块关联 ==========
 
     def set_flight_control(self, flight_control):
@@ -107,6 +103,39 @@ class DroneNestModule(BaseModule):
         """
         self.flight_control = flight_control
         self.log("✅ 已关联飞行控制模块")
+
+    def set_operation_callback(self, callback: Callable):
+        """
+        设置操作事件回调
+
+        Args:
+            callback: 回调函数，接收操作事件字典
+        """
+        self._operation_callback = callback
+        self.log("✅ 已设置操作事件回调")
+
+    def _report_operation_event(self, event_type: str, command: str, data: dict = None):
+        """
+        上报操作事件
+
+        Args:
+            event_type: 事件类型 (started/completed/failed/progress)
+            command: 命令名称
+            data: 事件数据
+        """
+        event = {
+            'event_type': event_type,
+            'command': command,
+            'timestamp': time.time(),
+        }
+        if data:
+            event.update(data)
+
+        if self._operation_callback:
+            try:
+                self._operation_callback(event)
+            except Exception as e:
+                self.log(f"操作事件回调执行错误: {e}", "ERROR")
 
     # ========== 消息处理 ==========
 
@@ -456,19 +485,29 @@ class DroneNestModule(BaseModule):
             # ==================== 记录日志 + 存储到模块（供API读取） ====================
             self.last_order_response = result  # ⭐ 新增成员变量，供API查询
 
+            # 上报命令执行结果事件
             if result["rejections"]:
                 self.log(f"⚠️ 检测到拒绝: {result['rejections']}", "WARNING")
+                self._report_operation_event('failed', 'gcs_command_response',
+                                             {'rejections': result['rejections']})
             else:
                 self.log("✅ 命令执行成功（无拒绝）", "INFO")
+                self._report_operation_event('completed', 'gcs_command_response',
+                                             {'result': 'success'})
 
         except Exception as e:
             self.log(f"处理指令回复时出错: {e}", "ERROR")
+            self._report_operation_event('failed', 'gcs_command_response',
+                                         {'error': str(e)})
     # ========== 一键启航协议支持 ==========
 
     def send_gcs_command(self, *commands: GCSCommand):
         """向机巢发送地面站命令"""
         if not self.dispatcher or not self.dispatcher.connection:
             self.log("⚠️ 机巢连接未就绪，无法发送命令", "WARNING")
+            self._report_operation_event('failed', 'gcs_command',
+                                         {'commands': [cmd.name for cmd in commands],
+                                          'error': 'connection not ready'})
             return
 
         try:
@@ -486,8 +525,17 @@ class DroneNestModule(BaseModule):
                 f"takeoff_land=0x{takeoff_land_order:02X}"
             )
 
+            # 上报命令发送事件
+            self._report_operation_event('started', 'gcs_command',
+                                         {'commands': [cmd.name for cmd in commands],
+                                          'ordinary_order': ordinary_order,
+                                          'takeoff_land_order': takeoff_land_order})
+
         except Exception as e:
             self.log(f"发送命令失败: {e}", "ERROR")
+            self._report_operation_event('failed', 'gcs_command',
+                                         {'commands': [cmd.name for cmd in commands],
+                                          'error': str(e)})
             import traceback
             traceback.print_exc()
 

@@ -13,10 +13,10 @@ from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
 
 # 🔥 修复：移除 AsyncSessionLocal 的直接导入
-from database.connection import get_async_session_local, init_database
-from database.mission_db import MissionDB
-from database.waypoint_db import WaypointDB
-from database.schemas import MissionCreate, WaypointCreate
+from src.database.connection import get_async_session_local, init_database_async
+from src.database.mission_db import MissionDB
+from src.database.waypoint_db import WaypointDB
+from src.database.schemas import MissionCreate, WaypointCreate
 
 
 
@@ -108,10 +108,10 @@ class WaypointManager(BaseModule):
             self.log(f"   航点数量: {len(waypoints)}")
 
             # 🔥 延迟初始化数据库
-            from database.connection import get_async_session_local, init_database
+            from database.connection import get_async_session_local, init_database_async
 
             # 确保数据库已初始化
-            await init_database()
+            await init_database_async()
 
             # 获取正确的 AsyncSessionLocal
             AsyncSessionLocal = get_async_session_local()
@@ -216,6 +216,7 @@ class WaypointManager(BaseModule):
             self.log(f"🔄 更新任务航点: {mission_id}")
             self.log(f"   航点数量: {len(waypoints)}")
 
+            AsyncSessionLocal = get_async_session_local()
             async with AsyncSessionLocal() as session:
                 waypoints_create = []
                 for wp in waypoints:
@@ -260,6 +261,7 @@ class WaypointManager(BaseModule):
 
             self.log(f"📥 从数据库加载任务: {mission_id}")
 
+            AsyncSessionLocal = get_async_session_local()
             async with AsyncSessionLocal() as session:
                 mission = await MissionDB.get_mission(session, mission_uuid)
                 if not mission:

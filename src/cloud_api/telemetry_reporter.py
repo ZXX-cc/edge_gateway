@@ -8,16 +8,21 @@ DJI Cloud API 标准遥测上报模块
 - 事件上报 (thing/product/{sn}/events)
 - 飞行任务进度上报
 - HMS告警上报
+- 断线缓存与恢复机制
 
 参考：DJI Cloud API - OSD & State Specification
 """
 import time
-from typing import Dict, Any, Optional
+import threading
+from typing import Dict, Any, Optional, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder, TopicBuilder
 
 logger = get_logger("telemetry")
+
+MAX_CACHE_SIZE = 100
+MAX_CACHE_TIME = 300  # 缓存最大时间（秒）
 
 
 class TelemetryReporter:
@@ -25,11 +30,19 @@ class TelemetryReporter:
     标准遥测上报器
 
     将内部遥测数据转换为大疆Cloud API标准格式并上报。
+    支持断线缓存与恢复机制。
     """
 
     def __init__(self, mqtt_client):
         self.mqtt = mqtt_client
         self.gateway_sn = Config.get_gateway_sn()
+
+        # 断线缓存
+        self._cache: List[Dict[str, Any]] = []
+        self._cache_lock = threading.Lock()
+
+        # 注册MQTT连接状态回调
+        self.mqtt.register_connect_callback(self._on_mqtt_connect)
 
     # ---- OSD 定频上报 ----
 
@@ -67,7 +80,7 @@ class TelemetryReporter:
         """
         topic = TopicBuilder.osd(device_sn)
         payload = MessageBuilder.build_osd(device_sn, osd_data)
-        return self.mqtt.publish(topic, payload, qos=0)
+        return self._publish_with_cache(topic, payload, qos=0)
 
     # ---- 状态变更上报 ----
 
@@ -86,7 +99,7 @@ class TelemetryReporter:
         """
         topic = TopicBuilder.state(device_sn)
         payload = MessageBuilder.build_state(device_sn, state_data)
-        return self.mqtt.publish(topic, payload, qos=1)
+        return self._publish_with_cache(topic, payload, qos=1)
 
     # ---- 事件上报 ----
 
@@ -100,7 +113,79 @@ class TelemetryReporter:
         """
         topic = TopicBuilder.events(self.gateway_sn)
         payload = MessageBuilder.build_event(method, data, self.gateway_sn)
-        return self.mqtt.publish(topic, payload, qos=1)
+        return self._publish_with_cache(topic, payload, qos=1)
+
+    # ---- 断线缓存与恢复机制 ----
+
+    def _publish_with_cache(self, topic: str, payload: dict, qos: int = 1) -> bool:
+        """
+        带缓存的发布方法
+
+        如果MQTT未连接，将消息缓存到本地，待连接恢复后重发
+        """
+        if self.mqtt.connected:
+            return self.mqtt.publish(topic, payload, qos=qos)
+        else:
+            self._add_to_cache(topic, payload, qos)
+            return False
+
+    def _add_to_cache(self, topic: str, payload: dict, qos: int):
+        """
+        添加消息到缓存
+
+        Args:
+            topic: 消息主题
+            payload: 消息内容
+            qos: QoS级别
+        """
+        with self._cache_lock:
+            # 清理过期缓存
+            self._clean_old_cache()
+
+            # 添加新缓存
+            cache_item = {
+                'topic': topic,
+                'payload': payload,
+                'qos': qos,
+                'timestamp': int(time.time())
+            }
+
+            # 限制缓存大小
+            if len(self._cache) >= MAX_CACHE_SIZE:
+                self._cache.pop(0)
+
+            self._cache.append(cache_item)
+            logger.debug(f"Message cached: topic={topic}, cache_size={len(self._cache)}")
+
+    def _clean_old_cache(self):
+        """清理过期缓存"""
+        now = int(time.time())
+        with self._cache_lock:
+            self._cache = [item for item in self._cache
+                           if now - item['timestamp'] <= MAX_CACHE_TIME]
+
+    def _recover_cache(self):
+        """恢复缓存的消息"""
+        if not self.mqtt.connected:
+            return
+
+        with self._cache_lock:
+            cache_copy = self._cache.copy()
+            self._cache.clear()
+
+        logger.info(f"Recovering {len(cache_copy)} cached messages...")
+
+        for item in cache_copy:
+            success = self.mqtt.publish(item['topic'], item['payload'], item['qos'])
+            if not success:
+                self._add_to_cache(item['topic'], item['payload'], item['qos'])
+
+        logger.info(f"Cache recovery completed, {len(self._cache)} messages remain")
+
+    def _on_mqtt_connect(self):
+        """MQTT连接成功回调"""
+        logger.info("MQTT reconnected, recovering cached messages")
+        self._recover_cache()
 
     # ---- 飞行任务事件 ----
 

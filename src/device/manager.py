@@ -21,11 +21,16 @@
 import time
 import threading
 import os
+import json
 import shutil
+import asyncio
 from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.database.connection import get_async_session_local, init_database_async
+from src.database.device_db import DeviceDB
+from src.database.alarm_db import AlarmDB
 
 logger = get_logger("device")
 
@@ -105,6 +110,16 @@ class DeviceManager:
         self._nest_module = None          # DroneNestModule - 机巢协议
         self._telemetry_processor = None   # TelemetryProcessor - MAVLink遥测
         self._dock_manager = None          # DockManager - 机场管理
+        self._cloud_conn = None            # CloudConnectionManager - 云端请求
+
+        # ===== 组织绑定信息持久化 =====
+        self._org_data_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            'data', 'organization.json'
+        )
+        self._org_data = self._load_organization_data()
+        # 绑定信息本地缓存结构：
+        # { "organization": {...}, "device_bindings": {sn: {...}} }
 
         # ===== 基础时间记录（必须在_init_properties之前定义） =====
         self._acc_time_start = time.time()
@@ -171,8 +186,18 @@ class DeviceManager:
         self._event_callback: Optional[Callable] = None
         self._state_callback: Optional[Callable] = None
 
+        # ===== 异步事件循环 =====
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # ===== 数据库初始化标志 =====
+        self._db_initialized = False
+
         # ===== 启动时加载持久化数据 =====
         self._load_persisted_data()
+
+    def set_event_loop(self, loop):
+        """注入异步事件循环引用"""
+        self._main_loop = loop
 
     def _init_properties(self) -> Dict[str, Any]:
         """初始化所有物模型属性（对齐DJI规范）"""
@@ -347,23 +372,34 @@ class DeviceManager:
         self._dock_manager = dock
         logger.info("DeviceManager: Dock manager injected")
 
+    def set_cloud_connection(self, cloud_conn):
+        """注入云端连接管理器（用于发起 requests/requests_reply）"""
+        self._cloud_conn = cloud_conn
+        logger.info("DeviceManager: Cloud connection manager injected")
+
     # ========== 持久化数据加载 ==========
 
     def _load_persisted_data(self):
         """启动时加载持久化数据"""
-        # 从配置中读取持久化属性
         device_config = Config.get('device', {})
         limits = device_config.get('limits', {})
         self._properties['remaining_power_for_return_home'] = limits.get(
             'return_home_power', 30)
 
-        # 读取激活时间（如配置文件中有记录）
-        # TODO: 从持久化存储读取
         self._properties['activation_time'] = 0
-
-        # 读取作业次数
-        # TODO: 从持久化存储读取
         self._properties['job_number'] = 0
+
+    def _schedule_async(self, coro):
+        """安全调度异步任务"""
+        import asyncio
+        if self._main_loop and self._main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                logger.warning("Cannot schedule async task: no running event loop")
 
     def _read_firmware_version(self) -> str:
         """读取当前固件版本"""
@@ -380,6 +416,176 @@ class DeviceManager:
         except Exception:
             pass
         return '1.0.0'
+
+    # ========== 数据库持久化 ==========
+
+    async def _init_database(self):
+        """初始化数据库表"""
+        if self._db_initialized:
+            return
+        await init_database_async()
+        await self._load_binding_from_db()
+        await self._load_alarms_from_db()
+        self._db_initialized = True
+        logger.info("DeviceManager database initialized")
+
+    async def _load_binding_from_db(self):
+        """从数据库加载设备绑定信息"""
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            binding = DeviceDB.get_device_binding(session, self.gateway_sn)
+            if binding:
+                self._device_state = self.STATE_BOUND if binding.is_bound else self.STATE_UNBOUND
+                self._bound_workspace_id = binding.workspace_id or ""
+                self._bound_workspace_name = binding.workspace_name or ""
+                self._org_data['organization'] = {
+                    'organization_id': binding.organization_id or "",
+                    'organization_name': binding.organization_name or "",
+                    'bind_time': binding.bind_time,
+                    'device_binding_code': ""
+                }
+                logger.info(f"Loaded binding from DB: workspace={self._bound_workspace_id}")
+
+    async def _save_binding_to_db(self):
+        """保存设备绑定信息到数据库"""
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            DeviceDB.upsert_device_binding(
+                session,
+                gateway_sn=self.gateway_sn,
+                workspace_id=self._bound_workspace_id,
+                workspace_name=self._bound_workspace_name,
+                organization_id=self._org_data.get('organization', {}).get('organization_id', ''),
+                organization_name=self._org_data.get('organization', {}).get('organization_name', ''),
+                is_bound=1 if self._device_state >= self.STATE_BOUND else 0,
+                bind_time=self._org_data.get('organization', {}).get('bind_time', 0)
+            )
+            await session.commit()
+            logger.info(f"Saved binding to DB: bound={self._device_state >= self.STATE_BOUND}")
+
+    async def _load_alarms_from_db(self):
+        """从数据库加载告警信息"""
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            alarms = AlarmDB.get_unread_alarms(session, self.gateway_sn)
+            self._hms_alarms = [
+                {
+                    'id': alarm.alarm_id,
+                    'level': alarm.alarm_level,
+                    'content': alarm.alarm_content,
+                    'type': alarm.alarm_type,
+                    'create_time': alarm.create_time
+                }
+                for alarm in alarms
+            ]
+            logger.info(f"Loaded {len(self._hms_alarms)} alarms from DB")
+
+    async def _save_alarm_to_db(self, alarm_id: str, alarm_level: int, alarm_content: str, **kwargs):
+        """保存告警到数据库"""
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            AlarmDB.create_alarm(
+                session,
+                gateway_sn=self.gateway_sn,
+                alarm_id=alarm_id,
+                alarm_level=alarm_level,
+                alarm_content=alarm_content,
+                **kwargs
+            )
+            await session.commit()
+            logger.info(f"Saved alarm to DB: {alarm_id}")
+
+    async def _clear_alarms_from_db(self, alarm_ids: List[str] = None):
+        """从数据库清除告警"""
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            if alarm_ids:
+                cleared = AlarmDB.delete_alarms_by_ids(session, alarm_ids)
+            else:
+                cleared = AlarmDB.delete_all_alarms(session, self.gateway_sn)
+            await session.commit()
+            logger.info(f"Cleared {cleared} alarms from DB")
+
+    # ========== 组织绑定信息持久化 ==========
+
+    def _load_organization_data(self) -> dict:
+        """从本地文件加载组织绑定数据"""
+        default_data = {
+            "organization": {
+                "organization_id": "",
+                "organization_name": "",
+                "bind_time": 0,
+                "device_binding_code": ""
+            },
+            "device_bindings": {}
+        }
+        try:
+            if os.path.exists(self._org_data_path):
+                with open(self._org_data_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # 合并默认值（防止文件格式不完整）
+                    for key, value in default_data.items():
+                        if key not in data:
+                            data[key] = value
+                    return data
+        except Exception as e:
+            logger.warning(f"Failed to load organization data: {e}")
+        return default_data
+
+    def _save_organization_data(self) -> bool:
+        """保存组织绑定数据到本地文件"""
+        try:
+            os.makedirs(os.path.dirname(self._org_data_path), exist_ok=True)
+            with open(self._org_data_path, 'w', encoding='utf-8') as f:
+                json.dump(self._org_data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save organization data: {e}")
+            return False
+
+    def _get_device_binding_info(self, sn: str) -> dict:
+        """获取单个设备的绑定信息"""
+        bindings = self._org_data.get('device_bindings', {})
+        return bindings.get(sn, {
+            'sn': sn,
+            'device_model_key': '',
+            'device_callsign': '',
+            'is_bound': False,
+            'organization_id': '',
+            'organization_name': '',
+            'bind_time': 0
+        })
+
+    def _set_device_binding_info(self, sn: str, info: dict):
+        """设置单个设备的绑定信息"""
+        if 'device_bindings' not in self._org_data:
+            self._org_data['device_bindings'] = {}
+        self._org_data['device_bindings'][sn] = info
+        self._save_organization_data()
+
+    def _set_organization_info(self, org_id: str, org_name: str,
+                                bind_code: str = "", bind_time: int = 0):
+        """设置组织信息"""
+        self._org_data['organization'] = {
+            'organization_id': org_id,
+            'organization_name': org_name,
+            'device_binding_code': bind_code,
+            'bind_time': bind_time
+        }
+        self._save_organization_data()
+
+    def _clear_organization_info(self):
+        """清除组织绑定信息（解绑时调用）"""
+        self._org_data['organization'] = {
+            'organization_id': '',
+            'organization_name': '',
+            'device_binding_code': '',
+            'bind_time': 0
+        }
+        # 清除 pending_organization 缓存
+        if 'pending_organization' in self._org_data:
+            del self._org_data['pending_organization']
+        self._save_organization_data()
 
     # ========== 属性管理核心方法 ==========
 
@@ -591,6 +797,59 @@ class DeviceManager:
         if updates:
             self.update_properties(updates, notify=False)
 
+    def update_from_mission(self, event: dict):
+        """
+        同步航线任务状态到设备物模型
+
+        Args:
+            event: MissionManager 上报的事件字典，包含 method 和 data
+        """
+        method = event.get('method', '')
+        data = event.get('data', {})
+        updates = {}
+
+        # 根据事件类型更新任务步骤码
+        step_map = {
+            'flighttask_prepare': 5,       # 任务空闲/准备中
+            'flighttask_execute': 6,       # 执行任务
+            'flighttask_progress': 6,      # 任务执行中
+            'flighttask_pause': 7,         # 任务暂停
+            'flighttask_resume': 8,        # 任务恢复
+            'flighttask_ready': 5,         # 任务就绪
+            'flighttask_undo': 9,          # 任务取消
+            'return_home_info': 10,        # 返航中
+            'flight_setup_exception_notify': 255,  # 异常
+        }
+
+        if method in step_map:
+            updates['flighttask_step_code'] = step_map[method]
+
+        # 根据任务状态更新 mode_code
+        if method == 'flighttask_execute':
+            updates['mode_code'] = 4  # 作业中
+        elif method in ('flighttask_undo', 'return_home_info'):
+            # 取消/返航时，检查是否还在作业中
+            pass
+
+        # 从 flighttask_progress 中提取更详细的步骤码
+        if method == 'flighttask_progress':
+            output = data.get('output', {})
+            progress = output.get('progress', {})
+            current_step = progress.get('current_step')
+            if current_step is not None:
+                updates['flighttask_step_code'] = current_step
+            # 提取 wayline_mission_state 映射到 mode_code
+            ext = output.get('ext', {})
+            wayline_state = ext.get('wayline_mission_state')
+            if wayline_state == 6:
+                updates['mode_code'] = 4  # 作业中
+            elif wayline_state == 9:
+                updates['mode_code'] = 0  # 空闲
+
+        if updates:
+            self.update_properties(updates, notify=True)
+            logger.debug(f"DeviceManager updated from mission: {updates}")
+
     def _update_system_status(self):
         """查询并更新系统状态（存储、网络等）"""
         updates = {}
@@ -770,17 +1029,52 @@ class DeviceManager:
 
     # ========== 设备生命周期 ==========
 
-    def bind_device(self, workspace_id: str, workspace_name: str) -> bool:
-        """设备绑定到工作空间"""
+    def bind_device(self, workspace_id: str, workspace_name: str,
+                     org_id: str = "", org_name: str = "",
+                     bind_code: str = "", callsign: str = "") -> bool:
+        """
+        设备绑定到工作空间/组织
+
+        Args:
+            workspace_id: 工作空间ID
+            workspace_name: 工作空间名称
+            org_id: 组织ID（组织管理用）
+            org_name: 组织名称
+            bind_code: 设备绑定码
+            callsign: 设备在组织中的名称
+        """
+        bind_time = int(time.time() * 1000)
+
+        # 更新设备生命周期状态
         self._device_state = self.STATE_BOUND
         self._bound_workspace_id = workspace_id
         self._bound_workspace_name = workspace_name
-        logger.info(f"Device bound to workspace: {workspace_id}")
+
+        # 更新组织绑定信息
+        self._set_organization_info(org_id or workspace_id,
+                                     org_name or workspace_name,
+                                     bind_code, bind_time)
+
+        # 更新网关自身的绑定信息
+        self._set_device_binding_info(self.gateway_sn, {
+            'sn': self.gateway_sn,
+            'device_model_key': f"{self._gateway_domain}-{self._gateway_type}-{self._gateway_sub_type}",
+            'device_callsign': callsign or self.gateway_sn,
+            'is_bound': True,
+            'organization_id': org_id or workspace_id,
+            'organization_name': org_name or workspace_name,
+            'bind_time': bind_time
+        })
+
+        logger.info(f"Device bound: workspace={workspace_id}, org={org_id}, code={bind_code}")
         self._notify_event('device_binding', {
             'workspace_id': workspace_id,
             'bind_status': 'success',
-            'timestamp': int(time.time() * 1000)
+            'timestamp': bind_time
         })
+
+        self._schedule_async(self._save_binding_to_db())
+
         return True
 
     def unbind_device(self) -> bool:
@@ -789,10 +1083,26 @@ class DeviceManager:
         self._bound_workspace_id = ""
         self._bound_workspace_name = ""
         self._sub_devices.clear()
+
+        # 清除组织绑定信息
+        self._org_data = {
+            'organization': {
+                'organization_id': '',
+                'organization_name': '',
+                'bind_time': 0,
+                'device_binding_code': ''
+            },
+            'device_bindings': {}
+        }
+        self._save_organization_data()
+
         logger.info("Device unbound")
         self._notify_event('device_unbinding', {
             'timestamp': int(time.time() * 1000)
         })
+
+        self._schedule_async(self._save_binding_to_db())
+
         return True
 
     def device_online(self):
@@ -1159,7 +1469,7 @@ class DeviceManager:
 
     def handle_device_binding(self, msg: dict) -> dict:
         """
-        设备绑定 (device_binding / airport_organization_bind)
+        设备绑定 (device_binding)
 
         Request: { workspace_id, workspace_name }
         Response: { result, workspace_id, bind_status }
@@ -1184,28 +1494,67 @@ class DeviceManager:
 
     def handle_workspace_bind_status(self, msg: dict) -> dict:
         """
-        查询工作空间绑定状态 (workspace_bind_status / airport_bind_status)
+        查询工作空间绑定状态 (workspace_bind_status)
 
-        requests/requests_reply 模式，返回绑定状态
+        返回网关自身的绑定状态摘要
         """
+        org = self._org_data.get('organization', {})
         return MessageBuilder.build_reply(msg, result=0, data={
             'is_bind': self._device_state >= self.STATE_BOUND,
             'workspace_id': self._bound_workspace_id,
             'workspace_name': self._bound_workspace_name,
-            'bind_time': int(time.time() * 1000) if self._bound_workspace_id else 0
+            'organization_id': org.get('organization_id', ''),
+            'organization_name': org.get('organization_name', ''),
+            'bind_time': org.get('bind_time', 0)
+        })
+
+    def handle_airport_bind_status(self, msg: dict) -> dict:
+        """
+        查询机场绑定状态 (airport_bind_status)
+
+        Direction: down (services) - 云端下发查询指令
+        Request: { devices: [{sn: string}] }
+        Response: { result, output: { bind_status: [...] } }
+        """
+        data = msg.get('data', {})
+        devices = data.get('devices', [])
+        
+        bind_status = []
+        for device in devices:
+            sn = device.get('sn', '')
+            is_bound = sn == self.gateway_sn and self._device_state >= self.STATE_BOUND
+            bind_status.append({
+                'sn': sn,
+                'is_device_bind_organization': is_bound,
+                'organization_id': self._org_data.get('organization', {}).get('organization_id', ''),
+                'organization_name': self._org_data.get('organization', {}).get('organization_name', ''),
+                'workspace_id': self._bound_workspace_id,
+                'workspace_name': self._bound_workspace_name,
+            })
+        
+        return MessageBuilder.build_reply(msg, result=0, data={
+            'output': {
+                'bind_status': bind_status
+            }
         })
 
     def handle_workspace_get(self, msg: dict) -> dict:
         """
-        获取工作空间信息 (workspace_get / airport_organization_get)
+        获取工作空间信息 (workspace_get)
 
-        requests/requests_reply 模式
+        返回当前绑定的组织/工作空间详细信息
         """
+        org = self._org_data.get('organization', {})
+        gateway_binding = self._get_device_binding_info(self.gateway_sn)
+
         return MessageBuilder.build_reply(msg, result=0, data={
             'workspace_id': self._bound_workspace_id or 'default_workspace',
             'workspace_name': self._bound_workspace_name or 'Default Workspace',
-            'organization_id': 'default_org',
-            'organization_name': 'Default Organization'
+            'organization_id': org.get('organization_id', 'default_org'),
+            'organization_name': org.get('organization_name', 'Default Organization'),
+            'device_callsign': gateway_binding.get('device_callsign', self.gateway_sn),
+            'is_bound': gateway_binding.get('is_bound', False),
+            'bind_time': gateway_binding.get('bind_time', 0)
         })
 
     # ========== API处理器：设备控制（真实下发到机巢） ==========
@@ -1589,6 +1938,15 @@ class DeviceManager:
         self._notify_event('hms', {'list': alarms})
         logger.info(f"HMS reported: {len(alarms)} alarms")
 
+        for alarm in alarms:
+            self._schedule_async(self._save_alarm_to_db(
+                alarm_id=alarm.get('id', ''),
+                alarm_level=alarm.get('level', 0),
+                alarm_content=alarm.get('content', ''),
+                alarm_type=alarm.get('type', 'hms'),
+                create_time=alarm.get('create_time', int(time.time()))
+            ))
+
     def handle_hms_get(self, msg: dict) -> dict:
         """
         获取HMS告警信息（services 模式，云端查询）
@@ -1620,6 +1978,8 @@ class DeviceManager:
             self._hms_alarms = [a for a in self._hms_alarms if a.get('id') not in alarm_ids]
         else:
             self._hms_alarms = []
+
+        self._schedule_async(self._clear_alarms_from_db(alarm_ids))
 
         return MessageBuilder.build_reply(msg, result=0, data={
             'cleared_count': len(alarm_ids)
@@ -1723,15 +2083,335 @@ class DeviceManager:
             logger.info(f"AirSense warning (services): level={level}, desc={description}")
         return MessageBuilder.build_reply(msg, result=0)
 
-    # 组织管理别名
-    def handle_airport_bind_status(self, msg: dict) -> dict:
-        return self.handle_workspace_bind_status(msg)
+    # ========== DJI 组织管理接口 (Organization) 完整实现 ==========
 
-    def handle_airport_organization_get(self, msg: dict) -> dict:
-        return self.handle_workspace_get(msg)
+    # ========== DJI 组织管理接口 - 边缘端主动发起（requests/requests_reply） ==========
+    #
+    # 注意：这三个接口在 DJI 规范中的 Direction = up（设备→云端）
+    # 属于 requests/requests_reply 模式，不是 services/services_reply 模式
+    # 因此边缘端应该【主动发起请求】，而不是【被动等待云端下发】
+    #
+    # 正确调用方式：
+    #   dm.query_bind_status_from_cloud([sn1, sn2], callback)
+    #   dm.query_organization_from_cloud(bind_code, org_id, callback)
+    #   dm.bind_to_organization(bind_devices, callback)
+    #
+    # 这些方法内部调用 CloudConnectionManager.send_request() 发送 requests
+    # 云端通过 requests_reply 回复，由 handle_org_requests_reply() 处理
 
-    def handle_airport_organization_bind(self, msg: dict) -> dict:
-        return self.handle_device_binding(msg)
+    def query_bind_status_from_cloud(self, device_sns: list = None,
+                                      callback: Callable = None) -> str:
+        """
+        主动向云端查询设备绑定状态 (airport_bind_status)
+
+        边缘端调用场景：
+        - 设备启动时，查询自身及子设备的绑定状态
+        - 用户操作后，刷新绑定状态
+
+        Args:
+            device_sns: 要查询的设备SN列表，None则查询网关自身+子设备
+            callback: 回调函数，签名为 (method, msg) -> None
+
+        Returns:
+            tid: 事务ID，用于匹配响应
+        """
+        if not self._cloud_conn:
+            logger.error("query_bind_status: CloudConnectionManager not available")
+            return ""
+
+        if not device_sns:
+            device_sns = [self.gateway_sn]
+            for dev in self._sub_devices.values():
+                device_sns.append(dev.sn)
+
+        data = {'devices': [{'sn': sn} for sn in device_sns]}
+
+        def _on_reply(method: str, msg: dict):
+            """处理云端回复"""
+            self._handle_airport_bind_status_reply(msg)
+            if callback:
+                callback(method, msg)
+
+        tid = self._cloud_conn.send_request('airport_bind_status', data, _on_reply)
+        logger.info(f"Query bind status sent: tid={tid}, devices={len(device_sns)}")
+        return tid
+
+    def _handle_airport_bind_status_reply(self, msg: dict):
+        """处理 airport_bind_status 的云端回复
+
+        处理场景：
+        - is_device_bind_organization=true: 设备已绑定，更新本地缓存
+        - is_device_bind_organization=false: 设备未绑定/已解绑，清理本地缓存
+        """
+        data = msg.get('data', {})
+        result = data.get('result', -1)
+        output = data.get('output', {})
+        bind_status = output.get('bind_status', [])
+
+        if result != 0:
+            logger.warning(f"Bind status query failed: result={result}")
+            return
+
+        for item in bind_status:
+            sn = item.get('sn', '')
+            is_bound = item.get('is_device_bind_organization', False)
+            org_id = item.get('organization_id', '')
+            org_name = item.get('organization_name', '')
+            callsign = item.get('device_callsign', sn)
+
+            if sn == self.gateway_sn:
+                if is_bound:
+                    # 网关已绑定
+                    if self._device_state < self.STATE_BOUND:
+                        self._device_state = self.STATE_BOUND
+                        self._bound_workspace_id = org_id
+                        self._bound_workspace_name = org_name
+                        self._set_organization_info(org_id, org_name, bind_time=int(time.time()*1000))
+                        logger.info(f"Gateway bound from cloud reply: org={org_id}")
+                        self._notify_event('device_binding', {
+                            'device_sn': sn,
+                            'organization_id': org_id,
+                            'bind_status': 'success',
+                            'timestamp': int(time.time() * 1000)
+                        })
+                else:
+                    # 网关已解绑（从云端确认）
+                    if self._device_state >= self.STATE_BOUND:
+                        logger.info(f"Gateway unbound detected from cloud: was org={self._bound_workspace_id}")
+                        self._device_state = self.STATE_ONLINE
+                        self._bound_workspace_id = ''
+                        self._bound_workspace_name = ''
+                        self._clear_organization_info()
+                        self._notify_event('device_unbinding', {
+                            'device_sn': sn,
+                            'bind_status': 'success',
+                            'timestamp': int(time.time() * 1000)
+                        })
+
+            # 更新设备绑定缓存（不管是不是网关自身都更新）
+            existing = self._get_device_binding_info(sn)
+            existing.update({
+                'is_bound': is_bound,
+                'organization_id': org_id,
+                'organization_name': org_name,
+                'device_callsign': callsign
+            })
+            if not is_bound:
+                existing['bind_time'] = 0
+            self._set_device_binding_info(sn, existing)
+
+        logger.info(f"Bind status reply processed: {len(bind_status)} devices")
+
+        self._schedule_async(self._save_binding_to_db())
+
+    def query_organization_from_cloud(self, binding_code: str, org_id: str,
+                                       callback: Callable = None) -> str:
+        """
+        主动向云端查询组织信息 (airport_organization_get)
+
+        边缘端调用场景：
+        - 用户输入绑定码后，先查询对应的组织名称确认
+
+        Args:
+            binding_code: 设备绑定码
+            org_id: 组织ID
+            callback: 回调函数
+
+        Returns:
+            tid: 事务ID
+        """
+        if not self._cloud_conn:
+            logger.error("query_organization: CloudConnectionManager not available")
+            return ""
+
+        data = {'device_binding_code': binding_code, 'organization_id': org_id}
+
+        def _on_reply(method: str, msg: dict):
+            self._handle_airport_organization_get_reply(msg)
+            if callback:
+                callback(method, msg)
+
+        tid = self._cloud_conn.send_request('airport_organization_get', data, _on_reply)
+        logger.info(f"Query organization sent: tid={tid}, org={org_id}")
+        return tid
+
+    def _handle_airport_organization_get_reply(self, msg: dict):
+        """处理 airport_organization_get 的云端回复
+
+        查询到组织名称后，缓存到 _org_data['pending_organization']，
+        供后续 bind_to_organization 时直接使用。
+        """
+        data = msg.get('data', {})
+        result = data.get('result', -1)
+        output = data.get('output', {})
+        org_name = output.get('organization_name', '')
+
+        if result == 0 and org_name:
+            logger.info(f"Organization query success: name={org_name}")
+            # 缓存组织名称，供后续绑定使用
+            if 'pending_organization' not in self._org_data:
+                self._org_data['pending_organization'] = {}
+            self._org_data['pending_organization']['organization_name'] = org_name
+            self._save_organization_data()
+        else:
+            logger.warning(f"Organization query failed: result={result}, name={org_name}")
+
+    def bind_to_organization(self, bind_devices: list,
+                              callback: Callable = None) -> str:
+        """
+        主动向云端发起设备绑定到组织 (airport_organization_bind)
+
+        边缘端调用场景：
+        - 用户确认绑定码和组织信息后，发起正式绑定请求
+
+        Args:
+            bind_devices: 绑定参数列表
+                [{sn, device_binding_code, organization_id,
+                  device_callsign, device_model_key}, ...]
+            callback: 回调函数
+
+        Returns:
+            tid: 事务ID
+        """
+        if not self._cloud_conn:
+            logger.error("bind_to_organization: CloudConnectionManager not available")
+            return ""
+
+        if not bind_devices:
+            logger.error("bind_to_organization: bind_devices is empty")
+            return ""
+
+        # 参数校验（device_model_key 为 DJI 文档要求的必填字段）
+        for dev in bind_devices:
+            if not dev.get('sn') or not dev.get('device_binding_code') or not dev.get('organization_id'):
+                logger.error(f"bind_to_organization: invalid device params (missing sn/bind_code/org_id): {dev}")
+                return ""
+            if not dev.get('device_model_key'):
+                logger.error(f"bind_to_organization: missing device_model_key for {dev.get('sn')}")
+                return ""
+
+        data = {'bind_devices': bind_devices}
+
+        def _on_reply(method: str, msg: dict):
+            self._handle_airport_organization_bind_reply(msg, bind_devices)
+            if callback:
+                callback(method, msg)
+
+        tid = self._cloud_conn.send_request('airport_organization_bind', data, _on_reply)
+        logger.info(f"Bind to organization sent: tid={tid}, devices={len(bind_devices)}")
+        return tid
+
+    def _handle_airport_organization_bind_reply(self, msg: dict, original_devices: list):
+        """处理 airport_organization_bind 的云端回复
+
+        DJI 文档说明：
+        - result=0 且 err_infos 为空：全部绑定成功
+        - result=0 且 err_infos 非空：部分成功（err_infos 中为失败的设备）
+        - result≠0：整体请求失败
+        """
+        data = msg.get('data', {})
+        result = data.get('result', -1)
+        output = data.get('output', {})
+        err_infos = output.get('err_infos', [])
+
+        if result != 0:
+            logger.error(f"Bind to organization failed: result={result}")
+            return
+
+        # 构建失败设备SN集合（用于过滤）
+        failed_sns = {err.get('sn', '') for err in err_infos}
+        if err_infos:
+            logger.warning(f"Bind to organization partial success: "
+                          f"{len(failed_sns)}/{len(original_devices)} devices failed, "
+                          f"errors={err_infos}")
+
+        bind_time = int(time.time() * 1000)
+        success_count = 0
+
+        for dev in original_devices:
+            sn = dev.get('sn', '')
+            if sn in failed_sns:
+                # 该设备绑定失败，记录错误信息
+                err_code = next((e.get('err_code', -1) for e in err_infos if e.get('sn') == sn), -1)
+                self._set_device_binding_info(sn, {
+                    'sn': sn,
+                    'device_model_key': dev.get('device_model_key', ''),
+                    'device_callsign': dev.get('device_callsign', sn),
+                    'is_bound': False,
+                    'organization_id': dev.get('organization_id', ''),
+                    'organization_name': '',
+                    'bind_time': 0,
+                    'last_err_code': err_code
+                })
+                logger.warning(f"Device bind failed: sn={sn}, err_code={err_code}")
+                continue
+
+            org_id = dev.get('organization_id', '')
+            bind_code = dev.get('device_binding_code', '')
+            callsign = dev.get('device_callsign', sn)
+            model_key = dev.get('device_model_key', '')
+
+            # 优先使用 pending_organization 缓存的组织名称
+            org_name = self._org_data.get('pending_organization', {}).get('organization_name', '')
+            if not org_name:
+                org_name = self._org_data.get('organization', {}).get('organization_name', org_id)
+
+            # 更新本地绑定缓存
+            self._set_device_binding_info(sn, {
+                'sn': sn,
+                'device_model_key': model_key,
+                'device_callsign': callsign,
+                'is_bound': True,
+                'organization_id': org_id,
+                'organization_name': org_name,
+                'bind_time': bind_time
+            })
+            success_count += 1
+
+            # 网关自身绑定联动
+            if sn == self.gateway_sn:
+                self._device_state = self.STATE_BOUND
+                self._bound_workspace_id = org_id
+                self._bound_workspace_name = org_name
+                self._set_organization_info(org_id, org_name, bind_code, bind_time)
+                self._notify_event('device_binding', {
+                    'device_sn': sn,
+                    'organization_id': org_id,
+                    'bind_status': 'success',
+                    'timestamp': bind_time
+                })
+
+            # 子设备绑定联动
+            elif sn in self._sub_devices:
+                self._sub_devices[sn].paired = True
+
+        logger.info(f"Bind to organization result: {success_count}/{len(original_devices)} devices bound successfully")
+        self.report_update_topo()
+
+        self._schedule_async(self._save_binding_to_db())
+
+    def auto_query_bind_status_on_startup(self):
+        """
+        设备启动时自动查询绑定状态
+
+        边缘端调用场景：
+        - main.py 中设备上线后，自动调用此方法查询绑定状态
+        - 如果已绑定，上报设备在线；如果未绑定，等待后续操作
+        """
+        if self._device_state >= self.STATE_BOUND:
+            logger.info("Device already bound, skip bind status query")
+            return
+
+        if not self._cloud_conn:
+            logger.warning("CloudConnectionManager not available, cannot query bind status")
+            return
+
+        if not self._cloud_conn.is_cloud_connected:
+            logger.warning("MQTT not connected yet, will query bind status later")
+            return
+
+        logger.info("Auto querying bind status on startup...")
+        self.query_bind_status_from_cloud()
 
     # update_topo（云端下发拓扑同步）
     def handle_update_topo(self, msg: dict) -> dict:

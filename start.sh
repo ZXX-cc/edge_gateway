@@ -9,9 +9,14 @@ set -e
 # --- 配置 ---
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${PROJECT_DIR}/config/gateway.yaml"
+CONFIG_DEST="${EDGE_GATEWAY_CONFIG_DEST:-/etc/edge_gateway/gateway.yaml}"
 VENV_DIR="${PROJECT_DIR}/.venv"
-LOG_DIR="/var/log/edge_gateway"
-PID_FILE="/var/run/edge_gateway.pid"
+REQUIREMENTS_FILE="${EDGE_GATEWAY_REQUIREMENTS:-${PROJECT_DIR}/requirements-ubuntu.txt}"
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    REQUIREMENTS_FILE="${PROJECT_DIR}/requirements.txt"
+fi
+LOG_DIR="${EDGE_GATEWAY_LOG_DIR:-/var/log/edge_gateway}"
+PID_FILE="${EDGE_GATEWAY_PID_FILE:-/var/run/edge_gateway.pid}"
 
 # --- 颜色输出 ---
 RED='\033[0;31m'
@@ -75,9 +80,9 @@ setup_venv() {
     source "${VENV_DIR}/bin/activate"
 
     # 安装依赖
-    log_info "Installing Python dependencies..."
-    pip install -q --upgrade pip
-    pip install -q -r "${PROJECT_DIR}/requirements.txt"
+    log_info "Installing Python dependencies from ${REQUIREMENTS_FILE}..."
+    python3 -m pip install -q --upgrade pip setuptools wheel
+    python3 -m pip install -q -r "${REQUIREMENTS_FILE}"
 }
 
 # --- 创建必要目录 ---
@@ -89,9 +94,9 @@ setup_directories() {
     mkdir -p "/etc/edge_gateway"
 
     # 复制默认配置(如果不存在)
-    if [ ! -f "/etc/edge_gateway/gateway.yaml" ]; then
-        cp "$CONFIG_FILE" "/etc/edge_gateway/gateway.yaml"
-        log_info "Default config copied to /etc/edge_gateway/gateway.yaml"
+    if [ ! -f "$CONFIG_DEST" ]; then
+        cp "$CONFIG_FILE" "$CONFIG_DEST"
+        log_info "Default config copied to $CONFIG_DEST"
     fi
 }
 
@@ -141,7 +146,7 @@ start_gateway() {
 
     # 启动网关程序
     nohup python3 "${PROJECT_DIR}/src/main.py" \
-        -c "/etc/edge_gateway/gateway.yaml" \
+        -c "$CONFIG_DEST" \
         >> "${LOG_DIR}/edge_gateway.log" 2>&1 &
 
     echo $! > "$PID_FILE"
@@ -186,7 +191,7 @@ status() {
     # 端口监听
     echo ""
     echo "Listening ports:"
-    ss -tlnp 2>/dev/null | grep -E "(1883|8083|5000)" || true
+    ss -tlnp 2>/dev/null | grep -E "(1883|8083|14550|5000)" || true
 }
 
 # --- 查看日志 ---

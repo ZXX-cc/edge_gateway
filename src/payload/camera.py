@@ -2,11 +2,17 @@
 相机控制模块
 处理拍照、录像、相机参数设置
 """
-from typing import Optional
+import time
+import threading
+import asyncio
+from typing import Optional, Callable
+from uuid import UUID
 from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.database.connection import get_async_session_local, init_database_async
+from src.database.media_db import MediaDB
 
 logger = get_logger("camera")
 
@@ -20,6 +26,7 @@ class CameraController:
     2. 录像控制(开始/停止)
     3. 相机参数设置(模式、曝光、变焦、对焦)
     4. 拍照进度上报
+    5. 媒体文件元数据管理
 
     API方法:
     - camera_photo_take, start_photo, stop_photo
@@ -47,9 +54,41 @@ class CameraController:
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
 
+        # ViewLink SDK 云台控制模块引用
+        self._gimbal_control = None
+
+        # 遥测模块引用
+        self._telemetry_module = None
+
+        # 事件回调
+        self._event_callback: Optional[Callable] = None
+
+        # 数据库相关
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._db_initialized = False
+
+        # 当前任务ID
+        self._current_mission_id = None
+
     def set_mavlink_connection(self, mavlink_conn):
         """注入MAVLink连接"""
         self._mavlink_conn = mavlink_conn
+
+    def set_gimbal_control(self, gimbal_control):
+        """注入 ViewLink 云台控制模块"""
+        self._gimbal_control = gimbal_control
+
+    def set_telemetry_module(self, telemetry_module):
+        """注入遥测模块"""
+        self._telemetry_module = telemetry_module
+
+    def set_event_callback(self, callback: Callable):
+        """设置事件回调"""
+        self._event_callback = callback
+
+    def set_current_mission_id(self, mission_id: str):
+        """设置当前任务ID"""
+        self._current_mission_id = mission_id
 
     def _send_mavlink_command(self, command: int, params: list) -> bool:
         """发送MAVLink COMMAND_LONG"""
@@ -82,15 +121,28 @@ class CameraController:
 
         logger.info(f"Photo take: camera={camera_idx}")
 
-        # 通过MAVLink发送拍照命令 (MAV_CMD_DO_DIGICAM_CONTROL)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_DO_DIGICAM_CONTROL,
-            [0, 0, 0, 0, 1, 0, 0]  # param5=1 触发拍照
-        )
+        success = False
+
+        # 优先使用 ViewLink SDK 拍照
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            result = self._gimbal_control.take_photo()
+            success = result.get('success', False)
+            logger.info(f"ViewLink photo: {result}")
+
+        # 如果 ViewLink 不可用，回退到 MAVLink
+        if not success:
+            success = self._send_mavlink_command(
+                mavutil.mavlink.MAV_CMD_DO_DIGICAM_CONTROL,
+                [0, 0, 0, 0, 1, 0, 0]  # param5=1 触发拍照
+            )
 
         self._photo_count += 1
 
-        return MessageBuilder.build_reply(msg, result=0)
+        # 异步写入媒体文件元数据到数据库
+        if success:
+            self._save_media_metadata_sync('photo')
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_start_photo(self, msg: dict) -> dict:
         """
@@ -142,14 +194,24 @@ class CameraController:
 
         logger.info(f"Start record: camera={camera_idx}, resolution={resolution}")
         self._is_recording = True
+        self._recording_start_time = time.time()
 
-        # 通过MAVLink发送录像命令 (MAV_CMD_VIDEO_START_CAPTURE)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_VIDEO_START_CAPTURE,
-            [0, 30, 0, 0, 0, 0, 0]  # param2=帧率
-        )
+        success = False
 
-        return MessageBuilder.build_reply(msg, result=0)
+        # 优先使用 ViewLink SDK 开始录像
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            result = self._gimbal_control.start_recording()
+            success = result.get('success', False)
+            logger.info(f"ViewLink start recording: {result}")
+
+        # 如果 ViewLink 不可用，回退到 MAVLink
+        if not success:
+            success = self._send_mavlink_command(
+                mavutil.mavlink.MAV_CMD_VIDEO_START_CAPTURE,
+                [0, 30, 0, 0, 0, 0, 0]  # param2=帧率
+            )
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_stop_record(self, msg: dict) -> dict:
         """停止录像"""
@@ -158,14 +220,28 @@ class CameraController:
 
         logger.info("Stop record")
         self._is_recording = False
+        self._recording_time = int(time.time() - self._recording_start_time)
 
-        # 通过MAVLink停止录像 (MAV_CMD_VIDEO_STOP_CAPTURE)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_VIDEO_STOP_CAPTURE,
-            [0, 0, 0, 0, 0, 0, 0]
-        )
+        success = False
 
-        return MessageBuilder.build_reply(msg, result=0, data={'record_time': self._recording_time})
+        # 优先使用 ViewLink SDK 停止录像
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            result = self._gimbal_control.stop_recording()
+            success = result.get('success', False)
+            logger.info(f"ViewLink stop recording: {result}")
+
+        # 如果 ViewLink 不可用，回退到 MAVLink
+        if not success:
+            success = self._send_mavlink_command(
+                mavutil.mavlink.MAV_CMD_VIDEO_STOP_CAPTURE,
+                [0, 0, 0, 0, 0, 0, 0]
+            )
+
+        # 异步写入媒体文件元数据到数据库
+        if success:
+            self._save_media_metadata_sync('video', duration=self._recording_time)
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={'record_time': self._recording_time})
 
     # ---- 参数设置API ----
 
@@ -277,8 +353,112 @@ class CameraController:
 
     def report_photo_progress(self, current: int, total: int, storage_path: str = ""):
         """上报拍照进度"""
-        # TODO: 通过events上报 photo_take_progress
-        pass
+        if self._event_callback:
+            event = MessageBuilder.build_event(
+                'photo_take_progress',
+                {
+                    'current': current,
+                    'total': total,
+                    'storage_path': storage_path
+                },
+                self.gateway_sn
+            )
+            self._event_callback(event)
+
+    # ---- 媒体文件元数据管理 ----
+
+    def _ensure_event_loop(self):
+        """确保事件循环已设置"""
+        if self._main_loop is None:
+            try:
+                self._main_loop = asyncio.get_running_loop()
+                logger.info("CameraController captured main event loop")
+            except RuntimeError:
+                logger.warning("No running event loop detected")
+
+    async def _init_database(self):
+        """初始化数据库"""
+        if self._db_initialized:
+            return
+        await init_database_async()
+        self._db_initialized = True
+        logger.info("CameraController database initialized")
+
+    async def _save_media_metadata(self, file_type: str, duration: float = None):
+        """保存媒体文件元数据到数据库"""
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+
+            # 获取当前遥测数据（位置信息）
+            lat, lon, alt = 0.0, 0.0, 0.0
+            if self._telemetry_module and hasattr(self._telemetry_module, 'get_gps'):
+                gps = self._telemetry_module.get_gps()
+                if gps:
+                    lat = gps.get('lat', 0.0)
+                    lon = gps.get('lon', 0.0)
+                    alt = gps.get('alt', 0.0)
+
+            capture_time = int(time.time())
+            file_name = f"{capture_time}_{file_type}.{file_type}"
+
+            async with AsyncSessionLocal() as session:
+                media_data = {
+                    'mission_id': self._current_mission_id,
+                    'device_sn': self.gateway_sn,
+                    'file_name': file_name,
+                    'file_path': f"/data/media/{file_name}",
+                    'file_size': 0,
+                    'file_type': file_type,
+                    'resolution': '1080p',
+                    'duration': duration,
+                    'capture_time': capture_time,
+                    'latitude': lat,
+                    'longitude': lon,
+                    'altitude': alt,
+                    'upload_status': 'pending',
+                }
+                await MediaDB.create_media_file(session, media_data)
+                await session.commit()
+
+            logger.info(f"Media metadata saved: {file_name}, type={file_type}")
+
+            # 上报拍照结果事件
+            if self._event_callback:
+                event = MessageBuilder.build_event(
+                    'photo_take_progress',
+                    {
+                        'current': self._photo_count,
+                        'total': self._photo_count,
+                        'storage_path': f"/data/media/{file_name}",
+                        'metadata': {
+                            'latitude': lat,
+                            'longitude': lon,
+                            'altitude': alt,
+                            'capture_time': capture_time,
+                            'file_type': file_type,
+                        }
+                    },
+                    self.gateway_sn
+                )
+                self._event_callback(event)
+
+        except Exception as e:
+            logger.error(f"Save media metadata failed: {e}")
+
+    def _save_media_metadata_sync(self, file_type: str, duration: float = None):
+        """异步保存媒体文件元数据（非阻塞）"""
+        self._ensure_event_loop()
+        if self._main_loop:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._save_media_metadata(file_type, duration),
+                    self._main_loop
+                )
+            except Exception as e:
+                logger.error(f"Failed to schedule media metadata save: {e}")
+        else:
+            logger.warning("Cannot save media metadata: no event loop")
 
     # ---- 大疆标准相机接口扩展 ----
 

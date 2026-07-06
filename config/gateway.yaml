@@ -70,6 +70,9 @@ mavlink:
 
 # --- 设备属性配置 ---
 device:
+  firmware_version: "1.0.0"       # 固件版本
+  storage_capacity: 64000         # 存储容量(MB)
+
   # 飞行限制
   limits:
     max_height: 120               # 最大飞行高度(m)
@@ -88,6 +91,9 @@ media:
   storage_path: "/data/media"     # 本地存储路径
   auto_upload: true
   upload_quality: "original"      # original/high/medium/low
+  video_sources:                  # 视频源配置
+    main: "camera_main"
+    thermal: "camera_thermal"
 
   # OSS配置(上传凭证由云端下发)
   oss:
@@ -108,6 +114,25 @@ logging:
   file: "/var/log/edge_gateway.log"
   max_size: "10MB"
   backup_count: 5
+
+# --- RTK/NTRIP配置 ---
+rtk:
+  enabled: false                  # 是否启用RTK差分定位
+  host: ""                        # NTRIP服务器地址
+  port: 8002                      # NTRIP服务器端口
+  mountpoint: ""                  # NTRIP挂载点
+  username: ""                    # NTRIP用户名
+  password: ""                    # NTRIP密码
+
+# --- 数据保留策略 ---
+retention:
+  telemetry_hours: 2              # 遥测数据保留时长(小时)
+  operation_days: 3               # 操作记录保留时长(天)
+  alarm_days: 1                   # 告警记录保留时长(天)
+  media_uploaded_days: 7          # 已上传媒体保留时长(天)
+  cleanup_interval_hours: 1       # 清理间隔(小时)
+  vacuum_interval_hours: 24       # 数据库压缩间隔(小时)
+  max_db_size_mb: 50              # 最大数据库大小(MB)
 
 # --- 远程调试 ---
 debug:

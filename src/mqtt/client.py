@@ -5,7 +5,7 @@ MQTT客户端模块
 import json
 import time
 import threading
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, List
 import paho.mqtt.client as mqtt
 
 from src.utils.logger import get_logger
@@ -35,6 +35,7 @@ class MQTTClient:
         self._topic_handlers: Dict[str, Callable] = {}  # method -> handler
         self._status_reply_handler: Optional[Callable] = None
         self._requests_reply_handler: Optional[Callable] = None
+        self._connect_callbacks: List[Callable] = []
         self._lock = threading.Lock()
         self._running = False
 
@@ -185,6 +186,19 @@ class MQTTClient:
         """设置 requests_reply 处理器"""
         self._requests_reply_handler = handler
 
+    def register_connect_callback(self, callback: Callable):
+        """注册连接成功回调"""
+        if callback not in self._connect_callbacks:
+            self._connect_callbacks.append(callback)
+
+    def _notify_connect_callbacks(self):
+        """通知所有连接回调"""
+        for callback in self._connect_callbacks:
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"Connect callback error: {e}")
+
     # ---- 回调 ----
 
     def _on_connect(self, client, userdata, flags, rc):
@@ -192,6 +206,7 @@ class MQTTClient:
             self.connected = True
             logger.info("MQTT connected to NanoMQ")
             self.subscribe_downstream()
+            self._notify_connect_callbacks()
         else:
             logger.error(f"MQTT connection failed, rc={rc}")
 
