@@ -60,9 +60,10 @@ Dock3 上云 API 模拟器
 |---|---|---|
 | `services -> services_reply` | 已验证可闭环，`dock_status_query`、`airport_bind_status` 均能收到 `result=0` 回包 | 对照 Dock3 设备管理/组织管理文档校验字段 |
 | `osd` 上报 | 已验证持续输出 SITL 遥测 | 对照 Dock3 properties/osd 字段名、单位和枚举 |
-| `property/set` | 网关能收到并处理 `property_set`，但实际回 `services_reply`，不是测试脚本等待的 `property/set_reply` | 人员1确认 Dock3 properties 标准 reply topic |
-| `drc/down` | 网关能收到并处理 `drc_mode_enter`，实际输出 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，不是测试脚本等待的 `drc/up` | 人员1确认 Dock3 DRC 上下行和事件规则，人员2确认设备侧状态 |
-| 状态一致性 | `dock_status_query.drone_status` 未同步 OSD 实时遥测 | 人员1定义云端字段，人员2提供实时状态来源，后续业务逻辑修复 |
+| `property/set` | 已通过 Ubuntu 服务器复测，`property_set` 返回 `property/set_reply`，`result=0` | 继续对照 Dock3 properties payload 结构 |
+| `drc/down` | 已通过 Ubuntu 服务器复测，`drc_mode_enter/exit` 均返回 `drc/up`，并上报 `drc_status_notify` 事件 | 人员1继续校验 Dock3 DRC topic/payload；人员2核对 MAVLink 执行状态 |
+| 状态一致性 | `dock_status_query.drone_status` 已同步 OSD 实时遥测，包含 `online=true`、经纬度、高度、电量、模式和 GPS | 继续对照 Dock3 机场/无人机状态字段 |
+| DRC 交接项 | MQTT 层 `drc_mode_enter` 已成功，但复测期间 OSD `mode_code=0`、`gear=0` | 人员2核对 DRC 进入后飞控模式切换、解锁状态和 `mode_code` 映射 |
 
 ## 4. 人员2：MAVLink 与网关
 

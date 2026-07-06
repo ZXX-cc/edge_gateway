@@ -150,16 +150,17 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 |---|---|---|---|
 | D3-AUDIT-001 | OSD 上报 | `thing/product/EDGE-GW-001/osd` 持续输出经纬度、高度、姿态、电池、GPS | 先确认 Dock3 properties/osd 字段名、单位和枚举，再决定是否改 telemetry 输出 |
 | D3-AUDIT-002 | Services | `dock_status_query` 和 `airport_bind_status` 可收到 `services_reply` | services 闭环可作为后续 Dock3 method 验收基础 |
-| D3-AUDIT-003 | 状态一致性 | `dock_status_query` 返回的 `drone_status` 未同步 OSD 实时遥测 | 已做代码修复：查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`；待 Ubuntu 服务器复测 |
-| D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 已做代码修复：`property/set` 来源回 `property/set_reply`；仍需对照 Dock3 properties 文档确认 payload 结构 |
-| D3-AUDIT-005 | DRC | `drc_mode_enter` 下行到 `drc/down` 后实际上报 `events:drc_status_notify`，并回 `services_reply:drc_mode_enter`，没有回 `drc/up` | 已做代码修复：`drc/down` 来源回 `drc/up`，事件保留；仍需对照 Dock3 DRC 文档确认 session 和上行语义 |
+| D3-AUDIT-003 | 状态一致性 | `dock_status_query` 返回的 `drone_status` 未同步 OSD 实时遥测 | 已修复并通过 Ubuntu 服务器复测：`online`、经纬度、高度、电量、飞行模式、GPS 已来自实时遥测快照 |
+| D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 已修复并通过 Ubuntu 服务器复测：`property/set` 来源回 `property/set_reply`；仍需对照 Dock3 properties 文档确认 payload 结构 |
+| D3-AUDIT-005 | DRC | `drc_mode_enter` 下行到 `drc/down` 后实际上报 `events:drc_status_notify`，并回 `services_reply:drc_mode_enter`，没有回 `drc/up` | 已修复并通过 Ubuntu 服务器复测：`drc_mode_enter/exit` 均回 `drc/up`，事件保留；仍需对照 Dock3 DRC 文档确认 session 和上行语义 |
+| D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0` 且上报 `drc_state=2`，但复测期间 OSD `mode_code=0`、`gear=0` | MQTT 协议链路已通，飞控是否真正切到可控模式和 `mode_code` 映射交由人员2继续核对 |
 
 下一步由人员1优先完成：
 
 1. 建立 properties 的 topic/reply/payload 对照表。
 2. 建立 DRC 的 `drc/down`、`drc/up`、`events`、`services_reply` 关系表。
 3. 将 `property_set`、`drc_mode_enter`、`dock_status_query` 标为 P0 审计项。
-4. 在 Ubuntu 服务器复测 `property_set`、`drc_mode_enter`、`dock_status_query`，确认代码修复效果。
+4. 将 DRC MQTT 状态与 MAVLink 飞控模式、解锁状态、`mode_code` 映射交给人员2继续核对。
 
 ## 10. 当前禁止事项
 

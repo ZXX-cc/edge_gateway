@@ -61,18 +61,20 @@
 |---|---|---|---|---|---|---|
 | P1-CLOUD-001 | `dock_status_query` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.result=0` | services 链路闭环成功 | 继续 Dock3 字段校验 |
 | P1-CLOUD-002 | `airport_bind_status` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.output.bind_status=[]` | services 链路闭环成功 | 对照 Dock3 组织管理文档校验字段 |
-| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | 修复前实际收到 `services_reply`，`data={"result":0,"results":{}}` | 代码已改为按 `property/set` 来源回 `property/set_reply` | 待 Ubuntu 服务器复测 |
-| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 修复前实际收到 `events` 的 `drc_status_notify`，以及 `services_reply` 的 `drc_mode_enter` 回包 | 代码已改为按 `drc/down` 来源回 `drc/up`，事件仍继续上报 | 待 Ubuntu 服务器复测，并继续校验 Dock3 DRC 语义 |
+| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | 复测收到 `property/set_reply`，`data.result=0`，`data.results={}` | 已修复并通过 Ubuntu 服务器复测 | 继续对照 Dock3 properties payload 结构 |
+| P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 复测收到 `drc/up`，`data.result=0`，含 `drc_session_id` 和 `status=enabled`；同时上报 `events:drc_status_notify`，`drc_state=2` | 已修复并通过 Ubuntu 服务器复测 | 继续校验 Dock3 DRC session、事件和上行语义 |
+| P1-CLOUD-006 | `drc_mode_exit` | `thing/product/EDGE-GW-001/drc/down` | `thing/product/EDGE-GW-001/drc/up` | 复测收到 `drc/up`，`data.result=0`；同时上报 `events:drc_status_notify`，`drc_state=0` | DRC 退出链路通过 Ubuntu 服务器复测 | 继续校验 Dock3 DRC 退出事件语义 |
 | P1-CLOUD-005 | `osd` 上报 | 无 | `thing/product/EDGE-GW-001/osd` | 持续收到经纬度、高度、姿态、电池、GPS | 设备遥测上报链路成功 | 对照 Dock3 properties/osd 字段校验名称、单位、枚举 |
 
 ### 3.3 关键发现
 
 | 编号 | 问题 | 证据 | 影响 | 负责人 |
 |---|---|---|---|---|
-| P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 已改为查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`，不在 OSD 热路径频繁写状态 | 待 Ubuntu 服务器复测 |
-| P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 已改为按下行来源 topic 分流回包 | 待 Ubuntu 服务器复测 |
-| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 已改为按下行来源 topic 分流回包；`drc_status_notify` 事件保留 | 待 Ubuntu 服务器复测 |
-| P1-ISSUE-004 | 网关可能处理自己发布的 `services_reply/events_reply` | 网关订阅了 reply topic，发布回包后可能再次进入 method 路由，造成重复业务日志 | 已加保护：`services_reply/events_reply` 只记录，不再路由到业务 handler | 待 Ubuntu 服务器复测 |
+| P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但修复前 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 已改为查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`，不在 OSD 热路径频繁写状态 | Ubuntu 复测通过：`online=true`，经纬度、高度、电量、模式、GPS 已同步 |
+| P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后修复前实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 已改为按下行来源 topic 分流回包 | Ubuntu 复测通过：收到 `property/set_reply` |
+| P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后修复前实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 已改为按下行来源 topic 分流回包；`drc_status_notify` 事件保留 | Ubuntu 复测通过：`drc_mode_enter` 和 `drc_mode_exit` 均收到 `drc/up` |
+| P1-ISSUE-004 | 网关可能处理自己发布的 `services_reply/events_reply` | 网关订阅了 reply topic，发布回包后可能再次进入 method 路由，造成重复业务日志 | 已加保护：`services_reply/events_reply` 只记录，不再路由到业务 handler | 待继续观察网关日志 |
+| P1-ISSUE-005 | DRC MQTT 状态与飞控 OSD 模式状态需要进一步核对 | `drc_mode_enter` 已返回 `result=0` 且事件 `drc_state=2`，但复测期间 OSD 中 `mode_code` 仍为 `0`、`gear` 仍为 `0` | MQTT/DRC 协议链路已通，但飞控是否真正切到可控模式需要 MAVLink 侧验证 | 交给人员2核对 MAVLink 模式切换、解锁状态和 `mode_code` 映射 |
 
 ### 3.4 当前判定
 
@@ -80,11 +82,12 @@
 |---|---|
 | `services -> services_reply` | 已通 |
 | `property/set` 下行接收 | 已通 |
-| `property/set` 标准 reply | 已做 topic-aware 代码修复，待服务器复测 |
+| `property/set` 标准 reply | 已修复并通过 Ubuntu 服务器复测 |
 | `drc/down` 下行接收 | 已通 |
-| `drc/up` 标准上行 | 已做 topic-aware 代码修复，待服务器复测 |
+| `drc/up` 标准上行 | 已修复并通过 Ubuntu 服务器复测 |
 | `events` 上报 | 已通 |
 | `osd` 上报 | 已通 |
+| `dock_status_query` 实时状态 | 已修复并通过 Ubuntu 服务器复测 |
 | Dock3 字段合规 | 未完成 |
 
 ## 4. Method 分组清单
