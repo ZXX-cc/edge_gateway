@@ -54,6 +54,16 @@ Dock3 上云 API 模拟器
 | reply 验收规则 | 成功、失败、未知方法、超时都有明确期望 |
 | request trace 方案 | 可复盘每次 API 调用的 request、dispatch、execute、reply、error |
 
+### 2026-07-06 当前进展
+
+| 项目 | 当前结论 | 后续动作 |
+|---|---|---|
+| `services -> services_reply` | 已验证可闭环，`dock_status_query`、`airport_bind_status` 均能收到 `result=0` 回包 | 对照 Dock3 设备管理/组织管理文档校验字段 |
+| `osd` 上报 | 已验证持续输出 SITL 遥测 | 对照 Dock3 properties/osd 字段名、单位和枚举 |
+| `property/set` | 网关能收到并处理 `property_set`，但实际回 `services_reply`，不是测试脚本等待的 `property/set_reply` | 人员1确认 Dock3 properties 标准 reply topic |
+| `drc/down` | 网关能收到并处理 `drc_mode_enter`，实际输出 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，不是测试脚本等待的 `drc/up` | 人员1确认 Dock3 DRC 上下行和事件规则，人员2确认设备侧状态 |
+| 状态一致性 | `dock_status_query.drone_status` 未同步 OSD 实时遥测 | 人员1定义云端字段，人员2提供实时状态来源，后续业务逻辑修复 |
+
 ## 4. 人员2：MAVLink 与网关
 
 ### 主要目标
@@ -190,4 +200,3 @@ Dock3 上云 API 模拟器
 - 失败的 tid/bid、错误日志和复现命令。
 - 是否影响其他人员的数据契约。
 - 是否需要更新文档。
-

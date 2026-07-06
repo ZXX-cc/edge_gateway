@@ -142,11 +142,29 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 8. 将失败用例记录到 request trace。
 9. 再补业务逻辑和 MongoDB 持久化。
 
-## 9. 当前禁止事项
+## 9. 2026-07-06 人员1首轮联调发现
+
+人员1已在 Ubuntu 服务器完成 MQTT 基础链路测试。结论是链路可用，但 Dock3 topic/reply/payload 规则尚未完成审计。
+
+| 编号 | 类别 | 现象 | Dock3 迁移判断 |
+|---|---|---|---|
+| D3-AUDIT-001 | OSD 上报 | `thing/product/EDGE-GW-001/osd` 持续输出经纬度、高度、姿态、电池、GPS | 先确认 Dock3 properties/osd 字段名、单位和枚举，再决定是否改 telemetry 输出 |
+| D3-AUDIT-002 | Services | `dock_status_query` 和 `airport_bind_status` 可收到 `services_reply` | services 闭环可作为后续 Dock3 method 验收基础 |
+| D3-AUDIT-003 | 状态一致性 | `dock_status_query` 返回的 `drone_status` 未同步 OSD 实时遥测 | 需要建立内部标准状态模型，由人员1定义云端字段、人员2提供实时遥测来源 |
+| D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 必须对照 Dock3 properties 文档确认标准 reply topic；确认前不直接判断代码正确或错误 |
+| D3-AUDIT-005 | DRC | `drc_mode_enter` 下行到 `drc/down` 后实际上报 `events:drc_status_notify`，并回 `services_reply:drc_mode_enter`，没有回 `drc/up` | 必须对照 Dock3 DRC 文档确认 `drc/up`、事件、session 和服务回包的关系 |
+
+下一步由人员1优先完成：
+
+1. 建立 properties 的 topic/reply/payload 对照表。
+2. 建立 DRC 的 `drc/down`、`drc/up`、`events`、`services_reply` 关系表。
+3. 将 `property_set`、`drc_mode_enter`、`dock_status_query` 标为 P0 审计项。
+4. 明确 `tools/mqtt_smoke_test.py` 的等待 topic 是否需要按 Dock3 规则调整。
+
+## 10. 当前禁止事项
 
 - 禁止把 Dock1 字段当作 Dock3 最终标准。
 - 禁止在未更新迁移矩阵的情况下直接改 method payload。
 - 禁止在 MQTT 回调中阻塞等待 MAVLink 或数据库。
 - 禁止将真实硬件差异作为当前模拟阶段阻塞项。
 - 禁止把 MongoDB 写成当前已完成实现。
-
