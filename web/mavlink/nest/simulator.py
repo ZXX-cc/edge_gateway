@@ -11,18 +11,18 @@ import time
 from protocol import (
     BIT_CALIBRATE,
     BIT_CHARGING,
+    BIT_DRONE_HEARTBEAT,
     BIT_ESTOP,
     BIT_INIT,
     BIT_LANDING_ABORT_PROGRESS,
     BIT_LANDING_IN_PROGRESS,
     BIT_NEST_HEARTBEAT,
-    BIT_DRONE_HEARTBEAT,
-    NEST_COMMANDS,
-    ORDINARY_COMMAND_LABELS,
     BIT_PLC_HEARTBEAT,
     BIT_PLC_READY,
     BIT_TAKEOFF_ABORT_PROGRESS,
     BIT_TAKEOFF_IN_PROGRESS,
+    NEST_COMMANDS,
+    ORDINARY_COMMAND_LABELS,
     TAKEOFF_LAND_COMMAND_LABELS,
     drone_nest,
 )
@@ -219,129 +219,63 @@ class NestSimulator:
             self._update_state_from_command(ordinary, takeoff_land)
             self._print_block("收到 DRONE_NEST_COMMAND", [
                 ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
-                ("ordinary_order", f"0x{ordinary:04X}"),
-                ("ordinary_name", self._ordinary_command_label(ordinary)),
-                ("takeoff_land", f"0x{takeoff_land:02X}"),
-                ("takeoff_name", self._takeoff_land_command_label(takeoff_land)),
-                ("gate_state", self.env_data["gate_state"]),
-                ("clamp_state", self.env_data["clamp_state"]),
-                ("charge_current", self.env_data["charge_current"]),
-                ("boolstate1", f"0x{self.env_data['boolstate1']:04X}"),
-                ("boolstate2", f"0x{self.env_data['boolstate2']:04X}"),
-                ("error_code", f"0x{self.env_data['error_code']:04X}"),
+                ("ordinary", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
+                ("takeoff_land", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
             ])
-            self._send_order_response(0, 0)
-            self._send_nest_response(reason="command")
-        elif not msg_type.startswith("UNKNOWN_"):
-            self._print_block("收到 MAVLink 消息", [
-                ("type", msg_type),
-                ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
-            ])
+            self._send_order_response()
+            self._send_nest_response()
 
-    def _describe_datagram(self, data, addr):
-        if not data:
-            return
-
-        magic = data[0]
-        if magic == 0xFD and len(data) >= 10:
-            msg_id = data[7] | (data[8] << 8) | (data[9] << 16)
-            rows = [
-                ("from", addr),
-                ("length", len(data)),
-                ("mavlink", "2"),
-                ("msgid", msg_id),
-            ]
-            if msg_id == drone_nest.MAVLINK_MSG_ID_DRONE_NEST_COMMAND:
-                rows.append(("message", "DRONE_NEST_COMMAND"))
-                rows.append(("confirm", "command frame arrived"))
-                self._print_block("收到 UDP 包", rows)
-            return
-
-        if magic == 0xFE and len(data) >= 6:
-            msg_id = data[5]
-            if msg_id != 0:
-                self._print_block("收到 UDP 包", [
-                    ("from", addr),
-                    ("length", len(data)),
-                    ("mavlink", "1"),
-                    ("msgid", msg_id),
-                ])
-            return
-
-        self._print_block("收到非 MAVLink UDP 包", [
-            ("from", addr),
-            ("length", len(data)),
-            ("magic", f"0x{magic:02X}"),
-        ])
-
-    def _status_loop(self):
+    def _periodic_status_loop(self):
         while self.running:
+            time.sleep(2.0)
             if self.client_addr:
                 self._send_nest_response(reason="periodic")
-            time.sleep(2)
 
-    def _receive_loop(self):
-        print("模拟器等待 MAVLink 消息...")
-        while self.running:
-            try:
-                data, addr = self.sock.recvfrom(4096)
-                self._describe_datagram(data, addr)
-                if self.client_addr != addr:
-                    self.client_addr = addr
-                    self._print_block("注册客户端地址", [
-                        ("client", addr),
-                    ])
-                    self._send_heartbeat()
+    def run(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((self.host, self.port))
+        self.sock.settimeout(0.2)
+        self.mav = drone_nest.MAVLink(None, srcSystem=self.system_id, srcComponent=self.component_id)
+        self.running = True
+
+        status_thread = threading.Thread(target=self._periodic_status_loop, daemon=True)
+        status_thread.start()
+
+        print(f"机巢模拟器启动: udp://{self.host}:{self.port}")
+        print("等待 HEARTBEAT 或 DRONE_NEST_COMMAND...")
+        try:
+            while self.running:
+                try:
+                    data, addr = self.sock.recvfrom(4096)
+                except socket.timeout:
+                    continue
+                self.client_addr = addr
                 for byte in data:
                     msg = self.mav.parse_char(bytes([byte]))
                     if msg:
                         self._handle_message(msg)
-            except socket.timeout:
-                continue
-            except Exception as exc:
-                print(f"接收错误: {exc}")
-                time.sleep(0.1)
-
-    def start(self):
-        print(f"启动 MAVLink 机巢模拟器 (UDP)，监听 {self.host}:{self.port}")
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((self.host, self.port))
-        self.sock.settimeout(0.5)
-        self.running = True
-
-        class DummyFile:
-            def write(self, data):
-                pass
-
-        self.mav = drone_nest.MAVLink(DummyFile(), srcSystem=self.system_id, srcComponent=self.component_id)
-        threading.Thread(target=self._status_loop, daemon=True).start()
-        self._receive_loop()
-
-    def stop(self):
-        self.running = False
-        if self.sock:
+        finally:
+            self.running = False
             self.sock.close()
-        print("模拟器已停止")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="机巢 MAVLink 模拟器")
-    parser.add_argument("--host", default="127.0.0.1", help="UDP 监听地址")
-    parser.add_argument("--port", type=int, default=14550, help="UDP 监听端口")
-    parser.add_argument(
-        "--log-status",
-        action="store_true",
-        help="打印周期性 DRONE_NEST_RESPONSE，上报调试时使用"
-    )
+    parser = argparse.ArgumentParser(description="机巢自定义 MAVLink 模拟器")
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址")
+    parser.add_argument("--port", type=int, default=14550, help="监听端口")
+    parser.add_argument("--system-id", type=int, default=101, help="模拟器 system id")
+    parser.add_argument("--component-id", type=int, default=1, help="模拟器 component id")
+    parser.add_argument("--log-status", action="store_true", help="打印周期状态帧")
     args = parser.parse_args()
 
-    sim = NestSimulator(host=args.host, port=args.port, log_status=args.log_status)
-    try:
-        sim.start()
-    except KeyboardInterrupt:
-        print("\n用户中断")
-        sim.stop()
+    simulator = NestSimulator(
+        host=args.host,
+        port=args.port,
+        system_id=args.system_id,
+        component_id=args.component_id,
+        log_status=args.log_status,
+    )
+    simulator.run()
 
 
 if __name__ == "__main__":

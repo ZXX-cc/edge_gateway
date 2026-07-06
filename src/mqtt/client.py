@@ -131,21 +131,19 @@ class MQTTClient:
         now = time.time()
         if now - self._last_osd_log_time >= 30:
             self._last_osd_log_time = now
-            logger.info(
-                "MQTT OSD sample: topic=%s, data=%s",
-                topic,
-                format_with_labels(data, max_length=2000)
-            )
+            logger.info(self._format_log_block("MQTT OSD SAMPLE", [
+                ("topic", topic),
+                ("data", format_with_labels(data, max_length=2000)),
+            ]))
         self.publish(topic, data, qos=0)
 
     def publish_state(self, device_sn: str, data: dict):
         """发布状态变更"""
         topic = TopicBuilder.state(device_sn)
-        logger.info(
-            "MQTT state publish: topic=%s, data=%s",
-            topic,
-            format_with_labels(data, max_length=3000)
-        )
+        logger.info(self._format_log_block("MQTT STATE PUBLISH", [
+            ("topic", topic),
+            ("data", format_with_labels(data, max_length=3000)),
+        ]))
         self.publish(topic, data, qos=1)
 
     def publish_event(self, data: dict):
@@ -158,12 +156,11 @@ class MQTTClient:
                 format_with_labels(data, max_length=1000)
             )
         else:
-            logger.info(
-                "MQTT event publish: topic=%s, method=%s, data=%s",
-                topic,
-                data.get('method'),
-                format_with_labels(data, max_length=3000)
-            )
+            logger.info(self._format_log_block("MQTT EVENT PUBLISH", [
+                ("topic", topic),
+                ("method", data.get('method')),
+                ("data", format_with_labels(data, max_length=3000)),
+            ]))
         self.publish(topic, data, qos=1)
 
     def publish_service_reply(self, data: dict):
@@ -227,16 +224,15 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
-        logger.info(
-            "MQTT reply sent: source_topic=%s, reply_topic=%s, method=%s, tid=%s, result=%s, ok=%s, data=%s",
-            source_topic,
-            reply_topic,
-            method,
-            data.get('tid'),
-            self._reply_result(data),
-            ok,
-            format_with_labels(data, max_length=3000)
-        )
+        logger.info(self._format_log_block("MQTT REPLY SENT", [
+            ("source_topic", source_topic),
+            ("reply_topic", reply_topic),
+            ("method", method),
+            ("tid", data.get('tid')),
+            ("result", self._reply_result(data)),
+            ("ok", ok),
+            ("data", format_with_labels(data, max_length=3000)),
+        ]))
         return ok
 
     def _publish_reply_for_source_topic(self, source_topic: str, data: dict) -> bool:
@@ -249,17 +245,16 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
-        logger.info(
-            "MQTT error reply sent: source_topic=%s, reply_topic=%s, method=%s, tid=%s, result=%s, msg=%s, ok=%s, data=%s",
-            source_topic,
-            reply_topic,
-            data.get('method'),
-            data.get('tid'),
-            self._reply_result(data),
-            data.get('msg'),
-            ok,
-            format_with_labels(data, max_length=3000)
-        )
+        logger.info(self._format_log_block("MQTT ERROR REPLY SENT", [
+            ("source_topic", source_topic),
+            ("reply_topic", reply_topic),
+            ("method", data.get('method')),
+            ("tid", data.get('tid')),
+            ("result", self._reply_result(data)),
+            ("msg", data.get('msg')),
+            ("ok", ok),
+            ("data", format_with_labels(data, max_length=3000)),
+        ]))
         return ok
 
     def _validate_downstream_topic(self, source_topic: str, method: str) -> Optional[str]:
@@ -273,22 +268,20 @@ class MQTTClient:
     def publish_status(self, data: dict):
         """发布设备状态/拓扑上报 (sys/product/{sn}/status)"""
         topic = TopicBuilder.status(self.gateway_sn)
-        logger.info(
-            "MQTT status publish: topic=%s, data=%s",
-            topic,
-            format_with_labels(data, max_length=3000)
-        )
+        logger.info(self._format_log_block("MQTT STATUS PUBLISH", [
+            ("topic", topic),
+            ("data", format_with_labels(data, max_length=3000)),
+        ]))
         self.publish(topic, data, qos=1)
 
     def publish_requests(self, data: dict):
         """发布设备请求 (thing/product/{sn}/requests)"""
         topic = TopicBuilder.requests(self.gateway_sn)
-        logger.info(
-            "MQTT request publish: topic=%s, method=%s, data=%s",
-            topic,
-            data.get('method'),
-            format_with_labels(data, max_length=3000)
-        )
+        logger.info(self._format_log_block("MQTT REQUEST PUBLISH", [
+            ("topic", topic),
+            ("method", data.get('method')),
+            ("data", format_with_labels(data, max_length=3000)),
+        ]))
         self.publish(topic, data, qos=1)
 
     # ---- 处理器注册 ----
@@ -328,6 +321,15 @@ class MQTTClient:
                 callback()
             except Exception as e:
                 logger.error(f"Connect callback error: {e}", exc_info=True)
+
+    @staticmethod
+    def _format_log_block(title: str, rows: list) -> str:
+        width = max([len(str(key)) for key, _ in rows] + [0])
+        lines = ["", f"========== {title} =========="]
+        for key, value in rows:
+            lines.append(f"{str(key):<{width}} : {value}")
+        lines.append("=" * (22 + len(title)))
+        return "\n".join(lines)
 
     # ---- 回调 ----
 
@@ -372,16 +374,15 @@ class MQTTClient:
                 logger.warning(f"No method in message on {msg.topic}")
                 return
 
-            logger.info(
-                "MQTT command received: topic=%s, method=%s, tid=%s, bid=%s, need_reply=%s, payload_bytes=%s, payload=%s",
-                msg.topic,
-                method,
-                payload.get('tid'),
-                payload.get('bid'),
-                payload.get('need_reply'),
-                len(msg.payload or b''),
-                format_with_labels(payload, max_length=3000)
-            )
+            logger.info(self._format_log_block("MQTT COMMAND RECEIVED", [
+                ("topic", msg.topic),
+                ("method", method),
+                ("tid", payload.get('tid')),
+                ("bid", payload.get('bid')),
+                ("need_reply", payload.get('need_reply')),
+                ("payload_bytes", len(msg.payload or b'')),
+                ("payload", format_with_labels(payload, max_length=3000)),
+            ]))
 
             # 特殊处理 sys/product/{sn}/status_reply
             if msg.topic.endswith('/status_reply'):
@@ -392,12 +393,11 @@ class MQTTClient:
                         logger.error(f"Status reply handler error for {method}: {e}", exc_info=True)
                 else:
                     result = payload.get('data', {}).get('result', -1)
-                    logger.info(
-                        "Status reply received: method=%s, result=%s, payload=%s",
-                        method,
-                        result,
-                        format_with_labels(payload, max_length=3000)
-                    )
+                    logger.info(self._format_log_block("MQTT STATUS REPLY", [
+                        ("method", method),
+                        ("result", result),
+                        ("payload", format_with_labels(payload, max_length=3000)),
+                    ]))
                 return
 
             # 特殊处理 thing/product/{sn}/requests_reply
@@ -409,25 +409,23 @@ class MQTTClient:
                         logger.error(f"Requests reply handler error for {method}: {e}", exc_info=True)
                 else:
                     result = payload.get('data', {}).get('result', -1)
-                    logger.info(
-                        "Requests reply received: method=%s, result=%s, payload=%s",
-                        method,
-                        result,
-                        format_with_labels(payload, max_length=3000)
-                    )
+                    logger.info(self._format_log_block("MQTT REQUESTS REPLY", [
+                        ("method", method),
+                        ("result", result),
+                        ("payload", format_with_labels(payload, max_length=3000)),
+                    ]))
                 return
 
             # services_reply/events_reply 是网关上行后的云端确认或本客户端自发回包，
             # 不能再次路由到业务handler，否则会造成重复执行。
             if msg.topic.endswith('/services_reply') or msg.topic.endswith('/events_reply'):
                 result = payload.get('data', {}).get('result', -1)
-                logger.info(
-                    "Upstream reply received: topic=%s, method=%s, result=%s, payload=%s",
-                    msg.topic,
-                    method,
-                    result,
-                    format_with_labels(payload, max_length=3000)
-                )
+                logger.info(self._format_log_block("MQTT UPSTREAM REPLY", [
+                    ("topic", msg.topic),
+                    ("method", method),
+                    ("result", result),
+                    ("payload", format_with_labels(payload, max_length=3000)),
+                ]))
                 return
 
             handler = self._topic_handlers.get(method)
@@ -442,14 +440,13 @@ class MQTTClient:
                         return
 
                     result = handler(payload)
-                    logger.info(
-                        "MQTT handler completed: method=%s, tid=%s, category_topic=%s, result=%s, reply=%s",
-                        method,
-                        payload.get('tid'),
-                        msg.topic,
-                        self._reply_result(result),
-                        format_with_labels(result, max_length=3000)
-                    )
+                    logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
+                        ("method", method),
+                        ("tid", payload.get('tid')),
+                        ("source_topic", msg.topic),
+                        ("result", self._reply_result(result)),
+                        ("reply", format_with_labels(result, max_length=3000)),
+                    ]))
                     # 如果需要响应，自动发送
                     if payload.get('need_reply') == 1 and result:
                         self._publish_reply_for_downstream_topic(msg.topic, result)

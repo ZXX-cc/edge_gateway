@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 GENERATED_DIALECT_DIR = PROJECT_ROOT / "src" / "generated_dialect"
 
 if str(PROJECT_ROOT) not in sys.path:

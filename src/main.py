@@ -319,16 +319,7 @@ class EdgeGateway:
                 self.device.set_telemetry_processor(self.telemetry)
                 self.device.set_dock_manager(self.dock)
 
-                # 机巢数据同步到 DeviceManager
-                def nest_env_cb(nest_data):
-                    self.device.update_from_nest(nest_data)
-                    if self.dock:
-                        dock_updates = filter_dock_status_fields(
-                            map_nest_to_cloud_properties(nest_data)
-                        )
-                        if dock_updates:
-                            self.dock.update_dock_status(dock_updates)
-                self.nest_module.env_callbacks.append(nest_env_cb)
+                self._wire_nest_module_to_business()
 
                 if use_separate_nest_mavlink:
                     self._start_nest_mavlink(nest_mavlink_config)
@@ -338,7 +329,12 @@ class EdgeGateway:
                 logger.info("MAVLink dispatcher started")
             else:
                 logger.warning("Failed to connect to MAVLink, retrying...")
-                # MAVLink连接失败不阻塞，后续会重连
+                # 主飞控 MAVLink 连接失败不阻塞机巢链路测试。
+                if use_separate_nest_mavlink:
+                    logger.info("Starting standalone nest MAVLink without main MAVLink")
+                    self.nest_module = DroneNestModule()
+                    self._wire_nest_module_to_business()
+                    self._start_nest_mavlink(nest_mavlink_config)
 
             # 启动云端连接管理（上报在线、启动心跳）
             if self.cloud_conn:
@@ -361,6 +357,29 @@ class EdgeGateway:
         except Exception as e:
             logger.error(f"Start failed: {e}", exc_info=True)
             return False
+
+    def _wire_nest_module_to_business(self):
+        """把机巢模块注入业务层；主飞控未连接时也允许单独测试机巢 MAVLink。"""
+        if not self.nest_module:
+            return
+
+        if self.device:
+            self.device.set_nest_module(self.nest_module)
+        if self.dock:
+            self.dock.set_nest_module(self.nest_module)
+
+        def nest_env_cb(nest_data):
+            if self.device:
+                self.device.update_from_nest(nest_data)
+            if self.dock:
+                dock_updates = filter_dock_status_fields(
+                    map_nest_to_cloud_properties(nest_data)
+                )
+                if dock_updates:
+                    self.dock.update_dock_status(dock_updates)
+
+        if nest_env_cb not in self.nest_module.env_callbacks:
+            self.nest_module.env_callbacks.append(nest_env_cb)
 
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""

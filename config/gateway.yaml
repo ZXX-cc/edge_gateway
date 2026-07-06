@@ -74,7 +74,7 @@ nest_mavlink:
   connection:
     type: "udp"
     host: "127.0.0.1"
-    port: 14550
+    port: 14551
   system_id: 1
   component_id: 190
 
