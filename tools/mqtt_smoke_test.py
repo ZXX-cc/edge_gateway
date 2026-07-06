@@ -8,10 +8,7 @@ import time
 import uuid
 from threading import Event
 
-try:
-    import paho.mqtt.client as mqtt
-except ImportError as exc:
-    raise SystemExit("paho-mqtt is required. Install requirements-ubuntu.txt first.") from exc
+mqtt = None
 
 
 CHANNELS = {
@@ -28,6 +25,11 @@ METHOD_CHANNEL_HINTS = {
     "stick_control": "drc",
     "drone_control": "drc",
     "payload_control": "drc",
+    "drc_speed_push": "drc",
+    "drc_heading_push": "drc",
+    "drc_altitude_push": "drc",
+    "drc_flyto_point_push": "drc",
+    "drc_gimbal_speed_push": "drc",
 }
 
 
@@ -50,6 +52,7 @@ def parse_payload(raw):
 
 
 def main():
+    global mqtt
     parser = argparse.ArgumentParser(description="MQTT smoke test for edge_gateway")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
@@ -60,6 +63,12 @@ def main():
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     args = parser.parse_args()
+    try:
+        import paho.mqtt.client as mqtt_module
+    except ImportError as exc:
+        raise SystemExit("paho-mqtt is required. Install requirements-ubuntu.txt first.") from exc
+
+    mqtt = mqtt_module
 
     channel = args.channel
     if channel == "auto":

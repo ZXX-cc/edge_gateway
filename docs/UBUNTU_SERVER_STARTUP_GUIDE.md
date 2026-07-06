@@ -324,7 +324,534 @@ received <- thing/product/EDGE-GW-001/services_reply
 "result": 0
 ```
 
-说明：当前 `dock_status_query` 只能证明旧机场查询链路可通，不代表 Dock3 字段已经合规。
+说明：当前 `dock_status_query` 能证明机场状态查询链路和实时遥测同步可通，但不能单独代表 Dock3 字段全量合规。
+
+### 2.5 Dock3 organization 云端模拟器验收
+
+Dock3 官方组织管理里的 `airport_bind_status` 是设备主动发 `requests`，云端回 `requests_reply`。这个验证不通过 `mqtt_smoke_test.py` 主动下发，而是需要先启动云端模拟器，再重启网关触发启动自动查询。
+
+终端A，先启动云端模拟器：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --once --bind-status unbound --timeout 90
+```
+
+终端B，重启网关：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python src/main.py -c config/gateway.yaml
+```
+
+成功标志：
+
+```text
+cloud simulator subscribed -> thing/product/EDGE-GW-001/requests
+received <- thing/product/EDGE-GW-001/requests
+"method": "airport_bind_status"
+published -> thing/product/EDGE-GW-001/requests_reply
+```
+
+网关日志成功标志：
+
+```text
+MQTT request publish: topic=thing/product/EDGE-GW-001/requests
+Device-originated request observed, skip downstream routing
+Request reply: method=airport_bind_status
+```
+
+说明：`python tools/mqtt_smoke_test.py --method airport_bind_status --timeout 8` 仍可用于 services 兼容 smoke，但它不是 Dock3 organization 的最终验收口径。
+
+### 2.6 Dock3 organization 查询/绑定验收
+
+`airport_organization_get` 和 `airport_organization_bind` 也是设备主动发 `requests`，云端回 `requests_reply`。建议先停止主网关，避免主网关旁路收到测试工具的 `requests_reply` 并记录 `Unexpected/late requests_reply`。
+
+终端A，启动云端模拟器并允许回复两个请求：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --max-requests 2 --timeout 120 \
+  --organization-id org_sim_001 --organization-name 模拟组织 --device-callsign EDGE-GW-001
+```
+
+终端B，发起完整 organization 查询和绑定流程：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action full --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --device-callsign EDGE-GW-001 --device-model-key dock3-sim --timeout 20
+```
+
+成功标志：
+
+```text
+published airport_organization_get -> thing/product/EDGE-GW-001/requests
+received <- thing/product/EDGE-GW-001/requests_reply, method=airport_organization_get
+published airport_organization_bind -> thing/product/EDGE-GW-001/requests
+received <- thing/product/EDGE-GW-001/requests_reply, method=airport_organization_bind
+organization request test ok
+```
+
+绑定后事件与持久化验收。终端A：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --max-requests 2 --timeout 120 \
+  --organization-id org_sim_001 --organization-name 模拟组织 --device-callsign EDGE-GW-001
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action full --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --device-callsign EDGE-GW-001 --device-model-key dock3-sim \
+  --expect-organization-name 模拟组织 --expect-event device_binding --expect-event update_topo \
+  --expect-bound --verify-db --verify-timeout 8 --timeout 20
+```
+
+成功标志：
+
+```text
+event observed: method=device_binding
+event observed: method=update_topo
+expected events observed: device_binding, update_topo
+memory binding ok: sn=EDGE-GW-001, organization_id=org_sim_001
+"db_binding": {
+  "gateway_sn": "EDGE-GW-001",
+  "organization_id": "org_sim_001",
+  "is_bound": true
+}
+organization request test ok
+```
+
+绑定后拓扑上报和 `status_reply` 验收。终端A 同时模拟 organization 回包和 `update_topo` 状态确认：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --enable-status --max-requests 3 --timeout 120 \
+  --organization-id org_sim_001 --organization-name 模拟组织 --device-callsign EDGE-GW-001
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action full --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --device-callsign EDGE-GW-001 --device-model-key dock3-sim \
+  --expect-organization-name 模拟组织 --expect-event device_binding --expect-event update_topo \
+  --expect-bound --verify-db --publish-events --expect-status-reply --verify-timeout 8 --timeout 20
+```
+
+成功标志：
+
+```text
+event observed: method=update_topo
+published update_topo -> sys/product/EDGE-GW-001/status
+received <- sys/product/EDGE-GW-001/status_reply, method=update_topo
+status_reply ok: method=update_topo, result=0
+organization request test ok
+```
+
+说明：这是 device topology 的正式链路验收入口。`--publish-events` 会把 `device_binding` 发布到 `thing/product/{sn}/events`，把 `update_topo` 发布到 `sys/product/{sn}/status`。
+
+2026-07-06 已复测通过：
+
+| 项目 | 事务 ID | 结果 |
+|---|---|---|
+| `airport_organization_get` | `3ab6639d-c94d-4c5f-9a5c-9589f8f810c7` | `organization_name=模拟组织` |
+| `airport_organization_bind` | `7a7f871f-68a7-483e-b179-3a608c5b1b15` | `output.err_infos=[]` |
+| `device_binding` event | `b7cc6aa4-03fb-492b-864c-7055838b2219` | 已发布到 `thing/product/EDGE-GW-001/events` |
+| `update_topo` status | `f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b` | 已发布到 `sys/product/EDGE-GW-001/status`，收到 `status_reply result=0` |
+
+多子设备拓扑验收。终端A：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --enable-status --max-requests 3 --timeout 120 \
+  --organization-id org_sim_001 --organization-name 模拟组织 --device-callsign EDGE-GW-001 \
+  --expect-status-sub-device-count 1 --expect-status-sub-device-sn DRONE-SIM-001 \
+  --validate-status-topo-schema
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action full --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --device-callsign EDGE-GW-001 --device-model-key dock3-sim \
+  --sub-device-json '{"sn":"DRONE-SIM-001","domain":"0","type":0,"sub_type":0,"index":"A","device_secret":"sim-secret","nonce":"sim-nonce","thing_version":"1.1.2","online":true,"paired":true}' \
+  --expect-organization-name 模拟组织 --expect-event device_binding --expect-event update_topo \
+  --expect-topo-sub-device-count 1 --expect-topo-sub-device-sn DRONE-SIM-001 \
+  --validate-topo-schema --expect-bound --verify-db --publish-events \
+  --expect-status-reply --verify-timeout 8 --timeout 20
+```
+
+成功标志：
+
+```text
+simulated sub-device added: sn=DRONE-SIM-001
+update_topo schema ok: method=update_topo, sub_devices=1
+published update_topo -> sys/product/EDGE-GW-001/status
+status_reply ok: method=update_topo, result=0
+organization request test ok
+```
+
+2026-07-06 多子设备拓扑已复测通过：
+
+| 项目 | 事务 ID | 结果 |
+|---|---|---|
+| `airport_organization_get` | `cee4606d-7f6d-41dd-86f6-bd7f6191d570` | `organization_name=模拟组织` |
+| `airport_organization_bind` | `352a71ac-133c-426f-b5a5-6f1f3f05a19a` | `output.err_infos=[]` |
+| `device_binding` event | `c5b34598-1165-4ece-9ed6-d422eea41bd9` | 已发布到 `thing/product/EDGE-GW-001/events` |
+| `update_topo` status | `f318713c-767a-43d9-a4b2-13ade3a969b2` | `sub_devices[0].sn=DRONE-SIM-001`，收到 `status_reply result=0` |
+
+说明：`domain/type/sub_type` 当前仍是模拟值，先用于验证 `sub_devices[]` 非空链路。人员1后续需要按 Dock3 device 文档固定官方枚举。
+
+异常分支验收一：组织查询失败。终端A：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --max-requests 1 --timeout 120 \
+  --organization-get-result 327000 --organization-get-message 绑定码无效
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action get --organization-id org_sim_001 \
+  --binding-code BAD-CODE --expect-get-result 327000 --timeout 20
+```
+
+异常分支验收二：绑定部分失败，云端返回 `output.err_infos`。终端A：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --max-requests 1 --timeout 120 \
+  --organization-bind-fail-sn EDGE-GW-001 --organization-bind-err-code 327000 \
+  --organization-bind-err-msg 设备绑定失败
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action bind --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --device-callsign EDGE-GW-001 --device-model-key dock3-sim \
+  --expect-bind-error-count 1 --timeout 20
+```
+
+异常分支验收三：云端回包超时。终端A：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_cloud_simulator.py --sn EDGE-GW-001 --max-requests 1 --timeout 120 --reply-delay 5
+```
+
+终端B：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_organization_test.py --action get --organization-id org_sim_001 \
+  --binding-code SIM-BIND-CODE --expect-timeout --timeout 2
+```
+
+### 2.7 Dock3 P0 接口和错误码验收
+
+人员1验证 Dock3 P0 链路时，继续在项目虚拟环境中执行：
+
+如果当前只验证“设备属性 properties”大类，先跑专项脚本：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
+```
+
+成功标志：
+
+```text
+dock3 properties test ok (accepted=..., ignored_mismatched=..., ignored_legacy=..., ignored_late=..., ignored_total=...)
+```
+
+该脚本覆盖：`silent_mode`、`air_transfer_enable`、`user_experience_improvement` 成功设置和回读，`battery_store_mode`、`alarm_state`、`drc_state`、未知属性、非法值拒绝。清理旧网关/旧模拟器进程后，可加 `--fail-on-stale` 做严格环境验收：
+
+```bash
+python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale --fail-on-stale
+```
+
+如果当前只验证“设备管理 device/topology”大类，跑专项脚本：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_device_test.py --timeout 12
+```
+
+成功标志：
+
+```text
+dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=...)
+```
+
+该脚本会：
+
+1. 发送测试触发用 `services:update_topo` 给运行中的网关。
+2. 验证网关发布官方 `sys/product/{sn}/status`、`method=update_topo`。
+3. 模拟云端发布 `sys/product/{sn}/status_reply`。
+4. 验证在线拓扑 `sub_devices[0].sn=DRONE-SIM-001`。
+5. 验证离线拓扑 `sub_devices=[]`。
+6. 验证缺少官方必填字段的无效拓扑返回 `325001`，且不产生 status 上报。
+
+说明：`services:update_topo` 只作为本地测试触发器使用，Dock3 官方最终方向仍是 `status/status_reply`。
+
+如果当前只验证“指令飞行 DRC”大类，优先跑专项脚本：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
+```
+
+成功标志：
+
+```text
+dock3 drc test ok (accepted=..., ignored_total=...)
+```
+
+2026-07-06 已复测通过：
+
+```text
+dock3 drc test ok (accepted=9, ignored_mismatched=0, ignored_legacy=4, ignored_late=1, ignored_total=5)
+```
+
+该次复测确认：
+
+| 项目 | 结果 |
+|---|---|
+| `drc_mode_exit` 清理旧状态 | 未启用时返回 `319999`，脚本允许作为清理状态 |
+| `drc_mode_enter` 官方 payload | `services_reply result=0` |
+| `property_get(drc_state)` | enter 后返回 `2`，exit 后返回 `0` |
+| 官方 `stick_control` 杆量 | `need_reply=0` 时无 `drc/up` 回包，符合当前 Dock3 控制数据口径 |
+| 非法 `stick_control` 杆量 | 返回 `325001`，示例 `pitch must be in range 364..1684` |
+| 官方 `drone_control` 字段 | 正常 `seq/x/y/h/w` 返回 `0` |
+| 非法 `drone_control` 字段 | 返回 `325001`，示例 `x must be in range -17..17 m/s` |
+| `drc_gimbal_speed_push` | 返回 `0` |
+
+该脚本会：
+
+1. 先发 `drc_mode_exit` 清理旧 DRC 状态。
+2. 使用官方 `mqtt_broker/osd_frequency/hsi_frequency` payload 进入 DRC。
+3. 回读 `property_get(drc_state)`，确认 enter 后为 `2`。
+4. 发送官方 `stick_control` 杆量字段 `roll/pitch/throttle/yaw/gimbal_pitch`，按 Dock3 “无回包机制”验证不产生 `drc/up`。
+5. 发送非法杆量，验证返回 `325001`。
+6. 发送官方废弃 `drone_control` 字段 `seq/x/y/h/w`，验证成功；再发越界字段，验证返回 `325001`。
+7. 验证 `drc_gimbal_speed_push` 基础回包。
+8. 退出 DRC 并回读 `drc_state=0`。
+
+说明：旧的 `tools/mqtt_drc_batch_test.py` 仍用于兼容控制数据回归；新的 `tools/mqtt_dock3_drc_test.py` 是 Dock3 DRC 大类专项入口。
+
+如果当前只验证“CMD/远程调试”大类，跑专项脚本：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
+```
+
+成功标志：
+
+```text
+dock3 cmd test ok (accepted=..., events=..., ignored_total=...)
+```
+
+2026-07-06 Ubuntu 已验证成功，实际输出：
+
+```text
+dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)
+```
+
+如果脚本曾看到同一个 `tid`、同一个 method，但回包缺少 `data.output.status` 且 `result=0`，说明 broker 上仍有旧版网关或旧 handler 抢答。新版脚本会把这类旧成功回包计入 `ignored_legacy` 并继续等待正确 Dock3 回包；非 0 错误回包会直接打印出来，不再静默忽略。如果最终超时，先用 `pgrep -af 'src/main.py|web/app.py|mqtt'` 清理重复进程，再重启唯一网关实例。
+
+该脚本会一次覆盖：
+
+| 分组 | 覆盖 method | 验证点 |
+|---|---|---|
+| 调试模式 | `debug_mode_open`、`debug_mode_close` | `services_reply result=0`、`output.status=ok`、`mode_code` 在 `2/0` 间切换 |
+| 补光灯 | `supplement_light_open`、`supplement_light_close` | `supplement_light_state` 在 `1/0` 间切换 |
+| 电池/空调/报警/SDR | `battery_maintenance_switch`、`air_conditioner_mode_switch`、`alarm_state_switch`、`battery_store_mode_switch`、`sdr_workmode_switch` | 官方 `action/link_workmode` 枚举校验，非法值返回 `325001` |
+| 舱体动作 | `cover_open/close`、`charge_open/close`、`putter_open/close` | `services_reply output.status=ok`，同 method 进度事件，状态字段联动 |
+| 飞行器/设备动作 | `drone_open/close`、`drone_format`、`device_format`、`format_sd_card`、`device_reboot`、`device_reset` | 回包和进度事件；`device_format/format_sd_card` 默认模拟，不会删除服务器媒体目录；`device_reboot` 默认模拟，不会真实重启服务器 |
+| 安全拒绝 | `cover_force_close` | 飞行器仍在舱内时返回 `314000`、`output.status=rejected` |
+
+注意：如果需要真实清理媒体目录，必须显式配置 `device.allow_storage_format=true`；如果需要真实重启服务器，必须显式配置 `device.allow_system_reboot=true`。默认纯模拟联调不删除媒体目录，也不执行真实 `sudo reboot`。
+
+如果当前只验证“Wayline/航线管理”大类，跑专项脚本：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
+```
+
+成功标志：
+
+```text
+dock3 wayline test ok (accepted=..., events=..., ignored_total=...)
+```
+
+2026-07-06 已在 Ubuntu 纯模拟环境验证成功，实际输出：
+
+```text
+dock3 wayline test ok (accepted=11, events=8, ignored_mismatched=0, ignored_legacy=11, ignored_late=0, ignored_total=11)
+```
+
+该脚本会一次覆盖：
+
+| 分组 | 覆盖 method | 验证点 |
+|---|---|---|
+| 任务准备 | `flighttask_prepare` | 官方 `flight_id/task_type/execute_time/file/simulate_mission`，`services_reply output.status=sent` |
+| 任务执行 | `flighttask_execute` | `output.status=in_progress`，产生 `flighttask_progress` 事件 |
+| 任务进度 | `flighttask_progress` | 回包包含 `output.progress.current_step/percent` 和 `output.ext.flight_id` |
+| 暂停/恢复 | `flighttask_pause`、`flighttask_resume` | `output.status=paused/in_progress`，状态不支持返回 `314000` 和 `output.status=rejected` |
+| 返航/取消返航 | `flighttask_return`、`return_home_cancel` | 返航产生 `flighttask_progress` 和 `return_home_info` 事件 |
+| 任务取消 | `flighttask_undo` | `output.status=canceled` |
+| 参数错误 | 非法 `flighttask_prepare` | 返回 DJI 错误码 `325001` |
+
+说明：该脚本使用 `simulate_mission.is_enable=1`，当前只验证上云 API 协议状态机，不要求真实 KMZ 下载或真实飞控执行航线。人员2后续再补 SITL 航点执行、飞控模式和返航语义。
+
+如果 `flighttask_execute` 返回 `319999`，并且 `msg` 类似 `模式切换超时，当前模式: MANUAL`，说明运行中的网关仍是旧代码路径：纯模拟任务不应切真实 `AUTO` 模式。停止终端 2 的网关进程，重新执行 `python src/main.py -c config/gateway.yaml` 后再跑本专项脚本。
+
+优先使用总批量脚本，一次覆盖 `dock_status_query`、属性读写、只读属性拒绝、DRC enter/control/exit、错误 topic：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --quiet-stale
+```
+
+成功标志：
+
+```text
+dock3 p0 batch test ok (accepted=..., ignored_mismatched=..., ignored_legacy=..., ignored_late=..., ignored_total=...)
+```
+
+如果脚本打印：
+
+```text
+ignored stale/mismatched reply
+ignored legacy stale reply
+```
+
+说明同一个 `tid` 收到了旧格式、非当前 method，或旧版负数错误码回包，通常是本地 broker 上还有旧版网关、Web 调试台、模拟器或历史进程在抢答。脚本会忽略这类回包并继续等待正确回包；如果最终超时，需要先按“十一、故障处理”排查重复进程。
+
+日常验收建议带 `--quiet-stale`，只在最后打印统计；清理 broker 环境后可加 `--fail-on-stale`，把任何旧格式重复回包都作为失败：
+
+```bash
+python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --quiet-stale --fail-on-stale
+python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale --fail-on-stale
+```
+
+如果 `--fail-on-stale` 失败，先排查是否还有旧进程或 broker 规则在抢答：
+
+```bash
+pgrep -af 'python|uvicorn|gunicorn|flask|mqtt|mosquitto|nanomq|node|pm2'
+ss -tnp | grep ':1883' || true
+```
+
+如果总批量脚本失败，再按下面单项命令定位具体分组。
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+
+python tools/mqtt_smoke_test.py --method property_set --payload '{"silent_mode":1}' --timeout 8
+python tools/mqtt_smoke_test.py --method property_get --payload '{"properties":["silent_mode","drc_state"]}' --timeout 8
+python tools/mqtt_smoke_test.py --method property_set --payload '{"air_transfer_enable":true}' --timeout 8
+python tools/mqtt_smoke_test.py --method property_set --payload '{"user_experience_improvement":2}' --timeout 8
+python tools/mqtt_smoke_test.py --method drc_mode_enter --payload '{}' --timeout 12
+python tools/mqtt_smoke_test.py --method property_get --payload '{"properties":["drc_state"]}' --timeout 8
+python tools/mqtt_smoke_test.py --method drc_mode_exit --payload '{}' --timeout 12
+```
+
+`airport_bind_status` 不放在 P0 总批量必过项里。Dock3 官方 organization 验证应按上文 2.5 使用 `requests/requests_reply` 云端模拟器流程；services 版只保留为历史兼容 smoke。如果确实要顺手测兼容路径，可以单独执行：
+
+```bash
+python tools/mqtt_smoke_test.py --method airport_bind_status --timeout 8
+# 或让总批量脚本额外包含该兼容项
+python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --quiet-stale --include-legacy-bind-status
+```
+
+错误 topic 验收：
+
+```bash
+python tools/mqtt_smoke_test.py --channel drc --method drc_mode_enter --payload '{}' --timeout 8
+```
+
+成功标志：
+
+```text
+received <- thing/product/EDGE-GW-001/drc/up
+"result": 325001
+```
+
+说明：`325001` 来自 DJI 上云 API 官方错误码，表示云端下发命令不符合格式要求。网关回包不得再出现 `result=-1/-2/-3`。
+
+DRC 控制数据批量验收：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+python tools/mqtt_drc_batch_test.py --timeout 12
+```
+
+该命令会一次完成：
+
+| 步骤 | Topic | Method | 期望 |
+|---|---|---|---|
+| 清理旧状态 | `services` | `drc_mode_exit` | `result=0` 或已未启用错误码 |
+| 进入 DRC | `services` | `drc_mode_enter` | `services_reply result=0` |
+| 状态回读 | `services` | `property_get` | `drc_state=2` |
+| 摇杆控制 | `drc/down` | `stick_control` | `drc/up result=0` |
+| 飞行控制 | `drc/down` | `drone_control` | `drc/up result=0` |
+| 负载控制 | `drc/down` | `payload_control` | `drc/up result=0` |
+| 速度推送 | `drc/down` | `drc_speed_push` | `drc/up result=0` |
+| 云台速度 | `drc/down` | `drc_gimbal_speed_push` | `drc/up result=0` |
+| 退出 DRC | `services` | `drc_mode_exit` | `services_reply result=0` |
+| 状态回读 | `services` | `property_get` | `drc_state=0` |
+
+成功标志：
+
+```text
+drc batch test ok
+```
+
+properties Batch 1 只读字段验收：
+
+```bash
+python tools/mqtt_smoke_test.py --method property_set --payload '{"battery_store_mode":2}' --timeout 8
+python tools/mqtt_smoke_test.py --method property_set --payload '{"alarm_state":1}' --timeout 8
+```
+
+成功标志：回包仍然是 `property/set_reply`，但对应字段的 `state.result` 不是 `0`，表示该字段不能通过 `property/set` 直接修改。相关控制后续应走 Dock3 对应 services method。
 
 ### 3. MAVLink 遥测验收
 
@@ -492,9 +1019,9 @@ pgrep -af 'mosquitto|sim_vehicle.py|mavproxy.py|src/main.py|web/app.py|nest_simu
 | 内容 | 当前问题 | 建议 |
 |---|---|---|
 | NanoMQ 官方 deb | Ubuntu 22.04 glibc 不兼容 | 当前继续用 Mosquitto；不要升级系统 glibc |
-| Dock3 协议字段 | 现有代码仍有 Dock/Dock1 风格 | 按 `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 建矩阵后逐项迁移 |
+| Dock3 协议字段 | 现有代码仍有 Dock/Dock1 风格 | 按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 分组台账逐项迁移 |
 | `set_flight_mode` API | 当前入参和 Copter 模式映射存在问题 | 暂时优先用 MAVProxy/Web 手动飞控验证 |
-| `dock_status_query` 的 `drone_status` | 当前未完整同步 SITL 遥测 | 只能作为链路冒烟，不能作为 Dock3 合规验收 |
+| `dock_status_query` 的 `drone_status` | 已同步 SITL 遥测快照，但 Dock3 字段仍待精校 | 可作为链路冒烟，不能单独作为 Dock3 合规验收 |
 | SITL + 机巢模拟器同时运行 | 默认端口会冲突 | 后续用 MAVLink Router 或网关多连接方案 |
 | MongoDB | 目前只是目标架构 | 当前代码仍使用 SQLite，不要把 MongoDB 当作已接入依赖 |
 

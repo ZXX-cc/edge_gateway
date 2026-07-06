@@ -8,9 +8,11 @@
 |---|---|
 | 当前代码状态 | 已有大量 DJI Cloud API 风格 method，但机场和航线部分仍偏 Dock/Dock1 |
 | 目标协议 | DJI Dock 3 |
-| 当前阶段 | 先跑通模拟全链路，再补齐 Dock3 字段和业务语义 |
+| 当前阶段 | Dock3 P0 链路已通过 Ubuntu 模拟验证，进入逐组全量迁移 |
 | 实机范围 | 不接实体设备，仅用 Ubuntu 服务器内模拟器 |
 | 数据存储目标 | MongoDB 服务型 NoSQL，当前仍是 SQLite |
+
+全量迁移进度以 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 为准。本文档保留迁移方法、官方文档入口和禁止事项。
 
 ## 2. DJI Dock 3 官方文档索引
 
@@ -135,7 +137,7 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 1. 建立 Dock3 properties 字段表。
 2. 对照当前 `osd` 和 `state` 输出，标出字段缺失、枚举不一致、单位不一致。
 3. 建立 Dock3 services method 表。
-4. 对照 `src/main.py` 当前 223 个已注册 method，标出已路由、旧 Dock1 风格、占位、缺失。
+4. 对照 `src/main.py` 当前 224 个已注册 method，标出已路由、旧 Dock1 风格、占位、缺失。
 5. 为 P0 method 写 MQTT payload 样例。
 6. 用上云 API 模拟器发布请求。
 7. 验证 `services_reply`、`state`、`events`、`osd`。
@@ -151,21 +153,40 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 | D3-AUDIT-001 | OSD 上报 | `thing/product/EDGE-GW-001/osd` 持续输出经纬度、高度、姿态、电池、GPS | 先确认 Dock3 properties/osd 字段名、单位和枚举，再决定是否改 telemetry 输出 |
 | D3-AUDIT-002 | Services | `dock_status_query` 和 `airport_bind_status` 可收到 `services_reply` | services 闭环可作为后续 Dock3 method 验收基础 |
 | D3-AUDIT-003 | 状态一致性 | `dock_status_query` 返回的 `drone_status` 未同步 OSD 实时遥测 | 已修复并通过 Ubuntu 服务器复测：`online`、经纬度、高度、电量、飞行模式、GPS 已来自实时遥测快照 |
-| D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 已修复并通过 Ubuntu 服务器复测：`property/set` 来源回 `property/set_reply`；仍需对照 Dock3 properties 文档确认 payload 结构 |
-| D3-AUDIT-005 | DRC | 前一轮将 `drc_mode_enter/exit` 当作 `drc/down -> drc/up` 测试 | 官方对照后已修正并通过 Ubuntu 复测：`drc_mode_enter/exit` 走 `services -> services_reply`；误发到 `drc/down` 返回 `result=-3` |
-| D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0`，并可通过 `property_get` 读到 `drc_state=2`；`drc_mode_exit` 后 `drc_state=0` | MQTT 协议链路和状态同步已通，飞控是否真正切到可控模式和 `mode_code/gear` 映射交由人员2继续核对 |
+| D3-AUDIT-004 | Properties | `property_set` 下行到 `property/set` 后实际回 `services_reply`，不是 `property/set_reply` | 已修复并通过 Ubuntu 服务器复测：`property/set` 来源回 `property/set_reply`；本轮新增 properties 专项脚本，按大类验证 `property/set_reply` 和 `property_get` |
+| D3-AUDIT-005 | DRC | 前一轮将 `drc_mode_enter/exit` 当作 `drc/down -> drc/up` 测试 | 官方对照后已修正并通过 Ubuntu 复测：`drc_mode_enter/exit` 走 `services -> services_reply`；误发到 `drc/down` 应返回 DJI 错误码 `325001` |
+| D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0`，并可通过 `property_get` 读到 `drc_state=2`；`drc_mode_exit` 后 `property_get` 返回 `drc_state=0` | MQTT 协议链路和状态同步已通，飞控是否真正切到可控模式和 `mode_code/gear` 映射交由人员2继续核对 |
 | D3-AUDIT-007 | Properties | Dock3 `property/set_reply` 示例按属性名逐项返回 `{state:{result}}`，不是通用 `data.result/results` | 代码已改为 Dock3 property reply 结构，同时兼容旧 `{properties:{...}}` 请求体 |
 | D3-AUDIT-008 | DRC 状态 | Dock3 文档提示 `drc_status_notify` 已废弃，更准确状态来自机场属性 `drc_state` 或 DRC 心跳 | 代码保留兼容事件，同时在事件触发时同步更新 `drc_state` 属性并上报 state；Ubuntu 复测 enter=2、exit=0 |
 | D3-AUDIT-009 | 日志可追踪性 | 协议迁移需要按 tid/bid 追踪 request、handler、reply、state/event | 日志已改为 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log`，关键 MQTT payload/reply/state/event 输出 `字段名(中文名)`，便于按 Dock3 字段审计 |
+| D3-AUDIT-010 | 设备拓扑 | `update_topo` 应走 `sys/product/{sn}/status -> status_reply`，不是普通 services reply | 已通过 Ubuntu 复测：绑定后发布 `update_topo tid=f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b` 到 status topic，并收到 `status_reply result=0` |
+| D3-AUDIT-011 | Properties 可写边界 | Dock3 properties 当前确认的顶层 `rw` 属性为 `air_transfer_enable`、`silent_mode`、`user_experience_improvement` | 已通过 Ubuntu 专项复测：`python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)` |
+| D3-AUDIT-012 | Device topology 字段边界 | Dock3 device 页 `update_topo` 上报字段包括网关 `domain/type/sub_type/device_secret/nonce/thing_version/sub_devices` 和子设备 `sn/domain/type/sub_type/index/device_secret/nonce/thing_version` | 代码已新增 `src/cloud_api/dock3_device.py` 统一构造和校验；专项验收命令为 `python tools/mqtt_dock3_device_test.py --timeout 12` |
 
-下一步由人员1优先完成：
+下一步由人员1按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 分组推进：
 
-1. 建立 properties 的 topic/reply/payload 对照表。
-2. 建立 DRC 的 `services/services_reply`、`drc/down/drc/up`、`events`、`state.drc_state` 关系表。
-3. 将 `property_set`、`drc_mode_enter`、`dock_status_query` 标为 P0 审计项。
-4. DRC enter/exit 的 services 路径已通过 Ubuntu 复测；下一步用 `--channel drc --method stick_control` 或后续控制 payload 复测 DRC 数据路径。
+1. device topology 专项复测：`python tools/mqtt_dock3_device_test.py --timeout 12`。
+2. organization 的 `requests/requests_reply` 云端模拟器验收。
+3. DRC 的 `drc/down/drc/up` 控制数据和 DRC 心跳。
+4. device `update_topo` 拓扑字段精校：专项通过后继续核对 `domain/type/sub_type/sub_devices` 和多设备拓扑。
+5. wayline `flighttask_prepare/execute/progress` 基础闭环。
 
-## 10. 当前禁止事项
+## 10. 错误码迁移阶段
+
+错误码以后以 DJI 上云 API 官方错误码为唯一基准，官方页面见 `docs/71.error-code.md` 和 https://developer.dji.com/doc/cloud-api-tutorial/cn/error-code.html。
+
+| 阶段 | 范围 | 当前状态 |
+|---|---|---|
+| P0 | MQTT 回包边界归一 | 已接入 `src/utils/dji_error_codes.py`，`services_reply`、`property/set_reply`、`drc/up` 不应再暴露 `-1/-2/-3` |
+| P0 | 请求格式 / topic 错误 | `drc_mode_enter` 误发到 `drc/down` 应返回 `325001` |
+| P0 | handler 异常 | 对外返回 `319999`，日志保留 traceback |
+| P0 | 未知 method | 对外返回 `314000` |
+| P1 | 业务模块直出官方码 | 后续逐个模块把内部 `-1/-2/-3` 改成更精确的官方码 |
+| P1 | request trace | 记录原始内部码、DJI 结果码、中文描述、tid、method、topic |
+
+人员1新增或修改接口时，必须同步更新 `docs/INTERFACE_DESIGN_SPEC.md` 的错误码和 API 定义表。
+
+## 11. 当前禁止事项
 
 - 禁止把 Dock1 字段当作 Dock3 最终标准。
 - 禁止在未更新迁移矩阵的情况下直接改 method payload。

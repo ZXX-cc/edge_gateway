@@ -12,6 +12,22 @@ from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.cloud_api.dock3_wayline import (
+    STATUS_CANCELED,
+    STATUS_FAILED,
+    STATUS_IN_PROGRESS,
+    STATUS_OK,
+    STATUS_PAUSED,
+    STATUS_REJECTED,
+    STATUS_SENT,
+    normalize_prepare_payload,
+    normalize_return_payload,
+    normalize_undo_payload,
+    output_data as wayline_output_data,
+    progress_percent,
+    validate_flight_id_payload,
+)
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.mission_db import MissionDB
 from src.database.waypoint_db import WaypointDB
@@ -45,8 +61,8 @@ class MissionManager:
     MISSION_FAILED = 5
     MISSION_CANCELED = 6
 
-    # DJI wayline_mission_state 枚举映射
-    # 参考: https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html
+    # DJI Dock3 wayline_mission_state 枚举映射
+    # 参考: https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html
     WAYLINE_MISSION_STATE_MAP = {
         0: '断连',
         1: '不支持该航点',
@@ -385,8 +401,12 @@ class MissionManager:
                 asyncio.run_coroutine_threadsafe(coro, self._main_loop)
             except Exception as e:
                 logger.error(f"Failed to schedule DB coroutine: {e}")
+                if hasattr(coro, "close"):
+                    coro.close()
         else:
             logger.warning("Cannot schedule DB coroutine: no event loop available")
+            if hasattr(coro, "close"):
+                coro.close()
 
     async def _recover_pending_missions(self):
         """恢复上次中断的任务"""
@@ -486,6 +506,63 @@ class MissionManager:
     @property
     def is_busy(self) -> bool:
         return self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING)
+
+    def _current_progress_percent(self) -> int:
+        return progress_percent(self._current_waypoint_idx, len(self._current_wayline))
+
+    def _wayline_ext(self, flight_id: str = None) -> dict:
+        ext = {
+            'flight_id': flight_id or self._current_task_id or '',
+            'current_waypoint_index': self._current_waypoint_idx,
+            'wayline_mission_state': self._wayline_mission_state,
+            'media_count': 0,
+            'track_id': '',
+            'wayline_id': 0,
+        }
+        if self._break_point:
+            ext['break_point'] = self._break_point
+        return ext
+
+    def _wayline_reply_data(self, status: str, current_step: int = None,
+                            percent: int = None, flight_id: str = None,
+                            extra: dict = None) -> dict:
+        return wayline_output_data(
+            status=status,
+            current_step=self._current_step if current_step is None else current_step,
+            percent=self._current_progress_percent() if percent is None else percent,
+            ext=self._wayline_ext(flight_id),
+            extra=extra,
+        )
+
+    def _wayline_status_name(self) -> str:
+        status_map = {
+            self.MISSION_PREPARING: STATUS_SENT,
+            self.MISSION_RUNNING: STATUS_IN_PROGRESS,
+            self.MISSION_PAUSED: STATUS_PAUSED,
+            self.MISSION_COMPLETED: STATUS_OK,
+            self.MISSION_FAILED: STATUS_FAILED,
+            self.MISSION_CANCELED: STATUS_CANCELED,
+        }
+        return status_map.get(self._status, STATUS_OK)
+
+    def _emit_wayline_progress(self, status: str, current_step: int = None,
+                               percent: int = None, flight_id: str = None):
+        if not self._event_callback:
+            return
+        event = MessageBuilder.build_event(
+            'flighttask_progress',
+            {
+                'result': 0,
+                **self._wayline_reply_data(
+                    status=status,
+                    current_step=current_step,
+                    percent=percent,
+                    flight_id=flight_id,
+                )
+            },
+            self.gateway_sn
+        )
+        self._event_callback(event)
 
     # ---- 参数校验工具 ----
 
@@ -674,7 +751,7 @@ class MissionManager:
             self._nest_module.request_takeoff()
 
         # 通过飞行控制模块启动航线任务
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"启动航线任务失败: {result.get('message')}")
@@ -729,7 +806,7 @@ class MissionManager:
             self._nest_module.abort_landing()
 
         # 发送返航指令
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
                 logger.warning(f"返航指令失败: {result.get('message')}")
@@ -744,7 +821,12 @@ class MissionManager:
         Response: { result }
         """
         if self._status != self.MISSION_RUNNING:
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="Mission not running")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                msg_str="Mission not running"
+            )
 
         self._status = self.MISSION_PAUSED
         self._wayline_mission_state = 7  # 航线中断
@@ -763,12 +845,17 @@ class MissionManager:
             ).start()
 
         # 发送悬停指令
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.set_mode("LOITER")
             if not result.get("success"):
                 logger.warning(f"暂停航线失败: {result.get('message')}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_PAUSED, current_step=23, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_PAUSED, current_step=23)
+        )
 
     def handle_resume_wayline(self, msg: dict) -> dict:
         """
@@ -778,7 +865,12 @@ class MissionManager:
         Response: { result }
         """
         if self._status != self.MISSION_PAUSED:
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="Mission not paused")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                msg_str="Mission not paused"
+            )
 
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 8  # 航线恢复
@@ -803,12 +895,17 @@ class MissionManager:
         # 启动监控并切换到AUTO模式
         self.start_mission_monitor()
         self._wayline_mission_state = 6  # 航线执行
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"恢复航线失败: {result.get('message')}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=23)
+        )
 
     # ---- 指令飞行DRC API ----
 
@@ -1431,101 +1528,23 @@ class MissionManager:
         }
         Response: { result }
         """
-        data = msg.get('data', {})
-        flight_id = data.get('flight_id', '')
-        task_type = data.get('task_type', 0)
-        execute_time = data.get('execute_time', 0)
-        file_info = data.get('file', {})
-        ready_conditions = data.get('ready_conditions', {})
-        executable_conditions = data.get('executable_conditions', {})
-        break_point = data.get('break_point', {})
-        rth_altitude = data.get('rth_altitude', 100)
-        out_of_control_action = data.get('out_of_control_action', 0)
-        exit_wayline_when_rc_lost = data.get('exit_wayline_when_rc_lost', 0)
-        simulate_mission = data.get('simulate_mission', {})
-
-        # ---- 参数校验（根据DJI文档 constraint） ----
-        errors = []
-
-        # flight_id: text, 必填
-        if not flight_id or not isinstance(flight_id, str):
-            errors.append("flight_id 必填且应为字符串")
-
-        # task_type: enum_int {0,1,2}
-        self._check_enum('task_type', task_type, {0, 1, 2}, errors)
-
-        # execute_time: int, length=13, 立即/定时任务必填
-        if task_type in (0, 1):
-            if not execute_time:
-                errors.append("execute_time 在立即/定时任务时必填")
-            else:
-                self._check_length('execute_time', execute_time, 13, errors)
-        elif task_type == 2 and execute_time:
-            self._check_length('execute_time', execute_time, 13, errors)
-
-        # file: struct, url和fingerprint为text
-        if file_info:
-            if not isinstance(file_info.get('url'), str):
-                errors.append("file.url 应为字符串")
-            if not isinstance(file_info.get('fingerprint'), str):
-                errors.append("file.fingerprint 应为字符串")
-
-        # ready_conditions: 条件任务(task_type=2)时必填
-        if task_type == 2:
-            if not ready_conditions:
-                errors.append("ready_conditions 在条件任务时必填")
-            else:
-                bc = ready_conditions.get('battery_capacity')
-                if bc is not None and (not isinstance(bc, int) or bc < 0 or bc > 100):
-                    errors.append("ready_conditions.battery_capacity 应为 0~100 的整数")
-                bt = ready_conditions.get('begin_time')
-                et = ready_conditions.get('end_time')
-                if bt:
-                    self._check_length('ready_conditions.begin_time', bt, 13, errors)
-                if et:
-                    self._check_length('ready_conditions.end_time', et, 13, errors)
-                if bt and et and bt >= et:
-                    errors.append("ready_conditions.begin_time 应小于 end_time")
-
-        # executable_conditions.storage_capacity: int
-        sc = executable_conditions.get('storage_capacity') if executable_conditions else None
-        if sc is not None and (not isinstance(sc, int) or sc < 0):
-            errors.append("executable_conditions.storage_capacity 应为非负整数")
-
-        # break_point: 可选
-        if break_point:
-            self._check_enum('break_point.state', break_point.get('state'), {0, 1}, errors)
-            self._check_range('break_point.progress', break_point.get('progress'), 0, 1.0, errors)
-            bp_lat = break_point.get('latitude')
-            bp_lon = break_point.get('longitude')
-            if bp_lat is not None:
-                self._check_range('break_point.latitude', bp_lat, -90, 90, errors)
-            if bp_lon is not None:
-                self._check_range('break_point.longitude', bp_lon, -180, 180, errors)
-
-        # rth_altitude: int, max=1500, min=20
-        self._check_range('rth_altitude', rth_altitude, 20, 1500, errors)
-
-        # out_of_control_action: enum_int {0,1,2}
-        self._check_enum('out_of_control_action', out_of_control_action, {0, 1, 2}, errors)
-
-        # exit_wayline_when_rc_lost: enum_int {0,1}
-        self._check_enum('exit_wayline_when_rc_lost', exit_wayline_when_rc_lost, {0, 1}, errors)
-
-        # simulate_mission: 可选
-        if simulate_mission:
-            self._check_enum('simulate_mission.is_enable', simulate_mission.get('is_enable'), {0, 1}, errors)
-            sm_lat = simulate_mission.get('latitude')
-            sm_lon = simulate_mission.get('longitude')
-            if sm_lat is not None:
-                self._check_range('simulate_mission.latitude', sm_lat, -90.0, 90.0, errors)
-            if sm_lon is not None:
-                self._check_range('simulate_mission.longitude', sm_lon, -180.0, 180.0, errors)
-
-        if errors:
+        ok, payload, errors = normalize_prepare_payload(msg.get('data', {}))
+        if not ok:
             error_msg = "; ".join(errors)
             logger.warning(f"Flighttask prepare validation failed: {error_msg}")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
+
+        flight_id = payload['flight_id']
+        task_type = payload['task_type']
+        execute_time = payload['execute_time']
+        file_info = payload['file']
+        ready_conditions = payload['ready_conditions']
+        executable_conditions = payload['executable_conditions']
+        break_point = payload['break_point']
+        rth_altitude = payload['rth_altitude']
+        out_of_control_action = payload['out_of_control_action']
+        exit_wayline_when_rc_lost = payload['exit_wayline_when_rc_lost']
+        simulate_mission = payload['simulate_mission']
 
         logger.info(f"Flighttask prepare: flight_id={flight_id}, type={task_type}, "
                    f"execute_time={execute_time}")
@@ -1593,7 +1612,17 @@ class MissionManager:
                        f"lon={simulate_mission.get('longitude')}")
 
         self._status = self.MISSION_IDLE
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_SENT, current_step=5, percent=0, flight_id=flight_id)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(
+                STATUS_SENT,
+                current_step=5,
+                percent=0,
+                flight_id=flight_id,
+            )
+        )
 
     def handle_flighttask_execute(self, msg: dict) -> dict:
         """
@@ -1603,17 +1632,11 @@ class MissionManager:
         Request: { flight_id: str }
         Response: { result }
         """
-        data = msg.get('data', {})
-        flight_id = data.get('flight_id', '')
-
-        # 参数校验
-        errors = []
-        if not flight_id or not isinstance(flight_id, str):
-            errors.append("flight_id 必填且应为字符串")
-        if errors:
+        ok, flight_id, errors = validate_flight_id_payload(msg.get('data', {}), 'flighttask_execute')
+        if not ok:
             error_msg = "; ".join(errors)
             logger.warning(f"Flighttask execute validation failed: {error_msg}")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask execute: {flight_id}")
         self._current_task_id = flight_id
@@ -1624,15 +1647,22 @@ class MissionManager:
         # 启动航点监控线程
         self.start_mission_monitor()
 
-        # 切换到AUTO模式执行航线
-        if self._flight_control:
+        # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"启动航线任务失败: {result.get('message')}")
                 self._status = self.MISSION_FAILED
                 return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
+        elif self._simulate_mission.get('is_enable') == 1:
+            logger.info("Flighttask execute in simulation mode, skip AUTO mode switch")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=23)
+        )
 
     def handle_flighttask_undo(self, msg: dict) -> dict:
         """
@@ -1642,23 +1672,11 @@ class MissionManager:
         Request: { flight_ids: [str] }
         Response: { result }
         """
-        data = msg.get('data', {})
-        flight_ids = data.get('flight_ids', [])
-
-        # 参数校验
-        errors = []
-        if not isinstance(flight_ids, list):
-            errors.append("flight_ids 应为数组")
-        elif not flight_ids:
-            errors.append("flight_ids 不能为空")
-        else:
-            for i, fid in enumerate(flight_ids):
-                if not isinstance(fid, str):
-                    errors.append(f"flight_ids[{i}] 应为字符串")
-        if errors:
+        ok, flight_ids, errors = normalize_undo_payload(msg.get('data', {}))
+        if not ok:
             error_msg = "; ".join(errors)
             logger.warning(f"Flighttask undo validation failed: {error_msg}")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask undo: {flight_ids}")
 
@@ -1670,12 +1688,17 @@ class MissionManager:
             logger.info(f"Current task {self._current_task_id} canceled, wayline_state=9(航线停止)")
 
             # 执行返航
-            if self._flight_control:
+            if self._flight_control and self._simulate_mission.get('is_enable') != 1:
                 result = self._flight_control.one_click_return()
                 if not result.get("success"):
                     logger.warning(f"返航指令失败: {result.get('message')}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_CANCELED, current_step=28, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_CANCELED, current_step=28)
+        )
 
     def handle_flighttask_return(self, msg: dict) -> dict:
         """
@@ -1684,23 +1707,16 @@ class MissionManager:
         Request: { flighttask_id: str, return_type: 0=返航 1=降落 }
         Response: { result }
         """
-        data = msg.get('data', {})
-        task_id = data.get('flighttask_id', '')
-        return_type = data.get('return_type', 0)
-
-        # 参数校验
-        errors = []
-        if not isinstance(return_type, int) or return_type not in {0, 1}:
-            errors.append("return_type 应为 0(返航) 或 1(降落)")
-        if errors:
+        ok, task_id, return_type, errors = normalize_return_payload(msg.get('data', {}))
+        if not ok:
             error_msg = "; ".join(errors)
             logger.warning(f"Flighttask return validation failed: {error_msg}")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str=error_msg)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask return: {task_id}, type={return_type}")
         self._wayline_mission_state = 9  # 航线停止
         self._current_step = 24  # 进入返航的检查准备工作
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             if return_type == 0:
                 result = self._flight_control.one_click_return()
             else:
@@ -1708,10 +1724,25 @@ class MissionManager:
             if not result.get("success"):
                 logger.warning(f"Flighttask return failed: {result.get('message')}")
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flighttask_id': task_id,
-            'return_type': return_type
-        })
+        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent(), flight_id=task_id)
+        self.report_return_home_info(
+            planned_path_points=[],
+            last_point_type=0,
+            flight_id=task_id,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(
+                STATUS_IN_PROGRESS,
+                current_step=24,
+                flight_id=task_id,
+                extra={
+                    'flight_id': task_id,
+                    'return_type': return_type,
+                }
+            )
+        )
 
     def handle_return_home(self, msg: dict) -> dict:
         """
@@ -1727,21 +1758,22 @@ class MissionManager:
         data = msg.get('data', {})
         if data and not isinstance(data, dict):
             logger.warning(f"Return home validation failed: data 应为 null 或空对象")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="data 应为 null 或空对象")
 
         self._wayline_mission_state = 9  # 航线停止
         self._current_step = 24  # 进入返航的检查准备工作
-        if self._flight_control:
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
                 logger.warning(f"一键返航失败: {result.get('message')}")
                 return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'output': {
-                'status': 'in_progress'
-            }
-        })
+        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=24)
+        )
 
     def handle_flighttask_progress(self, msg: dict) -> dict:
         """
@@ -1751,20 +1783,30 @@ class MissionManager:
         Response: { status, progress, current_waypoint, total_waypoints }
         """
         data = msg.get('data', {})
-        task_id = data.get('flighttask_id', '')
+        task_id = data.get('flight_id', data.get('flighttask_id', self._current_task_id or ''))
         logger.info(f"Flighttask progress query: {task_id}")
 
         total = len(self._current_wayline)
-        progress = int(self._current_waypoint_idx / total * 100) if total > 0 else 0
+        progress = self._current_progress_percent()
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flighttask_id': task_id,
-            'status': self._status,
-            'progress': progress,
-            'current_waypoint': self._current_waypoint_idx,
-            'total_waypoints': total,
-            'task_status': self._get_task_status_name()
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(
+                self._wayline_status_name(),
+                current_step=self._current_step,
+                percent=progress,
+                flight_id=task_id,
+                extra={
+                    'flight_id': task_id,
+                    'status': self._status,
+                    'progress': progress,
+                    'current_waypoint': self._current_waypoint_idx,
+                    'total_waypoints': total,
+                    'task_status': self._get_task_status_name()
+                }
+            )
+        )
 
     def handle_flighttask_pause(self, msg: dict) -> dict:
         """
@@ -1838,19 +1880,29 @@ class MissionManager:
         data = msg.get('data', {})
         if data and not isinstance(data, dict):
             logger.warning(f"Flight setup abort validation failed: data 应为 null 或空对象")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="data 应为 null 或空对象")
 
         # 状态检查：仅允许在准备阶段取消
         if self._status not in (self.MISSION_PREPARING, self.MISSION_IDLE):
             logger.warning(f"Flight setup abort rejected: current status={self._status}")
-            return MessageBuilder.build_reply(msg, result=326108, msg_str="当前状态不支持取消准备")
+            return MessageBuilder.build_reply(
+                msg,
+                result=326108,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                msg_str="当前状态不支持取消准备"
+            )
 
         self._status = self.MISSION_CANCELED
         self._wayline_mission_state = 9  # 航线停止
         self._current_step = 28  # 机场异常恢复
         self._current_task_id = None
         logger.info("Flight setup aborted, wayline_state=9(航线停止)")
-        return MessageBuilder.build_reply(msg, result=0)
+        self._emit_wayline_progress(STATUS_CANCELED, current_step=28, percent=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_CANCELED, current_step=28, percent=0)
+        )
 
     def handle_flighttask_create(self, msg: dict) -> dict:
         """
@@ -1923,14 +1975,21 @@ class MissionManager:
         data = msg.get('data', {})
         if data and not isinstance(data, dict):
             logger.warning(f"Return home cancel validation failed: data 应为 null 或空对象")
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="data 应为 null 或空对象")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="data 应为 null 或空对象")
 
-        # 切换到悬停模式
-        if self._flight_control:
+        # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             result = self._flight_control.set_mode("LOITER")
             if not result.get("success"):
                 logger.warning(f"取消返航失败: {result.get('message')}")
-        return MessageBuilder.build_reply(msg, result=0)
+        elif self._simulate_mission.get('is_enable') == 1:
+            logger.info("Return home cancel in simulation mode, skip LOITER mode switch")
+        self._emit_wayline_progress(STATUS_PAUSED, current_step=23, percent=self._current_progress_percent())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(STATUS_PAUSED, current_step=23)
+        )
 
     def handle_flighttask_resource_get(self, msg: dict) -> dict:
         """
@@ -2016,4 +2075,3 @@ class MissionManager:
     def handle_fly_to_point(self, msg: dict) -> dict:
         """Fly to point (fly_to_point) - alias of flyto"""
         return self.handle_flyto(msg)
-

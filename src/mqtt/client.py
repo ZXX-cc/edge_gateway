@@ -12,6 +12,11 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import TopicBuilder, parse_message
 from src.utils.field_labels import format_with_labels
+from src.utils.dji_error_codes import (
+    describe_error,
+    normalize_error_code,
+    normalize_reply_error_codes,
+)
 
 logger = get_logger("mqtt")
 
@@ -149,6 +154,7 @@ class MQTTClient:
     def publish_event(self, data: dict):
         """发布事件上报"""
         topic = TopicBuilder.events(self.gateway_sn)
+        data = self._normalize_reply_for_publish(topic, data)
         if data.get('method') == 'heartbeat':
             logger.debug(
                 "MQTT heartbeat event publish: topic=%s, data=%s",
@@ -166,16 +172,19 @@ class MQTTClient:
     def publish_service_reply(self, data: dict):
         """发布服务响应"""
         topic = TopicBuilder.services_reply(self.gateway_sn)
+        data = self._normalize_reply_for_publish(TopicBuilder.services(self.gateway_sn), data)
         self.publish(topic, data, qos=1)
 
     def publish_property_reply(self, data: dict):
         """发布属性设置响应"""
         topic = TopicBuilder.property_set_reply(self.gateway_sn)
+        data = self._normalize_reply_for_publish(TopicBuilder.property_set(self.gateway_sn), data)
         self.publish(topic, data, qos=1)
 
     def publish_drc_up(self, data: dict):
         """发布DRC上行数据"""
         topic = TopicBuilder.drc_up(self.gateway_sn)
+        data = self._normalize_reply_for_publish(TopicBuilder.drc_down(self.gateway_sn), data)
         self.publish(topic, data, qos=1)
 
     @staticmethod
@@ -188,15 +197,23 @@ class MQTTClient:
         }
 
     @staticmethod
-    def _build_error_reply(payload: dict, code: int, message: str, gateway_sn: str) -> dict:
+    def _build_error_reply(
+        payload: dict,
+        code: int,
+        message: str,
+        gateway_sn: str,
+        context: str = "generic",
+    ) -> dict:
+        dji_code = normalize_error_code(code, context=context)
+        dji_message = message or describe_error(dji_code)
         return {
             "bid": payload.get("bid", ""),
-            "data": {"result": code},
+            "data": {"result": dji_code},
             "gateway": payload.get("gateway", gateway_sn),
             "tid": payload.get("tid", ""),
             "timestamp": int(time.time() * 1000),
             "method": payload.get("method", ""),
-            "msg": message
+            "msg": dji_message
         }
 
     @staticmethod
@@ -204,6 +221,30 @@ class MQTTClient:
         if not isinstance(data, dict):
             return None
         return data.get('data', {}).get('result')
+
+    def _reply_context(self, source_topic: str, method: str) -> str:
+        if source_topic.endswith('/property/set'):
+            return "property"
+        if source_topic.endswith('/drc/down') and self._is_service_reply_method(method):
+            return "invalid_request"
+        return "generic"
+
+    def _normalize_reply_for_publish(self, source_topic: str, data: dict) -> dict:
+        method = data.get('method', '') if isinstance(data, dict) else ''
+        context = self._reply_context(source_topic, method)
+        normalized, conversions = normalize_reply_error_codes(data, context=context)
+        for conversion in conversions:
+            logger.warning(
+                "DJI error code normalized: source_topic=%s, method=%s, tid=%s, path=%s, original_result=%s, dji_result=%s, description=%s",
+                source_topic,
+                method,
+                normalized.get('tid'),
+                conversion.get('path'),
+                conversion.get('original_result'),
+                conversion.get('dji_result'),
+                conversion.get('description'),
+            )
+        return normalized
 
     def _publish_reply_for_downstream_topic(self, source_topic: str, data: dict) -> bool:
         """
@@ -213,6 +254,7 @@ class MQTTClient:
         property/set    -> property/set_reply
         drc/down        -> drc/up
         """
+        data = self._normalize_reply_for_publish(source_topic, data)
         method = data.get('method', '')
         if self._is_service_reply_method(method):
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
@@ -237,6 +279,7 @@ class MQTTClient:
 
     def _publish_reply_for_source_topic(self, source_topic: str, data: dict) -> bool:
         """按来源topic原样选择响应topic，用于错误提示避免测试端超时。"""
+        data = self._normalize_reply_for_publish(source_topic, data)
         if source_topic.endswith('/property/set'):
             reply_topic = TopicBuilder.property_set_reply(self.gateway_sn)
         elif source_topic.endswith('/drc/down'):
@@ -416,6 +459,20 @@ class MQTTClient:
                     ]))
                 return
 
+            # requests 是设备主动发给云端的上行 topic。网关和云端模拟器共用本地
+            # broker 时，客户端可能收到自己发布的 requests，不能把它再路由给
+            # 下行业务 handler，否则会产生错误的 services_reply。
+            if msg.topic.endswith('/requests'):
+                logger.info(
+                    "Device-originated request observed, skip downstream routing: "
+                    "topic=%s, method=%s, tid=%s, payload=%s",
+                    msg.topic,
+                    method,
+                    payload.get('tid'),
+                    format_with_labels(payload, max_length=3000)
+                )
+                return
+
             # services_reply/events_reply 是网关上行后的云端确认或本客户端自发回包，
             # 不能再次路由到业务handler，否则会造成重复执行。
             if msg.topic.endswith('/services_reply') or msg.topic.endswith('/events_reply'):
@@ -435,7 +492,13 @@ class MQTTClient:
                     if topic_error:
                         logger.warning(f"Invalid topic for method={method}: {topic_error}")
                         if payload.get('need_reply') == 1:
-                            error_reply = self._build_error_reply(payload, -3, topic_error, self.gateway_sn)
+                            error_reply = self._build_error_reply(
+                                payload,
+                                -3,
+                                topic_error,
+                                self.gateway_sn,
+                                context="invalid_request",
+                            )
                             self._publish_reply_for_source_topic(msg.topic, error_reply)
                         return
 
@@ -458,6 +521,7 @@ class MQTTClient:
                             -1,
                             f"Handler error for {method}: {e}",
                             self.gateway_sn,
+                            context="handler_exception",
                         )
                         self._publish_reply_for_downstream_topic(msg.topic, error_reply)
             else:
@@ -468,6 +532,7 @@ class MQTTClient:
                         -2,
                         f"No handler registered for method: {method}",
                         self.gateway_sn,
+                        context="unknown_method",
                     )
                     self._publish_reply_for_downstream_topic(msg.topic, error_reply)
 

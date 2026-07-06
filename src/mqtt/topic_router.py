@@ -4,6 +4,7 @@ Topic路由模块 - API方法路由分发
 """
 from typing import Dict, Callable
 from src.utils.logger import get_logger
+from src.utils.dji_error_codes import normalize_error_code
 
 logger = get_logger("router")
 
@@ -88,10 +89,10 @@ class TopicRouter:
                 return handler(msg)
             except Exception as e:
                 logger.error(f"Handler error for {method}: {e}")
-                return self._build_error_response(msg, -1, f"Handler error: {e}")
+                return self._build_error_response(msg, -1, f"Handler error: {e}", context="handler_exception")
         else:
             logger.warning(f"No route for method: {method}")
-            return self._build_error_response(msg, -2, f"Unknown method: {method}")
+            return self._build_error_response(msg, -2, f"Unknown method: {method}", context="unknown_method")
 
     def list_routes(self) -> Dict[str, str]:
         """列出所有注册的路由"""
@@ -106,13 +107,13 @@ class TopicRouter:
         return result
 
     @staticmethod
-    def _build_error_response(msg: dict, code: int, error_msg: str) -> dict:
+    def _build_error_response(msg: dict, code: int, error_msg: str, context: str = "generic") -> dict:
         """构造错误响应"""
         return {
             "tid": msg.get("tid", ""),
             "bid": msg.get("bid", ""),
             "timestamp": msg.get("timestamp", 0),
             "method": msg.get("method", ""),
-            "data": {"result": code},
+            "data": {"result": normalize_error_code(code, context=context)},
             "msg": error_msg
         }

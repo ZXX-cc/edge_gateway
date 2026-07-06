@@ -45,6 +45,9 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/PROJECT_FILE_GUIDE.md` | 项目目录和关键文件职责说明 |
 | `docs/TEAM_COLLABORATION_GUIDE.md` | 三人协同边界、交接接口、冲突规避 |
 | `docs/DJI_DOCK3_MIGRATION_GUIDE.md` | Dock1 -> DJI Dock 3 迁移索引和工作方法 |
+| `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 全量分组迁移台账和当前进度 |
+| `docs/DOCK3_MODULE_STATUS.md` | 当前已完成/未完成模块状态总表、验收命令和下一批建议 |
+| `docs/INTERFACE_DESIGN_SPEC.md` | 接口设计说明书：P0 字段映射、API 定义和 DJI 错误码规则 |
 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 自定义机巢 MAVLink 消息字段映射 |
@@ -93,7 +96,7 @@ http://Ubuntu服务器IP:8090
 | `src/payload/` | 相机、云台和第三方负载接口 |
 | `src/database/` | 当前 SQLite/SQLAlchemy 数据层，后续迁移到 MongoDB 目标抽象 |
 | `src/nest_simulator.py` | MAVLink 机巢模拟器 |
-| `tools/` | Ubuntu 预检和 MQTT 冒烟测试 |
+| `tools/` | Ubuntu 预检、MQTT 冒烟测试、Dock3 P0/DRC/organization 批量验收工具 |
 | `web/` | 独立 Web 调试台，不嵌入主网关 |
 
 ## 非阻塞架构要求
@@ -123,6 +126,6 @@ http://Ubuntu服务器IP:8090
 下一阶段：
 
 - 建立 DJI Dock 3 协议矩阵
-- 对齐当前 223 个已注册 method 的 Dock3 状态
+- 对齐当前 224 个已注册 method 的 Dock3 状态
 - 固化上云 API 模拟器和机巢模拟器
 - 补齐 request trace、MongoDB 目标架构和自动化 smoke test

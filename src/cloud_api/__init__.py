@@ -13,14 +13,26 @@
 通信协议：MQTT (thing/product/{sn}/services, thing/product/{sn}/events等)
 """
 
-from src.cloud_api.dock_manager import DockManager
-from src.cloud_api.connection_manager import CloudConnectionManager
-from src.cloud_api.telemetry_reporter import TelemetryReporter
-from src.cloud_api.capability_reporter import CapabilityReporter
-
 __all__ = [
     'DockManager',
     'CloudConnectionManager',
     'TelemetryReporter',
     'CapabilityReporter'
 ]
+
+
+def __getattr__(name):
+    """Lazy-load cloud API components to avoid import side effects in tests."""
+    if name == 'DockManager':
+        from src.cloud_api.dock_manager import DockManager
+        return DockManager
+    if name == 'CloudConnectionManager':
+        from src.cloud_api.connection_manager import CloudConnectionManager
+        return CloudConnectionManager
+    if name == 'TelemetryReporter':
+        from src.cloud_api.telemetry_reporter import TelemetryReporter
+        return TelemetryReporter
+    if name == 'CapabilityReporter':
+        from src.cloud_api.capability_reporter import CapabilityReporter
+        return CapabilityReporter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

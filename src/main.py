@@ -450,16 +450,17 @@ class EdgeGateway:
             self.device.stop()
         if self.rtk_module:
             self.rtk_module.stop_ntrip()
-        if self.retention_manager and self.loop:
-            self.loop.call_soon_threadsafe(asyncio.create_task, self.retention_manager.stop())
-        elif self.retention_manager:
+        if self.retention_manager:
             self.retention_manager.stop_sync()
-        if self.cloud_sync_manager and self.loop:
-            self.loop.call_soon_threadsafe(asyncio.create_task, self.cloud_sync_manager.stop())
-        elif self.cloud_sync_manager:
+        if self.cloud_sync_manager:
             self.cloud_sync_manager.stop_sync()
 
         logger.info("Edge Gateway stopped")
+
+    def request_stop(self, reason: str = ""):
+        """请求主循环退出，由 async finally 统一执行异步清理。"""
+        logger.info("Stop requested%s", f": {reason}" if reason else "")
+        self.running = False
 
     def _handle_async_exception(self, loop, context):
         """记录 asyncio 后台任务未处理异常。"""
@@ -722,8 +723,8 @@ class EdgeGateway:
         }, category='mission')
 
         # ---- 航线管理API (Wayline Management) ----
-        # DJI Cloud API Wayline 接口参考:
-        # https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html
+        # DJI Dock3 Cloud API Wayline 接口参考:
+        # https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html
         #
         # Services (down): 云端下发 -> 设备响应 services_reply
         # Events (up): 设备上报 -> 云端响应 events_reply
@@ -876,6 +877,7 @@ class EdgeGateway:
             'drc_heading_push': self.drc.handle_drc_heading_push,
             'drc_altitude_push': self.drc.handle_drc_altitude_push,
             'drc_flyto_point_push': self.drc.handle_drc_flyto_point_push,
+            'stick_control': self.drc.handle_stick_control,
             'drone_control': self.drc.handle_drone_control,
             'payload_control': self.drc.handle_payload_control,
             'drc_gimbal_speed_push': self.drc.handle_drc_gimbal_speed_push,
@@ -953,8 +955,7 @@ async def main_async():
     if sys.gettrace() is None:
         def signal_handler(signum, frame):
             logger.info(f"Received signal {signum}")
-            gateway.stop()
-            sys.exit(0)
+            gateway.request_stop(f"signal={signum}")
 
         signal.signal(signal.SIGINT, signal_handler)
         if hasattr(signal, 'SIGTERM'):

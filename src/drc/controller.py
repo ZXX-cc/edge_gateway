@@ -12,6 +12,13 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.utils.field_labels import format_with_labels
+from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.cloud_api.dock3_drc import (
+    normalize_drone_control,
+    normalize_stick_control,
+    validate_drc_mode_enter,
+    validate_gimbal_speed_push,
+)
 
 logger = get_logger("drc")
 
@@ -350,6 +357,13 @@ class DrcController:
 
         Request: { }
         """
+        data = msg.get('data', {})
+        valid, errors = validate_drc_mode_enter(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("DRC enter payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
         if self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC already enabled")
 
@@ -692,23 +706,28 @@ class DrcController:
         Response: { result }
         """
         data = msg.get('data', {})
-        h_speed = data.get('horizontal_speed', 0)
-        h_dir = data.get('horizontal_direction', 0)
-        v_speed = data.get('vertical_speed', 0)
-        v_dir = data.get('vertical_direction', 0)
-        yaw = data.get('yaw', 0)
 
         if not self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC not enabled")
 
-        # 将极坐标速度转换为机体坐标系速度
-        # h_dir: 0=前, 90=右, 180=后, 270=左
-        rad = math.radians(h_dir)
-        vx = h_speed * math.cos(rad)
-        vy = h_speed * math.sin(rad)
-        vz = v_speed * (1 if v_dir > 0 else -1)
+        valid, normalized, errors = normalize_drone_control(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("Drone control payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
-        logger.info(f"Drone control: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw={yaw}")
+        vx = normalized["vx"]
+        vy = normalized["vy"]
+        vz = normalized["vz"]
+        yaw_rate = normalized["yaw_rate"]
+        logger.info(
+            "Drone control normalized: seq=%s, vx=%.2f, vy=%.2f, vz=%.2f, yaw_rate=%.3f",
+            normalized.get("seq"),
+            vx,
+            vy,
+            vz,
+            yaw_rate,
+        )
 
         # 发送速度指令
         conn = self._get_mavlink_connection()
@@ -723,12 +742,44 @@ class DrcController:
                     0, 0, 0,
                     vx, vy, vz,
                     0, 0, 0,
-                    yaw, 0  # yaw, yaw_rate
+                    0, yaw_rate
                 )
             except Exception as e:
                 logger.error(f"Drone control send failed: {e}")
 
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_stick_control(self, msg: dict) -> dict:
+        """
+        DRC摇杆控制 (stick_control)
+
+        当前先作为 Dock3 DRC 控制数据的模拟兼容入口：
+        - 优先接受 vx/vy/vz/yaw_rate，直接转为速度控制
+        - 兼容 right_y/right_x/left_y/left_x 或 pitch/roll/throttle/yaw
+
+        后续按 Dock3 官方字段精校后，应在此处收敛字段名和值域。
+        """
+        data = msg.get('data', {})
+
+        if not self._drc_enabled:
+            return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC not enabled")
+
+        valid, normalized, errors = normalize_stick_control(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("Stick control payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        speed_msg = dict(msg)
+        speed_msg['data'] = normalized
+        logger.info(
+            "Stick control mapped to speed: vx=%s, vy=%s, vz=%s, yaw_rate=%s",
+            speed_msg['data']['vx'],
+            speed_msg['data']['vy'],
+            speed_msg['data']['vz'],
+            speed_msg['data']['yaw_rate'],
+        )
+        return self.handle_drc_speed_push(speed_msg)
 
     def handle_payload_control(self, msg: dict) -> dict:
         """
@@ -807,6 +858,12 @@ class DrcController:
 
         if not self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC not enabled")
+
+        valid, errors = validate_gimbal_speed_push(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("DRC gimbal speed payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
         logger.info(f"DRC gimbal speed: pitch={pitch}, yaw={yaw}, roll={roll}")
 

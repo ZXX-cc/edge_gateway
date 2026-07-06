@@ -7,6 +7,8 @@ import uuid
 import time
 from typing import Optional, Dict, Any
 
+from src.utils.dji_error_codes import describe_error, normalize_error_code
+
 
 class MessageBuilder:
     """标准消息构造器"""
@@ -47,17 +49,19 @@ class MessageBuilder:
             data: 响应数据
             msg_str: 结果描述
         """
+        normalized_result = normalize_error_code(result)
+        reply_msg = msg_str or (describe_error(normalized_result) if normalized_result else "")
         return {
             "bid": str(uuid.uuid4()),
             "data": {
-                "result": result,
-                **(data or {})
+                **(data or {}),
+                "result": normalized_result,
             },
             "gateway": original_msg.get("gateway", ""),
             "tid": original_msg.get("tid", ""),
             "timestamp": int(time.time() * 1000),
             "method": original_msg.get("method", ""),
-            "msg": msg_str
+            "msg": reply_msg
         }
 
     @staticmethod
@@ -76,7 +80,7 @@ class MessageBuilder:
         """
         data = {}
         for name, result in (results or {}).items():
-            data[name] = {"state": {"result": result}}
+            data[name] = {"state": {"result": normalize_error_code(result, context="property")}}
         return {
             "bid": str(uuid.uuid4()),
             "data": data,

@@ -31,6 +31,7 @@ Dock3 上云 API 模拟器
 
 - 整理 Dock3 文档中的 properties、device、organization、live、media、wayline、hms、cmd、firmware、log、config、drc 等接口。
 - 维护 `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 中的 Dock3 协议矩阵。
+- 维护 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 中的全量分组迁移台账。
 - 维护 `DJI_CLOUD_API_INTERFACES.md` 中各 method 的 Dock3 验收状态。
 - 验证 MQTT topic：
   - `thing/product/{sn}/services`
@@ -61,7 +62,8 @@ Dock3 上云 API 模拟器
 | `services -> services_reply` | 已验证可闭环，`dock_status_query`、`airport_bind_status` 均能收到 `result=0` 回包 | 对照 Dock3 设备管理/组织管理文档校验字段 |
 | `osd` 上报 | 已验证持续输出 SITL 遥测 | 对照 Dock3 properties/osd 字段名、单位和枚举 |
 | `property/set` | 已通过 Ubuntu 服务器复测，`property_set` 返回 `property/set_reply`，`result=0` | 继续对照 Dock3 properties payload 结构 |
-| `drc_mode_enter/exit` | Ubuntu 复测通过 Dock3 `services -> services_reply`；错误发送到 `drc/down` 会返回 `result=-3` | 人员2继续核对 MAVLink 执行状态和飞控模式映射 |
+| properties Batch 1 | Ubuntu 已验证：`air_transfer_enable`、`silent_mode`、`user_experience_improvement` 可通过 `property/set`；`battery_store_mode`、`alarm_state` 返回只读失败 | 人员1继续补全 `property_get` 回读、值域校验和 `osd/state` 字段矩阵 |
+| `drc_mode_enter/exit` | Ubuntu 复测通过 Dock3 `services -> services_reply`；错误发送到 `drc/down` 应返回 DJI 错误码 `325001` | 人员2继续核对 MAVLink 执行状态和飞控模式映射 |
 | `drc/down` | Dock3 中用于 DRC 建链后的控制数据，例如 `stick_control`、`drone_control`、`payload_control` | 人员1补 DRC 控制 payload；人员2核对 MAVLink 控制执行 |
 | 状态一致性 | `dock_status_query.drone_status` 已同步 OSD 实时遥测，包含 `online=true`、经纬度、高度、电量、模式和 GPS | 继续对照 Dock3 机场/无人机状态字段 |
 | DRC 状态交接项 | Ubuntu 复测通过：`drc_mode_enter` 后 `property_get(drc_state)=2`，`drc_mode_exit` 后 `property_get(drc_state)=0`；飞控 OSD `mode_code/gear` 仍需核对 | 人员2核对 DRC 进入后飞控模式切换、解锁状态和 `mode_code` 映射 |
@@ -179,7 +181,7 @@ Dock3 上云 API 模拟器
 
 | 变更类型 | 必须先更新 |
 |---|---|
-| Dock3 字段、method、topic、枚举、错误码 | `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 和 `DJI_CLOUD_API_INTERFACES.md` |
+| Dock3 字段、method、topic、枚举、错误码 | `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`、`docs/DJI_DOCK3_MIGRATION_GUIDE.md` 和 `DJI_CLOUD_API_INTERFACES.md` |
 | MAVLink 自定义消息字段 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` |
 | 启动命令、端口、部署依赖 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` |
 | 模块职责或目录结构 | `docs/PROJECT_FILE_GUIDE.md` |

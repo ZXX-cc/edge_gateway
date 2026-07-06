@@ -23,7 +23,7 @@
 | 手动飞控验证 | 已完成 | MAVProxy 手动 `GUIDED/arm/takeoff 10/LAND` 成功；OSD 高度从 0 上升到 10m，再下降到 0m |
 | 协议版本判断 | 已确认原项目偏 DJI Dock/Dock1 | `src/mission/manager.py` 和 `src/main.py` 注释引用 `dock1/wayline.html`，`src/cloud_api/dock_manager.py` 标注 `DJI Dock 机场管理模块` |
 | 当前目标变更 | 已确定切换到 DJI Dock 3 | 后续所有属性、服务、事件、状态、回包验收以 DJI Dock 3 文档为准 |
-| 当前阻塞 | 代码适配问题 | `set_flight_mode` API 入参和模式映射不适配 ArduCopter；`dock_status_query` 的 `drone_status` 未同步模拟遥测；Dock1 字段/接口需要迁移到 Dock3 |
+| 当前阻塞 | Dock3 全量字段迁移 | `dock_status_query.drone_status` 已同步模拟遥测；当前剩余重点是 Dock3 全量字段精校、组织管理 `requests/requests_reply`、DRC 控制数据和飞控模式映射 |
 
 ## 2026-07-03 协议目标变更：Dock1 -> Dock3
 
@@ -53,7 +53,7 @@
 | MQTT 本地链路 | 基本完成，当前用 Mosquitto 替代 NanoMQ |
 | SITL 与网关 MAVLink 链路 | 基本完成 |
 | MQTT osd/state/events/services_reply 基础链路 | 基本完成 |
-| Dock3 协议矩阵 | 待建立 |
+| Dock3 协议矩阵 | 已建立全量分组台账，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`；properties Batch 1 已开始 |
 | 上云 API 模拟器 | 待固化 |
 | MAVLink 机巢模拟器合流 | 待固化 |
 | MongoDB 服务型 NoSQL | 目标架构，当前未接入 |
@@ -66,7 +66,7 @@ MongoDB 说明：当前代码仍使用 SQLite + SQLAlchemy/aiosqlite。MongoDB �
 |---|---|---|
 | 项目性质 | Python 边缘网关，用 MQTT/NanoMQ 或 Mosquitto 对接大疆上云 API，用 MAVLink/SITL/模拟器提供设备侧行为 | 只做服务器内模拟，不接真实设备 |
 | 主入口 | `src/main.py`，`EdgeGateway` 初始化配置、MQTT、MAVLink、任务、设备、负载、媒体、云端上报和数据库 | Ubuntu 启动路径固定为 `python3 src/main.py -c /etc/edge_gateway/gateway.yaml` |
-| API 能力 | 当前主入口注册 223 个 MQTT API method，无重复 method，但机场/航线注释和字段偏 DJI Dock/Dock1 | 后续按 DJI Dock 3 的属性、服务、事件、状态、请求、回包重新分组验证 |
+| API 能力 | 当前主入口注册 224 个 MQTT API method，无重复 method，但机场/航线注释和字段偏 DJI Dock/Dock1 | 后续按 DJI Dock 3 的属性、服务、事件、状态、请求、回包重新分组验证 |
 | 默认配置 | MQTT `127.0.0.1:1883`，MAVLink UDP `127.0.0.1:14550`，cloud 默认关闭 | Ubuntu 22.04 第一阶段使用 Mosquitto + ArduPilot SITL；NanoMQ 后续换兼容包/源码编译/Ubuntu 24.04 再处理 |
 | ArduPilot 文档 | [Building Setup Linux](https://ardupilot.org/dev/docs/building-setup-linux.html) 是构建环境准备；[SITL on Linux](https://ardupilot.org/dev/docs/setting-up-sitl-on-linux.html) 才是模拟器联调入口 | 优先使用 ArduCopter SITL 模拟飞控 |
 | 仓库风险 | `README.md` 有合并冲突；原 `requirements.txt` 是 UTF-16 且含 Windows 本地 `setuptools` 引用 | Ubuntu 部署默认使用 `requirements-ubuntu.txt` |
@@ -144,7 +144,7 @@ source .venv/bin/activate
 python tools/mqtt_smoke_test.py --method dock_status_query --timeout 8
 ```
 
-说明：当前 `dock_status_query` 只证明本地旧机场查询链路可用，不代表已经符合 DJI Dock 3。Dock3 迁移完成后，需要用 Dock3 字段和 method 清单重新定义 smoke test。
+说明：当前 `dock_status_query` 可证明本地机场状态查询链路和实时遥测同步可用，但仍不能单独代表 DJI Dock 3 字段全量合规。Dock3 最终验收需要按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 的分组台账逐项通过。
 
 手动飞控验证命令在 MAVProxy 提示符中输入：
 
@@ -162,10 +162,10 @@ mode LAND
 | 优先级 | 问题 | 修复要求 | 验收标准 |
 |---|---|---|---|
 | P0 | 协议目标从 Dock1 切到 DJI Dock 3 | 按 Dock3 官方文档建立属性、服务、事件、状态、请求、回包字段矩阵；标出当前实现缺失、字段名不一致、枚举不一致、单位不一致项 | 形成 Dock3 差异清单，后续每个改动都有明确验收字段 |
-| P0 | 机场状态模型仍偏 Dock/Dock1 | 重构 `DockManager` 的模拟状态输出，使 `dock_status_query`、`osd/state/events` 中的机场字段以 Dock3 为准 | MQTT 订阅端看到的机场属性符合 Dock3 文档 |
+| P0 | 机场状态模型仍有历史字段 | `dock_status_query` 已同步实时无人机遥测，但 `dock_status`、`osd/state/events` 的机场字段仍需按 Dock3 properties/cmd/config 精校 | MQTT 订阅端看到的机场属性符合 Dock3 文档 |
 | P0 | `set_flight_mode` 入参不兼容 | 支持 `{"mode":"GUIDED"}`、`{"mode":4}`、`{"mode_code":4}`、`{"flight_mode":"GUIDED"}`；底层失败时不能回 `result=0` | 发送 `GUIDED/LAND/RTL/LOITER` 后，网关日志和 SITL 模式一致，失败时回包非 0 |
 | P0 | 飞控模式表不适配 ArduCopter | 根据 heartbeat vehicle type 或配置选择 ArduCopter/ArduPlane/QuadPlane 模式表；Copter 至少支持 `STABILIZE=0, ACRO=1, ALT_HOLD=2, AUTO=3, GUIDED=4, LOITER=5, RTL=6, CIRCLE=7, LAND=9` | 手动/API 模式切换不再出现 `UNKNOWN(9)`，`LAND` 能识别 |
-| P0 | `dock_status_query` 未同步模拟无人机状态 | `drone_status` 使用当前 `TelemetryModule` 和 `FlightControl` 状态填充 online、armed、flight_mode、lat/lon/alt/height/speed/GPS/battery | `dock_status_query` 返回值与 MQTT OSD 中的模拟遥测一致 |
+| P0 | `dock_status_query` 实时遥测同步 | 已使用当前 `TelemetryModule` 和 `FlightControl` 状态填充 online、armed、flight_mode、lat/lon/alt/height/speed/GPS/battery | Ubuntu 复测已通过；后续只做 Dock3 字段名、枚举和单位精校 |
 | P1 | API 起飞/降落链路待验证 | 在模式表修复后验证 `take_off`、`one_key_return_home`、`landing` 或等价 API | API 能让 SITL 起飞到 10m，并能降落/返航 |
 | P1 | 机巢模拟未联调 | 单独运行 `src/nest_simulator.py` 做 Dock-only；Combined 模式需 MAVLink Router 或多连接架构；输出字段按 Dock3 机场状态映射 | 能收到并解析机巢自定义 MAVLink 消息，并转换为 Dock3 机场属性 |
 
@@ -188,7 +188,7 @@ mode LAND
 | 启动验收 | Ubuntu 上能启动本地 MQTT broker、SITL 或机巢模拟器、网关；日志可查看 |
 | MAVLink 验收 | 已通过：网关收到 heartbeat、GPS、姿态、电池等遥测并进入缓存/上报链路 |
 | MQTT 验收 | 已通过：订阅下行 topic，发布 osd/state/events/reply，method 路由命中正确模块 |
-| Dock3 协议验收 | 待完成：按 DJI Dock 3 官方文档验证 properties、services、events、state、osd、reply |
+| Dock3 协议验收 | P0 已通过：`property_set/get`、`drc_mode_enter/exit`、错误码、日志；全量验收按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 继续推进 |
 | 命令验收 | `take_off`、`flyto`、`return_home`、`dock_control` 或 Dock3 等价 method 有明确执行结果 |
 | 日志验收 | 每次命令有 request、dispatch、execute、reply、error/timeout 的完整记录；关键字段以 `字段名(中文名)` 形式辅助排查 |
 | 性能验收 | 主循环持续运行；耗时任务不阻塞 MQTT 回调和 MAVLink 接收线程 |

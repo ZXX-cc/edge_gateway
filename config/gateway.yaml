@@ -11,7 +11,7 @@ gateway:
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
-  host: "192.168.2.188"
+  host: "127.0.0.1"
   port: 1883
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
@@ -54,7 +54,7 @@ mavlink:
     # udp配置示例:
     type: "udp"
     host: "127.0.0.1"
-    port: 14550
+    port: 14551 # 与主飞控 MAVLink 14550 分离，避免端口/协议冲突
 
   # 系统ID
   system_id: 1

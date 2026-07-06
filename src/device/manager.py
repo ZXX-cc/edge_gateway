@@ -28,6 +28,34 @@ from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.cloud_api.dock3_properties import (
+    PROPERTY_SET_SUCCESS,
+    validate_property_set,
+    writable_property_names,
+)
+from src.cloud_api.dock3_device import (
+    GATEWAY_DOMAIN,
+    GATEWAY_SUB_TYPE,
+    GATEWAY_TYPE,
+    THING_VERSION,
+    build_sub_device_payload,
+    build_update_topo_payload,
+    normalize_sub_device,
+    validate_update_topo_payload,
+)
+from src.cloud_api.dock3_cmd import (
+    TASK_STATUS_FAILED,
+    TASK_STATUS_OK,
+    TASK_STATUS_REJECTED,
+    command_output,
+    progress_event_data,
+    validate_action_payload,
+)
+from src.utils.dji_error_codes import (
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_COMMUNICATION_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
 from src.device.nest_property_mapper import map_nest_to_cloud_properties
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.device_db import DeviceDB
@@ -56,29 +84,30 @@ class SubDevice:
 
     def to_dict(self) -> dict:
         """序列化为大疆标准格式"""
-        return {
-            "sn": self.sn,
-            "domain": self.domain,
-            "type": self.type,
-            "sub_type": self.sub_type,
-            "index": self.index,
-            "device_secret": self.device_secret,
-            "nonce": self.nonce,
-            "thing_version": self.thing_version
-        }
+        return build_sub_device_payload(
+            sn=self.sn,
+            domain=self.domain,
+            device_type=self.type,
+            sub_type=self.sub_type,
+            index=self.index,
+            device_secret=self.device_secret,
+            nonce=self.nonce,
+            thing_version=self.thing_version,
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> "SubDevice":
         """从字典反序列化"""
+        normalized = normalize_sub_device(data or {})
         return cls(
-            sn=data.get("sn", ""),
-            domain=data.get("domain", "0"),
-            device_type=data.get("type", 0),
-            sub_type=data.get("sub_type", 0),
-            index=data.get("index", "A"),
-            device_secret=data.get("device_secret", ""),
-            nonce=data.get("nonce", ""),
-            thing_version=data.get("thing_version", "1.1.2")
+            sn=normalized.get("sn", ""),
+            domain=normalized.get("domain", "0"),
+            device_type=normalized.get("type", 0),
+            sub_type=normalized.get("sub_type", 0),
+            index=normalized.get("index", "A"),
+            device_secret=normalized.get("device_secret", ""),
+            nonce=normalized.get("nonce", ""),
+            thing_version=normalized.get("thing_version", THING_VERSION),
         )
 
 
@@ -127,29 +156,22 @@ class DeviceManager:
         self._first_power_on = int(time.time() * 1000)
 
         # ===== 设备属性表(物模型) =====
-        # 所有属性对齐 DJI Cloud API v1.15 properties.md
+        # 以 DJI Dock 3 properties 为目标；仍保留部分历史/模拟字段，迁移进度见文档。
         # pushMode=0: OSD定频上报 (0.5Hz)
         # pushMode=1: State事件性上报
         self._properties: Dict[str, Any] = self._init_properties()
 
-        # 可写属性列表 (accessMode = rw)
-        self._writable_props = [
-            'remaining_power_for_return_home',
-            'air_conditioner_mode',
-            'battery_store_mode',
-            'alarm_state',
-            'battery_maintenance_mode',
-            'silent_mode',
-            'user_experience_improvement',
-        ]
+        # Dock3 properties 页面中 accessMode=rw 的顶层属性。
+        # 其他机场动作通过 services method 修改，不允许云端直接 property/set。
+        self._writable_props = sorted(writable_property_names())
 
         # ===== 拓扑信息 =====
-        self._gateway_domain = "3"
-        self._gateway_type = 119
-        self._gateway_sub_type = 0
+        self._gateway_domain = GATEWAY_DOMAIN
+        self._gateway_type = GATEWAY_TYPE
+        self._gateway_sub_type = GATEWAY_SUB_TYPE
         self._gateway_device_secret = ""
         self._gateway_nonce = ""
-        self._gateway_thing_version = "1.1.2"
+        self._gateway_thing_version = THING_VERSION
 
         # 子设备列表
         self._sub_devices: Dict[str, SubDevice] = {}
@@ -246,7 +268,8 @@ class DeviceManager:
                 '4g_freq_band': 0.0,
             },
 
-            # ---- 直播属性 (pushMode=1, 只读) ----
+            # ---- 直播/媒体属性 (pushMode=1, 部分可写) ----
+            'air_transfer_enable': False,    # rw: 空中回传
             'live_status': [],
             'live_capacity': {
                 'available_video_number': 0,
@@ -257,7 +280,7 @@ class DeviceManager:
             # ---- 电源/电量属性 ----
             'electricity': 100,                      # 总电量(%)
             'remain_flight_time': 0,                 # 剩余飞行时间(s)
-            'remaining_power_for_return_home': 30,   # 返航预留电量(%) - rw
+            'remaining_power_for_return_home': 30,   # 历史配置字段，Dock3 property/set 不直接写
             'drone_charge_state': {'capacity_percent': 100, 'state': 0},
 
             # ---- 环境属性 (pushMode=0, 只读) ----
@@ -272,12 +295,12 @@ class DeviceManager:
             'working_voltage': 0,            # 工作电压(mV)
             'working_current': 0.0,          # 工作电流(mA)
 
-            # ---- 舱体属性 (部分可写) ----
-            'air_conditioner_mode': 0,       # rw: 0:关闭,1:制冷,2:制热,3:自动
-            'battery_store_mode': 1,         # rw: 1:计划模式,2:待命模式
-            'alarm_state': 0,                # rw: 0:关闭,1:开启
+            # ---- 舱体属性 (services 控制，property/set 只读) ----
+            'air_conditioner_mode': 0,       # 历史模拟字段，控制走 services
+            'battery_store_mode': 1,         # Dock3 properties 为只读，控制走 services
+            'alarm_state': 0,                # Dock3 properties 为只读，控制走 services
             'supplement_light_state': 0,     # 0:关闭,1:打开
-            'battery_maintenance_mode': 0,   # rw: 0:关闭保养,1:开启保养
+            'battery_maintenance_mode': 0,   # 历史模拟字段，控制走 services
             'silent_mode': 0,                # rw: 0:非静音,1:静音
 
             # ---- 空调详细状态 (pushMode=0, 只读) ----
@@ -400,6 +423,8 @@ class DeviceManager:
                 loop = asyncio.get_running_loop()
                 asyncio.run_coroutine_threadsafe(coro, loop)
             except RuntimeError:
+                if hasattr(coro, "close"):
+                    coro.close()
                 logger.warning("Cannot schedule async task: no running event loop")
 
     def _read_firmware_version(self) -> str:
@@ -434,7 +459,7 @@ class DeviceManager:
         """从数据库加载设备绑定信息"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            binding = DeviceDB.get_device_binding(session, self.gateway_sn)
+            binding = await DeviceDB.get_device_binding(session, self.gateway_sn)
             if binding:
                 self._device_state = self.STATE_BOUND if binding.is_bound else self.STATE_UNBOUND
                 self._bound_workspace_id = binding.workspace_id or ""
@@ -451,7 +476,7 @@ class DeviceManager:
         """保存设备绑定信息到数据库"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            DeviceDB.upsert_device_binding(
+            await DeviceDB.upsert_device_binding(
                 session,
                 gateway_sn=self.gateway_sn,
                 workspace_id=self._bound_workspace_id,
@@ -468,7 +493,7 @@ class DeviceManager:
         """从数据库加载告警信息"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            alarms = AlarmDB.get_unread_alarms(session, self.gateway_sn)
+            alarms = await AlarmDB.get_unread_alarms(session, self.gateway_sn)
             self._hms_alarms = [
                 {
                     'id': alarm.alarm_id,
@@ -485,7 +510,7 @@ class DeviceManager:
         """保存告警到数据库"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            AlarmDB.create_alarm(
+            await AlarmDB.create_alarm(
                 session,
                 gateway_sn=self.gateway_sn,
                 alarm_id=alarm_id,
@@ -501,9 +526,9 @@ class DeviceManager:
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
             if alarm_ids:
-                cleared = AlarmDB.delete_alarms_by_ids(session, alarm_ids)
+                cleared = await AlarmDB.delete_alarms_by_ids(session, alarm_ids)
             else:
-                cleared = AlarmDB.delete_all_alarms(session, self.gateway_sn)
+                cleared = await AlarmDB.delete_all_alarms(session, self.gateway_sn)
             await session.commit()
             logger.info(f"Cleared {cleared} alarms from DB")
 
@@ -605,19 +630,25 @@ class DeviceManager:
             logger.warning(f"Property not found: {name}")
             return False
 
-        if name not in self._writable_props:
-            logger.warning(f"Property read-only: {name}")
+        result, normalized_value, reason = validate_property_set(name, value)
+        if result != PROPERTY_SET_SUCCESS:
+            logger.warning(
+                "Property set rejected: name=%s, value=%r, reason=%s",
+                name,
+                value,
+                reason,
+            )
             return False
 
         old_value = self._properties[name]
-        if old_value == value:
+        if old_value == normalized_value:
             return True
 
-        self._properties[name] = value
-        logger.info(f"Property updated: {name} = {value} (was {old_value})")
+        self._properties[name] = normalized_value
+        logger.info(f"Property updated: {name} = {normalized_value} (was {old_value})")
 
         if notify and self._state_callback:
-            self._notify_state({'property': {name: value}})
+            self._notify_state({'property': {name: normalized_value}})
 
         return True
 
@@ -926,23 +957,28 @@ class DeviceManager:
         """
         sub_devices = [
             dev.to_dict() for dev in self._sub_devices.values()
-            if dev.online  # 只上报在线子设备
+            if dev.online  # Dock3 offline topology uses an empty sub_devices list.
         ]
-        return {
-            "domain": self._gateway_domain,
-            "type": self._gateway_type,
-            "sub_type": self._gateway_sub_type,
-            "device_secret": self._gateway_device_secret,
-            "nonce": self._gateway_nonce,
-            "thing_version": self._gateway_thing_version,
-            "sub_devices": sub_devices
-        }
+        return build_update_topo_payload(
+            domain=self._gateway_domain,
+            device_type=self._gateway_type,
+            sub_type=self._gateway_sub_type,
+            device_secret=self._gateway_device_secret,
+            nonce=self._gateway_nonce,
+            thing_version=self._gateway_thing_version,
+            sub_devices=sub_devices,
+        )
 
     def report_update_topo(self):
         """主动上报设备拓扑（update_topo）"""
         payload = self.build_topo_payload()
+        valid, errors = validate_update_topo_payload(payload)
+        if not valid:
+            logger.error("Update topo payload invalid: %s", "; ".join(errors))
+            return False
         self._notify_event('update_topo', payload)
         logger.info(f"Update topo reported: {len(payload['sub_devices'])} sub-devices")
+        return True
 
     def handle_update_topo_reply(self, method: str, msg: dict):
         """处理 update_topo 的云端回复 (status_reply)"""
@@ -1437,7 +1473,8 @@ class DeviceManager:
         """
         查询机场绑定状态 (airport_bind_status)
 
-        Direction: down (services) - 云端下发查询指令
+        Direction: legacy down (services) - 仅保留本地兼容 smoke。
+        Dock3 官方 organization 路径由设备主动发 requests，云端回 requests_reply。
         Request: { devices: [{sn: string}] }
         Response: { result, output: { bind_status: [...] } }
         """
@@ -1497,6 +1534,15 @@ class DeviceManager:
             bool: 命令是否成功发送
         """
         if not self._nest_module:
+            if Config.get('simulation.nest_command_fallback', True):
+                logger.info(
+                    "%s: Nest module not available, using simulated state update %s=%s",
+                    command_name,
+                    prop_name,
+                    prop_value,
+                )
+                self.update_properties({prop_name: prop_value})
+                return True
             logger.warning(f"{command_name}: Nest module not available, MAVLink command not sent")
             return False
 
@@ -1528,15 +1574,82 @@ class DeviceManager:
             logger.error(f"{command_name}: Failed to send nest command: {e}")
             return False
 
-    def _build_nest_command_reply(self, msg: dict, command_name: str, sent: bool) -> dict:
-        if sent:
-            return MessageBuilder.build_reply(msg, result=0, data={'action': command_name})
+    def _build_cmd_reply(
+        self,
+        msg: dict,
+        result: int = 0,
+        status: str = TASK_STATUS_OK,
+        msg_str: str = "",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> dict:
         return MessageBuilder.build_reply(
             msg,
-            result=-1,
-            msg_str=f"{command_name}: MAVLink nest command not sent",
-            data={'action': command_name}
+            result=result,
+            data=command_output(status=status, extra=extra),
+            msg_str=msg_str,
         )
+
+    def _notify_cmd_progress(
+        self,
+        method: str,
+        status: str = TASK_STATUS_OK,
+        percent: int = 100,
+        result: int = 0,
+    ):
+        self._notify_event(
+            method,
+            progress_event_data(method, status=status, percent=percent, result=result),
+        )
+
+    def _build_nest_command_reply(self, msg: dict, command_name: str, sent: bool) -> dict:
+        if sent:
+            self._notify_cmd_progress(command_name)
+            return self._build_cmd_reply(
+                msg,
+                result=0,
+                status=TASK_STATUS_OK,
+                extra={'action': command_name},
+            )
+        return self._build_cmd_reply(
+            msg,
+            result=DOCK_COMMUNICATION_ERROR,
+            status=TASK_STATUS_FAILED,
+            msg_str=f"{command_name}: MAVLink nest command not sent",
+            extra={'action': command_name},
+        )
+
+    def _reject_cmd(self, msg: dict, reason: str, result: int = INVALID_COMMAND_FORMAT) -> dict:
+        logger.warning("Dock3 cmd rejected: method=%s, reason=%s", msg.get('method'), reason)
+        return self._build_cmd_reply(
+            msg,
+            result=result,
+            status=TASK_STATUS_REJECTED,
+            msg_str=reason,
+        )
+
+    def _handle_enum_switch(
+        self,
+        msg: dict,
+        updates: Dict[str, Any],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        method = msg.get('method', '')
+        valid, value, used_field, errors = validate_action_payload(method, msg.get('data', {}))
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
+
+        update_values = {}
+        for prop_name, prop_value in updates.items():
+            update_values[prop_name] = value if prop_value is None else prop_value
+        self.update_properties(update_values)
+
+        reply_extra = dict(extra or {})
+        reply_extra[used_field or 'action'] = value
+        if used_field == 'mode':
+            reply_extra['link_workmode'] = value
+
+        logger.info("Dock3 cmd switch applied: method=%s, %s=%s", method, used_field, value)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=reply_extra)
 
     def handle_cover_open(self, msg: dict) -> dict:
         """打开舱盖 - 通过机巢协议真实下发"""
@@ -1556,9 +1669,10 @@ class DeviceManager:
         drone_in = self._properties.get('drone_in_dock', 1)
         if drone_in == 1:
             logger.warning("Force close cover rejected: drone still in dock")
-            return MessageBuilder.build_reply(
-                msg, result=-1,
-                msg_str="Drone in dock, cannot force close cover"
+            return self._reject_cmd(
+                msg,
+                "Drone in dock, cannot force close cover",
+                result=DEVICE_STATE_UNSUPPORTED,
             )
         sent = self._send_nest_command('cover_force_close', 'cover_state', 0)
         return self._build_nest_command_reply(msg, 'cover_force_close', sent)
@@ -1600,38 +1714,57 @@ class DeviceManager:
         # 当前仅更新物模型状态
         logger.info("Supplement light ON")
         self.update_properties({'supplement_light_state': 1})
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'supplement_light_open'})
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'action': 'supplement_light_open'},
+        )
 
     def handle_supplement_light_close(self, msg: dict) -> dict:
         """补光灯关"""
         logger.info("Supplement light OFF")
         self.update_properties({'supplement_light_state': 0})
-        return MessageBuilder.build_reply(msg, result=0, data={'action': 'supplement_light_close'})
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'action': 'supplement_light_close'},
+        )
 
     def handle_sdr_workmode_switch(self, msg: dict) -> dict:
         """SDR工作模式切换"""
-        data = msg.get('data', {})
-        mode = data.get('mode', 0)
-        logger.info(f"SDR workmode switch: {mode}")
-        # 更新wireless_link中的link_workmode
+        valid, mode, used_field, errors = validate_action_payload(
+            'sdr_workmode_switch',
+            msg.get('data', {}),
+        )
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
+
         wireless = self._properties.get('wireless_link', {}).copy()
         wireless['link_workmode'] = mode
         self.update_properties({'wireless_link': wireless})
-        return MessageBuilder.build_reply(msg, result=0, data={'mode': mode})
+        logger.info("SDR workmode switch: %s=%s", used_field, mode)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'link_workmode': mode},
+        )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
         """调试模式开启"""
         self._debug_mode = True
-        self.update_properties({'mode_code': 1})
+        self.update_properties({'mode_code': 2})
         logger.info("Debug mode ON")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_debug_mode_close(self, msg: dict) -> dict:
         """调试模式关闭"""
         self._debug_mode = False
         self.update_properties({'mode_code': 0})
         logger.info("Debug mode OFF")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_device_enter_simulation_mode(self, msg: dict) -> dict:
         """进入仿真模式"""
@@ -1656,9 +1789,12 @@ class DeviceManager:
         """
         data = msg.get('data', {})
         action = data.get('action', 0)
-        self.set_property('battery_maintenance_mode', action)
+        valid, action, _, errors = validate_action_payload('battery_maintenance_switch', data)
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
+        self.update_properties({'battery_maintenance_mode': action})
         logger.info(f"Battery maintenance: {'ON' if action else 'OFF'}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
 
     def handle_air_conditioner_mode_switch(self, msg: dict) -> dict:
         """
@@ -1667,13 +1803,20 @@ class DeviceManager:
         """
         data = msg.get('data', {})
         action = data.get('action', 0)
-        self.set_property('air_conditioner_mode', action)
+        valid, action, _, errors = validate_action_payload('air_conditioner_mode_switch', data)
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
         # 联动更新air_conditioner结构
         ac = self._properties.get('air_conditioner', {}).copy()
         ac['air_conditioner_state'] = action
-        self.update_properties({'air_conditioner': ac})
+        self.update_properties({'air_conditioner_mode': action, 'air_conditioner': ac})
         logger.info(f"Air conditioner mode: {action}")
-        return MessageBuilder.build_reply(msg, result=0, data={'mode': action})
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'action': action},
+        )
 
     def handle_alarm_state_switch(self, msg: dict) -> dict:
         """
@@ -1682,9 +1825,12 @@ class DeviceManager:
         """
         data = msg.get('data', {})
         action = data.get('action', 0)
-        self.set_property('alarm_state', action)
+        valid, action, _, errors = validate_action_payload('alarm_state_switch', data)
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
+        self.update_properties({'alarm_state': action})
         logger.info(f"Alarm: {'ON' if action else 'OFF'}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
 
     def handle_battery_store_mode_switch(self, msg: dict) -> dict:
         """
@@ -1693,9 +1839,12 @@ class DeviceManager:
         """
         data = msg.get('data', {})
         action = data.get('action', 1)
-        self.set_property('battery_store_mode', action)
+        valid, action, _, errors = validate_action_payload('battery_store_mode_switch', data)
+        if not valid:
+            return self._reject_cmd(msg, "; ".join(errors))
+        self.update_properties({'battery_store_mode': action})
         logger.info(f"Battery store mode: {action}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
 
     # ========== API处理器：RTK/降落点 ==========
 
@@ -1749,12 +1898,23 @@ class DeviceManager:
         TODO: 通过机巢主控继电器或飞控电源管理模块实现真实上电
         """
         logger.info("Drone power ON")
-        self.update_properties({'drone_in_dock': 0})
         for dev in self._sub_devices.values():
             dev.online = True
+            dev.paired = True
             dev.last_heartbeat = time.time()
+        first_dev = next(iter(self._sub_devices.values()), None)
+        if first_dev:
+            self.update_properties({
+                'sub_device': {
+                    'device_sn': first_dev.sn,
+                    'product_type': str(first_dev.type),
+                    'device_online_status': 1,
+                    'device_paired': 1 if first_dev.paired else 0
+                }
+            })
         self.report_update_topo()
-        return MessageBuilder.build_reply(msg, result=0)
+        self._notify_cmd_progress('drone_open')
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_drone_close(self, msg: dict) -> dict:
         """
@@ -1762,11 +1922,21 @@ class DeviceManager:
         TODO: 通过机巢主控继电器或飞控电源管理模块实现真实断电
         """
         logger.info("Drone power OFF")
-        self.update_properties({'drone_in_dock': 1})
         for dev in self._sub_devices.values():
             dev.online = False
+        first_dev = next(iter(self._sub_devices.values()), None)
+        if first_dev:
+            self.update_properties({
+                'sub_device': {
+                    'device_sn': first_dev.sn,
+                    'product_type': str(first_dev.type),
+                    'device_online_status': 0,
+                    'device_paired': 1 if first_dev.paired else 0
+                }
+            })
         self.report_update_topo()
-        return MessageBuilder.build_reply(msg, result=0)
+        self._notify_cmd_progress('drone_close')
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_drone_format(self, msg: dict) -> dict:
         """飞行器数据格式化"""
@@ -1775,24 +1945,51 @@ class DeviceManager:
             'remain_storage_capacity': self._properties.get('storage_capacity', 64000),
             'media_file_detail': {'remain_upload': 0}
         })
-        return MessageBuilder.build_reply(msg, result=0)
+        self._notify_cmd_progress('drone_format')
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_device_format(self, msg: dict) -> dict:
         """设备格式化（网关本地存储格式化）"""
-        logger.info("Device format")
-        try:
-            media_path = Config.get('media.storage_path', '/data/media')
-            if os.path.exists(media_path):
-                for item in os.listdir(media_path):
-                    item_path = os.path.join(media_path, item)
-                    if os.path.isfile(item_path):
-                        os.remove(item_path)
-                    elif os.path.isdir(item_path):
-                        shutil.rmtree(item_path)
-                logger.info(f"Device format completed: {media_path}")
-        except Exception as e:
-            logger.error(f"Device format failed: {e}")
-        return MessageBuilder.build_reply(msg, result=0)
+        method = msg.get('method') or 'device_format'
+        logger.info("%s requested", method)
+        allow_storage_format = bool(Config.get('device.allow_storage_format', False))
+        media_path = Config.get('media.storage_path', '/data/media')
+        if allow_storage_format:
+            try:
+                if os.path.exists(media_path):
+                    for item in os.listdir(media_path):
+                        item_path = os.path.join(media_path, item)
+                        if os.path.isfile(item_path):
+                            os.remove(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    logger.info(f"Device format completed: {media_path}")
+            except Exception as e:
+                logger.error(f"Device format failed: {e}")
+                return self._build_cmd_reply(
+                    msg,
+                    result=DOCK_COMMUNICATION_ERROR,
+                    status=TASK_STATUS_FAILED,
+                    msg_str=f"Device format failed: {e}",
+                )
+        else:
+            logger.info(
+                "%s simulated; set device.allow_storage_format=true to delete media path: %s",
+                method,
+                media_path,
+            )
+
+        self.update_properties({
+            'remain_storage_capacity': self._properties.get('storage_capacity', 64000),
+            'media_file_detail': {'remain_upload': 0}
+        })
+        self._notify_cmd_progress(method)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'simulation_mode': not allow_storage_format},
+        )
 
     # ========== API处理器：相机模式/重启/标定/重置 ==========
 
@@ -1806,23 +2003,34 @@ class DeviceManager:
     def handle_device_reboot(self, msg: dict) -> dict:
         """
         设备重启
-        启动异步线程执行系统重启，避免阻塞MQTT响应
+        默认按服务器模拟模式处理，避免联调服务器被真实 reboot。
+        如确需真实重启，配置 device.allow_system_reboot=true。
         """
         logger.info("Device reboot requested")
 
-        def do_reboot():
-            time.sleep(3)
-            try:
-                os.system('sudo reboot')
-            except Exception as e:
-                logger.error(f"Reboot failed: {e}")
+        allow_system_reboot = bool(Config.get('device.allow_system_reboot', False))
+        reboot_delay = 3
+        if allow_system_reboot:
+            def do_reboot():
+                time.sleep(reboot_delay)
+                try:
+                    os.system('sudo reboot')
+                except Exception as e:
+                    logger.error(f"Reboot failed: {e}")
 
-        reboot_thread = threading.Thread(target=do_reboot, daemon=True)
-        reboot_thread.start()
+            reboot_thread = threading.Thread(target=do_reboot, daemon=True)
+            reboot_thread.start()
+            logger.warning("System reboot thread scheduled by device_reboot")
+        else:
+            logger.info("Device reboot simulated; set device.allow_system_reboot=true to enable real reboot")
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'reboot_delay': 3
-        })
+        self._notify_cmd_progress('device_reboot')
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'reboot_delay': reboot_delay, 'simulation_mode': not allow_system_reboot},
+        )
 
     def handle_device_calibration(self, msg: dict) -> dict:
         """设备标定"""
@@ -1855,7 +2063,8 @@ class DeviceManager:
                 self._properties[name] = value
 
         self._notify_state({'property': {k: v for k, v in reset_props.items() if k in self._properties}})
-        return MessageBuilder.build_reply(msg, result=0)
+        self._notify_cmd_progress('device_reset')
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_format_sd_card(self, msg: dict) -> dict:
         """格式化SD卡"""
@@ -2356,16 +2565,31 @@ class DeviceManager:
         """
         data = msg.get('data', {})
 
-        self._gateway_domain = data.get('domain', self._gateway_domain)
-        self._gateway_type = data.get('type', self._gateway_type)
-        self._gateway_sub_type = data.get('sub_type', self._gateway_sub_type)
-        self._gateway_device_secret = data.get('device_secret', self._gateway_device_secret)
-        self._gateway_nonce = data.get('nonce', self._gateway_nonce)
-        self._gateway_thing_version = data.get('thing_version', self._gateway_thing_version)
+        valid, errors = validate_update_topo_payload(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("Rejected invalid update_topo payload: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
-        sub_devices_data = data.get('sub_devices', [])
+        normalized = build_update_topo_payload(
+            domain=data.get('domain', self._gateway_domain),
+            device_type=data.get('type', self._gateway_type),
+            sub_type=data.get('sub_type', self._gateway_sub_type),
+            device_secret=data.get('device_secret', self._gateway_device_secret),
+            nonce=data.get('nonce', self._gateway_nonce),
+            thing_version=data.get('thing_version', self._gateway_thing_version),
+            sub_devices=data.get('sub_devices', []),
+        )
+
+        self._gateway_domain = normalized.get('domain', self._gateway_domain)
+        self._gateway_type = normalized.get('type', self._gateway_type)
+        self._gateway_sub_type = normalized.get('sub_type', self._gateway_sub_type)
+        self._gateway_device_secret = normalized.get('device_secret', self._gateway_device_secret)
+        self._gateway_nonce = normalized.get('nonce', self._gateway_nonce)
+        self._gateway_thing_version = normalized.get('thing_version', self._gateway_thing_version)
+
         self._sub_devices.clear()
-        for dev_data in sub_devices_data:
+        for dev_data in normalized.get('sub_devices', []):
             sub_dev = SubDevice.from_dict(dev_data)
             sub_dev.online = True
             self._sub_devices[sub_dev.sn] = sub_dev

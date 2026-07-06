@@ -29,13 +29,13 @@
 | mission | 42 | 航线任务、飞行任务、指令飞行、返航、降落 |
 | payload | 74 | 相机、云台、红外、PSDK、喊话器、探照灯和第三方负载 |
 | media | 13 | 媒体文件、直播、上传优先级、存储配置 |
-| drc | 23 | DRC 模式和实时控制 |
+| drc | 24 | DRC 模式和实时控制 |
 | dock | 8 | 旧 Dock/Dock1 风格机场查询、控制、告警、气象 |
 | log | 3 | 日志列表和上传 |
 | flysafe | 3 | 远程解禁 |
 | flight_area | 2 | 自定义飞行区 |
 | custom_data | 4 | PSDK/ESDK 自定义数据透传 |
-| 合计 | 223 | 当前已注册 method 总数 |
+| 合计 | 224 | 当前已注册 method 总数 |
 
 ## 3. MQTT 与上云 API 层
 
@@ -150,7 +150,11 @@ src/core/connection.py
 |---|---|
 | `src/nest_simulator.py` | MAVLink 机巢模拟器，支持心跳、自定义状态上报和命令响应 |
 | `tools/ubuntu_preflight.sh` | Ubuntu 部署前只读检查脚本，不安装、不启动、不修改 |
-| `tools/mqtt_smoke_test.py` | MQTT method 冒烟测试工具，可发布 services 并等待 reply |
+| `tools/mqtt_smoke_test.py` | MQTT method 冒烟测试工具，可按 method 自动选择 services/property/drc topic 并等待 reply |
+| `tools/mqtt_dock3_p0_batch_test.py` | Dock3 P0 总批量验收工具，一次覆盖状态查询、properties、DRC 和错误 topic |
+| `tools/mqtt_drc_batch_test.py` | Dock3 DRC 控制数据批量验收工具，覆盖 `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` |
+| `tools/mqtt_cloud_simulator.py` | 上云 API 模拟器，支持 `requests_reply` 和 `status_reply` 模拟 |
+| `tools/mqtt_organization_test.py` | Dock3 organization 查询、绑定、事件、拓扑和持久化验收工具 |
 | `web/app.py` | 独立 Web 调试台后端，订阅 MQTT、显示消息、控制 SITL 和常用 MAVLink 命令 |
 | `web/static/` | Web 调试台前端页面 |
 | `web/README.md` | Web 调试台启动和页面操作说明 |
@@ -168,4 +172,3 @@ src/core/connection.py
 - `*.log`
 - `.idea/`, `.vscode/` 中的个人配置
 - `data/` 中的临时媒体、固件和运行数据
-
