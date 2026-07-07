@@ -8,6 +8,8 @@ import time
 import uuid
 from threading import Event
 
+from tool_config import add_config_argument, resolve_mqtt_settings
+
 mqtt = None
 
 TOPICS = {
@@ -278,14 +280,16 @@ def run_property_get_checks(client, args):
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="Test DJI Dock3 properties category")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--quiet-stale", action="store_true", help="Only count stale duplicate replies instead of printing their JSON payloads.")
     parser.add_argument("--fail-on-stale", action="store_true", help="Fail if duplicate legacy/stale replies are observed after the broker environment is cleaned.")
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
     try:
         import paho.mqtt.client as mqtt_module

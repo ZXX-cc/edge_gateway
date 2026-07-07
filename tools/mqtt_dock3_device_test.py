@@ -22,6 +22,7 @@ from src.cloud_api.dock3_device import (
     validate_update_topo_payload,
 )
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from tool_config import add_config_argument, resolve_mqtt_settings
 
 mqtt = None
 
@@ -287,9 +288,10 @@ def offline_payload(args):
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="Test DJI Dock3 device/topology category")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--gateway-secret", default="gw-secret")
@@ -311,6 +313,7 @@ def main():
         help="Seconds to watch for unexpected status after invalid update_topo.",
     )
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
     try:
         import paho.mqtt.client as mqtt_module

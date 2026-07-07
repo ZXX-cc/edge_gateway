@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from tool_config import add_config_argument, resolve_mqtt_settings
 
 mqtt = None
 
@@ -416,14 +417,16 @@ def run_job_checks(client, args):
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="Test DJI Dock3 cmd/remote-debug category")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
     try:
         import paho.mqtt.client as mqtt_module

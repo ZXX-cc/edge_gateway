@@ -8,6 +8,8 @@ import time
 import uuid
 from threading import Event
 
+from tool_config import add_config_argument, resolve_mqtt_settings
+
 mqtt = None
 
 TOPICS = {
@@ -331,9 +333,10 @@ def run_drc_checks(client, args):
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="Batch test Dock3 P0 MQTT APIs")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--skip-status", action="store_true")
@@ -350,6 +353,7 @@ def main():
         help="Also test the legacy services airport_bind_status compatibility path. Dock3 official path is requests/requests_reply.",
     )
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
     try:
         import paho.mqtt.client as mqtt_module

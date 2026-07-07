@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.cloud_api.dock3_device import validate_update_topo_payload as validate_dock3_update_topo_payload
+from tool_config import add_config_argument, resolve_mqtt_settings
 
 mqtt = None
 
@@ -34,9 +35,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Simulate cloud replies for DJI Dock3 device-originated MQTT requests."
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--once", action="store_true", help="Reply to one request and exit.")
     parser.add_argument(
@@ -92,7 +94,9 @@ def parse_args():
         action="store_true",
         help="Validate required top-level and sub-device keys in update_topo payload.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    return args
 
 
 def build_reply(request, data, gateway_sn):

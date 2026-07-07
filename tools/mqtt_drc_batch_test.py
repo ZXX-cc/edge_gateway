@@ -8,6 +8,8 @@ import time
 import uuid
 from threading import Event
 
+from tool_config import add_config_argument, resolve_mqtt_settings
+
 mqtt = None
 
 TOPICS = {
@@ -230,9 +232,10 @@ class MqttRequestClient:
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="Batch test Dock3 DRC enter/control/exit flow")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--no-reset-first", action="store_true")
@@ -253,6 +256,8 @@ def main():
         help="Run only --control-case cases, not the default control cases.",
     )
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
+
     try:
         import paho.mqtt.client as mqtt_module
     except ImportError as exc:

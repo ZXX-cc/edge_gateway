@@ -8,6 +8,8 @@ import time
 import uuid
 from threading import Event
 
+from tool_config import add_config_argument, resolve_mqtt_settings
+
 mqtt = None
 
 
@@ -54,15 +56,18 @@ def parse_payload(raw):
 def main():
     global mqtt
     parser = argparse.ArgumentParser(description="MQTT smoke test for edge_gateway")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1883)
-    parser.add_argument("--sn", default="EDGE-GW-001")
+    add_config_argument(parser)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--sn", default=None)
     parser.add_argument("--channel", choices=["auto", *sorted(CHANNELS)], default="auto")
     parser.add_argument("--method", default="dock_status_query")
     parser.add_argument("--payload", type=parse_payload, default={})
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     args = parser.parse_args()
+    args.host, args.port, args.sn = resolve_mqtt_settings(args)
+
     try:
         import paho.mqtt.client as mqtt_module
     except ImportError as exc:
