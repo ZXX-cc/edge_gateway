@@ -119,6 +119,35 @@ def print_summary(records: list[dict]):
     }, ensure_ascii=False, indent=2))
 
 
+def validate_expectations(records: list[dict], args) -> int:
+    errors = []
+    if args.expect_min_total is not None and len(records) < args.expect_min_total:
+        errors.append(f"expected at least {args.expect_min_total} records, actual={len(records)}")
+
+    events = {item.get("event", "") for item in records}
+    for event in args.expect_event:
+        if event not in events:
+            errors.append(f"missing expected event: {event}")
+
+    methods = {item.get("method", "") for item in records}
+    for method in args.expect_method:
+        if method not in methods:
+            errors.append(f"missing expected method: {method}")
+
+    results = {item.get("result") for item in records if item.get("result") is not None}
+    for result in args.expect_result:
+        if result not in results:
+            errors.append(f"missing expected result: {result}")
+
+    if errors:
+        for error in errors:
+            print(f"trace expectation failed: {error}", file=sys.stderr)
+        return 2
+    if args.expect_event or args.expect_method or args.expect_result or args.expect_min_total is not None:
+        print("trace expectations ok")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Query edge_gateway request trace JSONL files")
     add_config_argument(parser)
@@ -133,6 +162,10 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--summary", action="store_true")
+    parser.add_argument("--expect-min-total", type=int, default=None)
+    parser.add_argument("--expect-event", action="append", default=[])
+    parser.add_argument("--expect-method", action="append", default=[])
+    parser.add_argument("--expect-result", type=int, action="append", default=[])
     args = parser.parse_args()
 
     root = resolve_trace_dir(args)
@@ -154,6 +187,9 @@ def main() -> int:
         print(json.dumps(records, ensure_ascii=False, indent=2))
     else:
         print_text(records)
+    rc = validate_expectations(records, args)
+    if rc != 0:
+        return rc
     return 0 if records else 1
 
 

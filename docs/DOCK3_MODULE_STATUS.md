@@ -44,7 +44,7 @@
 | Ubuntu 纯模拟部署与基础链路 | 部分完成 | 80% | Mosquitto、Edge Gateway、ArduPilot SITL、MAVLink、OSD、基础 MQTT reply 已跑通 | systemd、一键启动、环境固化、严格旧回包清理未完成 | 固化启动脚本和服务化部署 | 人员3 |
 | MQTT topic/reply 边界 | 部分完成 | 85% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证 | broker 中仍可能观察到旧格式重复回包，需要清理旧进程/旧模拟器后严格验证 | 清理旧回包源，使用 `--fail-on-stale` 严格验收 | 人员1 |
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
-| 日志与可观测性 | Needs Test | 72% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；已新增非阻塞 request trace JSONL 和查询工具，覆盖 MQTT 收包、handler、reply、requests/status 回包和超时 | Ubuntu trace 复测、E2E 证据归档、远程日志上传和压缩策略未完整实现 | 跑 P0 批量后按 tid/method 查询 trace，再补远程日志大类 | 人员1/人员3 |
+| 日志与可观测性 | Needs Test | 74% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 基础复测，`property_set total=27` 且 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply` 各 9 条；已补 Dock3 property/set 逐属性 result 提取 | 逐属性 result 提取增强待 Ubuntu 复测，E2E 证据归档、远程日志上传和压缩策略未完整实现 | 跑带断言的 trace 查询，再补远程日志大类 | 人员1/人员3 |
 | 非阻塞与容错基础 | 部分完成 | 45% | 已修复若干 coroutine 未 await warning，停止流程可正常 await | MongoDB/NoSQL 目标未实现，数据库写入和文件 IO 仍需全面后台化审计 | 建异步数据访问层和操作队列 | 人员1/人员2 |
 | Properties / OSD / State | 已通过 | 75% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；`mqtt_dock3_osd_state_test.py` 已在 Ubuntu 通过，覆盖机场 OSD、飞行器 OSD 和属性 state，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0` | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校；当前 OSD 仍是纯模拟零值 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 70% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测 | `domain/type/sub_type` 官方产品枚举、多真实子设备语义未精校 | 精校设备类型枚举和多设备拓扑 | 人员1/人员3 |
@@ -86,7 +86,7 @@
 
 | 大类 | Ubuntu 验收命令 | 成功标志 |
 |---|---|---|
-| Request Trace | 先跑任一 MQTT 专项，例如 `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale`；再执行 `python tools/request_trace_query.py --method property_set --summary` | `total > 0`，且包含 `mqtt_received`、`mqtt_handler_completed`、`mqtt_publish_reply` |
+| Request Trace | 先跑任一 MQTT 专项，例如 `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale`；再执行 `python tools/request_trace_query.py --method property_set --summary --expect-min-total 3 --expect-event mqtt_received --expect-event mqtt_handler_completed --expect-event mqtt_publish_reply --expect-result 0 --expect-result 1` | 输出 `trace expectations ok`，summary 包含三段事件，`results` 同时包含成功 `0` 和拒绝 `1` |
 
 ## 下一批建议
 

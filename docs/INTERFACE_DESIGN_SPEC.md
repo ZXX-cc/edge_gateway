@@ -389,11 +389,17 @@ Ubuntu 复测流程：
 
 ```bash
 python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
-python tools/request_trace_query.py --method property_set --summary
+python tools/request_trace_query.py --method property_set --summary \
+  --expect-min-total 3 \
+  --expect-event mqtt_received \
+  --expect-event mqtt_handler_completed \
+  --expect-event mqtt_publish_reply \
+  --expect-result 0 \
+  --expect-result 1
 python tools/request_trace_query.py --method property_set --limit 20
 ```
 
-成功标志：summary 中 `total > 0`，并能看到 `mqtt_received`、`mqtt_handler_completed`、`mqtt_publish_reply`。需要追单个请求时，用测试输出中的 `tid`：
+成功标志：summary 中 `total > 0`，并能看到 `mqtt_received`、`mqtt_handler_completed`、`mqtt_publish_reply`，`results` 同时包含成功 `0` 和拒绝 `1`，命令输出 `trace expectations ok`。2026-07-07 Ubuntu 基础复测已验证：`property_set total=27`，三段事件各 9 条。增强版 trace 会把 Dock3 `property/set_reply` 的逐属性 `state.result` 汇总到 trace 顶层 `result`，并在 `extra.property_results` 保留逐属性结果。需要追单个请求时，用测试输出中的 `tid`：
 
 ```bash
 python tools/request_trace_query.py --tid <tid> --json

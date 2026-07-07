@@ -27,7 +27,41 @@ def _safe_result(payload: Any) -> Optional[int]:
     if not isinstance(data, dict):
         return None
     result = data.get("result")
-    return result if isinstance(result, int) else None
+    if isinstance(result, int):
+        return result
+
+    property_results = _property_state_results(data)
+    if not property_results:
+        return None
+    return 0 if all(item == 0 for item in property_results) else max(property_results)
+
+
+def _property_state_results(data: Dict[str, Any]) -> list[int]:
+    results: list[int] = []
+    for value in data.values():
+        if not isinstance(value, dict):
+            continue
+        state = value.get("state")
+        if not isinstance(state, dict):
+            continue
+        result = state.get("result")
+        if isinstance(result, int):
+            results.append(result)
+    return results
+
+
+def _property_state_summary(data: Dict[str, Any]) -> Dict[str, int]:
+    summary: Dict[str, int] = {}
+    for name, value in data.items():
+        if not isinstance(value, dict):
+            continue
+        state = value.get("state")
+        if not isinstance(state, dict):
+            continue
+        result = state.get("result")
+        if isinstance(result, int):
+            summary[name] = result
+    return summary
 
 
 def _safe_json_value(value: Any, max_chars: int) -> Any:
@@ -136,6 +170,12 @@ class RequestTraceRecorder:
             if result is None:
                 result = _safe_result(payload)
 
+        trace_extra = dict(extra or {})
+        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+            property_results = _property_state_summary(payload["data"])
+            if property_results:
+                trace_extra["property_results"] = property_results
+
         record = {
             "ts": now_ms(),
             "event": event,
@@ -151,7 +191,7 @@ class RequestTraceRecorder:
             "payload_bytes": payload_bytes,
             "error": error,
             "payload": _safe_json_value(payload, self.payload_max_chars),
-            "extra": extra or {},
+            "extra": trace_extra,
         }
 
         with self._lock:
