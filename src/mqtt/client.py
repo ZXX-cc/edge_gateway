@@ -304,7 +304,6 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
-<<<<<<< HEAD
         trace_command(
             "mqtt_reply_sent",
             source_topic=source_topic,
@@ -313,14 +312,13 @@ class MQTTClient:
             tid=data.get("tid"),
             result=self._reply_result(data),
             ok=ok,
-=======
+        )
         self._trace_publish(
             "mqtt_publish_reply",
             reply_topic,
             data,
             ok=ok,
             source_topic=source_topic,
->>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
         )
         logger.info(self._format_log_block("MQTT REPLY SENT", [
             ("source_topic", source_topic),
@@ -344,7 +342,6 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
-<<<<<<< HEAD
         trace_command(
             "mqtt_error_reply_sent",
             source_topic=source_topic,
@@ -354,14 +351,13 @@ class MQTTClient:
             result=self._reply_result(data),
             msg=data.get("msg"),
             ok=ok,
-=======
+        )
         self._trace_publish(
             "mqtt_publish_error_reply",
             reply_topic,
             data,
             ok=ok,
             source_topic=source_topic,
->>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
         )
         logger.info(self._format_log_block("MQTT ERROR REPLY SENT", [
             ("source_topic", source_topic),
@@ -697,7 +693,6 @@ class MQTTClient:
                         return
 
                     result = handler(payload)
-<<<<<<< HEAD
                     if is_downstream_command:
                         trace_command(
                             "mqtt_handler_completed",
@@ -706,7 +701,6 @@ class MQTTClient:
                             tid=payload.get("tid"),
                             result=self._reply_result(result),
                         )
-=======
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     self._trace.record(
                         "mqtt_handler_completed",
@@ -721,7 +715,6 @@ class MQTTClient:
                             "will_reply": bool(payload.get('need_reply') == 1 and result),
                         },
                     )
->>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
                     logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
                         ("method", method),
                         ("tid", payload.get('tid')),
