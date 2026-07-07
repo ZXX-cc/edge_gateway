@@ -12,7 +12,7 @@
   -> Dock3 云端落点或设备侧 adapter
   -> P0/P1/P2 backlog ID
   -> P0/P1 gap ID
-  -> 验收脚本、日志、MQTT 样例或 Demo 证据
+  -> 验收脚本、日志、MQTT 样例、trace 或数据库证据
 ```
 
 开发口径：
@@ -22,6 +22,7 @@
 - 客户文档中的 Dock1/Dock2/旧 Dock 表述只保留业务意图，不作为最终云端字段标准。
 - 机巢 v1.3、MAVLink、ViewLink、媒体源和负载协议属于设备侧 adapter，不改变云端 Dock3 口径。
 - 客户暂未提及/当前业务未用到的 Dock3 能力可以 Deferred，不进入 30 天 P0/P1 强迁移。
+- 客户未要求 Web 调试台或前端页面，`web/` 目录只作为历史调试/adapter 代码来源，不作为客户交付或计划项。
 - 30 天内 P0/P1 必须 100% 可用；P2 可以带已记录问题，但不能影响 P0/P1 主链路。
 
 ## 1. 当前权威交付文档
@@ -55,7 +56,7 @@
 | 2.3 充电管理 | 开始/停止充电、充电状态、异常 | `cmd`、`drone_charge_state`、HMS | P0-11、P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | CMD + HMS + 机巢专项 |
 | 2.4 起降流程状态机 | 备飞、起飞、降落、返航、异常中断 | `wayline` + `cmd` + `events/state` | P1-01、P1-02、P1-17 | G-P1-01、G-P1-02、G-P1-17 | `e2e_takeoff_flow_test.py`、`e2e_full_chain_test.py` |
 | 2.5 气象感知 | 风速、雨量、环境状态和禁止起飞条件 | `properties`、`hms`、`state` | P0-13、P1-10、P2-07 | G-P0-05、G-P1-10 | properties/HMS 专项、mock adapter |
-| 2.6 设备管理 | 设备在线、拓扑、绑定、多设备 | `device`、`organization`、`status` | P0-02、P0-03、P0-04、P1-14 | G-P1-14 | Device/Organization 专项、Demo 在线 |
+| 2.6 设备管理 | 设备在线、拓扑、绑定、多设备 | `device`、`organization`、`status` | P0-02、P0-03、P0-04、P1-14 | G-P1-14 | Device/Organization 专项、MQTT 在线和 DB 记录 |
 | 2.7 网络管理 | MQTT 连接、离线重连、链路状态 | MQTT `events/osd/state/reply` | P0-01、P0-02、P1-14 | G-P1-14 | P0 批量、长时间订阅日志 |
 | 2.8 远程运维 | 日志、配置、升级、操作记录 | `log`、`config`、`firmware`、operation record | P0-15、P1-11、P1-12、P1-13、P1-16 | G-P0-06、G-P1-11、G-P1-12、G-P1-13、G-P1-16 | trace、log、firmware/config 专项 |
 | 2.9 HMS 告警 | 告警、恢复、清除、故障联动 | `hms`、events | P1-10 | G-P1-10 | `mqtt_dock3_hms_log_test.py` |
@@ -74,9 +75,9 @@
 | IF-001 飞控到伴随计算机 | MAVLink 2.0，OSD 高频、状态低频 | `src/core/connection.py`、`src/modules/telemetry.py`、`src/modules/flight_control.py` | P0-06、P0-07、P0-08、P1-06 | G-P0-01、G-P0-02、G-P0-03、G-P1-06 | SITL、OSD、Wayline E2E |
 | IF-002 伴随计算机到机巢主控 | MAVLink over TCP/UDP，实时命令和状态 | `src/modules/drone_nest_module.py`、`src/device/nest_property_mapper.py` | P0-12、P0-13、P1-02 | G-P0-04、G-P0-05、G-P1-02 | 机巢 v1.3 专项 |
 | IF-003 机巢主控到执行器 | 舱盖、充电、归中、急停等设备侧动作 | `src/nest_simulator.py`、`src/cloud_api/dock3_cmd.py` | P0-11、P0-13、P1-02 | G-P0-05、G-P1-02 | CMD + 机巢状态位 |
-| IF-004 机巢主控到云端 | MQTT over TLS，OSD/state/events/reply | `src/mqtt/`、`src/cloud_api/`、`src/device/` | P0-01、P0-02、P0-03、P0-04、P0-14、P0-15、P0-16 | G-P0-06、G-P0-07 | P0 批量、Demo 在线、trace |
+| IF-004 机巢主控到云端 | MQTT over TLS，OSD/state/events/reply | `src/mqtt/`、`src/cloud_api/`、`src/device/` | P0-01、P0-02、P0-03、P0-04、P0-14、P0-15、P0-16 | G-P0-06、G-P0-07 | P0 批量、MQTT 在线、trace |
 | IF-005 相机链路 | 摄像头采集和媒体文件 | `src/payload/camera.py`、`src/media/manager.py` | P1-07、P1-08、P1-09 | G-P1-07、G-P1-08、G-P1-09 | media/live/payload 专项 |
-| IF-006 云台链路 | 云台角度、速度、状态 | `src/payload/gimbal.py`、`web/mavlink/viewlink/` | P1-09 | G-P1-09 | payload 专项 |
+| IF-006 云台链路 | 云台角度、速度、状态 | `src/payload/gimbal.py`；历史 ViewLink 映射可参考 `web/mavlink/viewlink/` | P1-09 | G-P1-09 | payload 专项 |
 | IF-007 喊话器 | 第三方负载控制 | `src/payload/third_party.py` | P2-01、P2-02 | P2 风险 | P2 mock 和限制说明 |
 | IF-008 探照灯 | 第三方负载或 GPIO/CAN/串口 | `src/payload/third_party.py`、`src/cloud_api/dock3_cmd.py` | P0-11、P2-01 | P2 风险 | CMD 基础 + P2 mock |
 | IF-009 飞控到云台直连 | MAVLink Gimbal v2 设备侧路径 | `src/modules/flight_control.py`、`src/payload/gimbal.py` | P1-09 | G-P1-09 | payload 专项 |
@@ -94,8 +95,8 @@
 | 2.5 事件 | 设备事件、任务事件、告警事件 | `src/cloud_api/connection_manager.py`、`src/device/manager.py` | P0-02、P0-13、P1-10 | events/HMS/E2E |
 | 4.1 DJI Cloud API collections | Dock3 method 分组 | `src/cloud_api/dock3_*` | 全部 P0/P1/P2 | 分组专项脚本 |
 | 4.2 能力覆盖 | 当前能力与缺口 | coverage/backlog/gap 文档 | 全部 P0/P1/P2 | 文档关项 + 脚本 |
-| 5.1 到 5.10 代码模块 | 当前代码结构和模块职责 | `src/`、`tools/`、`web/` | 全部 P0/P1/P2 | 单测、专项、E2E |
-| 第6章 ViewLink SDK | 吊舱/相机/云台集成 | `web/mavlink/viewlink/`、`src/payload/` | P1-09、P2-01、P2-02 | payload 专项、P2 说明 |
+| 5.1 到 5.10 代码模块 | 当前代码结构和模块职责 | `src/`、`tools/`；`web/` 只作历史调试/adapter 参考 | 全部 P0/P1/P2 | 单测、专项、E2E |
+| 第6章 ViewLink SDK | 吊舱/相机/云台集成 | `src/payload/`；历史 ViewLink 映射可参考 `web/mavlink/viewlink/` | P1-09、P2-01、P2-02 | payload 专项、P2 说明 |
 | 第7章 DRC | 指令飞行和实时控制 | `src/drc/`、`src/cloud_api/dock3_drc.py` | P0-09、P1-03、P1-04 | DRC 专项 |
 | 第8章 Auto-Takeoff | 一键启航 | `src/mission/manager.py`、`src/cloud_api/dock3_wayline.py`、`src/modules/drone_nest_module.py` | P1-01、P1-02、P1-17 | 起飞流程 E2E |
 | 第9章 架构模式 | 非阻塞、状态机、adapter、可观测性 | `src/database/`、`src/media/`、`src/modules/`、`tools/` | P0-15、P0-16、P1-16、P1-17 | trace、压测、E2E |
@@ -106,7 +107,7 @@
 
 | 业务流程 | Dock3 落点 | Backlog | Gap | 验收 |
 |---|---|---|---|---|
-| 启动流程 | MQTT 连接、上线、心跳、OSD/state | P0-01、P0-02、P0-06、P0-15 | G-P0-01、G-P0-06 | P0 批量、Demo 在线 |
+| 启动流程 | MQTT 连接、上线、心跳、OSD/state | P0-01、P0-02、P0-06、P0-15 | G-P0-01、G-P0-06 | P0 批量、MQTT 在线 |
 | 设备绑定与组织 | `organization`、`device`、`status` | P0-03、P0-04、P1-14 | G-P1-14 | organization/device 专项 |
 | 一键启航 | `wayline` + `cmd` + `events/state` | P1-01、P1-02、P1-17 | G-P1-01、G-P1-02、G-P1-17 | `e2e_takeoff_flow_test.py` |
 | 航线飞行监控 | `wayline` progress、OSD、任务事件 | P0-10、P1-05、P1-06 | G-P1-05、G-P1-06 | Wayline + SITL E2E |

@@ -15,27 +15,29 @@
 - 客户需求相关云端 topic、method、payload、reply、字段、枚举和错误码以 DJI Dock 3 为最终标准。
 - 客户暂未提及、当前业务未用到的 Dock3 能力可以标为 Deferred；Deferred 项不参与 P0/P1 通过判定，但必须记录原因和后续触发条件。
 - 设备侧 MAVLink、机巢 v1.3、媒体源、负载协议只作为 adapter，不改变 Dock3 云端口径。
+- 客户未要求 Web 调试台或前端页面，Web/Demo 页面不作为正式验收模式；可选 Demo Docker 只用于内部联通排查。
 
 ## 1. 验收链路
 
 标准全链路：
 
 ```text
-DJI Dock3 云端模拟器 / DJI Cloud API Demo
+DJI Dock3 云端模拟器
   -> MQTT Broker
   -> Edge Gateway
   -> ArduPilot SITL / 机巢 v1.3 模拟器 / 媒体与负载 mock
   -> Edge Gateway
   -> MQTT osd / state / events / services_reply / requests_reply / status_reply / drc/up
-  -> 云端页面、脚本和日志证据
+  -> 脚本、MQTT、日志、trace、DB 和 E2E 证据
 ```
 
-验收分为两种运行模式：
+正式验收运行模式：
 
 | 模式 | 用途 | 说明 |
 |---|---|---|
 | 脚本模拟模式 | 日常开发和 CI 式回归 | 使用 `tools/*.py` 发布/订阅 MQTT，适合精确检查 payload 和错误码 |
-| DJI Demo 模式 | 页面和真实 Demo Docker 联调 | 使用 DJI Cloud API Demo Web/Backend/MySQL 证明设备在线、拓扑和基础可视化 |
+
+DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 
 ## 2. 现有脚本和缺口
 
@@ -86,7 +88,7 @@ docker ps --format 'table {{.Names}}\t{{.Ports}}'
 | Git 状态 | 当前分支和本地改动明确，不覆盖他人修改 |
 | Python 依赖 | `ubuntu_preflight.sh` 无关键依赖错误 |
 | MQTT | `1883` 可用或已有 Mosquitto/NanoMQ 明确监听 |
-| Demo Docker | DJI Demo 模式下 `cloud_api_sample-*` 容器运行 |
+| 可选 Demo Docker | 仅内部联调时检查 `cloud_api_sample-*` 容器运行；正式验收不依赖页面 |
 | 端口冲突 | SITL 和机巢模拟器不抢同一个 MAVLink 端口 |
 
 ## 4. 标准启动顺序
@@ -152,15 +154,15 @@ python src/main.py -c config/gateway.yaml
 | `Cloud heartbeat started` | 云端心跳已启动 |
 | `Edge Gateway started successfully` | 主循环启动 |
 
-### 4.6 DJI Demo Docker 模式
+### 4.6 可选 DJI Demo Docker 联调
 
-如果使用 DJI Demo Docker 页面验收，先确认容器：
+如需用 DJI Demo Docker 辅助排查联通，先确认容器：
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep cloud_api_sample
 ```
 
-Demo 页面验收最低标准：
+Demo 联通参考项：
 
 | 页面 | 通过条件 |
 |---|---|
@@ -168,7 +170,7 @@ Demo 页面验收最低标准：
 | Aircraft | `DRONESIM001` 显示 Online |
 | Last Online | 时间随消息更新 |
 
-注意：Demo 页面显示 Dock2/M3D 只是联调枚举兼容，不代表最终设备目标。最终协议目标仍是 Dock3。
+注意：Demo 页面显示 Dock2/M3D 只是联调枚举兼容，不代表最终设备目标，也不作为客户交付证据。最终协议目标仍是 Dock3。
 
 ## 5. P0 验收
 
@@ -250,7 +252,7 @@ Deferred 只适用于客户暂未提及且当前主链路未使用的 Dock3 官�
 | 命令输出 | 每个脚本的完整 stdout/stderr |
 | 网关日志 | `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 中对应时间段 |
 | MQTT 订阅输出 | 关键 `osd/state/events/reply` 样例 |
-| Demo 截图 | Dock/Aircraft Online、Last Online、Workspace |
+| trace 记录 | `tools/request_trace_query.py` 按 tid/method 查询结果 |
 | 数据库证据 | 绑定、拓扑、操作记录、告警、媒体记录 |
 | 失败清单 | 失败 tid/bid、复现命令、影响 P0/P1/P2、负责人 |
 
@@ -260,7 +262,7 @@ Deferred 只适用于客户暂未提及且当前主链路未使用的 Dock3 官�
 |---|---|
 | 网关显示 MQTT 未连接 | `ss -tlnp | grep 1883`、Mosquitto 状态、`config/gateway.yaml` |
 | 订阅端看到旧格式重复回包 | 清理旧网关进程、旧模拟器、broker retained；再用 `--fail-on-stale` 严格验证 |
-| Demo 页面不显示设备 | SN 是否为 Demo 兼容格式、MySQL 绑定状态、`update_topo` 是否发布 |
+| 可选 Demo 页面不显示设备 | SN 是否为 Demo 兼容格式、MySQL 绑定状态、`update_topo` 是否发布；不影响正式脚本验收 |
 | `airport_bind_status` 超时 | 云端模拟器是否先启动、是否监听 `requests`、`tid` 是否匹配 |
 | `update_topo` 没有入库 | 是否走 `sys/product/{sn}/status`，Demo backend 是否收到 `status_reply` |
 | MAVLink 无心跳 | SITL 是否启动、端口是否冲突、配置是否指向正确 UDP/TCP |
@@ -276,7 +278,7 @@ Deferred 只适用于客户暂未提及且当前主链路未使用的 Dock3 官�
 代码分支/commit:
 配置文件:
 SN:
-运行模式: 脚本模拟 / DJI Demo Docker
+运行模式: 脚本模拟
 
 P0:
 - p0_batch:
@@ -302,6 +304,7 @@ P2:
 - 后续计划:
 
 日志位置:
-Demo 截图:
+trace 查询:
+数据库证据:
 结论:
 ```

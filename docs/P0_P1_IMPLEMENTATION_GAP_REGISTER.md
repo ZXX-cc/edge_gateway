@@ -49,7 +49,7 @@
 | G-P1-06 | P1-06 真实 SITL 航点执行 | 当前 Wayline 脚本以纯模拟为主，不证明真实 SITL 航点执行 | `src/modules/waypoint_manager.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | SITL Wayline E2E | Day 12-15 | Open |
 | G-P1-07 | P1-07 媒体基础 | Dock3 media 文件列表、删除、上传优先级、上传事件未迁移 | `src/media/manager.py`, `src/database/media_db.py`, `src/payload/camera.py` | 新增 `tools/mqtt_dock3_media_test.py` | Day 16-20 | Open |
 | G-P1-08 | P1-08 直播基础 | Dock3 live 开始/停止、质量、镜头、状态事件未迁移；推流可先 mock | `src/media/manager.py`, `src/payload/camera.py` | 新增 `tools/mqtt_dock3_live_test.py` | Day 16-20 | Open |
-| G-P1-09 | P1-09 相机/云台基础控制 | 拍照、录像、变焦、云台角度/速度需要和 Dock3 payload/DRC 语义统一 | `src/payload/camera.py`, `src/payload/gimbal.py`, `src/modules/gimbal_control.py`, `web/mavlink/viewlink/` | Payload 专项或并入 media/live | Day 16-20 | In Progress |
+| G-P1-09 | P1-09 相机/云台基础控制 | 拍照、录像、变焦、云台角度/速度需要和 Dock3 payload/DRC 语义统一；历史 `web/mavlink/viewlink/` 只作 adapter 参考，不作为 Web 交付 | `src/payload/camera.py`, `src/payload/gimbal.py`, `src/modules/gimbal_control.py` | Payload 专项或并入 media/live | Day 16-20 | In Progress |
 | G-P1-10 | P1-10 HMS 告警 | Dock3 HMS 文案 key、告警结构、恢复/清除和事件未迁移 | `src/database/alarm_db.py`, `src/device/manager.py` | 新增 `tools/mqtt_dock3_hms_log_test.py` | Day 21-24 | Open |
 | G-P1-11 | P1-11 远程日志 | 日志列表、压缩、上传模拟、超时和失败码未按 Dock3 验收 | `src/modules/log_manager.py`, `src/database/operation_db.py`, `src/utils/logger.py` | `tools/mqtt_dock3_hms_log_test.py` | Day 21-24 | Open |
 | G-P1-12 | P1-12 固件升级模拟 | 升级任务、进度、失败码和后台任务模型未完成 Dock3 验收 | `src/device/manager.py`, `src/database/operation_db.py` | 新增 `tools/mqtt_dock3_firmware_config_test.py` | Day 21-24 | Open |
@@ -81,5 +81,5 @@
 | 代码关项 | 对应 handler、adapter、状态机或数据层实现已完成 |
 | 脚本关项 | 专项脚本或 E2E 脚本能稳定复现成功和关键失败分支 |
 | 文档关项 | backlog、runbook、模块状态和迁移进度同步更新 |
-| 证据关项 | 有脚本输出、日志 tid/bid、MQTT 样例或 Demo 截图 |
+| 证据关项 | 有脚本输出、日志 tid/bid、MQTT 样例、trace 或 DB 记录 |
 | P2 例外 | 只有 P2 可带问题；P0/P1 不允许以“后续真实硬件再补”为关项理由 |

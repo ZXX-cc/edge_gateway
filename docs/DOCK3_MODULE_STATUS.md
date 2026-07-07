@@ -6,6 +6,8 @@
 
 客户 Word 文档中的功能清单和业务流程已经归一到 `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md`。后续开发口径是：客户文档定义业务范围，DJI Dock 3 官方 Cloud API 定义最终协议标准。旧 Dock/Dock1/Dock2 字段只能作为差异对照或内部适配线索，不能作为最终验收口径。
 
+客户未要求独立 Web 调试台或前端页面，后续计划不把 `web/`、页面截图或 Demo 页面作为交付项。它们只可作为内部联调参考；正式验收证据以 MQTT 脚本、日志、trace、数据库记录和 E2E 输出为准。
+
 ## 状态口径
 
 | 状态 | 含义 |
@@ -54,8 +56,7 @@
 | Wayline 航线管理 | 已通过 | 62% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；纯模拟不触发真实飞控模式切换 | KMZ 下载解析、媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补 KMZ、媒体计数和真实 SITL 航点执行 | 人员1/人员2 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
 | MAVLink 飞控联动 | 部分完成 | 60% | 网关能连接 SITL，Telemetry、FlightControl、ModeControl、WaypointManager、RTK 基础运行；已新增共享 ArduPilot flight mode 映射，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择，`set_flight_mode` 支持 `mode/mode_code/flight_mode` 并在底层失败时返回非 0 | 解锁/起飞/航线执行、非阻塞超时恢复仍需完善；模式切换需 Ubuntu SITL 复测 | 跑 set_flight_mode + SITL 模式切换专项 | 人员2 |
-| MAVLink 机巢模拟器 | 部分完成 | 50% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调 | 机巢动作闭环、状态机、错误恢复和 Web 一键联动仍需完善 | 补机巢模拟器专项测试 | 人员2/人员3 |
-| Web 调试台 | 部分完成 | 45% | 已有独立 `web/` 程序，可辅助替代终端观察 MQTT/SITL | UI 功能、日志筛选、状态汇总、批量测试入口仍需完善 | 加入 Dock3 大类测试入口和日志面板 | 人员3 |
+| MAVLink 机巢模拟器 | 部分完成 | 50% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调 | 机巢动作闭环、状态机、错误恢复和云端一键启航联动仍需完善 | 补机巢模拟器专项测试 | 人员2/人员3 |
 | Media 媒体管理 | 待迁移 | 15% | 旧代码中有媒体管理和上传队列基础 | Dock3 `media.html` 的文件列表、上传、删除、优先级、事件未对齐 | 下一阶段优先迁移 media 或 live | 人员1 |
 | Live 直播功能 | 待迁移 | 10% | 旧代码中有直播/媒体相关入口 | Dock3 `live.html` 的推流、镜头、质量、状态事件未对齐 | 建直播 method 矩阵和模拟回包 | 人员1/人员3 |
 | HMS 管理 | 待迁移 | 15% | 有告警数据库和部分 HMS handler | Dock3 HMS 文案 key、告警结构、清除/上报规则未对齐 | 建 HMS 字段和错误码矩阵 | 人员1 |

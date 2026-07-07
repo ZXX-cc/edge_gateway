@@ -86,7 +86,7 @@ P2 问题影响 P0/P1 = 0 项
 | ID | 功能域 | 第 30 天通过状态 | 必须证据 |
 |---|---|---|---|
 | P0-01 | MQTT 基础链路 | Usable | P0 批量脚本、MQTT 订阅日志 |
-| P0-02 | 设备上线和心跳 | Usable | Demo Online 或 MQTT `events/osd/state` |
+| P0-02 | 设备上线和心跳 | Usable | MQTT `events/osd/state`、拓扑/绑定 DB 记录 |
 | P0-03 | 组织绑定和绑定状态 | Usable | `mqtt_organization_test.py` |
 | P0-04 | 设备拓扑 | Usable | `mqtt_dock3_device_test.py` |
 | P0-05 | Dock3 可写属性 | Usable | `mqtt_dock3_properties_test.py` |
@@ -159,6 +159,6 @@ P2 可以存在已记录问题，但不能空白。第 30 天至少 6 项要达�
 - `docs/METHOD_COVERAGE_LEDGER.md` 中 243 个 method 的处置状态；Deferred method 必须说明客户暂未使用和后续触发条件。
 - `docs/30_DAY_EXECUTION_BOARD.md` 中 Day 1-30 的每日证据和失败清单。
 - P2 风险清单和影响范围。
-- Demo 或 MQTT 订阅证据。
+- MQTT 订阅、trace 或数据库证据。
 - 网关日志、operation record、tid/bid trace。
 - 当前 `git rev-parse HEAD`、配置文件摘要和运行环境摘要。

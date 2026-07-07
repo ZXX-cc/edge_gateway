@@ -11,6 +11,8 @@
 - 44 个 backlog 项至少 40 项可用，44 项开发完成。
 - P2 可以有已记录问题，但不能空白、不能影响 P0/P1。
 - 客户暂未提及/当前业务未用到的 Dock3 能力可以 Deferred，不抢占 P0/P1 开发资源。
+- 客户未要求 Web 调试台或前端页面，人员3不再以 Web/Demo 页面作为交付目标；所有关项以脚本、MQTT、日志、trace、DB 和 E2E 证据为准。
+- 后续开发按功能包推进，每次提交尽量同时包含代码、专项脚本或单测、文档状态和下一步验收命令，避免只改一个很小的点。
 - 每天结束时必须更新对应缺口状态、脚本结果和文档状态。
 
 角色口径：
@@ -19,15 +21,15 @@
 |---|---|---|
 | 人员1 | Dock3 MQTT/API、字段、错误码、脚本 | `src/cloud_api/`、`src/mqtt/`、`src/device/`、`tools/mqtt_dock3_*` |
 | 人员2 | MAVLink、SITL、飞控、机巢 v1.3、状态机 | `src/modules/`、`src/core/`、`src/nest_simulator.py`、SITL/E2E |
-| 人员3 | Ubuntu/Demo/模拟器/部署/Web/证据归档 | 启动脚本、Demo Docker、MQTT 观察、runbook、证据包 |
+| 人员3 | Ubuntu/Docker/MQTT/模拟器部署和证据归档 | 启动脚本、MQTT 观察、runbook、证据包、可选 Demo Docker 联调记录 |
 
 ## 1. 日级执行表
 
 | 日期 | 优先级 | 人员1 | 人员2 | 人员3 | 当日必须产出 | 关联系统门禁 |
 |---|---|---|---|---|---|---|
-| Day 1 | P0 | 冻结 Dock3 最终口径，核对 P0/P1/P2 backlog | 复核 MAVLink/SITL/机巢当前链路 | 固化 Ubuntu 启动顺序和 Demo 容器状态 | 覆盖矩阵、method 台账、启动基线 | P0-01 到 P0-05 |
+| Day 1 | P0 | 冻结 Dock3 最终口径，核对 P0/P1/P2 backlog | 复核 MAVLink/SITL/机巢当前链路 | 固化 Ubuntu 启动顺序和模拟器状态 | 覆盖矩阵、method 台账、启动基线 | P0-01 到 P0-05 |
 | Day 2 | P0 | 跑 P0/properties/device/organization 脚本并记录失败项 | 复核 OSD 输入源和模式字段来源 | 清理旧进程、broker retained、旧模拟器 | P0 基线日志和失败清单 | P0-01 到 P0-06 |
-| Day 3 | P0 | 修正 P0 脚本入参和错误码边界 | 给出飞控模式映射表初稿 | 输出 Demo 在线证据和 MySQL 绑定检查步骤 | Day 1-3 出口记录 | P0-02 到 P0-07 |
+| Day 3 | P0 | 修正 P0 脚本入参和错误码边界 | 给出飞控模式映射表初稿 | 输出 MQTT 在线证据和绑定/拓扑 DB 检查步骤 | Day 1-3 出口记录 | P0-02 到 P0-07 |
 | Day 4 | P0 | 建 OSD/state/properties 字段矩阵 | 校验 TelemetryModule 到 OSD 的字段单位 | 准备长时间 MQTT 订阅模板 | 字段矩阵 v1 | G-P0-01 |
 | Day 5 | P0 | 收敛 `property_get/property_set` 和 state 快照一致性 | 校验 ArduPilot 模式到 `mode_code/gear` | 记录 SITL 模式切换命令 | OSD/state 专项用例 | G-P0-01、G-P0-02 |
 | Day 6 | P0 | 建 request trace 字段和日志样例 | 提供 MAVLink command 超时和 ACK 约定 | 归档 trace 证据模板 | trace 设计和样例 | G-P0-06 |
@@ -44,7 +46,7 @@
 | Day 17 | P1 | 实现媒体上传事件和失败码 | 联动拍照/录像触发媒体记录 | 记录 OSS/HTTP PUT mock 限制 | media 专项通过或缺口 | P1-07 |
 | Day 18 | P1 | 实现 live 开始/停止/质量/镜头字段 | 提供直播状态和相机负载模拟状态 | 准备 RTSP/RTMP/mock 推流说明 | live 专项骨架 | G-P1-08 |
 | Day 19 | P1 | 补 camera/gimbal 基础控制 Dock3 回包 | 联调 ViewLink/gimbal adapter 和无硬件降级 | 记录负载 mock 限制 | payload 基础专项 | G-P1-09 |
-| Day 20 | P1 | 复跑 media/live/payload 联合验收 | 修复媒体/直播/负载联动问题 | 归档截图和 MQTT 样例 | Day 16-20 出口证据 | P1-07 到 P1-09 |
+| Day 20 | P1 | 复跑 media/live/payload 联合验收 | 修复媒体/直播/负载联动问题 | 归档脚本输出、MQTT 样例和日志 | Day 16-20 出口证据 | P1-07 到 P1-09 |
 | Day 21 | P1/P2 | 实现 HMS 告警结构、清除和恢复事件 | 提供机巢/飞控故障到 HMS 映射 | 准备 HMS 订阅和证据模板 | HMS 专项骨架 | G-P1-10 |
 | Day 22 | P1/P2 | 实现远程日志列表/压缩/上传模拟 | 确认日志采集不阻塞 MAVLink | 准备日志证据归档脚本/步骤 | HMS/log 专项 | G-P1-11 |
 | Day 23 | P1/P2 | 实现固件升级模拟和配置更新回滚 | 确认升级/配置任务不阻塞状态机 | 记录后台任务和超时证据 | firmware/config 专项 | G-P1-12、G-P1-13 |
@@ -53,7 +55,7 @@
 | Day 26 | P1 | 扩展 E2E 覆盖 media/live/HMS/log/config | 修复全链路状态机串联问题 | 归档 E2E 失败清单 | P0/P1 E2E 首跑 | G-P1-17 |
 | Day 27 | P1 | 修复 E2E 所有 P0/P1 阻塞项 | 复测 SITL/机巢/任务稳定性 | 输出全链路证据包 | P0/P1 E2E 通过 | P0/P1 强门禁 |
 | Day 28 | P2 | 检查 243 method 处置状态、P2 adapter 和 Deferred 标记 | 修复 P2 对主链路的影响点 | 归档 P2 风险、Deferred 原因和限制说明 | P2/Deferred 清单 | 100% 开发完成 |
-| Day 29 | P0/P1/P2 | 全量脚本回归，更新评分卡 | 复核飞控/机巢/任务最终状态 | 输出 Demo/MQTT/日志证据 | 40/44 可用和 44/44 开发完成证据 | 90% 可用率 |
+| Day 29 | P0/P1/P2 | 全量脚本回归，更新评分卡 | 复核飞控/机巢/任务最终状态 | 输出 MQTT/日志/trace/DB/E2E 证据 | 40/44 可用和 44/44 开发完成证据 | 90% 可用率 |
 | Day 30 | P0/P1/P2 | 修复最后阻塞项，整理交付说明 | 确认硬件 adapter 边界 | 归档版本、配置、环境和证据包 | 最终交付包 | 交付判定 |
 
 ## 2. 缺失脚本交付顺序
@@ -80,7 +82,7 @@
 | 是否新增 P2 风险 | 风险是否影响 P0/P1，是否有绕过方式 |
 | 是否有阻塞 IO 或长任务进入热路径 | MQTT/MAVLink/状态机是否受影响 |
 | 是否更新文档 | backlog、gap register、runbook、scorecard、method ledger 是否同步 |
-| 是否留下证据 | 脚本输出、日志、MQTT 样例、Demo 截图、DB 记录 |
+| 是否留下证据 | 脚本输出、日志、MQTT 样例、trace、DB 记录 |
 
 ## 4. 交付阻塞条件
 
@@ -102,7 +104,8 @@ evidence/day-XX/
   commands/
   logs/
   mqtt/
-  screenshots/
+  trace/
+  db/
   db/
   failures.md
 ```
