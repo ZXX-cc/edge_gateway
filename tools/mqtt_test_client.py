@@ -15,6 +15,8 @@ CHANNELS = {
     "drc": ("thing/product/{sn}/drc/down", "thing/product/{sn}/drc/up"),
 }
 EVENTS_TOPIC = "thing/product/{sn}/events"
+STATUS_TOPIC = "sys/product/{sn}/status"
+STATUS_REPLY_TOPIC = "sys/product/{sn}/status_reply"
 
 METHOD_CHANNEL_HINTS = {
     "property_set": "property",
@@ -132,6 +134,7 @@ class MqttRequestClient:
         quiet_stale: bool = False,
         client_id_prefix: str = "edge_gateway_mqtt_test",
         subscribe_events: bool = False,
+        subscribe_status: bool = False,
         mqtt_module=None,
     ):
         if mqtt_module is None:
@@ -148,6 +151,11 @@ class MqttRequestClient:
         self.event_topics = {EVENTS_TOPIC.format(sn=self.sn)} if subscribe_events else set()
         self.events_by_method: dict[str, list[dict[str, Any]]] = {}
         self.event_signal = Event()
+        self.status_topic = STATUS_TOPIC.format(sn=self.sn)
+        self.status_reply_topic = STATUS_REPLY_TOPIC.format(sn=self.sn)
+        self.status_topics = {self.status_topic} if subscribe_status else set()
+        self.status_messages_by_method: dict[str, list[dict[str, Any]]] = {}
+        self.status_signal = Event()
         self.connected = Event()
         self.connect_rc: Optional[int] = None
         self.pending: dict[str, dict[str, Any]] = {}
@@ -158,6 +166,7 @@ class MqttRequestClient:
             "ignored_legacy": 0,
             "ignored_wrong_topic": 0,
             "events": 0,
+            "status": 0,
         }
         self.client = build_client(mqtt_module, f"{client_id_prefix}_{uuid.uuid4().hex[:8]}")
 
@@ -185,6 +194,9 @@ class MqttRequestClient:
         for topic in sorted(self.event_topics):
             self.client.subscribe(topic, qos=self.qos)
             print(f"mqtt test subscribed -> {topic}")
+        for topic in sorted(self.status_topics):
+            self.client.subscribe(topic, qos=self.qos)
+            print(f"mqtt test subscribed -> {topic}")
         self.connected.set()
 
     def _on_message(self, client, userdata, msg):
@@ -201,6 +213,10 @@ class MqttRequestClient:
             self.event_signal.set()
             if not self.quiet_stale:
                 print(f"event observed: method={method}, tid={payload.get('tid') if isinstance(payload, dict) else None}")
+            return
+
+        if msg.topic in self.status_topics:
+            self._handle_status_message(payload)
             return
 
         tid = payload.get("tid") if isinstance(payload, dict) else None
@@ -375,6 +391,34 @@ class MqttRequestClient:
 
         print(f"timeout waiting for event: method={method}", file=sys.stderr)
         return 7, None
+
+    def _handle_status_message(self, payload: dict) -> None:
+        method = payload.get("method") if isinstance(payload, dict) else None
+        self.status_messages_by_method.setdefault(method, []).append(payload)
+        self.stats["status"] += 1
+        self.status_signal.set()
+        if not self.quiet_stale:
+            print(f"status observed: method={method}, tid={payload.get('tid') if isinstance(payload, dict) else None}")
+
+    def status_count(self, method: str) -> int:
+        return len(self.status_messages_by_method.get(method, []))
+
+    def wait_status(self, method: str, previous_count: int, timeout: float) -> Optional[dict]:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            messages = self.status_messages_by_method.get(method, [])
+            if len(messages) > previous_count:
+                return messages[-1]
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            self.status_signal.wait(max(0.05, min(0.5, remaining)))
+            self.status_signal.clear()
+        return None
+
+    def publish_json(self, topic: str, payload: dict) -> None:
+        self.client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=self.qos)
 
     def stale_total(self) -> int:
         return (

@@ -132,6 +132,20 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             self.assertTrue(event_client.connect(0.1))
         self.assertIn(("thing/product/EDGEGW001/events", 1), event_client.client.subscriptions)
 
+    def test_connect_subscribes_status_when_requested(self):
+        status_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            subscribe_status=True,
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(status_client.connect(0.1))
+        self.assertIn(("sys/product/EDGEGW001/status", 1), status_client.client.subscriptions)
+
     def test_connect_returns_false_on_nonzero_rc(self):
         FakeMqttClient.connect_rc = 5
         failed_client = MqttRequestClient(
@@ -253,6 +267,28 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             rc, observed = event_client.wait_event("cover_open", 0, 0.1, expected_status="ok")
         self.assertEqual(rc, 0)
         self.assertEqual(observed, event)
+
+    def test_status_topic_is_recorded_and_waitable(self):
+        status_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            subscribe_status=True,
+            mqtt_module=FakeMqttModule,
+        )
+        status = {
+            "tid": "status-tid",
+            "method": "update_topo",
+            "data": {"sub_devices": []},
+        }
+
+        status_client._on_message(None, None, mqtt_message("sys/product/EDGEGW001/status", status))
+
+        self.assertEqual(status_client.status_count("update_topo"), 1)
+        self.assertEqual(status_client.stats["status"], 1)
+        observed = status_client.wait_status("update_topo", 0, 0.1)
+        self.assertEqual(observed, status)
 
     def test_no_reply_request_omits_need_reply_and_succeeds_without_reply(self):
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):

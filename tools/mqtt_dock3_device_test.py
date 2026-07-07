@@ -7,11 +7,11 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from threading import Event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from mqtt_test_client import MqttRequestClient, result_code
 from src.cloud_api.dock3_device import (
     GATEWAY_DOMAIN,
     GATEWAY_SUB_TYPE,
@@ -24,59 +24,9 @@ from src.cloud_api.dock3_device import (
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
 
-mqtt = None
-
-
-def result_code(message):
-    if not isinstance(message, dict):
-        return None
-    return message.get("data", {}).get("result")
-
-
-def looks_like_legacy_stale_reply(message):
-    """Detect old gateway/simulator replies that can share the same broker."""
-    if not isinstance(message, dict):
-        return False
-    data = message.get("data")
-    if not isinstance(data, dict):
-        return False
-
-    # Current replies include top-level gateway/msg and use DJI error codes.
-    # Older fallback code can still emit data.result=-1/-2 or data.msg.
-    if "gateway" not in message and "msg" not in message:
-        result = data.get("result")
-        if isinstance(result, int) and result < 0:
-            return True
-        if any(isinstance(item, int) and item < 0 for item in data.values()):
-            return True
-        if "msg" in data:
-            return True
-    return False
-
-
-def build_client(client_id):
-    if hasattr(mqtt, "CallbackAPIVersion"):
-        try:
-            return mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=client_id)
-        except TypeError:
-            pass
-    return mqtt.Client(client_id=client_id)
-
 
 def now_ms():
     return int(time.time() * 1000)
-
-
-def build_message(sn, method, data):
-    return {
-        "tid": str(uuid.uuid4()),
-        "bid": str(uuid.uuid4()),
-        "timestamp": now_ms(),
-        "gateway": sn,
-        "method": method,
-        "need_reply": 1,
-        "data": data,
-    }
 
 
 def build_status_reply(status_msg, sn, result=0):
@@ -90,119 +40,38 @@ def build_status_reply(status_msg, sn, result=0):
     }
 
 
-class DeviceTopologyClient:
-    def __init__(self, host, port, sn, qos):
-        self.host = host
-        self.port = port
-        self.sn = sn
-        self.qos = qos
-        self.services_topic = f"thing/product/{sn}/services"
-        self.services_reply_topic = f"thing/product/{sn}/services_reply"
-        self.status_topic = f"sys/product/{sn}/status"
-        self.status_reply_topic = f"sys/product/{sn}/status_reply"
-        self.connected_event = Event()
-        self.pending = {}
-        self.status_messages = []
-        self.status_event = Event()
+class DeviceTopologyClient(MqttRequestClient):
+    def __init__(self, host, port, sn, qos, quiet_stale=False):
+        super().__init__(
+            host,
+            port,
+            sn,
+            qos,
+            quiet_stale=quiet_stale,
+            client_id_prefix="edge_gateway_dock3_device",
+            subscribe_status=True,
+        )
         self.status_validation_errors = []
-        self.stats = {
-            "accepted": 0,
-            "ignored_late": 0,
-            "ignored_mismatched": 0,
-            "ignored_legacy": 0,
-        }
-        self.client = build_client(f"edge_gateway_dock3_device_{uuid.uuid4().hex[:8]}")
 
-    def connect(self, timeout):
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
-        self.client.connect(self.host, self.port, keepalive=30)
-        self.client.loop_start()
-        return self.connected_event.wait(timeout)
-
-    def disconnect(self):
-        self.client.loop_stop()
-        self.client.disconnect()
-
-    def _on_connect(self, client, userdata, flags, rc):
-        if rc != 0:
-            print(f"connect failed: rc={rc}", file=sys.stderr)
-            self.connected_event.set()
-            return
-        client.subscribe(self.services_reply_topic, qos=self.qos)
-        client.subscribe(self.status_topic, qos=self.qos)
-        print(f"dock3 device subscribed -> {self.services_reply_topic}")
-        print(f"dock3 device subscribed -> {self.status_topic}")
-        print(f"dock3 device replies  -> {self.status_reply_topic}")
-        self.connected_event.set()
-
-    def _on_message(self, client, userdata, msg):
-        try:
-            payload = json.loads(msg.payload.decode("utf-8"))
-        except Exception as exc:
-            print(f"invalid JSON on {msg.topic}: {exc}", file=sys.stderr)
-            return
-
-        if msg.topic == self.status_topic:
-            self._handle_status(payload)
-            return
-
-        if msg.topic == self.services_reply_topic:
-            tid = payload.get("tid")
-            waiter = self.pending.get(tid)
-            if not waiter:
-                self.stats["ignored_late"] += 1
-                print(f"ignored services_reply tid={tid}, method={payload.get('method')}")
-                return
-            if payload.get("method") != waiter["method"]:
-                self.stats["ignored_mismatched"] += 1
-                print(
-                    f"ignored services_reply method mismatch: "
-                    f"expected={waiter['method']}, actual={payload.get('method')}, tid={tid}"
-                )
-                return
-            if looks_like_legacy_stale_reply(payload):
-                self.stats["ignored_legacy"] += 1
-                print(
-                    f"ignored legacy services_reply: method={payload.get('method')}, "
-                    f"tid={tid}, result={result_code(payload)}"
-                )
-                print(json.dumps(payload, ensure_ascii=False, indent=2))
-                return
-            self.stats["accepted"] += 1
-            waiter["payload"] = payload
-            waiter["event"].set()
-
-    def _handle_status(self, payload):
+    def _handle_status_message(self, payload):
         print(f"received <- {self.status_topic}, method={payload.get('method')}, tid={payload.get('tid')}")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         if payload.get("method") == "update_topo":
             valid, errors = validate_update_topo_payload(payload.get("data", {}))
             if errors:
                 self.status_validation_errors.extend(errors)
-            self.status_messages.append(payload)
+            self.status_messages_by_method.setdefault("update_topo", []).append(payload)
+            self.stats["status"] += 1
             reply = build_status_reply(payload, self.sn, result=0 if valid else INVALID_COMMAND_FORMAT)
-            self.client.publish(self.status_reply_topic, json.dumps(reply, ensure_ascii=False), qos=self.qos)
+            self.publish_json(self.status_reply_topic, reply)
             print(f"published -> {self.status_reply_topic}")
             print(json.dumps(reply, ensure_ascii=False, indent=2))
-            self.status_event.set()
+            self.status_signal.set()
 
     def request(self, method, data, timeout, expected_result):
-        message = build_message(self.sn, method, data)
-        waiter = {"event": Event(), "payload": None, "method": method}
-        self.pending[message["tid"]] = waiter
-        self.client.publish(self.services_topic, json.dumps(message, ensure_ascii=False), qos=self.qos)
-        print(f"published {method} -> {self.services_topic}, tid={message['tid']}")
-
-        if not waiter["event"].wait(timeout):
-            self.pending.pop(message["tid"], None)
-            print(f"timeout waiting for services_reply: method={method}, tid={message['tid']}", file=sys.stderr)
-            return 2, None
-
-        self.pending.pop(message["tid"], None)
-        reply = waiter["payload"]
-        print(f"received <- {self.services_reply_topic}, method={reply.get('method')}, tid={reply.get('tid')}")
-        print(json.dumps(reply, ensure_ascii=False, indent=2))
+        rc, reply = super().request(method, data, timeout, channel="services")
+        if rc != 0:
+            return rc, reply
         result = result_code(reply)
         if result != expected_result:
             print(
@@ -213,13 +82,7 @@ class DeviceTopologyClient:
         return 0, reply
 
     def wait_for_new_status(self, previous_count, timeout):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if len(self.status_messages) > previous_count:
-                return self.status_messages[-1]
-            self.status_event.wait(max(0.05, min(0.5, deadline - time.time())))
-            self.status_event.clear()
-        return None
+        return self.wait_status("update_topo", previous_count, timeout)
 
 
 def assert_status_payload(status_msg, expected_count, expected_sn=None):
@@ -286,7 +149,6 @@ def offline_payload(args):
 
 
 def main():
-    global mqtt
     parser = argparse.ArgumentParser(description="Test DJI Dock3 device/topology category")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
@@ -306,6 +168,8 @@ def main():
     parser.add_argument("--sub-device-thing-version", default=THING_VERSION)
     parser.add_argument("--skip-offline-check", action="store_true")
     parser.add_argument("--skip-invalid-check", action="store_true")
+    parser.add_argument("--quiet-stale", action="store_true")
+    parser.add_argument("--fail-on-stale", action="store_true")
     parser.add_argument(
         "--no-status-window",
         type=float,
@@ -315,19 +179,13 @@ def main():
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
-    try:
-        import paho.mqtt.client as mqtt_module
-    except ImportError as exc:
-        raise SystemExit("paho-mqtt is required. Install requirements-ubuntu.txt first.") from exc
-    mqtt = mqtt_module
-
-    client = DeviceTopologyClient(args.host, args.port, args.sn, args.qos)
+    client = DeviceTopologyClient(args.host, args.port, args.sn, args.qos, quiet_stale=args.quiet_stale)
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)
         return 2
 
     try:
-        before = len(client.status_messages)
+        before = client.status_count("update_topo")
         rc, _ = client.request("update_topo", online_payload(args), args.timeout, expected_result=0)
         if rc != 0:
             return rc
@@ -340,7 +198,7 @@ def main():
             return rc
 
         if not args.skip_offline_check:
-            before = len(client.status_messages)
+            before = client.status_count("update_topo")
             rc, _ = client.request("update_topo", offline_payload(args), args.timeout, expected_result=0)
             if rc != 0:
                 return rc
@@ -352,7 +210,7 @@ def main():
                 return rc
 
         if not args.skip_invalid_check:
-            before = len(client.status_messages)
+            before = client.status_count("update_topo")
             invalid_payload = {"sub_devices": []}
             rc, _ = client.request(
                 "update_topo",
@@ -372,10 +230,20 @@ def main():
                 print(error, file=sys.stderr)
             return 9
 
+        stale_total = client.stale_total()
+        if args.fail_on_stale and stale_total:
+            print(f"stale replies observed: {client.stats}", file=sys.stderr)
+            return 10
+
         print(
             "dock3 device topology test ok "
-            f"(status_messages={len(client.status_messages)}, sub_device_sn={args.sub_device_sn}, "
-            f"accepted={client.stats['accepted']}, ignored_legacy={client.stats['ignored_legacy']})"
+            f"(status_messages={client.status_count('update_topo')}, sub_device_sn={args.sub_device_sn}, "
+            f"accepted={client.stats['accepted']}, status={client.stats['status']}, "
+            f"ignored_mismatched={client.stats['ignored_mismatched']}, "
+            f"ignored_legacy={client.stats['ignored_legacy']}, "
+            f"ignored_late={client.stats['ignored_late']}, "
+            f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
+            f"ignored_total={stale_total})"
         )
         return 0
     finally:
