@@ -588,7 +588,7 @@ class EdgeGateway:
         def osd_cb(osd_data):
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
-            self.mqtt.publish_osd(gateway_sn, osd_data)
+            self.mqtt.publish_osd(gateway_sn, self.device.build_dock3_dock_osd())
             for sub_device in self.device.get_all_sub_devices():
                 if sub_device.online:
                     self.mqtt.publish_osd(sub_device.sn, osd_data)
