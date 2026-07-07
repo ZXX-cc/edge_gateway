@@ -101,6 +101,7 @@ class MessageBuilder:
         """构造OSD定频数据"""
         return {
             "tid": str(uuid.uuid4()),
+            "bid": str(uuid.uuid4()),
             "timestamp": int(time.time() * 1000),
             "data": osd_data,
             "gateway": gateway_sn
@@ -111,6 +112,7 @@ class MessageBuilder:
         """构造状态变更消息"""
         return {
             "tid": str(uuid.uuid4()),
+            "bid": str(uuid.uuid4()),
             "timestamp": int(time.time() * 1000),
             "data": state_data,
             "gateway": gateway_sn

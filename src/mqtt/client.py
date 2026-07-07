@@ -10,7 +10,7 @@ import paho.mqtt.client as mqtt
 
 from src.utils.logger import get_logger
 from src.utils.config import Config
-from src.utils.message import TopicBuilder, parse_message
+from src.utils.message import MessageBuilder, TopicBuilder, parse_message
 from src.utils.field_labels import format_with_labels
 from src.utils.dji_error_codes import (
     describe_error,
@@ -133,23 +133,25 @@ class MQTTClient:
     def publish_osd(self, device_sn: str, data: dict):
         """发布OSD定频数据"""
         topic = TopicBuilder.osd(device_sn)
+        payload = MessageBuilder.build_osd(self.gateway_sn, data)
         now = time.time()
         if now - self._last_osd_log_time >= 30:
             self._last_osd_log_time = now
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
-                ("data", format_with_labels(data, max_length=2000)),
+                ("data", format_with_labels(payload, max_length=2000)),
             ]))
-        self.publish(topic, data, qos=0)
+        self.publish(topic, payload, qos=0)
 
     def publish_state(self, device_sn: str, data: dict):
         """发布状态变更"""
         topic = TopicBuilder.state(device_sn)
+        payload = MessageBuilder.build_state(self.gateway_sn, data)
         logger.info(self._format_log_block("MQTT STATE PUBLISH", [
             ("topic", topic),
-            ("data", format_with_labels(data, max_length=3000)),
+            ("data", format_with_labels(payload, max_length=3000)),
         ]))
-        self.publish(topic, data, qos=1)
+        self.publish(topic, payload, qos=1)
 
     def publish_event(self, data: dict):
         """发布事件上报"""
