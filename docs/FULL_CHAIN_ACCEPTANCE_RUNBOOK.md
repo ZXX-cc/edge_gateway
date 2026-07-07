@@ -55,7 +55,8 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
-| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline |
+| `tools/mqtt_dock3_media_test.py` | Media 专项，待 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline；media 已接入代码编排，待 Ubuntu 复测 |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须补齐：
@@ -63,7 +64,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 脚本 | 必须覆盖 | 优先级 |
 |---|---|---|
 | `tools/nest_v13_protocol_test.py` | `DRONE_NEST_COMMAND/RESPONSE/ORDER_RESPONSE`、命令条件、状态位、拒绝原因 | P0/P1 |
-| `tools/mqtt_dock3_media_test.py` | 文件列表、删除、上传优先级、上传事件 | P1 |
+| Ubuntu 复测 `tools/mqtt_dock3_media_test.py` | 文件列表、删除、上传优先级、上传事件 | P1 |
 | `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
 | `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/压缩/上传 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
@@ -191,7 +192,7 @@ python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
 python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
-python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
+python tools/e2e_full_chain_test.py --phase p0 --timeout 12 --quiet-stale
 ```
 
 P0 通过标准：
@@ -207,7 +208,7 @@ P0 通过标准：
 | DRC 批量 | 输出 `drc batch test ok`，且 `ignored_total=0` |
 | CMD | 输出 `dock3 cmd test ok` |
 | Wayline | 输出 `dock3 wayline test ok` |
-| 当前核心 E2E | 输出 `dock3 e2e full-chain test ok`，6 个子阶段 `exit=0` 且 `ignored_total=0` |
+| P0 E2E | 输出 `dock3 e2e full-chain test ok`，P0 子阶段 `exit=0` 且 `ignored_total=0` |
 | 错误码 | 对外不出现内部 `-1/-2/-3` |
 | Topic | `airport_bind_status` 最终走 `requests/requests_reply`，`update_topo` 最终走 `status/status_reply` |
 

@@ -54,11 +54,11 @@
 | DRC 指令飞行 | 已通过 | 78% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；最新 E2E DRC 阶段输出 `accepted=14, events=7, ignored_total=0` | 真实 MAVLink 模式语义、链路抖动和超时边界仍需精校 | 补 SITL 指点飞行和飞控模式联动 | 人员1/人员2 |
 | CMD 远程调试 | 已通过 | 72% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、进度事件已通过专项复测 | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
 | Wayline 航线管理 | 已通过 | 70% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；mock KMZ 下载、校验、解析和内部任务转换已进入 `flighttask_prepare`；最新 E2E Wayline 阶段输出 `accepted=11, events=9, ignored_total=0` | 媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补媒体计数和真实 SITL 航点执行 | 人员1/人员2 |
-| P0/P1 E2E 回归 | 已通过 | 70% | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `exit=0` 且 `ignored_total=0` | media/live/HMS/log/firmware/config 和一键启航尚未接入同一入口 | 每完成一个剩余 P1 域就接入 E2E 编排 | 人员1 |
+| P0/P1 E2E 回归 | 已通过 | 72% | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `exit=0` 且 `ignored_total=0`；media 阶段已接入代码编排，本地 dry-run 通过 | media 尚未 Ubuntu 复测，live/HMS/log/firmware/config 和一键启航尚未接入同一入口 | 每完成一个剩余 P1 域就接入 E2E 编排 | 人员1 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
 | MAVLink 飞控联动 | 部分完成 | 60% | 网关能连接 SITL，Telemetry、FlightControl、ModeControl、WaypointManager、RTK 基础运行；已新增共享 ArduPilot flight mode 映射，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择，`set_flight_mode` 支持 `mode/mode_code/flight_mode` 并在底层失败时返回非 0 | 解锁/起飞/航线执行、非阻塞超时恢复仍需完善；模式切换需 Ubuntu SITL 复测 | 跑 set_flight_mode + SITL 模式切换专项 | 人员2 |
 | MAVLink 机巢模拟器 | 部分完成 | 50% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调 | 机巢动作闭环、状态机、错误恢复和云端一键启航联动仍需完善 | 补机巢模拟器专项测试 | 人员2/人员3 |
-| Media 媒体管理 | 待迁移 | 15% | 旧代码中有媒体管理和上传队列基础 | Dock3 `media.html` 的文件列表、上传、删除、优先级、事件未对齐 | 下一阶段优先迁移 media 或 live | 人员1 |
+| Media 媒体管理 | 部分完成 | 35% | 已新增 `src/cloud_api/dock3_media.py`，`file_list_get/file_delete/adjust_upload_priority/highest_priority_upload_flighttask_media` 支持本地目录扫描、删除、优先级状态和上传事件；`tools/mqtt_dock3_media_test.py` 已接入 E2E 编排，本地单测和 dry-run 通过 | 尚未在 Ubuntu 网关实跑，真实云端 OSS 凭证、断点续传和媒体上传完成事件仍需精校 | 运行 `mqtt_dock3_media_test.py`，通过后接入完整 E2E 证据 | 人员1 |
 | Live 直播功能 | 待迁移 | 10% | 旧代码中有直播/媒体相关入口 | Dock3 `live.html` 的推流、镜头、质量、状态事件未对齐 | 建直播 method 矩阵和模拟回包 | 人员1/人员3 |
 | HMS 管理 | 待迁移 | 15% | 有告警数据库和部分 HMS handler | Dock3 HMS 文案 key、告警结构、清除/上报规则未对齐 | 建 HMS 字段和错误码矩阵 | 人员1 |
 | Firmware 固件升级 | 待迁移 | 10% | 有 OTA/升级相关旧入口 | 升级任务、进度、失败码、后台化未按 Dock3 精校 | 后台任务化固件升级模拟 | 人员1/人员3 |
@@ -91,12 +91,13 @@
 | 大类 | Ubuntu 验收命令 | 成功标志 |
 |---|---|---|
 | P0-07 飞行模式映射 | `python -m unittest tests.test_flight_modes tests.test_mavlink_telemetry_mapping`；连接 SITL 后依次执行 `python tools/mqtt_smoke_test.py --method set_flight_mode --payload '{"mode":"GUIDED"}' --timeout 12`、`python tools/mqtt_smoke_test.py --method set_flight_mode --payload '{"mode_code":9}' --timeout 12` | 单测通过；MQTT 回包 `result=0` 且 `data.mode` 分别为 `GUIDED`、`LAND`；SITL 日志不再出现关键模式 `UNKNOWN(9)` |
+| P1-07 Media | `python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` | `dock3 media test ok` |
 
 ## 下一批建议
 
 | 优先级 | 模块 | 原因 | 预期交付 |
 |---:|---|---|---|
-| 1 | Media/Live | 云端业务闭环通常需要媒体文件和直播状态，当前仍待迁移 | `dock3_media_test.py`、`dock3_live_test.py`、字段矩阵和模拟回包 |
+| 1 | Media/Live | 云端业务闭环通常需要媒体文件和直播状态；media 已完成代码和脚本，待 Ubuntu 复测，live 仍待迁移 | `dock3_media_test.py`、`dock3_live_test.py`、字段矩阵和模拟回包 |
 | 2 | HMS/Remote Log | 关系到故障诊断和服务器日志可用性 | HMS 告警结构、远程日志列表/上传模拟、错误码 |
 | 3 | MAVLink 专项 | 人员2需要把纯协议模拟推进到真实 SITL 行为 | 模式映射、解锁/起飞/航线执行、超时恢复 |
 | 4 | NoSQL/Request Trace | 关系到主线程非阻塞和可追踪性 | MongoDB/异步数据层方案、请求链路表、操作记录 |

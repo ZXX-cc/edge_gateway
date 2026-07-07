@@ -9,10 +9,23 @@ import subprocess
 import threading
 import asyncio
 import requests
+from pathlib import Path
 from typing import Dict, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.cloud_api.dock3_media import (
+    build_media_file,
+    file_list_data,
+    filter_media_files,
+    media_task_output,
+    normalize_delete_ids,
+    normalize_page,
+    normalize_priority_items,
+    paginate,
+    upload_progress_event_data,
+)
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 
@@ -48,10 +61,11 @@ class MediaManager:
 
     def __init__(self):
         self.gateway_sn = Config.get_gateway_sn()
-        self.storage_path = Config.get('media.storage_path', '/data/media')
+        self.storage_path = self._resolve_storage_path(Config.get('media.storage_path', '/data/media'))
 
         # 上传队列
         self._upload_queue = []
+        self._priority_overrides: Dict[str, int] = {}
         self._uploading = False
         self._upload_thread: Optional[threading.Thread] = None
         self._upload_lock = threading.Lock()
@@ -83,6 +97,30 @@ class MediaManager:
 
         # 上传重试配置
         self._max_retry_count = 3
+
+    @staticmethod
+    def _resolve_storage_path(configured_path: str) -> str:
+        """Use configured media storage, falling back to a repo-local path when unwritable."""
+        candidates = [Path(configured_path).expanduser()]
+        project_root = Path(__file__).resolve().parents[2]
+        fallback = project_root / "data" / "media"
+        if not candidates[0].is_absolute():
+            candidates[0] = project_root / candidates[0]
+        if candidates[0] != fallback:
+            candidates.append(fallback)
+
+        for path in candidates:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                probe = path / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return str(path)
+            except Exception as exc:
+                logger.warning("Media storage path unavailable: path=%s, error=%s", path, exc)
+
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback)
 
     def set_event_callback(self, callback: Callable):
         """设置事件上报回调"""
@@ -134,13 +172,33 @@ class MediaManager:
         Request: { files: [{file_id, priority}, ...] }
         """
         data = msg.get('data', {})
-        files = data.get('files', [])
+        files, errors = normalize_priority_items(data)
+        if errors:
+            logger.warning("Rejected adjust_upload_priority payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=media_task_output("rejected", {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
 
         logger.info(f"Adjust upload priority: {len(files)} files")
+        for item in files:
+            self._priority_overrides[item["file_id"]] = item["priority"]
 
-        # TODO: 重新排序上传队列
+        known = self._scan_local_files()
+        by_id = self._media_identity_map(known)
+        touched = [by_id[file["file_id"]] for file in files if file["file_id"] in by_id]
+        if touched and self._event_callback:
+            self._event_callback(MessageBuilder.build_event(
+                "fileupload_progress",
+                upload_progress_event_data(touched, status="in_progress", progress=0),
+                self.gateway_sn,
+            ))
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0, data=media_task_output("ok", {
+            "files": files,
+        }))
 
     def request_storage_config_get(self, module: int = 0,
                                     callback: Callable = None) -> str:
@@ -245,20 +303,31 @@ class MediaManager:
             for ext in extensions:
                 pattern = os.path.join(self.storage_path, ext)
                 for filepath in glob.glob(pattern):
-                    filename = os.path.basename(filepath)
-                    filesize = os.path.getsize(filepath)
-                    filetype = filename.split('.')[-1].lower()
-                    files.append({
-                        'file_name': filename,
-                        'file_path': filepath,
-                        'file_size': filesize,
-                        'file_type': filetype,
-                        'capture_time': int(os.path.getmtime(filepath))
-                    })
+                    item = build_media_file(filepath, self.storage_path, self.gateway_sn)
+                    item['file_path'] = filepath
+                    item['priority'] = self._priority_overrides.get(item['file_id'], 0)
+                    files.append(item)
         except Exception as e:
             logger.error(f"Scan local files failed: {e}")
 
         return files
+
+    @staticmethod
+    def _media_identity_map(files: List[dict]) -> Dict[str, dict]:
+        mapping: Dict[str, dict] = {}
+        for item in files:
+            identities = {
+                item.get("file_id"),
+                item.get("fingerprint"),
+                item.get("name"),
+                item.get("file_name"),
+                item.get("object_key"),
+                item.get("path"),
+            }
+            for identity in identities:
+                if identity:
+                    mapping[str(identity)] = item
+        return mapping
 
     async def _get_pending_files_for_upload(self) -> List[dict]:
         """获取待上传的文件列表（与数据库比对）"""
@@ -319,34 +388,29 @@ class MediaManager:
 
     def _update_upload_progress(self, file_id: str, progress: int, status: str):
         """更新上传进度"""
-        self._run_db_coroutine(MediaDB.update_upload_status(file_id, status))
+        async def _update_status():
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+            if not AsyncSessionLocal:
+                return
+            async with AsyncSessionLocal() as session:
+                await MediaDB.update_upload_status(session, file_id, status)
+                await session.commit()
+
+        self._run_db_coroutine(_update_status())
 
         # 上报进度事件
         if self._event_callback:
+            event_files = [self._media_identity_map(self._scan_local_files()).get(file_id, {
+                "file_id": file_id,
+                "fingerprint": file_id,
+                "device_sn": self.gateway_sn,
+                "object_key": file_id,
+                "size": 0,
+            })]
             event = MessageBuilder.build_event(
                 'fileupload_progress',
-                {
-                    'result': 0,
-                    'output': {
-                        'status': 'in_progress' if status == 'uploading' else status,
-                        'ext': {
-                            'files': [{
-                                'device_sn': self.gateway_sn,
-                                'module': 'media',
-                                'size': 0,
-                                'key': file_id,
-                                'fingerprint': '',
-                                'progress': {
-                                    'progress': progress,
-                                    'finish_time': 0,
-                                    'upload_rate': 0,
-                                    'status': status,
-                                    'result': 0
-                                }
-                            }]
-                        }
-                    }
-                },
+                upload_progress_event_data(event_files, status=status, progress=progress),
                 self.gateway_sn
             )
             self._event_callback(event)
@@ -443,7 +507,9 @@ class MediaManager:
         # 开始上传
         self.start_upload(flighttask_id)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0, data=media_task_output("sent", {
+            "flighttask_id": flighttask_id,
+        }))
 
     # ---- 直播控制 ----
 
@@ -742,20 +808,18 @@ class MediaManager:
         Request: { media_type, start_time, end_time, page, page_size }
         """
         data = msg.get('data', {})
-        media_type = data.get('media_type', 'all')
-        page = data.get('page', 1)
-        page_size = data.get('page_size', 20)
+        page, page_size = normalize_page(data)
 
-        logger.info(f"File list get: type={media_type}, page={page}, size={page_size}")
+        logger.info(f"File list get: page={page}, size={page_size}")
 
-        # TODO: 扫描存储目录获取文件列表
+        filtered = filter_media_files(self._scan_local_files(), data)
+        selected = paginate(filtered, page, page_size)
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'total': 0,
-            'page': page,
-            'page_size': page_size,
-            'files': []
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=media_task_output("ok", file_list_data(selected, page, page_size, len(filtered))),
+        )
 
     def handle_file_delete(self, msg: dict) -> dict:
         """
@@ -764,9 +828,39 @@ class MediaManager:
         Request: { file_ids: [...] }
         """
         data = msg.get('data', {})
-        file_ids = data.get('file_ids', [])
+        file_ids, errors = normalize_delete_ids(data)
+        if errors:
+            logger.warning("Rejected file_delete payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=media_task_output("rejected", {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
+
         logger.info(f"File delete: {len(file_ids)} files")
-        return MessageBuilder.build_reply(msg, result=0)
+        known = self._scan_local_files()
+        by_id = self._media_identity_map(known)
+        results = []
+        for file_id in file_ids:
+            item = by_id.get(file_id)
+            if not item:
+                results.append({"file_id": file_id, "result": INVALID_COMMAND_FORMAT, "msg": "file not found"})
+                continue
+
+            filepath = item.get("file_path", "")
+            try:
+                if filepath and os.path.exists(filepath):
+                    os.remove(filepath)
+                self._priority_overrides.pop(item.get("file_id", ""), None)
+                results.append({"file_id": file_id, "result": 0})
+            except Exception as exc:
+                logger.error("Delete media file failed: file_id=%s, path=%s, error=%s", file_id, filepath, exc)
+                results.append({"file_id": file_id, "result": INVALID_COMMAND_FORMAT, "msg": str(exc)})
+
+        return MessageBuilder.build_reply(msg, result=0, data=media_task_output("ok", {
+            "files": results,
+        }))
 
     def handle_live_capability_query(self, msg: dict) -> dict:
         """
@@ -793,7 +887,9 @@ class MediaManager:
         flighttask_id = data.get('flighttask_id', '')
         logger.info(f"Highest priority upload: {flighttask_id}")
         self.report_priority_media(flighttask_id)
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0, data=media_task_output("ok", {
+            "flighttask_id": flighttask_id,
+        }))
 
     def handle_live_lens_change(self, msg: dict) -> dict:
         """Live lens change (live_lens_change) - alias of set_livestream_lens"""
@@ -802,4 +898,3 @@ class MediaManager:
     def handle_live_set_quality(self, msg: dict) -> dict:
         """Live set quality (live_set_quality) - alias of set_livestream_quality"""
         return self.handle_set_livestream_quality(msg)
-

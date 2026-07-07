@@ -20,7 +20,7 @@
 | Dock3 P0 协议链路 | 97% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令、错误码边界已通过批量、专项和 E2E 编排验证，剩旧回包噪声清理和字段精校 |
 | 客户需求相关 method/字段迁移 | 60% | properties 官方可写/只读边界、OSD/state、device topology、DRC 官方字段和批量链路、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；当前已迁移核心域已纳入 E2E 编排；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
 | 非阻塞、日志、容错基础 | 55% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现，待 Ubuntu 复测；NoSQL/MongoDB 和远程日志仍待迁移 |
-| 模拟器和测试工具 | 90% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/P0 批量测试工具可用，`e2e_full_chain_test.py` 已串联当前 P0/P1 核心 MQTT 域并通过 Ubuntu 复测，媒体/直播/HMS/log/config 模拟器仍待补 |
+| 模拟器和测试工具 | 90% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/P0 批量测试工具可用，`e2e_full_chain_test.py` 已串联当前 P0/P1 核心 MQTT 域并通过 Ubuntu 复测；media 专项脚本已补并接入 E2E 编排，待 Ubuntu 复测，直播/HMS/log/config 模拟器仍待补 |
 
 综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 66%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
 
@@ -389,7 +389,8 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 4.1 | device topology | `update_topo` 完整 topic/payload/status_reply；严格字段校验和专项脚本已通过 Ubuntu 复测 | 已完成本轮专项；后续继续精校官方设备类型枚举 |
 | Batch 4.2 | cmd/远程调试 | `debug_mode_*`、`cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_*`、`*_switch` 已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；后续清理旧回包源后用 `--fail-on-stale` 做严格环境验证 |
 | Batch 5 | wayline | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环和 mock KMZ 解析已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；下一步进入 media/live 或 HMS，Wayline 后续补远端 KMZ 下载、媒体计数、真实 SITL 航点执行 |
-| Batch 6 | P0/P1 E2E 回归 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，全部 `exit=0`，总耗时 19.0s | 已完成当前核心 MQTT 域 E2E 编排；后续把 media/live/HMS/log/config 接入同一入口 |
+| Batch 6 | P0/P1 E2E 回归 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，全部 `exit=0`，总耗时 19.0s | 已完成当前核心 MQTT 域 E2E 编排；media 已接入代码编排待复测，后续把 live/HMS/log/config 接入同一入口 |
+| Batch 7 | media 基础 | 已新增 `src/cloud_api/dock3_media.py`、`tools/mqtt_dock3_media_test.py` 和 `tests/test_dock3_media.py`，覆盖文件列表、删除、上传优先级和上传事件；本地单测与 E2E dry-run 已通过 | 待 Ubuntu 网关实跑 `python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` |
 
 ## 5. 更新规则
 
