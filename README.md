@@ -50,6 +50,7 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/INTERFACE_DESIGN_SPEC.md` | 接口设计说明书：P0 字段映射、API 定义和 DJI 错误码规则 |
 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
+| `docs/DJI_CLOUD_API_DEMO_CONNECTION_PROGRESS.md` | DJI Cloud API Demo Docker 接入记录、当前在线状态和后续事项 |
 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 自定义机巢 MAVLink 消息字段映射 |
 | `DJI_CLOUD_API_INTERFACES.md` | 当前 MQTT method 分组和 Dock3 验收状态 |
 | `ARCHITECTURE_DESIGN.md` | 面向 Dock3 纯模拟目标的系统架构说明 |

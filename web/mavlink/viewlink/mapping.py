@@ -26,7 +26,7 @@ SENSOR_MAP = {
 
 RECORD_MODE_MAP = {
     "NONE": 0,
-    "PHOTO": 1,                                                                                                                                       §
+    "PHOTO": 1,
     "RECORD": 2,
 }
 
