@@ -1,37 +1,58 @@
 # 多人协同开发指南
 
-本文档定义 3 名开发人员在当前阶段的职责边界、交接接口和验收方式。当前阶段优先全链路调通，实际业务逻辑后续补齐。
+本文档定义 3 名开发人员在当前阶段的职责边界、交接接口和验收方式。当前阶段以客户需求为目标开发，最终协议口径是 DJI Dock 3。30 天内 P0/P1 必须 100% 可用，P2 允许存在已记录问题但不能影响 P0/P1 主链路。
 
 ## 1. 当前协同目标
 
 ```text
-Dock3 上云 API 模拟器
+客户需求 / Dock3 上云 API 模拟器
   <-> MQTT Broker
   <-> Edge Gateway
-  <-> MAVLink / ArduPilot SITL / 机巢模拟器
+  <-> MAVLink / ArduPilot SITL / 机巢 v1.3 / 媒体与负载 mock
+  <-> Edge Gateway
+  <-> MQTT osd / state / events / reply / drc/up
 ```
 
-当前不接实体设备。所有联调结果以模拟环境和 MQTT/MAVLink 数据流为准。
+当前不接实体设备。所有联调结果以模拟环境、DJI Demo 页面、MQTT/MAVLink 数据流和验收脚本为准。
+
+## 1.1 当前执行口径
+
+| 文档 | 用途 |
+|---|---|
+| `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md` | 客户需求覆盖口径 |
+| `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 功能 backlog 和交付证据 |
+| `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 代码缺口、必补脚本和目标窗口 |
+| `docs/30_DAY_MILESTONE_PLAN.md` | 30 天阶段计划 |
+| `docs/30_DAY_EXECUTION_BOARD.md` | 日级执行看板、人员分工和每日证据要求 |
+| `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路启动、验收命令和证据归档 |
+
+执行规则：
+
+- P0 失败时不进入 P1 大规模开发。
+- P1 未形成主链路验收证据时，不把主要资源投入 P2 深度优化。
+- P2 可以有问题，但每个问题必须记录影响范围、绕过方式、后续计划和是否影响 P0/P1。
+- 客户暂未提及、当前业务未用到的 Dock3 能力可以标为 Deferred，不抢占 P0/P1 开发资源。
+- 新增或修改云端字段、method、reply、错误码，必须以 Dock3 文档或客户 adapter 需求为依据。
 
 ## 2. 人员职责
 
 | 人员 | 负责范围 | 不负责范围 |
 |---|---|---|
-| 人员1 | 上云 API 与网关通信、Dock3 协议字段、MQTT topic/method/payload/reply、云端模拟器验收 | MAVLink 底层连接、SITL 参数、机巢自定义 MAVLink 字段 |
-| 人员2 | MAVLink 与网关通信、SITL、TelemetryModule、FlightControl、DroneNestModule、MAVLink 映射、非阻塞分发 | Dock3 官方字段解释、云端模拟器页面、部署脚本 |
-| 人员3 | Ubuntu 部署、MQTT Broker、上云 API 模拟器、MAVLink 机巢模拟器、Web 调试台、启动脚本、smoke test | 网关业务逻辑实现、Dock3 字段最终语义、MAVLink 业务映射最终语义 |
+| 人员1 | Dock3 上云协议、MQTT topic/method/payload/reply、错误码、request trace、P0/P1 上云专项验收 | MAVLink 底层连接、SITL 参数、机巢自定义 MAVLink 字段 |
+| 人员2 | MAVLink/SITL、飞控模式、Telemetry/FlightControl/Wayline、DroneNestModule、机巢 v1.3 映射、非阻塞分发 | Dock3 官方字段最终解释、Demo Docker 部署 |
+| 人员3 | Ubuntu/Docker/MQTT/Demo/Web/模拟器启动、脚本化验收、证据归档、端口和环境固化 | Dock3 字段语义、飞控和机巢业务映射最终语义 |
 
 ## 3. 人员1：上云 API 与网关
 
 ### 主要目标
 
-让 Dock3 云端模拟器与网关完成双向通信。
+让 Dock3 云端模拟器、DJI Demo 和网关完成可验收的双向通信，保证 P0/P1 云端协议可用。
 
 ### 负责内容
 
 - 整理 Dock3 文档中的 properties、device、organization、live、media、wayline、hms、cmd、firmware、log、config、drc 等接口。
 - 维护 `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 中的 Dock3 协议矩阵。
-- 维护 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 中的全量分组迁移台账。
+- 维护 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 中的客户需求分组迁移台账。
 - 维护 `DJI_CLOUD_API_INTERFACES.md` 中各 method 的 Dock3 验收状态。
 - 验证 MQTT topic：
   - `thing/product/{sn}/services`
@@ -45,15 +66,17 @@ Dock3 上云 API 模拟器
   - `thing/product/{sn}/drc/down`
   - `thing/product/{sn}/drc/up`
 - 定义 request trace 字段：`tid`、`bid`、`method`、`topic`、请求 payload、响应 payload、耗时、结果码、错误原因。
+- 维护 P0/P1 云端专项脚本和 runbook 里的云端验收项。
 
 ### 交付物
 
 | 交付物 | 验收标准 |
 |---|---|
-| Dock3 method 矩阵 | 每个 method 有文档来源、方向、topic、请求体、响应体、当前实现状态 |
+| Dock3 method 矩阵 | 每个客户需求相关 method 有文档来源、方向、topic、请求体、响应体、当前实现状态；客户未用 method 标 Deferred |
 | 云端模拟器请求样例 | 每个核心 method 至少有一个可复现 MQTT payload |
 | reply 验收规则 | 成功、失败、未知方法、超时都有明确期望 |
 | request trace 方案 | 可复盘每次 API 调用的 request、dispatch、execute、reply、error |
+| P0/P1 验收证据 | P0/P1 每个云端功能都有脚本输出、日志或 Demo 证据 |
 
 ### 2026-07-06 当前进展
 
@@ -73,7 +96,7 @@ Dock3 上云 API 模拟器
 
 ### 主要目标
 
-让 ArduPilot SITL、MAVLink 机巢模拟器与网关完成稳定双向通信，并保证 MAVLink 接收和分发不阻塞。
+让 ArduPilot SITL、MAVLink 机巢 v1.3 模拟器与网关完成稳定双向通信，并保证 MAVLink 接收和分发不阻塞。
 
 ### 负责内容
 
@@ -99,6 +122,7 @@ Dock3 上云 API 模拟器
   - 机巢状态
 - 维护 `docs/DRONE_NEST_MAVLINK_MAPPING.md`。
 - 修复或标记 ArduCopter/ArduPlane/QuadPlane 模式表差异。
+- 对 P0/P1 中的飞控、航线、DRC、一键启航和机巢状态机提供可执行证据。
 
 ### 非阻塞要求
 
@@ -116,12 +140,13 @@ Dock3 上云 API 模拟器
 | 飞控命令状态 | GUIDED、ARM、TAKEOFF、LAND、RTL 可模拟验证 |
 | 机巢命令状态 | 开盖、关盖、充电、推杆、环境状态可模拟验证 |
 | 性能约束 | 接收分发循环不因数据库、日志、文件、网络 IO 阻塞 |
+| P0/P1 设备侧证据 | SITL、机巢 v1.3 和一键启航关键路径有脚本或日志证明 |
 
 ## 5. 人员3：部署与模拟器
 
 ### 主要目标
 
-提供可重复启动、可观察、可 smoke test 的服务器内模拟联调环境。
+提供可重复启动、可观察、可验收的服务器内模拟联调环境，并负责 runbook 证据归档。
 
 ### 负责内容
 
@@ -135,6 +160,14 @@ Dock3 上云 API 模拟器
   - `tools/ubuntu_preflight.sh`
   - `tools/mqtt_smoke_test.py`
   - `web/`
+- P1 缺失验收脚本的工程化补齐：
+  - `tools/nest_v13_protocol_test.py`
+  - `tools/mqtt_dock3_media_test.py`
+  - `tools/mqtt_dock3_live_test.py`
+  - `tools/mqtt_dock3_hms_log_test.py`
+  - `tools/mqtt_dock3_firmware_config_test.py`
+  - `tools/e2e_takeoff_flow_test.py`
+  - `tools/e2e_full_chain_test.py`
 - 维护 `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md`。
 
 ### 交付物
@@ -145,6 +178,7 @@ Dock3 上云 API 模拟器
 | 模拟器启动脚本或说明 | 人员1/2 无需猜端口和启动顺序 |
 | smoke test | 可验证 MQTT 下发、reply、osd、state、events |
 | 故障排查说明 | 端口占用、SITL 依赖、MQTT 不通、MAVLink 无心跳有处理步骤 |
+| 全链路证据包 | 按 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 保存脚本输出、日志、MQTT 样例和 Demo 截图 |
 
 ## 6. 协作接口
 
@@ -181,6 +215,7 @@ Dock3 上云 API 模拟器
 
 | 变更类型 | 必须先更新 |
 |---|---|
+| P0/P1/P2 优先级或验收状态 | `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` |
 | Dock3 字段、method、topic、枚举、错误码 | `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`、`docs/DJI_DOCK3_MIGRATION_GUIDE.md` 和 `DJI_CLOUD_API_INTERFACES.md` |
 | MAVLink 自定义消息字段 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` |
 | 启动命令、端口、部署依赖 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` |
@@ -191,17 +226,20 @@ Dock3 上云 API 模拟器
 
 | 周期 | 人员1 | 人员2 | 人员3 |
 |---|---|---|---|
-| 第一步 | 建 Dock3 核心 method 矩阵 | 稳定 SITL 遥测和飞控模式 | 固化 Ubuntu 启动顺序 |
-| 第二步 | 编写云端模拟 payload | 完成遥测/机巢状态映射 | 固化机巢模拟器和 Web 调试台 |
-| 第三步 | 批量验证 reply/osd/state/events | 验证飞控/机巢命令结果 | 整合 smoke test |
-| 第四步 | 补 request trace 和错误码 | 补超时/失败原因 | 输出一键联调说明 |
+| Day 1-7 | P0 云端协议、properties、device、organization、错误码和 trace | P0 OSD、模式映射、基础飞控控制、机巢关键状态 | P0 脚本、Demo Docker、启动顺序和证据归档 |
+| Day 8-15 | P1 Wayline/DRC/一键启航云端状态和事件 | 机巢 v1.3 状态机、SITL 航点执行、起降/返航联动 | 机巢专项和一键启航 E2E 脚本 |
+| Day 16-24 | Media/Live/HMS/Log/Firmware/Config Dock3 payload 和错误码 | 负载、媒体源、云台相机基础 adapter | P1 缺失脚本、mock 服务和回归入口 |
+| Day 25-30 | P0/P1 全链路回归、P2 风险归档 | 设备侧失败原因、超时恢复和非阻塞审计 | 全链路 runbook 执行、证据包和发布说明 |
 
 ## 9. 每日同步最小信息
 
 每次同步只需要汇报：
 
+- 今天推进了哪些 P0/P1/P2 backlog 项。
 - 今天验证了哪些 topic/method。
 - 成功的输入 payload 和输出 reply。
 - 失败的 tid/bid、错误日志和复现命令。日志中字段应优先保留 `字段名(中文名)`，例如 `drc_state(DRC链路状态)`、`capacity_percent(电量百分比)`。
+- 是否影响 P0/P1 交付门禁。
+- 是否产生 P2 已知问题和绕过方式。
 - 是否影响其他人员的数据契约。
 - 是否需要更新文档。

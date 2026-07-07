@@ -1,12 +1,14 @@
-# DJI Dock 3 全量迁移进度台账
+# DJI Dock 3 客户需求迁移进度台账
 
-更新时间：2026-07-06
+更新时间：2026-07-07
 
-本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“全量 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个字段、method、topic、reply 或 smoke test，都必须更新本文档。
+本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“客户需求相关能力按 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个客户需求相关字段、method、topic、reply 或 smoke test，都必须更新本文档。
 
 如果只需要快速查看当前哪些模块已完成、哪些未完成，看 `docs/DOCK3_MODULE_STATUS.md`。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、organization 基础 requests 链路、device topology、DRC 大类专项、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环均已通过 Ubuntu 模拟验证；Wayline 首次复测暴露的 `flighttask_execute` 纯模拟任务误触发 MAVLink `AUTO` 模式切换问题已修复并复测通过；全量迁移未完成。**
+如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
+
+当前结论：**Dock3 P0 总批量、properties 大类专项、organization 基础 requests 链路、device topology、DRC 大类专项、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环均已通过 Ubuntu 模拟验证；Wayline 首次复测暴露的 `flighttask_execute` 纯模拟任务误触发 MAVLink `AUTO` 模式切换问题已修复并复测通过；客户需求相关迁移未完成。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
 当前进度估算：**约 60%**。
 
@@ -16,11 +18,11 @@
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 80% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，剩 systemd/一键化和环境固化 |
 | Dock3 P0 协议链路 | 92% | property、services、requests、status、events、DRC 控制数据、CMD 控制命令、错误码边界已通过批量和专项验证，剩旧回包噪声清理和字段精校 |
-| Dock3 全量 method/字段迁移 | 53% | properties 官方可写/只读边界、device topology、DRC 官方字段、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；live/media/HMS/log/config 等仍待迁移 |
+| 客户需求相关 method/字段迁移 | 53% | properties 官方可写/只读边界、device topology、DRC 官方字段、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
 | 非阻塞、日志、容错基础 | 45% | 日志落盘、字段中文名、部分 async warning 已修复，NoSQL/MongoDB 和完整 request trace 未实现 |
 | 模拟器和测试工具 | 81% | 云端模拟器、organization/status/topology/properties/DRC/CMD/Wayline/P0 批量测试工具可用，P0、DRC、CMD、Wayline 工具已支持旧回包统计并通过 Ubuntu 复测，媒体模拟器仍待补 |
 
-综合按当前目标“服务器内跑通 Dock3 云端模拟链路，不接真实实体设备”估算为约 60%。该百分比不是验收承诺，后续每完成一个 Dock3 分组再调整。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 60%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
 
 ## 1. 当前验收基线
 
@@ -50,20 +52,21 @@
 | P0 总批量验证入口 | 已通过 Ubuntu 复测 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 一次覆盖 `dock_status_query`、properties、DRC、错误 topic，输出 `dock3 p0 batch test ok`；`airport_bind_status` 官方链路单独走云端模拟器 |
 | 旧格式重复回包 | 已识别，非阻塞 | P0 批量测试中可见同一 `tid` 先收到旧格式 `property/set_reply` 或旧 `data.result=-2` 回包，脚本已按 `tid + method + Dock3格式` 忽略并继续等待正确回包；后续清理 broker/旧进程后可用 `--fail-on-stale` 做严格验证 |
 
-## 2. 全量分组进度
+## 2. 客户需求分组进度
 
 状态说明：
 
 | 状态 | 含义 |
 |---|---|
 | 已验证 | 已按 Dock3 topic/reply/payload 在 Ubuntu 模拟环境通过 |
-| 部分完成 | 已有代码或部分字段可用，但未完成官方字段/枚举/单位全量对照 |
-| 待迁移 | 已有旧实现或占位，需要按 Dock3 改造 |
-| 暂缓 | 当前纯模拟阶段不阻塞主链路，保留接口或占位 |
+| 部分完成 | 已有代码或部分字段可用，但未完成客户需求相关字段/枚举/单位对照 |
+| 待迁移 | 客户需求涉及，已有旧实现或占位，需要按 Dock3 改造 |
+| 暂缓 | 当前客户需求未用到或不阻塞主链路，保留接口或占位 |
+| Deferred | Dock3 官方存在但客户暂未提及/未使用，后续需求触发时迁移 |
 
 | 顺序 | Dock3 分组 | 官方文档 | 当前状态 | 当前代码入口 | 下一步 |
 |---:|---|---|---|---|---|
-| 1 | 设备属性 properties | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html | 部分完成，官方 `rw` 属性和值域边界已通过 Ubuntu 专项复测 | `src/device/manager.py`, `src/cloud_api/dock3_properties.py`, `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `tools/mqtt_dock3_properties_test.py` | 继续补 `osd/state` 字段、枚举、单位和值域全量精校 |
+| 1 | 设备属性 properties | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html | 部分完成，官方 `rw` 属性和值域边界已通过 Ubuntu 专项复测 | `src/device/manager.py`, `src/cloud_api/dock3_properties.py`, `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `tools/mqtt_dock3_properties_test.py` | 继续补客户需求涉及的 `osd/state` 字段、枚举、单位和值域精校 |
 | 2 | 设备管理 device | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/device.html | 部分完成，`update_topo` 官方字段校验和专项脚本已通过 Ubuntu 复测 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py` | 继续精校 `domain/type/sub_type` 官方枚举和多设备真实拓扑语义 |
 | 3 | 组织管理 organization | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/organization.html | 部分完成，基础成功路径、异常分支、绑定后事件和持久化均已通过 Ubuntu 验证 | `src/cloud_api/connection_manager.py`, `src/device/manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_organization_test.py` | 字段精校，补真实云端/多设备差异 |
 | 4 | 直播 live | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html | 待迁移 | `src/media/manager.py` | 建直播 method 表，先模拟 `live_start/live_stop/quality/lens` |
@@ -114,9 +117,9 @@
 
 | 字段 | 官方 Dock3 名称 | 官方访问 | pushMode | 当前项目状态 | 下一步 |
 |---|---|---|---|---|---|
-| `air_transfer_enable` | 空中回传 | `rw` | `1` | 已通过 Ubuntu 专项复测：`property/set` 返回 `state.result=0`，`property_get` 可读回 | 后续补 state/osd 全量字段精校 |
-| `silent_mode` | 机场静音模式 | `rw` | `1` | 已通过 Ubuntu 专项复测，可设置并读回 | 后续补 state/osd 全量字段精校 |
-| `user_experience_improvement` | 用户体验改善计划 | `rw` | `1` | 已通过 Ubuntu 专项复测：`property/set` 返回 `state.result=0`，`property_get` 可读回 | 后续补 state/osd 全量字段精校 |
+| `air_transfer_enable` | 空中回传 | `rw` | `1` | 已通过 Ubuntu 专项复测：`property/set` 返回 `state.result=0`，`property_get` 可读回 | 后续补客户需求相关 state/osd 字段精校 |
+| `silent_mode` | 机场静音模式 | `rw` | `1` | 已通过 Ubuntu 专项复测，可设置并读回 | 后续补客户需求相关 state/osd 字段精校 |
+| `user_experience_improvement` | 用户体验改善计划 | `rw` | `1` | 已通过 Ubuntu 专项复测：`property/set` 返回 `state.result=0`，`property_get` 可读回 | 后续补客户需求相关 state/osd 字段精校 |
 | `drc_state` | DRC 链路的状态 | `r` | `0` | 已通过 enter/exit 同步验证 | 补 DRC 心跳超时恢复 |
 | `mode_code` | 机场状态 | `r` | `0` | 当前 OSD 有 `mode_code`，但与飞控模式映射仍待人员2核对 | 按 Dock3 枚举精校 |
 | `cover_state` | 舱盖状态 | `r` | `0` | 当前机巢模拟字段存在 | 按 Dock3 枚举精校 |
@@ -326,7 +329,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 
 | 批次 | 目标 | 交付物 | 验收 |
 |---|---|---|---|
-| Batch 1 | properties 官方可写边界 | `src/cloud_api/dock3_properties.py`、`tools/mqtt_dock3_properties_test.py`、`docs/INTERFACE_DESIGN_SPEC.md` | 已通过 Ubuntu 跑 `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale`；后续进入 `osd/state` 全量字段精校 |
+| Batch 1 | properties 官方可写边界 | `src/cloud_api/dock3_properties.py`、`tools/mqtt_dock3_properties_test.py`、`docs/INTERFACE_DESIGN_SPEC.md` | 已通过 Ubuntu 跑 `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale`；后续进入客户需求相关 `osd/state` 字段精校 |
 | Batch 2 | organization requests 模拟器 | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 基础成功路径、异常分支、绑定后事件和持久化已通过 Ubuntu 验证 | 下一步字段精校、真实云端差异和多设备场景 |
 | Batch 2.1 | organization get/bind 工具 | `tools/mqtt_organization_test.py` 已通过 Ubuntu 复测成功路径、组织查询失败、绑定 `err_infos`、请求超时 | 已完成 |
 | Batch 2.2 | organization 绑定后状态 | 已通过 Ubuntu 复测 `device_binding/update_topo`、内存状态、SQLite 持久化 | 已完成 |
@@ -338,8 +341,8 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 
 ## 5. 更新规则
 
-- 每完成一个字段或 method，对应分组状态必须从“待迁移”更新为“部分完成”或“已验证”。
+- 每完成一个客户需求相关字段或 method，对应分组状态必须从“待迁移”更新为“部分完成”或“已验证”。
 - 任何保留旧 services 兼容入口的 method，都必须标注“兼容 smoke，不作为 Dock3 最终验收”。
-- 每个 Dock3 method 必须记录：官方文档、topic、direction、request、reply/event、错误码、当前 handler、smoke 命令。
+- 每个客户需求相关 method 必须记录：官方文档、topic、direction、request、reply/event、错误码、当前 handler、smoke 命令。客户未提及/未用到的 Dock3 method 可以在 method 台账中标为 Deferred。
 - 不得把 `dock_status_query` 这种旧机场查询结果当作 Dock3 官方属性替代品。
 - 不得在 MQTT 回调或 MAVLink 接收热路径中做阻塞 IO、下载、上传、数据库长事务或外部命令。

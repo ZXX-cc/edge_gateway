@@ -2,7 +2,7 @@
 
 Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目。当前阶段目标是在 Ubuntu 服务器内跑通纯模拟全链路，不接实体无人机、飞控、机巢或负载设备。
 
-当前优先级是先让链路通：
+当前优先级按客户需求和 P0/P1/P2 backlog 推进。30 天内 P0/P1 必须 100% 可用，P2 可以存在已记录问题但不能影响主链路：
 
 ```text
 上云 API 模拟器
@@ -13,7 +13,7 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
   -> MQTT osd/state/events/reply
 ```
 
-实际业务逻辑、真实硬件协议、真实负载 SDK 和生产级云端凭证后续再补。
+当前不接实体设备。真实硬件协议、真实负载 SDK 和生产级云端凭证通过 adapter、mock 或 P2 风险归档处理；P0/P1 业务闭环不能因此空缺。
 
 ## 当前目标
 
@@ -25,7 +25,10 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | 设备侧通信 | MAVLink + ArduPilot SITL + 机巢模拟器 |
 | 数据存储现状 | SQLite + SQLAlchemy/aiosqlite |
 | 数据存储目标 | MongoDB 服务型 NoSQL，后续通过异步数据访问层接入 |
-| 当前重点 | 多人协同、全链路联调、Dock1 -> Dock3 协议迁移 |
+| 客户需求口径 | 客户文档定义业务能力全集，旧 Dock/Dock1/Dock2 表述只做业务意图和差异对照 |
+| 最终协议口径 | 客户需求涉及的上云能力必须按 DJI Dock 3 官方 Cloud API 定义 MQTT topic、method、payload、reply、字段、枚举和验收 |
+| 迁移边界 | 客户暂未提及、当前业务未用到的 Dock3 官方能力可以延期迁移，但必须在 method 台账或 P2 风险中标明 Deferred/Adapter 状态 |
+| 当前重点 | 多人协同、全链路联调、客户需求到 Dock3 的按需协议迁移 |
 
 ## 人员分工
 
@@ -45,8 +48,17 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/PROJECT_FILE_GUIDE.md` | 项目目录和关键文件职责说明 |
 | `docs/TEAM_COLLABORATION_GUIDE.md` | 三人协同边界、交接接口、冲突规避 |
 | `docs/DJI_DOCK3_MIGRATION_GUIDE.md` | Dock1 -> DJI Dock 3 迁移索引和工作方法 |
-| `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 全量分组迁移台账和当前进度 |
+| `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 客户需求迁移台账和当前进度 |
 | `docs/DOCK3_MODULE_STATUS.md` | 当前已完成/未完成模块状态总表、验收命令和下一批建议 |
+| `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md` | 客户需求覆盖矩阵：把客户 Word 文档归一到 Dock3 开发口径 |
+| `docs/CUSTOMER_REQUIREMENTS_TRACEABILITY_MATRIX.md` | 客户需求可追溯矩阵：章节 -> Dock3 落点 -> P0/P1/P2 -> 缺口 -> 验收证据 |
+| `docs/METHOD_COVERAGE_LEDGER.md` | MQTT method 覆盖台账：当前 243 个注册 method 的分组、P0/P1/P2 归类和关项要求 |
+| `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 交付 backlog：功能优先级、当前状态、30 天交付要求和验收证据 |
+| `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 实现缺口登记：代码入口、缺口、验收脚本和目标窗口 |
+| `docs/30_DAY_MILESTONE_PLAN.md` | 30 天里程碑计划：P0/P1 100% 可用、P2 风险归档、100% 开发完成和全链路验收安排 |
+| `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板：日级任务、人员分工、缺失脚本顺序和每日证据要求 |
+| `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡：44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
+| `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 Runbook：启动顺序、P0/P1 验收命令、P2 边界和证据归档 |
 | `docs/INTERFACE_DESIGN_SPEC.md` | 接口设计说明书：P0 字段映射、API 定义和 DJI 错误码规则 |
 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
@@ -123,10 +135,12 @@ http://Ubuntu服务器IP:8090
 - MQTT `osd/state/events/services_reply` 基础流转
 - Web 调试台初版
 - Dock1 -> Dock3 目标确认
+- 客户总需求与 Dock3 最终协议口径确认
+- DJI Cloud API Demo Docker 联调在线显示 Dock/Aircraft
 
 下一阶段：
 
-- 建立 DJI Dock 3 协议矩阵
-- 对齐当前 224 个已注册 method 的 Dock3 状态
+- 按客户需求覆盖矩阵补齐 Dock3 协议矩阵
+- 对齐当前 243 个已注册 method 的 Dock3 状态
 - 固化上云 API 模拟器和机巢模拟器
 - 补齐 request trace、MongoDB 目标架构和自动化 smoke test

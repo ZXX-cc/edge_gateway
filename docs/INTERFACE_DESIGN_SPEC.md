@@ -2,7 +2,7 @@
 
 本文档面向人员1、人员2、人员3，定义当前 Edge Gateway 按 DJI Dock 3 上云 API 迁移时的 P0 接口契约。当前目标是在 Ubuntu 服务器内纯模拟跑通链路，不接真实 Dock 3、无人机、飞控、机巢或负载设备。
 
-本说明书只把当前已联调链路写成详细规范。224 个已注册 method 的完整清单以 `DJI_CLOUD_API_INTERFACES.md` 为准，全量迁移进度以 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 为准。后续每完成一组 Dock3 校验，再把该组接口补充到本文。
+本说明书只把当前已联调链路写成详细规范。当前 243 个已注册 method 的完整清单以 `docs/METHOD_COVERAGE_LEDGER.md` 和 `DJI_CLOUD_API_INTERFACES.md` 为准，客户需求相关 Dock3 迁移进度以 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 为准。后续每完成一组客户需求相关 Dock3 校验，再把该组接口补充到本文。
 
 ## 1. 协议总览
 
@@ -740,13 +740,13 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 
 `property/set_reply` 的逐属性 `state.result` 可以保留 Dock3 允许的 `0/1/2`，但不得返回负数；需要精确表达失败原因时使用官方错误码。
 
-## 5. 224 Method 索引状态
+## 5. 243 Method 索引状态
 
 | 分组 | 数量 | 当前说明 |
 |---|---:|---|
 | Device | 51 | 已路由，P0 总批量覆盖 `property_set`、`property_get`；`airport_bind_status` 由 organization 云端模拟器单独覆盖；device topology 和 CMD/远程调试均已通过 Ubuntu 专项复测 |
 | Mission / Wayline | 42 | 已路由；Wayline P1 `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 已完成代码收敛并通过 Ubuntu 专项复测，旧 `load_wayline/execute_task/wayline_task_*` 仍待 Dock3 精校 |
-| Payload | 74 | 已路由，多数为模拟/占位，待负载协议补齐 |
+| Payload | 93 | 已路由，多数为模拟/占位，包含 ViewLink 调试入口，待负载协议补齐 |
 | Media / Live | 13 | 已路由，待 Dock3 `media.html`、`live.html` 校验 |
 | DRC | 24 | P0 覆盖 `drc_mode_enter`、`drc_mode_exit`；`tools/mqtt_dock3_drc_test.py` 已通过 Ubuntu 专项复测，覆盖官方 DRC 字段和值域；旧批量工具覆盖兼容控制数据 |
 | Dock | 8 | P0 覆盖 `dock_status_query`，字段待精校 |
