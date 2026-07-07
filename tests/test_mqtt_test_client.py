@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sys
@@ -122,7 +124,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             mqtt_module=FakeMqttModule,
         )
 
-        self.assertFalse(failed_client.connect(0.1))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(failed_client.connect(0.1))
 
     def setUp(self):
         self.client = MqttRequestClient(
@@ -181,6 +184,54 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_legacy"], 1)
+
+    def test_no_reply_request_omits_need_reply_and_succeeds_without_reply(self):
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            rc, payload = self.client.request(
+                "stick_control",
+                {"roll": 1024, "pitch": 1024},
+                0,
+                channel="drc",
+                need_reply=0,
+                verbose=False,
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertIsNone(payload)
+        topic, message, qos = self.client.client.published[-1]
+        self.assertEqual(topic, "thing/product/EDGEGW001/drc/down")
+        self.assertEqual(qos, 1)
+        self.assertNotIn("need_reply", message)
+
+    def test_no_reply_request_fails_if_exact_reply_arrives(self):
+        original_publish = self.client.client.publish
+
+        def publish_and_reply(topic, payload, qos=0):
+            original_publish(topic, payload, qos)
+            message = json.loads(payload)
+            reply = {
+                "tid": message["tid"],
+                "method": message["method"],
+                "gateway": "EDGEGW001",
+                "msg": "",
+                "data": {"result": 0},
+            }
+            self.client._on_message(None, None, mqtt_message("thing/product/EDGEGW001/drc/up", reply))
+
+        self.client.client.publish = publish_and_reply
+
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            rc, payload = self.client.request(
+                "stick_control",
+                {"roll": 1024, "pitch": 1024},
+                0,
+                channel="drc",
+                need_reply=0,
+                verbose=False,
+            )
+
+        self.assertEqual(rc, 8)
+        self.assertEqual(payload["method"], "stick_control")
 
 
 if __name__ == "__main__":

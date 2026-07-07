@@ -223,6 +223,7 @@ class MqttRequestClient:
         channel: str = "auto",
         allowed_results: Optional[set[int]] = None,
         verbose: bool = True,
+        need_reply: int = 1,
     ) -> tuple[int, Optional[dict]]:
         selected_channel = resolve_channel(method, channel)
         publish_tpl, reply_tpl = CHANNELS[selected_channel]
@@ -235,9 +236,10 @@ class MqttRequestClient:
             "timestamp": int(time.time() * 1000),
             "gateway": self.sn,
             "method": method,
-            "need_reply": 1,
             "data": data or {},
         }
+        if need_reply:
+            message["need_reply"] = 1
         waiter = {
             "event": Event(),
             "topic": "",
@@ -249,8 +251,20 @@ class MqttRequestClient:
 
         self.client.publish(publish_topic, json.dumps(message, ensure_ascii=False), qos=self.qos)
         if verbose:
-            print(f"published {method} -> {publish_topic}, tid={tid}")
+            print(f"published {method} -> {publish_topic}, tid={tid}, need_reply={need_reply}")
             print(f"waiting reply on {reply_topic}")
+
+        if not need_reply:
+            if waiter["event"].wait(timeout):
+                self.pending.pop(tid, None)
+                payload = waiter["payload"]
+                print(f"{method} unexpectedly received reply for no-reply request", file=sys.stderr)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 8, payload
+            self.pending.pop(tid, None)
+            if verbose:
+                print(f"no reply observed as expected: method={method}, tid={tid}")
+            return 0, None
 
         if not waiter["event"].wait(timeout):
             self.pending.pop(tid, None)
