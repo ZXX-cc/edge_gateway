@@ -118,6 +118,21 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             ],
         )
 
+    def test_connect_can_skip_default_reply_topics(self):
+        quiet_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            subscribe_default_replies=False,
+            observe_topics={"thing/product/EDGEGW001/requests_reply"},
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(quiet_client.connect(0.1))
+        self.assertEqual(quiet_client.client.subscriptions, [("thing/product/EDGEGW001/requests_reply", 1)])
+
     def test_connect_subscribes_events_when_requested(self):
         event_client = MqttRequestClient(
             "127.0.0.1",

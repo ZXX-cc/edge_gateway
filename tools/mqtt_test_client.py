@@ -136,6 +136,7 @@ class MqttRequestClient:
         subscribe_events: bool = False,
         subscribe_status: bool = False,
         observe_topics: Optional[Iterable[str]] = None,
+        subscribe_default_replies: bool = True,
         mqtt_module=None,
     ):
         if mqtt_module is None:
@@ -149,6 +150,7 @@ class MqttRequestClient:
         self.sn = sn
         self.qos = qos
         self.quiet_stale = quiet_stale
+        self.subscribe_default_replies = subscribe_default_replies
         self.event_topics = {EVENTS_TOPIC.format(sn=self.sn)} if subscribe_events else set()
         self.events_by_method: dict[str, list[dict[str, Any]]] = {}
         self.event_signal = Event()
@@ -160,7 +162,8 @@ class MqttRequestClient:
         self.observed_topics = set(observe_topics or ())
         self.observed_by_topic: dict[str, list[Any]] = {}
         self.observed_signal = Event()
-        self.connected = Event()
+        self.connected = False
+        self.connected_event = Event()
         self.connect_rc: Optional[int] = None
         self.pending: dict[str, dict[str, Any]] = {}
         self.stats = {
@@ -180,22 +183,25 @@ class MqttRequestClient:
         self.client.on_message = self._on_message
         self.client.connect(self.host, self.port, keepalive=30)
         self.client.loop_start()
-        return self.connected.wait(timeout) and self.connect_rc == 0
+        return self.connected_event.wait(timeout) and self.connect_rc == 0
 
     def disconnect(self) -> None:
         self.client.loop_stop()
         self.client.disconnect()
+        self.connected = False
 
     def _on_connect(self, client, userdata, flags, rc):
         self.connect_rc = rc
         if rc != 0:
+            self.connected = False
             print(f"connect failed: rc={rc}", file=sys.stderr)
-            self.connected.set()
+            self.connected_event.set()
             return
-        for _, reply_tpl in CHANNELS.values():
-            topic = reply_tpl.format(sn=self.sn)
-            self.client.subscribe(topic, qos=self.qos)
-            print(f"mqtt test subscribed -> {topic}")
+        if self.subscribe_default_replies:
+            for _, reply_tpl in CHANNELS.values():
+                topic = reply_tpl.format(sn=self.sn)
+                self.client.subscribe(topic, qos=self.qos)
+                print(f"mqtt test subscribed -> {topic}")
         for topic in sorted(self.event_topics):
             self.client.subscribe(topic, qos=self.qos)
             print(f"mqtt test subscribed -> {topic}")
@@ -205,7 +211,8 @@ class MqttRequestClient:
         for topic in sorted(self.observed_topics):
             self.client.subscribe(topic, qos=self.qos)
             print(f"mqtt test subscribed -> {topic}")
-        self.connected.set()
+        self.connected = True
+        self.connected_event.set()
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -459,7 +466,7 @@ class MqttRequestClient:
         return None
 
     def publish_json(self, topic: str, payload: dict) -> None:
-        self.client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=self.qos)
+        return self.client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=self.qos)
 
     def stale_total(self) -> int:
         return (
