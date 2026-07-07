@@ -25,6 +25,10 @@ BIT_CHARGING = 4
 BIT_CALIBRATE = 5
 BIT_PLC_READY = 6
 BIT_INIT = 7
+BIT_SYSTEM_BUSY = 8
+BIT_FAULT = 9
+BIT_R_AXIS_ZERO = 10
+BIT_HEADLIGHT_OFF = 11
 BIT_TAKEOFF_IN_PROGRESS = 0
 BIT_LANDING_IN_PROGRESS = 1
 BIT_TAKEOFF_ABORT_PROGRESS = 2
@@ -49,6 +53,10 @@ NEST_COMMANDS = {
     "estop-off": (GCSCommand.ESTOP_DEACTIVATE.value, 0),
     "initialize": (GCSCommand.INITIALIZE.value, 0),
     "fault-recovery": (GCSCommand.FAULT_RECOVERY.value, 0),
+    "light-on": (GCSCommand.LIGHT_ON.value, 0),
+    "light-off": (GCSCommand.LIGHT_OFF.value, 0),
+    "drone-power-on": (GCSCommand.DRONE_POWER_ON.value, 0),
+    "drone-power-off": (GCSCommand.DRONE_POWER_OFF.value, 0),
 }
 
 
@@ -68,6 +76,10 @@ ORDINARY_COMMAND_LABELS = {
     GCSCommand.ESTOP_DEACTIVATE.value: "急停解除",
     GCSCommand.INITIALIZE.value: "初始化",
     GCSCommand.FAULT_RECOVERY.value: "故障恢复",
+    GCSCommand.LIGHT_ON.value: "大灯开",
+    GCSCommand.LIGHT_OFF.value: "大灯关",
+    GCSCommand.DRONE_POWER_ON.value: "飞机上电",
+    GCSCommand.DRONE_POWER_OFF.value: "飞机下电",
 }
 
 

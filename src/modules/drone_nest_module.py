@@ -396,6 +396,10 @@ class DroneNestModule(BaseModule):
             calibrate_state = bool(boolstate1 & (1 << 5))
             ready_state = bool(boolstate1 & (1 << 6))
             init_state = bool(boolstate1 & (1 << 7))
+            system_busy = bool(boolstate1 & (1 << 8))
+            fault_state = bool(boolstate1 & (1 << 9))
+            r_axis_zero = bool(boolstate1 & (1 << 10))
+            headlight_off = bool(boolstate1 & (1 << 11))
 
             # boolstate2: 流程状态
             takeoff_in_progress = bool(boolstate2 & (1 << 0))
@@ -415,6 +419,10 @@ class DroneNestModule(BaseModule):
                 "calibrate_state": calibrate_state,
                 "ready_state": ready_state,
                 "init_state": init_state,
+                "system_busy": system_busy,
+                "fault_state": fault_state,
+                "r_axis_zero": r_axis_zero,
+                "headlight_off": headlight_off,
                 "takeoff_in_progress": takeoff_in_progress,
                 "landing_in_progress": landing_in_progress,
                 "takeoff_abort_progress": takeoff_abort_progress,
@@ -473,6 +481,10 @@ class DroneNestModule(BaseModule):
                 "nest_heartbeat": nest_heartbeat,
                 "drone_heartbeat": drone_heartbeat,
                 "plc_heartbeat": plc_heartbeat,
+                "system_busy": system_busy,
+                "fault_state": fault_state,
+                "r_axis_zero": r_axis_zero,
+                "headlight_off": headlight_off,
                 "clamp_state": msg.clamp_state,
                 "gate_state": msg.gate_state,
                 "landing_light_state": msg.landing_light_state,
@@ -736,6 +748,22 @@ class DroneNestModule(BaseModule):
     def fault_recovery(self):
         """故障恢复"""
         self.send_gcs_command(GCSCommand.FAULT_RECOVERY)
+
+    def light_on(self):
+        """大灯开"""
+        self.send_gcs_command(GCSCommand.LIGHT_ON)
+
+    def light_off(self):
+        """大灯关"""
+        self.send_gcs_command(GCSCommand.LIGHT_OFF)
+
+    def drone_power_on(self):
+        """飞机上电"""
+        self.send_gcs_command(GCSCommand.DRONE_POWER_ON)
+
+    def drone_power_off(self):
+        """飞机下电"""
+        self.send_gcs_command(GCSCommand.DRONE_POWER_OFF)
 
     # ========== 回调管理 ==========
 

@@ -14,8 +14,8 @@
 
 | 字段 | 类型 | 原始单位/编码 | 业务含义 | 当前模拟器映射 |
 |---|---|---|---|---|
-| `ordinary_order` | `uint16_t` | bit/枚举命令字 | 普通机巢动作命令 | 低 8 位：`0x01` 开舱门，`0x02` 关舱门，`0x03` 推杆推出，`0x04` 推杆收回，`0x05` 开始充电，`0x06` 停止充电 |
-| `takeoff_land_order` | `uint8_t` | 枚举命令字 | 起降相关命令 | 当前模拟器接收但未细分处理 |
+| `ordinary_order` | `uint16_t` | 枚举命令字 | 普通机巢动作命令 | `0x1101` 开门，`0x1102` 关门，`0x1103` 门停止，`0x0F01` 充电，`0x0F02` 不充电，`0x1401` 夹紧，`0x1402` 夹紧释放，`0x1403` 夹紧停止，`0x0A01` 急停，`0x0A02` 解除急停，`0x0A04` 初始化，`0x0A05` 故障恢复，`0x0A06` 大灯开，`0x0A07` 大灯关，`0x0B01` 飞机上电，`0x0B02` 飞机下电 |
+| `takeoff_land_order` | `uint8_t` | 枚举命令字 | 起降相关命令 | `0x01` 起飞，`0x02` 起飞终止，`0x04` 降落终止；协议 v1.3 未定义 `LANDING_START` |
 
 ## `DRONE_NEST_RESPONSE` 字段
 
@@ -24,18 +24,18 @@
 | `ac_temp` | `uint16_t` | `/10` | 摄氏度 | 空调温度 |
 | `nest_temperature` | `uint16_t` | `/10` | 摄氏度 | 机巢内部温度 |
 | `env_temperature` | `uint16_t` | `/10` | 摄氏度 | 外部环境温度 |
-| `wind_direction` | `uint16_t` | `/10` | 度 | 风向 |
+| `wind_direction` | `uint16_t` | `/100` | 度 | 风向 |
 | `wind_speed` | `uint16_t` | `/10` | m/s | 风速 |
 | `atmospheric_pressure` | `uint16_t` | `/10` | kPa | 大气压 |
-| `rainfall` | `uint16_t` | `1` | mm/m² | 降雨量 |
-| `charge_volt` | `uint16_t` | `/10` | V | 充电电压 |
-| `charge_current` | `uint16_t` | `/10` | A | 充电电流 |
+| `rainfall` | `uint16_t` | `/10` | mm/m² | 降雨量 |
+| `charge_volt` | `uint16_t` | `/100` | V | 充电电压 |
+| `charge_current` | `uint16_t` | `/100` | A | 充电电流 |
 | `error_code` | `uint16_t` | `1` | 错误码 | 机巢故障码 |
-| `boolstate1` | `uint16_t` | bitset | 位图 | 机巢布尔状态组 1；模拟器使用 bit4 表示充电中 |
+| `boolstate1` | `uint16_t` | bitset | 位图 | bit0 机巢心跳，bit1 飞机心跳，bit2 PLC心跳，bit3 急停，bit4 充电，bit5 校准，bit6 备飞，bit7 初始化，bit8 系统busy，bit9 故障，bit10 R轴0位，bit11 大灯状态：0开灯/1关灯 |
 | `boolstate2` | `uint16_t` | bitset | 位图 | 机巢布尔状态组 2 |
-| `clamp_state` | `uint8_t` | enum | 状态码 | 推杆/夹持状态；模拟器 `1` 推出，`2` 收回 |
-| `gate_state` | `uint8_t` | enum | 状态码 | 舱门状态；模拟器 `1` 打开，`2` 关闭 |
-| `landing_light_state` | `uint8_t` | enum | 状态码 | 降落灯状态 |
+| `clamp_state` | `uint8_t` | enum | 状态码 | `0` 默认，`1` 放开，`2` 夹紧，`3` 放开打开中，`4` 夹紧关闭中，`5` 暂停中，`6` 故障中 |
+| `gate_state` | `uint8_t` | enum | 状态码 | `0` 默认，`1` 打开，`2` 关闭，`3` 开启中，`4` 关闭中，`5` 暂停中，`6` 故障中 |
+| `landing_light_state` | `uint8_t` | enum | 状态码 | `0` 默认，`1` 打开，`2` 关闭，`6` 故障中 |
 
 ## `DRONE_NEST_ORDER_RESPONSE` 字段
 
@@ -69,6 +69,7 @@
 | `gate_state` | `cover_state` | 0 关闭，1 打开，2 动作中，3 异常 | 舱盖状态 |
 | `clamp_state` | `putter_state` | 0 收回/夹紧，1 推出/释放，2 动作中，3 异常 | 推杆/夹紧机构状态 |
 | `landing_light_state` | `supplement_light_state` | 0 关闭，1 打开 | 补光/降落灯状态 |
+| `fault_state` / `error_code` | `alarm_state` | 0 正常，1 告警 | 机巢故障状态 |
 | `ac_temp` | `air_conditioner.air_conditioner_state` | 0 关闭，1 开启 | 空调状态 |
 
 注意：上表是当前项目上云属性字段的集中映射层。Dock3 官方 properties 最终枚举确认后，应优先修改 `nest_property_mapper.py`，再同步本表。

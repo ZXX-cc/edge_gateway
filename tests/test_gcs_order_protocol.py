@@ -36,6 +36,21 @@ class GCSOrderProtocolTest(unittest.TestCase):
         self.assertFalse(hasattr(GCSCommand, "CALIBRATE_R"))
         self.assertNotIn("calibrate-r", NEST_COMMANDS)
 
+    def test_v13_ordinary_commands_are_exposed(self):
+        codec = GCSOrderCodec()
+
+        cases = {
+            GCSCommand.LIGHT_ON: ("light-on", 0x0A06),
+            GCSCommand.LIGHT_OFF: ("light-off", 0x0A07),
+            GCSCommand.DRONE_POWER_ON: ("drone-power-on", 0x0B01),
+            GCSCommand.DRONE_POWER_OFF: ("drone-power-off", 0x0B02),
+        }
+        for command, (name, expected_value) in cases.items():
+            encoded = codec.encode_gcs_command(command)
+            self.assertEqual((encoded >> 8) & 0xFFFF, expected_value)
+            self.assertEqual(encoded & 0xFF, 0)
+            self.assertEqual(NEST_COMMANDS[name], (expected_value, 0))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

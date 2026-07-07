@@ -20,11 +20,15 @@ from .protocol import (
     BIT_EMERGENCY_LANDING,
     BIT_ESTOP,
     BIT_INIT,
+    BIT_FAULT,
+    BIT_HEADLIGHT_OFF,
     BIT_LANDING_ABORT_PROGRESS,
     BIT_LANDING_IN_PROGRESS,
     BIT_NEST_HEARTBEAT,
     BIT_PLC_HEARTBEAT,
     BIT_PLC_READY,
+    BIT_R_AXIS_ZERO,
+    BIT_SYSTEM_BUSY,
     BIT_TAKEOFF_ABORT_PROGRESS,
     BIT_TAKEOFF_IN_PROGRESS,
 )
@@ -57,6 +61,10 @@ def response_to_nest_state(msg: Any) -> Dict[str, Any]:
         "calibrate_state": _bit(boolstate1, BIT_CALIBRATE),
         "ready_state": _bit(boolstate1, BIT_PLC_READY),
         "init_state": _bit(boolstate1, BIT_INIT),
+        "system_busy": _bit(boolstate1, BIT_SYSTEM_BUSY),
+        "fault_state": _bit(boolstate1, BIT_FAULT),
+        "r_axis_zero": _bit(boolstate1, BIT_R_AXIS_ZERO),
+        "headlight_off": _bit(boolstate1, BIT_HEADLIGHT_OFF),
         "takeoff_in_progress": _bit(boolstate2, BIT_TAKEOFF_IN_PROGRESS),
         "landing_in_progress": _bit(boolstate2, BIT_LANDING_IN_PROGRESS),
         "takeoff_abort_progress": _bit(boolstate2, BIT_TAKEOFF_ABORT_PROGRESS),
@@ -112,8 +120,8 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
             "air_conditioner_state": 1 if nest_state["ac_temp"] > 0 else 0,
             "switch_time": 0,
         }
-    if "error_code" in nest_state:
-        properties["alarm_state"] = 1 if nest_state["error_code"] else 0
+    if "error_code" in nest_state or "fault_state" in nest_state:
+        properties["alarm_state"] = 1 if nest_state.get("error_code") or nest_state.get("fault_state") else 0
     if "drone_heartbeat" in nest_state:
         properties["drone_in_dock"] = 1 if nest_state["drone_heartbeat"] else 0
 

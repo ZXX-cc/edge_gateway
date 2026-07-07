@@ -14,11 +14,14 @@ from protocol import (
     BIT_DRONE_HEARTBEAT,
     BIT_ESTOP,
     BIT_INIT,
+    BIT_HEADLIGHT_OFF,
     BIT_LANDING_ABORT_PROGRESS,
     BIT_LANDING_IN_PROGRESS,
     BIT_NEST_HEARTBEAT,
     BIT_PLC_HEARTBEAT,
     BIT_PLC_READY,
+    BIT_R_AXIS_ZERO,
+    BIT_SYSTEM_BUSY,
     BIT_TAKEOFF_ABORT_PROGRESS,
     BIT_TAKEOFF_IN_PROGRESS,
     NEST_COMMANDS,
@@ -62,6 +65,8 @@ class NestSimulator:
                 | (1 << BIT_DRONE_HEARTBEAT)
                 | (1 << BIT_PLC_HEARTBEAT)
                 | (1 << BIT_PLC_READY)
+                | (1 << BIT_R_AXIS_ZERO)
+                | (1 << BIT_HEADLIGHT_OFF)
             ),
             "boolstate2": 0,
             "clamp_state": 2,
@@ -183,6 +188,16 @@ class NestSimulator:
             self.env_data["boolstate1"] &= ~(1 << BIT_ESTOP)
             self.env_data["boolstate1"] |= (1 << BIT_INIT) | (1 << BIT_PLC_READY)
             self.env_data["error_code"] = 0
+        elif ordinary_order == NEST_COMMANDS["light-on"][0]:
+            self.env_data["landing_light_state"] = 1
+            self.env_data["boolstate1"] &= ~(1 << BIT_HEADLIGHT_OFF)
+        elif ordinary_order == NEST_COMMANDS["light-off"][0]:
+            self.env_data["landing_light_state"] = 2
+            self.env_data["boolstate1"] |= 1 << BIT_HEADLIGHT_OFF
+        elif ordinary_order == NEST_COMMANDS["drone-power-on"][0]:
+            self.env_data["boolstate1"] |= 1 << BIT_DRONE_HEARTBEAT
+        elif ordinary_order == NEST_COMMANDS["drone-power-off"][0]:
+            self.env_data["boolstate1"] &= ~(1 << BIT_DRONE_HEARTBEAT)
 
         if takeoff_land_order == 0x01:
             self.env_data["boolstate2"] |= 1 << BIT_TAKEOFF_IN_PROGRESS

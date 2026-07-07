@@ -1525,6 +1525,8 @@ class DeviceManager:
                 ('charging_state', 0): GCSCommand.CHARGE_STOP,
                 ('putter_state', 1): GCSCommand.CLAMP_RELEASE,   # 推出=释放夹紧
                 ('putter_state', 0): GCSCommand.CLAMP_TIGHTEN,   # 收回=夹紧
+                ('supplement_light_state', 1): GCSCommand.LIGHT_ON,
+                ('supplement_light_state', 0): GCSCommand.LIGHT_OFF,
             }
 
             cmd = cmd_map.get((prop_name, prop_value))
@@ -1541,6 +1543,23 @@ class DeviceManager:
 
         except Exception as e:
             logger.error(f"{command_name}: Failed to send nest command: {e}")
+            return False
+
+    def _send_drone_power_command(self, command_name: str, power_on: bool) -> bool:
+        """通过机巢协议下发飞机上下电；无机巢模块时保留模拟拓扑更新。"""
+        if not self._nest_module:
+            logger.info("%s: Nest module not available, using simulated drone power state", command_name)
+            return bool(Config.get('simulation.nest_command_fallback', True))
+
+        try:
+            from src.generated_dialect.gcs_order_protocol import GCSCommand
+
+            cmd = GCSCommand.DRONE_POWER_ON if power_on else GCSCommand.DRONE_POWER_OFF
+            self._nest_module.send_gcs_command(cmd)
+            logger.info("%s: Nest command sent -> %s", command_name, cmd.name)
+            return True
+        except Exception as e:
+            logger.error("%s: Failed to send drone power command: %s", command_name, e)
             return False
 
     def _build_cmd_reply(
@@ -1678,28 +1697,14 @@ class DeviceManager:
     # ========== API处理器：灯光/SDR/仿真/调试 ==========
 
     def handle_supplement_light_open(self, msg: dict) -> dict:
-        """补光灯开"""
-        # TODO: 补光灯控制需通过实际硬件接口（如GPIO或机巢扩展协议）实现
-        # 当前仅更新物模型状态
-        logger.info("Supplement light ON")
-        self.update_properties({'supplement_light_state': 1})
-        return self._build_cmd_reply(
-            msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'action': 'supplement_light_open'},
-        )
+        """补光灯开 - 通过机巢协议真实下发"""
+        sent = self._send_nest_command('supplement_light_open', 'supplement_light_state', 1)
+        return self._build_nest_command_reply(msg, 'supplement_light_open', sent)
 
     def handle_supplement_light_close(self, msg: dict) -> dict:
-        """补光灯关"""
-        logger.info("Supplement light OFF")
-        self.update_properties({'supplement_light_state': 0})
-        return self._build_cmd_reply(
-            msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'action': 'supplement_light_close'},
-        )
+        """补光灯关 - 通过机巢协议真实下发"""
+        sent = self._send_nest_command('supplement_light_close', 'supplement_light_state', 0)
+        return self._build_nest_command_reply(msg, 'supplement_light_close', sent)
 
     def handle_sdr_workmode_switch(self, msg: dict) -> dict:
         """SDR工作模式切换"""
@@ -1864,9 +1869,11 @@ class DeviceManager:
     def handle_drone_open(self, msg: dict) -> dict:
         """
         飞行器开机
-        TODO: 通过机巢主控继电器或飞控电源管理模块实现真实上电
         """
         logger.info("Drone power ON")
+        sent = self._send_drone_power_command('drone_open', power_on=True)
+        if self._nest_module and not sent:
+            return self._build_nest_command_reply(msg, 'drone_open', False)
         for dev in self._sub_devices.values():
             dev.online = True
             dev.paired = True
@@ -1888,9 +1895,11 @@ class DeviceManager:
     def handle_drone_close(self, msg: dict) -> dict:
         """
         飞行器关机
-        TODO: 通过机巢主控继电器或飞控电源管理模块实现真实断电
         """
         logger.info("Drone power OFF")
+        sent = self._send_drone_power_command('drone_close', power_on=False)
+        if self._nest_module and not sent:
+            return self._build_nest_command_reply(msg, 'drone_close', False)
         for dev in self._sub_devices.values():
             dev.online = False
         first_dev = next(iter(self._sub_devices.values()), None)

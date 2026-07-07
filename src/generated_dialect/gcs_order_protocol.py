@@ -35,6 +35,11 @@ class GCSCommand(IntEnum):
     ESTOP_DEACTIVATE = 0x0A02  # 解除急停
     INITIALIZE = 0x0A04  # 初始化
     FAULT_RECOVERY = 0x0A05  # 故障恢复
+    LIGHT_ON = 0x0A06  # 大灯开
+    LIGHT_OFF = 0x0A07  # 大灯关
+
+    DRONE_POWER_ON = 0x0B01  # 飞机上电
+    DRONE_POWER_OFF = 0x0B02  # 飞机下电
 
 
 # ==================== 机巢主控 → 地面站（状态位） ====================

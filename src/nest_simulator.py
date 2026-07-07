@@ -131,6 +131,20 @@ class NestSimulator:
             self.env_data['charge_current'] = 0
             self.env_data['boolstate1'] &= ~(1 << 4)
             print("模拟器：停止充电")
+        elif ordinary_order == 0x0A06:
+            self.env_data['landing_light_state'] = 1
+            self.env_data['boolstate1'] &= ~(1 << 11)
+            print("模拟器：大灯开")
+        elif ordinary_order == 0x0A07:
+            self.env_data['landing_light_state'] = 2
+            self.env_data['boolstate1'] |= (1 << 11)
+            print("模拟器：大灯关")
+        elif ordinary_order == 0x0B01:
+            self.env_data['boolstate1'] |= (1 << 1)
+            print("模拟器：飞机上电")
+        elif ordinary_order == 0x0B02:
+            self.env_data['boolstate1'] &= ~(1 << 1)
+            print("模拟器：飞机下电")
         elif ordinary_order:
             print(f"模拟器：未识别普通命令 0x{ordinary_order:04X}")
 
