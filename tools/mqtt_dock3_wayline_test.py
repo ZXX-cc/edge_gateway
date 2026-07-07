@@ -4,6 +4,8 @@
 import argparse
 import sys
 import time
+import tempfile
+import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,13 +20,38 @@ def now_ms():
     return int(time.time() * 1000)
 
 
-def official_prepare_payload(flight_id):
+def write_mock_kmz(path: Path):
+    kml = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <LineString>
+        <coordinates>
+          149.165237,-35.363262,50
+          149.165537,-35.363562,60
+          149.165837,-35.363862,70
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
+"""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("wpmz/template.kml", kml)
+
+
+def file_url(path: str) -> str:
+    parsed = Path(path).expanduser().resolve()
+    return parsed.as_uri() if parsed.exists() else path
+
+
+def official_prepare_payload(flight_id, wayline_file):
     return {
         "flight_id": flight_id,
         "task_type": 0,
         "execute_time": now_ms() + 30_000,
         "file": {
-            "url": "https://example.invalid/simulated-wayline.kmz",
+            "url": file_url(wayline_file),
             "fingerprint": "simulated-fingerprint",
         },
         "ready_conditions": {},
@@ -57,10 +84,48 @@ class Dock3WaylineClient(MqttRequestClient):
         return self.stale_total()
 
 
+def wayline_file_summary(payload):
+    try:
+        return payload["data"]["output"]["ext"]["file"]
+    except (KeyError, TypeError):
+        return {}
+
+
+def assert_wayline_file_parsed(payload, min_waypoints):
+    summary = wayline_file_summary(payload)
+    if not summary.get("parsed"):
+        print(f"wayline file not parsed: {summary}", file=sys.stderr)
+        return 10
+    waypoint_count = summary.get("waypoint_count")
+    if not isinstance(waypoint_count, int) or waypoint_count < min_waypoints:
+        print(
+            f"wayline waypoint_count too small: expected>={min_waypoints}, actual={waypoint_count}",
+            file=sys.stderr,
+        )
+        return 11
+    print(
+        "wayline file parsed: "
+        f"format={summary.get('format')}, waypoint_count={waypoint_count}, files={summary.get('files')}"
+    )
+    return 0
+
+
 def run_wayline_checks(client, args):
     flight_id = args.flight_id or f"dock3-wayline-{int(time.time())}"
+    rc, prepare_payload = client.request(
+        "flighttask_prepare",
+        official_prepare_payload(flight_id, args.wayline_file),
+        args.timeout,
+        [0],
+        "sent",
+    )
+    if rc != 0:
+        return rc
+    rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
+    if rc != 0:
+        return rc
+
     checks = [
-        ("flighttask_prepare", official_prepare_payload(flight_id), [0], "sent"),
         ("flighttask_execute", {"flight_id": flight_id}, [0], "in_progress"),
         ("flighttask_progress", {"flight_id": flight_id}, [0], "in_progress"),
         ("flighttask_pause", {}, [0], "paused"),
@@ -78,11 +143,18 @@ def run_wayline_checks(client, args):
         ("flighttask_pause", {}, [DEVICE_STATE_UNSUPPORTED], "rejected"),
     ]
     for method, data, allowed, status in checks:
-        rc, _ = client.request(method, data, args.timeout, allowed, status)
+        rc, payload = client.request(method, data, args.timeout, allowed, status)
         if rc != 0:
             return rc
+        if method == "flighttask_progress" and payload:
+            rc = assert_wayline_file_parsed(payload, args.expect_waypoint_count)
+            if rc != 0:
+                return rc
         time.sleep(args.step_delay)
 
+    if not client.has_event("flighttask_ready"):
+        print("expected flighttask_ready event was not observed", file=sys.stderr)
+        return 5
     if not client.has_event("flighttask_progress"):
         print("expected flighttask_progress event was not observed", file=sys.stderr)
         return 6
@@ -101,44 +173,58 @@ def main():
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--flight-id", default="")
+    parser.add_argument("--wayline-file", default="")
+    parser.add_argument("--expect-waypoint-count", type=int, default=3)
     parser.add_argument("--step-delay", type=float, default=0.1)
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
-    client = Dock3WaylineClient(
-        args.host,
-        args.port,
-        args.sn,
-        args.qos,
-        quiet_stale=args.quiet_stale,
-        client_id_prefix="edge_gateway_dock3_wayline",
-        subscribe_events=True,
-    )
-    if not client.connect(args.timeout):
-        print("timeout waiting for MQTT connection", file=sys.stderr)
-        return 1
+    temp_dir = None
+    if not args.wayline_file:
+        temp_dir = tempfile.TemporaryDirectory()
+        mock_path = Path(temp_dir.name) / "simulated-wayline.kmz"
+        write_mock_kmz(mock_path)
+        args.wayline_file = str(mock_path)
+        print(f"mock wayline kmz -> {args.wayline_file}")
+
     try:
-        rc = run_wayline_checks(client, args)
-        if rc != 0:
-            return rc
-        ignored_total = client.ignored_total()
-        if args.fail_on_stale and ignored_total:
-            print(f"stale replies observed: {client.stats}", file=sys.stderr)
-            return 9
-        print(
-            "dock3 wayline test ok "
-            f"(accepted={client.stats['accepted']}, events={client.stats['events']}, "
-            f"ignored_mismatched={client.stats['ignored_mismatched']}, "
-            f"ignored_legacy={client.stats['ignored_legacy']}, "
-            f"ignored_late={client.stats['ignored_late']}, "
-            f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
-            f"ignored_total={ignored_total})"
+        client = Dock3WaylineClient(
+            args.host,
+            args.port,
+            args.sn,
+            args.qos,
+            quiet_stale=args.quiet_stale,
+            client_id_prefix="edge_gateway_dock3_wayline",
+            subscribe_events=True,
         )
-        return 0
+        if not client.connect(args.timeout):
+            print("timeout waiting for MQTT connection", file=sys.stderr)
+            return 1
+        try:
+            rc = run_wayline_checks(client, args)
+            if rc != 0:
+                return rc
+            ignored_total = client.ignored_total()
+            if args.fail_on_stale and ignored_total:
+                print(f"stale replies observed: {client.stats}", file=sys.stderr)
+                return 9
+            print(
+                "dock3 wayline test ok "
+                f"(accepted={client.stats['accepted']}, events={client.stats['events']}, "
+                f"ignored_mismatched={client.stats['ignored_mismatched']}, "
+                f"ignored_legacy={client.stats['ignored_legacy']}, "
+                f"ignored_late={client.stats['ignored_late']}, "
+                f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
+                f"ignored_total={ignored_total})"
+            )
+            return 0
+        finally:
+            client.disconnect()
     finally:
-        client.disconnect()
+        if temp_dir:
+            temp_dir.cleanup()
 
 
 if __name__ == "__main__":
