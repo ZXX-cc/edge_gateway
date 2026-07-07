@@ -6,30 +6,20 @@ import asyncio
 import json
 import sys
 import time
-import uuid
 from threading import Event, Thread
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-mqtt = None
+from mqtt_test_client import MqttRequestClient
+
 Config = None
 load_config = None
 TopicBuilder = None
-parse_message = None
 CloudConnectionManager = None
 DeviceManager = None
 SubDevice = None
-
-
-def build_client(client_id):
-    if hasattr(mqtt, "CallbackAPIVersion"):
-        try:
-            return mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=client_id)
-        except TypeError:
-            pass
-    return mqtt.Client(client_id=client_id)
 
 
 def start_background_loop():
@@ -50,19 +40,27 @@ def stop_background_loop(loop, thread):
         loop.close()
 
 
-class OrganizationRequestClient:
+class OrganizationRequestClient(MqttRequestClient):
     """Minimal MQTT client required by CloudConnectionManager.send_request()."""
 
-    def __init__(self, host, port, gateway_sn, qos):
-        self.host = host
-        self.port = port
+    def __init__(self, host, port, gateway_sn, qos, mqtt_module=None):
         self.gateway_sn = gateway_sn
-        self.qos = qos
         self.connected = False
-        self._connected_event = Event()
         self._reply_handler = None
         self._status_reply_handler = None
-        self._client = build_client(f"edge_gateway_org_test_{uuid.uuid4().hex[:8]}")
+        self._requests_reply_topic = TopicBuilder.requests_reply(gateway_sn)
+        self._status_reply_topic = TopicBuilder.status_reply(gateway_sn)
+        super().__init__(
+            host,
+            port,
+            gateway_sn,
+            qos,
+            quiet_stale=True,
+            client_id_prefix="edge_gateway_org_test",
+            observe_topics={self._requests_reply_topic, self._status_reply_topic},
+            subscribe_default_replies=False,
+            mqtt_module=mqtt_module,
+        )
 
     def set_reply_handler(self, handler):
         self._reply_handler = handler
@@ -71,70 +69,50 @@ class OrganizationRequestClient:
         self._status_reply_handler = handler
 
     def connect(self, timeout=10.0):
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
-        self._client.connect(self.host, self.port, keepalive=30)
-        self._client.loop_start()
-        return self._connected_event.wait(timeout)
+        self.client.on_disconnect = self._on_disconnect
+        return super().connect(timeout)
 
     def disconnect(self):
-        self._client.loop_stop()
-        self._client.disconnect()
+        super().disconnect()
         self.connected = False
 
     def publish_requests(self, data):
         topic = TopicBuilder.requests(self.gateway_sn)
-        payload = json.dumps(data, ensure_ascii=False)
-        result = self._client.publish(topic, payload, qos=self.qos)
+        result = self.publish_json(topic, data)
         print(f"published {data.get('method')} -> {topic}, tid={data.get('tid')}")
-        return result.rc == mqtt.MQTT_ERR_SUCCESS
+        return getattr(result, "rc", 0) == 0
 
     def publish_event(self, data):
         topic = TopicBuilder.events(self.gateway_sn)
-        payload = json.dumps(data, ensure_ascii=False)
-        result = self._client.publish(topic, payload, qos=self.qos)
+        result = self.publish_json(topic, data)
         print(f"published {data.get('method')} -> {topic}, tid={data.get('tid')}")
-        return result.rc == mqtt.MQTT_ERR_SUCCESS
+        return getattr(result, "rc", 0) == 0
 
     def publish_status(self, data):
         topic = TopicBuilder.status(self.gateway_sn)
-        payload = json.dumps(data, ensure_ascii=False)
-        result = self._client.publish(topic, payload, qos=self.qos)
+        result = self.publish_json(topic, data)
         print(f"published {data.get('method')} -> {topic}, tid={data.get('tid')}")
-        return result.rc == mqtt.MQTT_ERR_SUCCESS
+        return getattr(result, "rc", 0) == 0
 
     def _on_connect(self, client, userdata, flags, rc):
-        if rc != 0:
-            print(f"connect failed: rc={rc}", file=sys.stderr)
-            self._connected_event.set()
-            return
-        self.connected = True
-        reply_topic = TopicBuilder.requests_reply(self.gateway_sn)
-        self._client.subscribe(reply_topic, qos=self.qos)
-        print(f"organization test subscribed -> {reply_topic}")
-        if self._status_reply_handler:
-            status_reply_topic = TopicBuilder.status_reply(self.gateway_sn)
-            self._client.subscribe(status_reply_topic, qos=self.qos)
-            print(f"organization test subscribed -> {status_reply_topic}")
-        self._connected_event.set()
+        super()._on_connect(client, userdata, flags, rc)
+        self.connected = rc == 0
 
     def _on_disconnect(self, client, userdata, rc):
         self.connected = False
 
-    def _on_message(self, client, userdata, msg):
-        payload = parse_message(msg.payload)
-        if not payload:
-            print(f"invalid reply on {msg.topic}", file=sys.stderr)
+    def _handle_observed_message(self, topic, payload):
+        if not isinstance(payload, dict):
+            print(f"invalid reply on {topic}", file=sys.stderr)
             return
         method = payload.get("method", "")
-        if msg.topic == TopicBuilder.status_reply(self.gateway_sn):
-            print(f"received <- {msg.topic}, method={method}, tid={payload.get('tid')}")
+        if topic == self._status_reply_topic:
+            print(f"received <- {topic}, method={method}, tid={payload.get('tid')}")
             if self._status_reply_handler:
                 self._status_reply_handler(method, payload)
             return
 
-        print(f"received <- {msg.topic}, method={method}, tid={payload.get('tid')}")
+        print(f"received <- {topic}, method={method}, tid={payload.get('tid')}")
         if self._reply_handler:
             self._reply_handler(method, payload)
 
@@ -420,28 +398,22 @@ def verify_db_binding(loop, gateway_sn, organization_id, timeout):
 
 
 def main():
-    global mqtt, Config, load_config, TopicBuilder, parse_message
+    global Config, load_config, TopicBuilder
     global CloudConnectionManager, DeviceManager, SubDevice
 
     args = parse_args()
-    try:
-        import paho.mqtt.client as mqtt_module
-    except ImportError as exc:
-        raise SystemExit("paho-mqtt is required. Install requirements-ubuntu.txt first.") from exc
 
     try:
         from src.utils.config import Config as ConfigClass, load_config as load_config_func
-        from src.utils.message import TopicBuilder as TopicBuilderClass, parse_message as parse_message_func
+        from src.utils.message import TopicBuilder as TopicBuilderClass
         from src.cloud_api.connection_manager import CloudConnectionManager as CloudConnectionManagerClass
         from src.device.manager import DeviceManager as DeviceManagerClass, SubDevice as SubDeviceClass
     except ImportError as exc:
         raise SystemExit("Project dependencies are missing. Activate .venv and install requirements-ubuntu.txt first.") from exc
 
-    mqtt = mqtt_module
     Config = ConfigClass
     load_config = load_config_func
     TopicBuilder = TopicBuilderClass
-    parse_message = parse_message_func
     CloudConnectionManager = CloudConnectionManagerClass
     DeviceManager = DeviceManagerClass
     SubDevice = SubDeviceClass
