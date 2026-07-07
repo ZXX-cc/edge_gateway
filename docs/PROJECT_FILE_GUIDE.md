@@ -143,6 +143,8 @@ src/core/connection.py
 | `src/database/media_db.py` | 媒体文件和上传状态 |
 | `src/database/alarm_db.py` | 告警记录 |
 | `src/database/device_db.py` | 设备绑定和设备信息 |
+| `src/utils/request_trace.py` | 非阻塞 request trace 记录器，写入 `logs/request_trace/YYYY-MM/request_trace_YYYY-MM-DD.jsonl` |
+| `tools/request_trace_query.py` | request trace 查询工具，可按 `tid`、`bid`、`method`、`event`、`result` 过滤 |
 | `src/database/device_state_db.py` | 设备状态 |
 | `src/database/cloud_sync_manager.py` | 云端同步任务 |
 | `src/database/retention_manager.py` | 数据清理、VACUUM 和保留策略 |

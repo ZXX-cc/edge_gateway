@@ -19,7 +19,7 @@
 | Ubuntu 纯模拟部署与基础链路 | 80% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，剩 systemd/一键化和环境固化 |
 | Dock3 P0 协议链路 | 92% | property、services、requests、status、events、DRC 控制数据、CMD 控制命令、错误码边界已通过批量和专项验证，剩旧回包噪声清理和字段精校 |
 | 客户需求相关 method/字段迁移 | 53% | properties 官方可写/只读边界、device topology、DRC 官方字段、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
-| 非阻塞、日志、容错基础 | 45% | 日志落盘、字段中文名、部分 async warning 已修复，NoSQL/MongoDB 和完整 request trace 未实现 |
+| 非阻塞、日志、容错基础 | 55% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现，待 Ubuntu 复测；NoSQL/MongoDB 和远程日志仍待迁移 |
 | 模拟器和测试工具 | 81% | 云端模拟器、organization/status/topology/properties/DRC/CMD/Wayline/P0 批量测试工具可用，P0、DRC、CMD、Wayline 工具已支持旧回包统计并通过 Ubuntu 复测，媒体模拟器仍待补 |
 
 综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 60%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。

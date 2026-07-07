@@ -375,6 +375,30 @@ python tools/mqtt_dock3_osd_state_test.py --timeout 15
 
 脚本会按 `tid + method` 精确匹配回包。如果同一 `tid` 先收到旧格式回包，例如 `method=null`、`data={"silent_mode":-1}` 或 `data.result=-2`，脚本会统计为 `ignored_mismatched` 或 `ignored_legacy` 并继续等待正确回包。出现非零统计时，应检查本地 broker 上是否有旧网关、Web 调试台、模拟器或 broker 规则在抢答。清理环境后可加 `--fail-on-stale`，把旧格式重复回包作为失败。
 
+### Request Trace
+
+P0-15 request trace 当前以非阻塞 JSONL 方式落盘，默认开启：
+
+```bash
+logs/request_trace/YYYY-MM/request_trace_YYYY-MM-DD.jsonl
+```
+
+每条 trace 至少包含 `ts`、`event`、`direction`、`topic`、`method`、`tid`、`bid`、`gateway`、`result`、`elapsed_ms`、`payload` 和 `extra`。MQTT 热路径只写入内存队列，后台线程异步落盘；超长 payload 会按 `request_trace.payload_max_chars` 截断。
+
+Ubuntu 复测流程：
+
+```bash
+python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
+python tools/request_trace_query.py --method property_set --summary
+python tools/request_trace_query.py --method property_set --limit 20
+```
+
+成功标志：summary 中 `total > 0`，并能看到 `mqtt_received`、`mqtt_handler_completed`、`mqtt_publish_reply`。需要追单个请求时，用测试输出中的 `tid`：
+
+```bash
+python tools/request_trace_query.py --tid <tid> --json
+```
+
 `airport_bind_status` 不属于 P0 总批量必过项。Dock3 官方 organization 验收必须走 `requests -> requests_reply` 云端模拟器流程；services 兼容路径可用 `python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --include-legacy-bind-status` 单独附加验证。
 
 该命令会自动执行：

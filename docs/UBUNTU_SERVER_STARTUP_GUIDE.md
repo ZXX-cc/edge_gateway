@@ -107,6 +107,10 @@ grep -E 'ERROR|WARNING|CRITICAL' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).lo
 # 按 tid 追踪一次 MQTT 请求
 grep '你的tid' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
 
+# 查询结构化 request trace
+python tools/request_trace_query.py --tid 你的tid --json
+python tools/request_trace_query.py --method property_set --summary
+
 # 查找带中文标注的关键字段
 grep -E 'drc_state\\(DRC链路状态\\)|capacity_percent\\(电量百分比\\)|longitude\\(经度\\)' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
 ```
@@ -118,6 +122,7 @@ grep -E 'drc_state\\(DRC链路状态\\)|capacity_percent\\(电量百分比\\)|lo
 - MAVLink 连接、心跳、Dispatcher 启动、模块启动。
 - 每次 MQTT 下行命令的 `topic/method/tid/bid/need_reply`。
 - 每次 handler 执行结果和回包 `reply_topic/result`，并带关键字段中文标注，例如 `capacity_percent(电量百分比)`、`drc_state(DRC链路状态)`。
+- 每次 request trace 的 `mqtt_received`、`mqtt_handler_completed`、`mqtt_publish_reply`、`cloud_request_matched_reply` 或 `cloud_request_timeout`。
 - 任务、航线、DRC、机巢、媒体、日志上传等关键业务过程。
 - warning/error/critical 级别 traceback。
 
