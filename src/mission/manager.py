@@ -1611,8 +1611,10 @@ class MissionManager:
         self._wayline_mission_state = 2  # 航线准备状态
         self._current_step = 5  # 航线执行进入准备状态
 
+        simulate_enabled = isinstance(simulate_mission, dict) and simulate_mission.get('is_enable') == 1
+
         # ---- 实际航线上传到飞控 ----
-        if self._current_wayline and self._waypoint_manager:
+        if self._current_wayline and self._waypoint_manager and not simulate_enabled:
             self._waypoint_manager.clear_waypoints()
             for wp in self._current_wayline:
                 wp_dict = {
@@ -1642,6 +1644,12 @@ class MissionManager:
                 "No local wayline coordinates available for waypoint upload: %s",
                 file_info.get('url', '')[:80],
             )
+        elif self._current_wayline and self._waypoint_manager and simulate_enabled:
+            logger.info(
+                "Simulation mission enabled, skip waypoint upload to FC: flight_id=%s, waypoints=%s",
+                flight_id,
+                len(self._current_wayline),
+            )
 
         # 断点续飞设置
         if break_point:
@@ -1654,7 +1662,7 @@ class MissionManager:
             logger.info(f"RTH altitude configured: {rth_altitude}m")
 
         # 模拟器任务
-        if simulate_mission and simulate_mission.get('is_enable') == 1:
+        if simulate_enabled:
             logger.info(f"Simulate mission enabled: lat={simulate_mission.get('latitude')}, "
                        f"lon={simulate_mission.get('longitude')}")
 

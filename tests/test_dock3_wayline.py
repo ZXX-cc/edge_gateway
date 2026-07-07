@@ -105,6 +105,23 @@ class FailingFlightControl:
         return {"success": False, "message": "降落超时"}
 
 
+class RecordingWaypointManager:
+    def __init__(self):
+        self.clear_calls = 0
+        self.added = []
+        self.upload_calls = []
+
+    def clear_waypoints(self):
+        self.clear_calls += 1
+
+    def add_waypoint_from_dict(self, waypoint):
+        self.added.append(waypoint)
+
+    def upload_mission(self, timeout=15.0):
+        self.upload_calls.append(timeout)
+        return False
+
+
 class Dock3WaylineTest(unittest.TestCase):
     def test_parse_local_kmz_extracts_waypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +176,8 @@ class Dock3WaylineTest(unittest.TestCase):
         manager = MissionManager()
         manager.set_event_callback(events.append)
         manager.set_flight_control(flight_control)
+        waypoint_manager = RecordingWaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
         manager.start_mission_monitor = lambda: None
         manager.stop_mission_monitor = lambda: None
         manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
@@ -183,6 +202,9 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertTrue(file_summary["parsed"])
         self.assertEqual(file_summary["waypoint_count"], 2)
         self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
+        self.assertEqual(waypoint_manager.clear_calls, 0)
+        self.assertEqual(waypoint_manager.added, [])
+        self.assertEqual(waypoint_manager.upload_calls, [])
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
             "flight_id": "flight-001",

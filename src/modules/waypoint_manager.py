@@ -326,6 +326,17 @@ class WaypointManager(BaseModule):
         )
         self.wploader.add(wp)
 
+    @staticmethod
+    def _coord_to_mission_int(value) -> int:
+        """Return MAVLink MISSION_ITEM_INT coordinate without double scaling."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0
+        if abs(number) > 180:
+            return int(round(number))
+        return int(round(number * 1e7))
+
     def clear_mission(self):
         """清空当前任务"""
         self.wploader.clear()
@@ -629,8 +640,8 @@ class WaypointManager(BaseModule):
                 wp.current,
                 wp.autocontinue,
                 wp.param1, wp.param2, wp.param3, wp.param4,
-                int(wp.x * 1e7),
-                int(wp.y * 1e7),
+                self._coord_to_mission_int(wp.x),
+                self._coord_to_mission_int(wp.y),
                 wp.z,
                 mavlink.MAV_MISSION_TYPE_MISSION
             )
