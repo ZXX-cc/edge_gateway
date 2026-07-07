@@ -42,7 +42,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-03 | 组织绑定和绑定状态 | 设备绑定与组织管理 | `requests/requests_reply` organization | 已可用 | `airport_bind_status/get/bind` 成功、失败、超时均可处理 | `mqtt_organization_test.py` |
 | P0-04 | 设备拓扑 | 设备管理、飞机-机巢关系 | `sys/product/{sn}/status:update_topo` | 已可用 | 网关和子设备拓扑按 Dock3 字段发布，能处理离线拓扑 | `mqtt_dock3_device_test.py` |
 | P0-05 | Dock3 可写属性 | 设备属性 | `property/set`、`property/set_reply`、`property_get` | 已可用 | `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 可写，只读/非法拒绝 | `mqtt_dock3_properties_test.py` |
-| P0-06 | 飞行器 OSD 基础遥测 | F-023 到 F-050 等 OSD P0 | `thing/product/{sn}/osd`、`thing/product/{sn}/state` | Needs Test | 经纬度、高度、姿态、速度、电池、GPS、飞行时间、机场 OSD 和属性 state 可重复验证，字段按 Dock3 精校 | `mqtt_dock3_osd_state_test.py`、字段矩阵、P0 批量 |
+| P0-06 | 飞行器 OSD 基础遥测 | F-023 到 F-050 等 OSD P0 | `thing/product/{sn}/osd`、`thing/product/{sn}/state` | 已可用 | 经纬度、高度、姿态、速度、电池、GPS、飞行时间、机场 OSD 和属性 state 可重复验证；字段单位和枚举继续按 Dock3 精校 | `mqtt_dock3_osd_state_test.py` 已通过，字段矩阵继续补 |
 | P0-07 | 飞行模式映射 | F-001 到 F-012、F-019 等 P0 | `mode_code`、`gear`、任务状态 | 部分可用 | ArduPilot 模式映射到 Dock3 状态，不再出现关键模式 UNKNOWN | SITL 模式切换测试 |
 | P0-08 | 基础飞控控制 | F-051 到 F-060 等 P0 | `drc`、`wayline`、相关 services | 部分可用 | 起飞、FlyTo、返航、降落、解锁、任务开始/暂停/恢复/取消能在 SITL 或模拟链路跑通 | DRC/Wayline/SITL 专项 |
 | P0-09 | DRC 建链和杆量 | F-007、F-059 | `drc_mode_enter/exit`、`drc/down`、`drc/up` | 已可用 | 官方 payload、值域、错误 topic 和 `drc_state` 同步可用 | `mqtt_dock3_drc_test.py` |

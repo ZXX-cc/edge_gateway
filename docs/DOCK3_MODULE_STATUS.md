@@ -46,7 +46,7 @@
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
 | 日志与可观测性 | 部分完成 | 65% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名 | request trace、链路耗时汇总、日志上传、日志压缩策略未完整实现 | 补全请求追踪和远程日志大类 | 人员1/人员3 |
 | 非阻塞与容错基础 | 部分完成 | 45% | 已修复若干 coroutine 未 await warning，停止流程可正常 await | MongoDB/NoSQL 目标未实现，数据库写入和文件 IO 仍需全面后台化审计 | 建异步数据访问层和操作队列 | 人员1/人员2 |
-| Properties / OSD / State | Needs Test | 72% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；已新增 `mqtt_dock3_osd_state_test.py` 校验机场 OSD、飞行器 OSD 和属性 state | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校；新脚本待 Ubuntu 复测 | 跑 OSD/state 专项并补字段矩阵 | 人员1 |
+| Properties / OSD / State | 已通过 | 75% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；`mqtt_dock3_osd_state_test.py` 已在 Ubuntu 通过，覆盖机场 OSD、飞行器 OSD 和属性 state，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0` | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校；当前 OSD 仍是纯模拟零值 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 70% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测 | `domain/type/sub_type` 官方产品枚举、多真实子设备语义未精校 | 精校设备类型枚举和多设备拓扑 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 70% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件和 SQLite 持久化已验证 | 真实云端差异、多设备绑定、解绑流程仍需补 | 补真实云端联调和解绑/多设备场景 | 人员1 |
 | DRC 指令飞行 | 已通过 | 68% | `drc_mode_enter/exit`、`stick_control`、`drone_control`、`drc_gimbal_speed_push`、非法字段和值域错误已通过专项复测 | DRC 心跳、`takeoff_to_point`、超时恢复、MAVLink 模式语义仍需精校 | 补 DRC 心跳和飞控模式联动 | 人员1/人员2 |

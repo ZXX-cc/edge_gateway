@@ -371,6 +371,8 @@ python tools/mqtt_dock3_osd_state_test.py --timeout 15
 
 该脚本启动后会先通过 `update_topo` 把默认子设备 `DRONESIM001` 注册到网关内存拓扑，除非显式加 `--skip-topo`；随后监听 `thing/product/EDGEGW001/osd`、`thing/product/DRONESIM001/osd` 和 `thing/product/EDGEGW001/state`，并主动下发一次 `property_set silent_mode` 触发状态变化。验收重点是：网关 SN 的 OSD 必须是 Dock3 机场物模型结构，不能混用飞行器 `battery/attitude` 裸遥测；飞行器 SN 的 OSD 必须包含经纬度、高度、姿态、速度、电池、GPS、飞行时间；`state` 必须能按 Dock3 property 结构上报属性变化。成功标志为 `dock3 osd/state test ok`。
 
+2026-07-07 Ubuntu 复测已通过，关键结果：`update_topo result=0`、`property_set silent_mode state.result=0`、`dock_osd=1`、`drone_osd=1`、`state=1`、`invalid=0`。
+
 脚本会按 `tid + method` 精确匹配回包。如果同一 `tid` 先收到旧格式回包，例如 `method=null`、`data={"silent_mode":-1}` 或 `data.result=-2`，脚本会统计为 `ignored_mismatched` 或 `ignored_legacy` 并继续等待正确回包。出现非零统计时，应检查本地 broker 上是否有旧网关、Web 调试台、模拟器或 broker 规则在抢答。清理环境后可加 `--fail-on-stale`，把旧格式重复回包作为失败。
 
 `airport_bind_status` 不属于 P0 总批量必过项。Dock3 官方 organization 验收必须走 `requests -> requests_reply` 云端模拟器流程；services 兼容路径可用 `python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --include-legacy-bind-status` 单独附加验证。

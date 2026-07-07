@@ -28,7 +28,7 @@
 
 | ID | Backlog | 当前缺口 | 主要代码入口 | 必补验收 | 目标窗口 | 状态 |
 |---|---|---|---|---|---|---|
-| G-P0-01 | P0-06 OSD 基础遥测 | 客户需求相关 Dock3 OSD/state 字段、单位、枚举仍未逐项精校；已新增 OSD/state 专项脚本，客户未用字段可 Deferred | `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `src/device/manager.py` | `tools/mqtt_dock3_osd_state_test.py` Ubuntu 复测 + 字段矩阵精校 | Day 4-7 | Needs Test |
+| G-P0-01 | P0-06 OSD 基础遥测 | OSD/state 专项已通过 Ubuntu 复测；客户需求相关 Dock3 字段单位、枚举、真实 SITL 动态值仍需逐项精校，客户未用字段可 Deferred | `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `src/device/manager.py` | 字段矩阵精校 + 真实 SITL 动态 OSD 验证 | Day 4-7 | In Progress |
 | G-P0-02 | P0-07 飞行模式映射 | ArduPilot Copter/Plane/QuadPlane 模式和 Dock3 `mode_code/gear` 仍需统一映射表 | `src/modules/mode_control.py`, `src/modules/flight_control.py`, `src/modules/telemetry_module.py` | SITL 模式切换专项；E2E 中检查 `mode_code` | Day 4-7 | Open |
 | G-P0-03 | P0-08 基础飞控控制 | 起飞、FlyTo、返航、降落、解锁、任务控制目前部分停留在模拟回包或未完整 SITL 行为验证 | `src/modules/flight_control.py`, `src/drc/controller.py`, `src/mission/manager.py` | DRC/Wayline/SITL 联合专项 | Day 8-15 | In Progress |
 | G-P0-04 | P0-12 机巢 v1.3 基础通信 | 自定义消息已存在，但缺 12003/12004/12005 协议级专项脚本和拒绝条件验证 | `src/modules/drone_nest_module.py`, `src/nest_simulator.py`, `src/generated_dialect/drone_nest.py` | 新增 `tools/nest_v13_protocol_test.py` | Day 8-11 | Open |

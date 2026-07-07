@@ -88,7 +88,7 @@
 |---|---|---:|---|---|
 | 云端连接、上线、心跳 | 已可用 | 85% | 生产 TLS、鉴权、桥接策略待固化 | `events`、`osd`、Demo 在线状态 |
 | 设备拓扑和绑定 | 已可用 | 75% | `domain/type/sub_type` 官方枚举、多设备真实语义待精校 | `device`、`organization`、`status/status_reply` |
-| Properties / OSD / State | 部分可用 | 70% | `properties` 已通过专项复测，已新增 OSD/state 专项脚本；客户需求涉及的单位、枚举和真实 Dock3 字段仍需精校 | `properties`、`osd`、`state` |
+| Properties / OSD / State | 已可用 | 75% | `properties` 和 OSD/state 专项均已通过 Ubuntu 复测；客户需求涉及的单位、枚举和真实 Dock3 字段仍需精校 | `properties`、`osd`、`state` |
 | DRC 指令飞行 | 已可用 | 68% | 心跳、超时恢复、飞控模式语义待补 | `drc`、`drc/down`、`drc/up` |
 | CMD 远程调试 | 已可用 | 72% | 真实执行耗时、失败码、设备动作开关待补 | `cmd` |
 | Wayline 航线 | 部分可用 | 62% | KMZ/WPML、媒体计数、真实 SITL 航点执行待补 | `wayline` |

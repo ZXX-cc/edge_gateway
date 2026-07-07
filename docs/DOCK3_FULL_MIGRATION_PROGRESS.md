@@ -110,8 +110,8 @@
 | `user_experience_improvement` | 已通过 Ubuntu 专项复测 | 只接受 `0/1/2` |
 | 非官方 `rw` 历史字段 | 已通过 Ubuntu 专项复测 | `battery_store_mode`、`alarm_state`、`drc_state`、未知属性和非法值通过 `property/set` 返回 `state.result=1`；相关动作保留 services 控制 |
 | `drc_state` | 已验证 | enter 后为 `2`，exit 后为 `0` |
-| OSD 遥测 | Needs Test | 经度、纬度、高度、电池、姿态、GPS 已上报；新增 `mqtt_dock3_osd_state_test.py` 校验飞行器 OSD 和机场 OSD 基础结构，字段仍需逐项对照官方属性表 |
-| Dock 状态字段 | 部分完成 | `cover_state`、`putter_state`、`drone_in_dock` 已纳入 OSD/state 验收；`charging_state` 等仍是当前模拟枚举，未完成 Dock3 枚举精校 |
+| OSD 遥测 | 已通过 Ubuntu 专项复测 | `mqtt_dock3_osd_state_test.py` 已通过，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0`；经度、纬度、高度、电池、姿态、GPS 已具备基础上报结构，字段仍需逐项对照官方属性表 |
+| Dock 状态字段 | 部分完成 | `cover_state`、`putter_state`、`drone_in_dock`、`charging_state` 已纳入 OSD/state 验收；当前仍是模拟枚举，未完成 Dock3 枚举精校 |
 
 #### 3.1.1 Batch 1 字段对照结果
 
