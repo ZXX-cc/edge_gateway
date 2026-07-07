@@ -52,6 +52,43 @@
 | P0 总批量验证入口 | 已通过 Ubuntu 复测 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 一次覆盖 `dock_status_query`、properties、DRC、错误 topic，输出 `dock3 p0 batch test ok`；`airport_bind_status` 官方链路单独走云端模拟器 |
 | 旧格式重复回包 | 已识别，非阻塞 | P0 批量测试中可见同一 `tid` 先收到旧格式 `property/set_reply` 或旧 `data.result=-2` 回包，脚本已按 `tid + method + Dock3格式` 忽略并继续等待正确回包；后续清理 broker/旧进程后可用 `--fail-on-stale` 做严格验证 |
 
+### 1.1 命令链路专用日志
+
+为方便无平台联调时判断“云端/MQTT -> 网关 -> MAVLink 机巢 -> 网关 -> MQTT 回包”是否通，已新增独立命令链路日志。该日志只记录 MQTT 下发命令、网关 handler、网关转发的机巢命令、机巢执行回包和 MQTT 回包，不记录心跳、OSD 定频上报、空轮询。
+
+网关侧日志文件：
+
+```text
+logs/command_trace/YYYY-MM/command_trace_YYYY-MM-DD.log
+```
+
+机巢模拟器侧日志文件：
+
+```text
+logs/nest_simulator_command_trace.log
+```
+
+查看命令链路：
+
+```bash
+tail -f logs/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
+tail -f logs/nest_simulator_command_trace.log
+```
+
+典型事件顺序：
+
+```text
+mqtt_command_received
+gateway_nest_command_send
+nest_command_encoded
+nest_command_mavlink_sent
+nest_order_response_received
+mqtt_handler_completed
+mqtt_reply_sent
+```
+
+机巢模拟器默认不再打印心跳和空轮询。如果需要看周期状态帧，启动模拟器时显式加 `--log-status`。
+
 ## 2. 客户需求分组进度
 
 状态说明：

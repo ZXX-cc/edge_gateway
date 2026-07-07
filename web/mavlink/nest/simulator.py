@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import struct
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 
 from protocol import (
     BIT_CALIBRATE,
@@ -39,12 +42,14 @@ class NestSimulator:
         system_id: int = 101,
         component_id: int = 1,
         log_status: bool = False,
+        command_log: str = "logs/nest_simulator_command_trace.log",
     ):
         self.host = host
         self.port = port
         self.system_id = system_id
         self.component_id = component_id
         self.log_status = log_status
+        self.command_log = Path(command_log) if command_log else None
         self.sock = None
         self.client_addr = None
         self.running = False
@@ -82,6 +87,21 @@ class NestSimulator:
             print(f"{key:<18}: {value}")
         print("=" * (22 + len(title)))
 
+    def _trace_command(self, event, **fields):
+        if not self.command_log:
+            return
+        try:
+            self.command_log.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "time": datetime.now().isoformat(timespec="milliseconds"),
+                "event": event,
+            }
+            record.update(fields)
+            with self.command_log.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     @staticmethod
     def crc16(data, extra=0):
         crc = 0xFFFF
@@ -108,10 +128,11 @@ class NestSimulator:
             + struct.pack("<H", crc)
         )
         self._send_raw(frame)
-        self._print_block("发送 HEARTBEAT", [
-            ("target", self.client_addr),
-            ("system/component", f"{self.system_id}/{self.component_id}"),
-        ])
+        if self.log_status:
+            self._print_block("发送 HEARTBEAT", [
+                ("target", self.client_addr),
+                ("system/component", f"{self.system_id}/{self.component_id}"),
+            ])
 
     def _send_nest_response(self, reason="command"):
         msg = drone_nest.MAVLink_drone_nest_response_message(
@@ -132,7 +153,7 @@ class NestSimulator:
             landing_light_state=self.env_data["landing_light_state"],
         )
         self._send_raw(msg.pack(self.mav))
-        if reason != "periodic" or self.log_status:
+        if reason == "command" or self.log_status:
             self._print_block("发送 DRONE_NEST_RESPONSE", [
                 ("reason", reason),
                 ("target", self.client_addr),
@@ -144,17 +165,25 @@ class NestSimulator:
                 ("error_code", f"0x{self.env_data['error_code']:04X}"),
             ])
 
-    def _send_order_response(self, ordinary_response=0, takeoff_land_response=0):
+    def _send_order_response(self, ordinary_response=0, takeoff_land_response=0, triggered_by_command=False):
         msg = drone_nest.MAVLink_drone_nest_order_response_message(
             ordinary_order_response=ordinary_response,
             takeoff_land_order_response=takeoff_land_response,
         )
         self._send_raw(msg.pack(self.mav))
-        self._print_block("发送 DRONE_NEST_ORDER_RESPONSE", [
-            ("target", self.client_addr),
-            ("ordinary_response", f"0x{ordinary_response:08X}"),
-            ("takeoff_land_resp", f"0x{takeoff_land_response:08X}"),
-        ])
+        if triggered_by_command or self.log_status:
+            self._print_block("发送 DRONE_NEST_ORDER_RESPONSE", [
+                ("target", self.client_addr),
+                ("ordinary_response", f"0x{ordinary_response:08X}"),
+                ("takeoff_land_resp", f"0x{takeoff_land_response:08X}"),
+            ])
+        if triggered_by_command or ordinary_response or takeoff_land_response:
+            self._trace_command(
+                "simulator_order_response_sent",
+                target=str(self.client_addr),
+                ordinary_response=f"0x{ordinary_response:08X}",
+                takeoff_land_response=f"0x{takeoff_land_response:08X}",
+            )
 
     def _update_state_from_command(self, ordinary_order, takeoff_land_order):
         if ordinary_order == NEST_COMMANDS["open-door"][0]:
@@ -222,22 +251,32 @@ class NestSimulator:
     def _handle_message(self, msg):
         msg_type = msg.get_type()
         if msg_type == "HEARTBEAT":
-            self._print_block("收到 HEARTBEAT", [
-                ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
-            ])
+            if self.log_status:
+                self._print_block("收到 HEARTBEAT", [
+                    ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
+                ])
             self._send_heartbeat()
         elif msg_type == "DRONE_NEST_COMMAND":
             ordinary = getattr(msg, "ordinary_order", 0)
             takeoff_land = getattr(msg, "takeoff_land_order", 0)
+            has_command = bool(ordinary or takeoff_land)
             self._update_state_from_command(ordinary, takeoff_land)
-            if ordinary or takeoff_land:
+            if has_command:
+                self._trace_command(
+                    "simulator_command_received",
+                    src=f"{msg.get_srcSystem()}/{msg.get_srcComponent()}",
+                    ordinary=f"0x{ordinary:04X}",
+                    ordinary_label=self._ordinary_command_label(ordinary),
+                    takeoff_land=f"0x{takeoff_land:02X}",
+                    takeoff_land_label=self._takeoff_land_command_label(takeoff_land),
+                )
                 self._print_block("收到 DRONE_NEST_COMMAND", [
                     ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
                     ("ordinary", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
                     ("takeoff_land", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
                 ])
-            self._send_order_response()
-            self._send_nest_response()
+            self._send_order_response(triggered_by_command=has_command)
+            self._send_nest_response(reason="command" if has_command else "poll")
 
     def _periodic_status_loop(self):
         while self.running:
@@ -280,6 +319,11 @@ def main():
     parser.add_argument("--system-id", type=int, default=101, help="模拟器 system id")
     parser.add_argument("--component-id", type=int, default=1, help="模拟器 component id")
     parser.add_argument("--log-status", action="store_true", help="打印周期状态帧")
+    parser.add_argument(
+        "--command-log",
+        default="logs/nest_simulator_command_trace.log",
+        help="只记录非心跳命令的 JSONL 日志文件；设为空字符串可关闭",
+    )
     args = parser.parse_args()
 
     simulator = NestSimulator(
@@ -288,6 +332,7 @@ def main():
         system_id=args.system_id,
         component_id=args.component_id,
         log_status=args.log_status,
+        command_log=args.command_log,
     )
     simulator.run()
 

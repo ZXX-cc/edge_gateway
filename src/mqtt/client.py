@@ -10,6 +10,7 @@ import paho.mqtt.client as mqtt
 
 from src.utils.logger import get_logger
 from src.utils.config import Config
+from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder, TopicBuilder, parse_message
 from src.utils.field_labels import format_with_labels
 from src.utils.dji_error_codes import (
@@ -268,6 +269,15 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
+        trace_command(
+            "mqtt_reply_sent",
+            source_topic=source_topic,
+            reply_topic=reply_topic,
+            method=method,
+            tid=data.get("tid"),
+            result=self._reply_result(data),
+            ok=ok,
+        )
         logger.info(self._format_log_block("MQTT REPLY SENT", [
             ("source_topic", source_topic),
             ("reply_topic", reply_topic),
@@ -290,6 +300,16 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
+        trace_command(
+            "mqtt_error_reply_sent",
+            source_topic=source_topic,
+            reply_topic=reply_topic,
+            method=data.get("method"),
+            tid=data.get("tid"),
+            result=self._reply_result(data),
+            msg=data.get("msg"),
+            ok=ok,
+        )
         logger.info(self._format_log_block("MQTT ERROR REPLY SENT", [
             ("source_topic", source_topic),
             ("reply_topic", reply_topic),
@@ -419,6 +439,23 @@ class MQTTClient:
                 logger.warning(f"No method in message on {msg.topic}")
                 return
 
+            is_downstream_command = (
+                msg.topic.endswith('/services')
+                or msg.topic.endswith('/property/set')
+                or msg.topic.endswith('/drc/down')
+            )
+            if is_downstream_command:
+                trace_command(
+                    "mqtt_command_received",
+                    topic=msg.topic,
+                    method=method,
+                    tid=payload.get("tid"),
+                    bid=payload.get("bid"),
+                    need_reply=payload.get("need_reply"),
+                    payload_bytes=len(msg.payload or b""),
+                    data=payload.get("data", {}),
+                )
+
             logger.info(self._format_log_block("MQTT COMMAND RECEIVED", [
                 ("topic", msg.topic),
                 ("method", method),
@@ -505,6 +542,14 @@ class MQTTClient:
                         return
 
                     result = handler(payload)
+                    if is_downstream_command:
+                        trace_command(
+                            "mqtt_handler_completed",
+                            source_topic=msg.topic,
+                            method=method,
+                            tid=payload.get("tid"),
+                            result=self._reply_result(result),
+                        )
                     logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
                         ("method", method),
                         ("tid", payload.get('tid')),

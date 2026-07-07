@@ -10,6 +10,8 @@ from pymavlink import mavutil
 import sys
 import os
 
+from src.utils.command_trace import trace_command
+
 # 导入自定义 dialect（包含你的自定义消息）
 from src.generated_dialect.drone_nest import *
 from src.generated_dialect.gcs_order_protocol import (
@@ -568,6 +570,18 @@ class DroneNestModule(BaseModule):
             if is_empty_poll_response:
                 return
 
+            trace_command(
+                "nest_order_response_received",
+                ordinary_raw=ordinary_info.get("raw"),
+                ordinary_command_code=ordinary_info.get("command_code"),
+                ordinary_reply_status=ordinary_info.get("reply_status"),
+                ordinary_reject_reason_code=ordinary_info.get("reject_reason_code"),
+                takeoff_raw=takeoff_info.get("raw"),
+                takeoff_command_code=takeoff_info.get("command_code"),
+                takeoff_reply_status=takeoff_info.get("reply_status"),
+                takeoff_reject_reason_code=takeoff_info.get("reject_reason_code"),
+                rejections=result["rejections"],
+            )
             self.log(f"检测到常规回复: {result['ordinary_response']}", "INFO")
             self.log(f"检测到起飞回复: {result['takeoff_land_response']}", "INFO")
 
@@ -613,6 +627,12 @@ class DroneNestModule(BaseModule):
             ordinary_order = int((gcs_order >> 8) & 0xFFFF)  # uint16_t
             takeoff_land_order = int(gcs_order & 0xFF)  # uint8_t
 
+            trace_command(
+                "nest_command_encoded",
+                commands=[cmd.name for cmd in commands],
+                ordinary_order=f"0x{ordinary_order:04X}",
+                takeoff_land_order=f"0x{takeoff_land_order:02X}",
+            )
             self.send_gcs_order_response(ordinary_order, takeoff_land_order)
 
             self.log(
@@ -683,6 +703,11 @@ class DroneNestModule(BaseModule):
                     connection.write(msgbuf)
 
             if verbose:
+                trace_command(
+                    "nest_command_mavlink_sent",
+                    ordinary_order=f"0x{int(ordinary_order):04X}",
+                    takeoff_land_order=f"0x{int(takeoff_land_order):02X}",
+                )
                 self.log(
                     f"📤 已发送指令: ordinary=0x{ordinary_order:04X}, "
                     f"takeoff_land=0x{takeoff_land_order:02X}"

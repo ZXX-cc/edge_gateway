@@ -27,6 +27,7 @@ import asyncio
 from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
+from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
@@ -1573,6 +1574,14 @@ class DeviceManager:
             bool: 命令是否成功发送
         """
         if not self._nest_module:
+            trace_command(
+                "gateway_nest_command_fallback",
+                method=command_name,
+                property=prop_name,
+                value=prop_value,
+                reason="nest_module_not_available",
+                simulation=bool(Config.get('simulation.nest_command_fallback', True)),
+            )
             if Config.get('simulation.nest_command_fallback', True):
                 logger.info(
                     "%s: Nest module not available, using simulated state update %s=%s",
@@ -1601,9 +1610,22 @@ class DeviceManager:
 
             cmd = cmd_map.get((prop_name, prop_value))
             if cmd:
+                trace_command(
+                    "gateway_nest_command_send",
+                    method=command_name,
+                    property=prop_name,
+                    value=prop_value,
+                    gcs_command=cmd.name,
+                )
                 self._nest_module.send_gcs_command(cmd)
                 logger.info(f"{command_name}: Nest command sent -> {cmd.name}")
             else:
+                trace_command(
+                    "gateway_nest_command_unmapped",
+                    method=command_name,
+                    property=prop_name,
+                    value=prop_value,
+                )
                 logger.warning(f"{command_name}: No nest command mapping for {prop_name}={prop_value}")
                 return False
 
@@ -1618,6 +1640,14 @@ class DeviceManager:
     def _send_drone_power_command(self, command_name: str, power_on: bool) -> bool:
         """通过机巢协议下发飞机上下电；无机巢模块时保留模拟拓扑更新。"""
         if not self._nest_module:
+            trace_command(
+                "gateway_nest_command_fallback",
+                method=command_name,
+                action="drone_power",
+                power_on=power_on,
+                reason="nest_module_not_available",
+                simulation=bool(Config.get('simulation.nest_command_fallback', True)),
+            )
             logger.info("%s: Nest module not available, using simulated drone power state", command_name)
             return bool(Config.get('simulation.nest_command_fallback', True))
 
@@ -1625,6 +1655,13 @@ class DeviceManager:
             from src.generated_dialect.gcs_order_protocol import GCSCommand
 
             cmd = GCSCommand.DRONE_POWER_ON if power_on else GCSCommand.DRONE_POWER_OFF
+            trace_command(
+                "gateway_nest_command_send",
+                method=command_name,
+                action="drone_power",
+                power_on=power_on,
+                gcs_command=cmd.name,
+            )
             self._nest_module.send_gcs_command(cmd)
             logger.info("%s: Nest command sent -> %s", command_name, cmd.name)
             return True
