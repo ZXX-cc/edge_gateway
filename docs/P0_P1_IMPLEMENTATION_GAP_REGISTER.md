@@ -35,7 +35,7 @@
 | G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞到 Dock3 state/properties/HMS 的映射仍不完整 | `src/device/nest_property_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py` | `nest_v13_protocol_test.py` + `mqtt_dock3_cmd_test.py` | Day 8-11 | In Progress |
 | G-P0-06 | P0-15 Request Trace | Ubuntu properties 专项后 trace 断言已通过，能按 method 汇总 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply`，并统计 Dock3 property/set 逐属性 `result=0/1` | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 后续全链路 E2E 保存 trace 证据 | Day 4-10 | Closed |
 | G-P0-07 | P0-16 非阻塞主链路 | DB、文件、媒体、日志、固件等路径需要系统性审计，缺自动化卡顿/超时验证 | `src/database/*`, `src/media/manager.py`, `src/modules/log_manager.py`, `src/device/manager.py` | E2E 压测和超时注入 | Day 8-15 | Open |
-| G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `ignored_total=0`；media 已通过 Ubuntu 专项并接入编排，live 已接入代码编排待复测 | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_shared.py` | 后续把 HMS/log/config 接入同一入口 | Day 25-27 | Closed |
+| G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `ignored_total=0`；media 和 live 均已通过 Ubuntu 专项，HMS/log 专项脚本已补齐待复测 | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_shared.py` | 后续把 HMS/log/config 接入同一入口 | Day 25-27 | Closed |
 
 ## 2. P1 缺口
 
@@ -48,16 +48,16 @@
 | G-P1-05 | P1-05 KMZ/WPML 基础解析 | Wayline 已支持 mock KMZ 下载/校验/解析并转换到内部任务准备链路；最新 E2E Wayline 阶段输出 `dock3 wayline test ok (accepted=11, events=9, ignored_total=0)` | `src/mission/manager.py`, `src/modules/waypoint_manager.py`, `src/database/mission_db.py` | 真实 SITL 航点执行继续归入 G-P1-06 | Day 12-15 | Closed |
 | G-P1-06 | P1-06 真实 SITL 航点执行 | 当前 Wayline 脚本以纯模拟为主，不证明真实 SITL 航点执行 | `src/modules/waypoint_manager.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | SITL Wayline E2E | Day 12-15 | Open |
 | G-P1-07 | P1-07 媒体基础 | Dock3 media 文件列表、删除、上传优先级和上传事件已通过 Ubuntu 专项；输出 `dock3 media test ok (accepted=6, events=2, ignored_total=0)` | `src/cloud_api/dock3_media.py`, `src/media/manager.py`, `tools/mqtt_dock3_media_test.py` | 真实 OSS 凭证、断点续传和上传完成事件后续精校 | Day 16-20 | Closed |
-| G-P1-08 | P1-08 直播基础 | Dock3 live mock 推流代码和脚本已补齐；`live_start/live_stop/live_set_quality/live_lens_change/live_capability_query` 支持 `mock://` 纯模拟和 `live_status_notify` 事件，本地单测与 E2E dry-run 已通过，待 Ubuntu 网关实跑验证 | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | `python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` | Day 16-20 | Needs Test |
+| G-P1-08 | P1-08 直播基础 | Dock3 live mock 推流已通过 Ubuntu 网关实跑；`live_capability_query/live_start/live_set_quality/live_lens_change/live_stop` 均返回 Dock3 `output.status`，`live_status_notify` 事件正常，非法 `live_start` 返回 `325001/rejected`，输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)` | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | 后续真实 RTMP/WebRTC/GB28181 adapter 精校 | Day 16-20 | Closed |
 | G-P1-09 | P1-09 相机/云台基础控制 | 拍照、录像、变焦、云台角度/速度需要和 Dock3 payload/DRC 语义统一；历史 `web/mavlink/viewlink/` 只作 adapter 参考，不作为 Web 交付 | `src/payload/camera.py`, `src/payload/gimbal.py`, `src/modules/gimbal_control.py` | Payload 专项或并入 media/live | Day 16-20 | In Progress |
-| G-P1-10 | P1-10 HMS 告警 | Dock3 HMS 文案 key、告警结构、恢复/清除和事件未迁移 | `src/database/alarm_db.py`, `src/device/manager.py` | 新增 `tools/mqtt_dock3_hms_log_test.py` | Day 21-24 | Open |
-| G-P1-11 | P1-11 远程日志 | 日志列表、压缩、上传模拟、超时和失败码未按 Dock3 验收 | `src/modules/log_manager.py`, `src/database/operation_db.py`, `src/utils/logger.py` | `tools/mqtt_dock3_hms_log_test.py` | Day 21-24 | Open |
+| G-P1-10 | P1-10 HMS 告警 | 已补 Dock3 HMS 查询/清除的 `output.status`、告警结构规范化、模拟注入告警和 `hms` 事件；本地单测通过，待 Ubuntu 网关专项复测 | `src/cloud_api/dock3_hms_log.py`, `src/database/alarm_db.py`, `src/device/manager.py` | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` | Day 21-24 | Needs Test |
+| G-P1-11 | P1-11 远程日志 | 已补本地日志扫描、`device_log_list_get/device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝；本地单测通过，待 Ubuntu 网关专项复测 | `src/cloud_api/dock3_hms_log.py`, `src/modules/log_manager.py`, `src/utils/logger.py` | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` | Day 21-24 | Needs Test |
 | G-P1-12 | P1-12 固件升级模拟 | 升级任务、进度、失败码和后台任务模型未完成 Dock3 验收 | `src/device/manager.py`, `src/database/operation_db.py` | 新增 `tools/mqtt_dock3_firmware_config_test.py` | Day 21-24 | Open |
 | G-P1-13 | P1-13 配置更新 | 配置下发、持久化、回滚和状态事件未完成 Dock3 验收 | `src/device/manager.py`, `src/cloud_api/connection_manager.py`, `src/database/device_state_db.py` | `tools/mqtt_dock3_firmware_config_test.py` | Day 21-24 | Open |
 | G-P1-14 | P1-14 多设备/解绑/离线 | 当前单子设备拓扑、组织绑定、绑定后 `device_binding/update_topo` 和 `status_reply` 已通过；仍需多子设备、解绑、离线、重连回归 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py` | 扩展 `tools/mqtt_dock3_device_test.py` 和 `tools/mqtt_organization_test.py` | Day 21-24 | In Progress |
 | G-P1-15 | P1-15 CMD 进阶失败码 | CMD 基础已通过，但真实耗时、失败码、安全拒绝和任务进度需更贴近 Dock3 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 扩展 `tools/mqtt_dock3_cmd_test.py` | Day 21-24 | Needs Test |
 | G-P1-16 | P1-16 数据保留和操作记录 | 操作记录、遥测保留、告警保留和清理策略有基础，但缺 P1 验收证据 | `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
-| G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已通过 Ubuntu 的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 一键输出 6 段成功；media 已通过专项并接入编排，live 已接入编排待复测，HMS/log/config 后续按域加入 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | E2E 后续扩展剩余 P1 域 | Day 25-27 | Closed |
+| G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已通过 Ubuntu 的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 一键输出 6 段成功；media/live 已通过专项，HMS/log 已补专项脚本，config 后续按域加入 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | E2E 后续扩展剩余 P1 域 | Day 25-27 | Closed |
 
 ## 3. 缺失脚本优先级
 
@@ -68,11 +68,11 @@
 | 3 | 扩展 `tools/mqtt_dock3_wayline_test.py` | G-P1-05 已完成 mock KMZ 基础解析；G-P1-06 真实 SITL 航点执行待补 |
 | 4 | `tools/e2e_takeoff_flow_test.py` | G-P1-01 |
 | 5 | `tools/mqtt_dock3_media_test.py` | G-P1-07 已通过 Ubuntu 专项 |
-| 6 | `tools/mqtt_dock3_live_test.py` | G-P1-08 已完成代码和脚本，待 Ubuntu 复测 |
-| 7 | `tools/mqtt_dock3_hms_log_test.py` | G-P1-10、G-P1-11 |
+| 6 | `tools/mqtt_dock3_live_test.py` | G-P1-08 已通过 Ubuntu 专项 |
+| 7 | `tools/mqtt_dock3_hms_log_test.py` | G-P1-10、G-P1-11 已完成代码和脚本，待 Ubuntu 复测 |
 | 8 | `tools/mqtt_dock3_firmware_config_test.py` | G-P1-12、G-P1-13 |
 | 9 | 扩展 device/organization/cmd 测试 | G-P1-14、G-P1-15 |
-| 10 | `tools/e2e_full_chain_test.py` | G-P0-08、G-P1-17 已完成当前 Ubuntu 通过域；media 已接入且专项通过，live 已接入待复测，后续接入 HMS/log/config |
+| 10 | `tools/e2e_full_chain_test.py` | G-P0-08、G-P1-17 已完成当前 Ubuntu 通过域；media/live 已通过专项，后续接入 HMS/log/config |
 
 ## 4. 关项规则
 

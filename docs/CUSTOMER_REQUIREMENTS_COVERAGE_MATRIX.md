@@ -66,10 +66,10 @@
 | DRC + 基础飞控控制 | Dock3 DRC services + MAVLink 控制 | 专项已通过，真实模式映射仍需补 |
 | 航线 + WPML 转换 | Dock3 wayline + MAVLink waypoint | 基础闭环已通过，KMZ/WPML 深度解析待补 |
 | 起降状态机 + 充电协同 | 一键启航、机巢 v1.3、充电/夹紧/舱盖联动 | 设备侧命令已映射，完整状态机待补 |
-| 直播 | Dock3 live | 待迁移 |
+| 直播 | Dock3 live | 基础可用，真实推流 adapter 待补 |
 | 云台/相机 | Dock3 payload/camera/gimbal | 部分入口存在，真实链路待补 |
-| 媒体 + OSS 上传 | Dock3 media | 待迁移 |
-| HMS + 远程运维 | Dock3 hms/log/firmware/config | 待迁移 |
+| 媒体 + OSS 上传 | Dock3 media | 基础可用，真实 OSS/断点续传待补 |
+| HMS + 远程运维 | Dock3 hms/log/firmware/config | HMS/log 代码和脚本已补，firmware/config 待迁移 |
 | PSDK | Dock3 psdk | 暂缓/占位 |
 | 高级能力 | WebRTC、GB28181、远程解禁等 | 后续分组补齐 |
 
@@ -95,11 +95,11 @@
 | MAVLink 飞控联动 | 部分可用 | 55% | 解锁/起飞/航线/返航/模式映射和非阻塞超时待补 | MAVLink + Dock3 events/state |
 | 机巢 v1.3 协议 | 部分可用 | 60% | 使用条件、拒绝原因、状态机闭环和 boolstate2 精细映射待补 | `cmd`、`properties`、`hms` |
 | 一键启航业务流 | 开发中 | 45% | 起飞前检查、舱盖/夹紧/充电/备飞/飞控串联待补 | `wayline` + `cmd` + `events` |
-| 媒体管理 | 开发中 | 15% | 文件列表、删除、上传优先级、上传事件待迁移 | `media` |
-| 直播 | 开发中 | 10% | 推流启动/停止、质量、镜头、状态事件待迁移 | `live` |
-| HMS 告警 | 开发中 | 15% | HMS 文案 key、告警结构、清除规则待迁移 | `hms` |
+| 媒体管理 | 已可用 | 55% | 文件列表、删除、上传优先级和上传事件已通过专项；真实 OSS/断点续传待补 | `media` |
+| 直播 | 已可用 | 45% | mock 推流启动/停止、质量、镜头、状态事件已通过专项；真实 RTMP/WebRTC/GB28181 adapter 待补 | `live` |
+| HMS 告警 | 部分可用 | 35% | HMS 告警查询/清除和事件代码已补；文案 key、真实故障源和 Ubuntu 专项待补 | `hms` |
 | 固件升级 | 开发中 | 10% | 升级任务、进度、失败码、后台化待迁移 | `firmware` |
-| 远程日志 | 开发中 | 20% | 日志列表、压缩、上传、超时和失败码待迁移 | `log` |
+| 远程日志 | 部分可用 | 45% | 日志列表、上传模拟、取消、进度事件和失败码代码已补；压缩、真实上传和 Ubuntu 专项待补 | `log` |
 | 配置更新 | 开发中 | 15% | 配置下发、持久化、回滚、事件待迁移 | `config` |
 | 自定义飞行区/远程解禁/AirSense | 未覆盖到可用 | 5% | 文件、证书、缓存、生效逻辑待定义 | `custom-fly-region`、`flysafe`、`airsense` |
 | PSDK/ESDK 透传 | 未覆盖到可用 | 5% | 真实负载协议和透传契约待定义 | `psdk`、`psdk/esdk transmit` |

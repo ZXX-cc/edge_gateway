@@ -52,6 +52,21 @@ from src.cloud_api.dock3_cmd import (
     progress_event_data,
     validate_action_payload,
 )
+from src.cloud_api.dock3_hms_log import (
+    TASK_STATUS_IN_PROGRESS as HMS_LOG_STATUS_IN_PROGRESS,
+    TASK_STATUS_OK as HMS_LOG_STATUS_OK,
+    TASK_STATUS_REJECTED as HMS_LOG_STATUS_REJECTED,
+    hms_event_data,
+    hms_list_data,
+    normalize_alarm_ids,
+    normalize_hms_alarms,
+    normalize_page as normalize_hms_log_page,
+    paginate as paginate_hms_log,
+    resolve_log_root,
+    scan_log_files,
+    task_output as hms_log_task_output,
+    upload_progress_event_data as hms_log_progress_event_data,
+)
 from src.utils.dji_error_codes import (
     DEVICE_STATE_UNSUPPORTED,
     DOCK_COMMUNICATION_ERROR,
@@ -2165,11 +2180,12 @@ class DeviceManager:
         上报 HMS 健康告警事件 (hms)
         由外部健康监控模块调用
         """
-        self._hms_alarms = alarms
-        self._notify_event('hms', {'list': alarms})
-        logger.info(f"HMS reported: {len(alarms)} alarms")
+        normalized = normalize_hms_alarms(alarms, self.gateway_sn)
+        self._hms_alarms = normalized
+        self._notify_event('hms', hms_event_data(normalized))
+        logger.info(f"HMS reported: {len(normalized)} alarms")
 
-        for alarm in alarms:
+        for alarm in normalized:
             self._schedule_async(self._save_alarm_to_db(
                 alarm_id=alarm.get('id', ''),
                 alarm_level=alarm.get('level', 0),
@@ -2184,71 +2200,66 @@ class DeviceManager:
         返回当前缓存的告警列表
         """
         data = msg.get('data', {})
-        page = data.get('page', 1)
-        page_size = data.get('page_size', 20)
+        page, page_size = normalize_hms_log_page(data)
+
+        if data.get('simulate') or data.get('inject_alarm'):
+            simulated = normalize_hms_alarms(data.get('alarms', data.get('alarm')), self.gateway_sn)
+            self._hms_alarms = simulated
+            self._notify_event('hms', hms_event_data(simulated))
 
         total = len(self._hms_alarms)
-        start = (page - 1) * page_size
-        end = start + page_size
-        alarms = self._hms_alarms[start:end]
+        alarms = paginate_hms_log(self._hms_alarms, page, page_size)
 
         logger.info(f"HMS get: total={total}, page={page}")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'alarms': alarms,
-            'total': total,
-            'has_more': end < total
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=hms_list_data(alarms, page=page, page_size=page_size, total=total),
+        )
 
     def handle_hms_clear(self, msg: dict) -> dict:
         """清除HMS告警（services 模式，云端下发）"""
         data = msg.get('data', {})
-        alarm_ids = data.get('alarm_ids', [])
+        alarm_ids = normalize_alarm_ids(data)
         logger.info(f"HMS clear: {len(alarm_ids)} alarms")
 
+        before_count = len(self._hms_alarms)
         if alarm_ids:
             self._hms_alarms = [a for a in self._hms_alarms if a.get('id') not in alarm_ids]
         else:
             self._hms_alarms = []
 
         self._schedule_async(self._clear_alarms_from_db(alarm_ids))
+        self._notify_event('hms', hms_event_data(self._hms_alarms))
 
         return MessageBuilder.build_reply(msg, result=0, data={
-            'cleared_count': len(alarm_ids)
+            **hms_log_task_output(HMS_LOG_STATUS_OK),
+            'cleared_count': before_count - len(self._hms_alarms),
+            'alarm_ids': alarm_ids,
         })
 
     def handle_device_log_list_get(self, msg: dict) -> dict:
         """获取设备日志列表"""
         data = msg.get('data', {})
-        page = data.get('page', 1)
-        page_size = data.get('page_size', 20)
-
-        # 扫描日志目录
+        page, page_size = normalize_hms_log_page(data)
         logs = []
         try:
-            log_dir = '/var/log'
-            if os.path.exists(log_dir):
-                files = sorted(os.listdir(log_dir))
-                for f in files:
-                    if 'edge' in f.lower() or 'gateway' in f.lower():
-                        fpath = os.path.join(log_dir, f)
-                        st = os.stat(fpath)
-                        logs.append({
-                            'id': f,
-                            'name': f,
-                            'size': st.st_size,
-                            'create_time': int(st.st_ctime * 1000)
-                        })
+            log_dir = resolve_log_root(Config.get('logging.dir', './logs'))
+            logs = scan_log_files(log_dir, self.gateway_sn, module=3)
         except Exception as e:
             logger.warning(f"Log list scan failed: {e}")
 
         total = len(logs)
-        start = (page - 1) * page_size
-        end = start + page_size
+        selected = paginate_hms_log(logs, page, page_size)
 
         logger.info(f"Device log list: total={total}, page={page}")
         return MessageBuilder.build_reply(msg, result=0, data={
-            'total': total, 'page': page, 'page_size': page_size,
-            'logs': logs[start:end]
+            **hms_log_task_output(HMS_LOG_STATUS_OK),
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'logs': selected,
+            'list': selected,
         })
 
     def handle_device_log_upload(self, msg: dict) -> dict:
@@ -2256,10 +2267,40 @@ class DeviceManager:
         data = msg.get('data', {})
         log_ids = data.get('log_ids', [])
         logger.info(f"Device log upload: {len(log_ids)} files")
-        # TODO: 实现日志打包上传
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'upload_task_id': str(int(time.time() * 1000))
-        })
+        if not isinstance(log_ids, list) or not log_ids:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=hms_log_task_output(HMS_LOG_STATUS_REJECTED, {
+                    'errors': ['device_log_upload missing log_ids'],
+                }),
+                msg_str='device_log_upload missing log_ids',
+            )
+
+        normalized_log_ids = [str(item) for item in log_ids if item]
+        log_dir = resolve_log_root(Config.get('logging.dir', './logs'))
+        known_logs = scan_log_files(log_dir, self.gateway_sn, module=3)
+        by_id = {item['file_id']: item for item in known_logs}
+        selected = [by_id[item] for item in normalized_log_ids if item in by_id]
+        if selected:
+            self._notify_event(
+                'fileupload_progress',
+                hms_log_progress_event_data(
+                    selected,
+                    device_sn=self.gateway_sn,
+                    status=HMS_LOG_STATUS_IN_PROGRESS,
+                    progress=0,
+                ),
+            )
+
+        return MessageBuilder.build_reply(msg, result=0, data=hms_log_task_output(
+            HMS_LOG_STATUS_IN_PROGRESS,
+            {
+                'upload_task_id': str(int(time.time() * 1000)),
+                'accepted_count': len(selected),
+                'missing_ids': [item for item in normalized_log_ids if item not in by_id],
+            },
+        ))
 
     def handle_device_capability_query(self, msg: dict) -> dict:
         """设备能力查询 - 返回网关和无人机的完整能力集"""

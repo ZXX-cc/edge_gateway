@@ -8,9 +8,9 @@
 
 如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路均已通过 Ubuntu 模拟验证；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在 Ubuntu 串联通过 properties、device、OSD/state、CMD、DRC、Wayline 6 个阶段，输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，且各阶段 `ignored_total=0`。Live mock 推流代码和专项脚本已补齐并接入 E2E 编排，待 Ubuntu 网关实跑。人员1负责的云端 topic/reply 边界和专项验收脚本已收敛到共享 MQTT 客户端，当前重点转向 live/HMS/log/config、机巢 v1.3、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
+当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路均已通过 Ubuntu 模拟验证；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在 Ubuntu 串联通过 properties、device、OSD/state、CMD、DRC、Wayline 6 个阶段，输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，且各阶段 `ignored_total=0`。HMS/log 基础代码、单测和专项脚本已补齐，待 Ubuntu 网关实跑。人员1负责的云端 topic/reply 边界和专项验收脚本已收敛到共享 MQTT 客户端，当前重点转向 HMS/log/config、机巢 v1.3、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
-当前进度估算：**约 68%**。
+当前进度估算：**约 70%**。
 
 估算口径：
 
@@ -18,11 +18,11 @@
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 83% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，且人员1 P0/P1 MQTT 回归入口已一键串联通过；剩 systemd/一键化和环境固化 |
 | Dock3 P0 协议链路 | 97% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令、错误码边界已通过批量、专项和 E2E 编排验证，剩旧回包噪声清理和字段精校 |
-| 客户需求相关 method/字段迁移 | 64% | properties 官方可写/只读边界、OSD/state、device topology、DRC 官方字段和批量链路、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环、Media 基础链路已通过专项验证；live mock 代码和脚本已补齐待 Ubuntu 复测；HMS/log/config 等仍待迁移 |
-| 非阻塞、日志、容错基础 | 55% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现，待 Ubuntu 复测；NoSQL/MongoDB 和远程日志仍待迁移 |
-| 模拟器和测试工具 | 92% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/P0 批量测试工具可用，`e2e_full_chain_test.py` 已串联当前 P0/P1 核心 MQTT 域并通过 Ubuntu 复测；live 专项脚本已补并接入 E2E 编排，待 Ubuntu 复测，HMS/log/config 模拟器仍待补 |
+| 客户需求相关 method/字段迁移 | 66% | properties 官方可写/只读边界、OSD/state、device topology、DRC 官方字段和批量链路、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环、Media 基础链路、Live 基础链路已通过专项验证；HMS/log 代码和脚本已补齐待 Ubuntu 复测；config 等仍待迁移 |
+| 非阻塞、日志、容错基础 | 58% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已补代码和单测，待 Ubuntu 复测；NoSQL/MongoDB 仍待迁移 |
+| 模拟器和测试工具 | 94% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/P0 批量测试工具可用，`e2e_full_chain_test.py` 已串联当前 P0/P1 核心 MQTT 域并通过 Ubuntu 复测；HMS/log 待 Ubuntu 复测，config 模拟器仍待补 |
 
-综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 68%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 70%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
 
 ## 1. 当前验收基线
 
@@ -53,7 +53,8 @@
 | CMD/远程调试专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)`；验证调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝和任务进度事件 |
 | Wayline/航线管理 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` 输出 `dock3 wayline test ok (accepted=11, events=8, ignored_mismatched=0, ignored_legacy=11, ignored_late=0, ignored_total=11)`；覆盖 `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel`、参数错误和状态不支持错误分支；纯模拟任务不触发真实飞控 `AUTO/LOITER/返航/降落` 控制 |
 | Media/媒体管理 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 输出 `dock3 media test ok (accepted=6, events=2, ignored_total=0)`；覆盖 `file_list_get`、`adjust_upload_priority`、`highest_priority_upload_flighttask_media`、`file_delete`、非法删除错误码和事件 |
-| Live/直播 P1 | 代码和脚本已完成，待 Ubuntu 复测 | `src/cloud_api/dock3_live.py` 与 `tools/mqtt_dock3_live_test.py` 已覆盖 `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop`、`mock://` 推流和 `live_status_notify` 事件；本地单测与 E2E dry-run 已通过 |
+| Live/直播 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` 输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)`；覆盖 `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop`、`mock://` 推流、`live_status_notify` 事件和非法 `live_start` 错误码 |
+| HMS/远程日志 P1 | 代码和脚本已完成，待 Ubuntu 复测 | 已新增 `src/cloud_api/dock3_hms_log.py` 和 `tools/mqtt_dock3_hms_log_test.py`；覆盖 HMS 告警注入/查询/清除、`hms` 事件、日志列表、`device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝 |
 | P0 总批量验证入口 | 已通过 Ubuntu 复测 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 一次覆盖 `dock_status_query`、properties、DRC、错误 topic，输出 `dock3 p0 batch test ok`；`airport_bind_status` 官方链路单独走云端模拟器 |
 | P0/P1 E2E 回归入口 | 已通过 Ubuntu 复测 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline 6 个阶段，输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`；各阶段均 `exit=0` 且 `ignored_total=0` |
 | 旧格式重复回包 | 已识别，非阻塞 | P0 批量测试中可见同一 `tid` 先收到旧格式 `property/set_reply` 或旧 `data.result=-2` 回包，脚本已按 `tid + method + Dock3格式` 忽略并继续等待正确回包；后续清理 broker/旧进程后可用 `--fail-on-stale` 做严格验证 |
@@ -119,13 +120,13 @@ tail -f logs/nest_simulator_command_trace.log
 | 1 | 设备属性 properties | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html | 部分完成，官方 `rw` 属性和值域边界已通过 Ubuntu 专项复测 | `src/device/manager.py`, `src/cloud_api/dock3_properties.py`, `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `tools/mqtt_dock3_properties_test.py` | 继续补客户需求涉及的 `osd/state` 字段、枚举、单位和值域精校 |
 | 2 | 设备管理 device | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/device.html | 部分完成，`update_topo` 官方字段校验和专项脚本已通过 Ubuntu 复测 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py` | 继续精校 `domain/type/sub_type` 官方枚举和多设备真实拓扑语义 |
 | 3 | 组织管理 organization | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/organization.html | 部分完成，基础成功路径、异常分支、绑定后事件和持久化均已通过 Ubuntu 验证 | `src/cloud_api/connection_manager.py`, `src/device/manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_organization_test.py` | 字段精校，补真实云端/多设备差异 |
-| 4 | 直播 live | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html | 代码完成，待 Ubuntu 复测 | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | 先跑通 mock 推流，再接真实 RTMP/WebRTC/GB28181 adapter |
+| 4 | 直播 live | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | 后续接真实 RTMP/WebRTC/GB28181 adapter |
 | 5 | 媒体 media | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/media.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_media.py`, `src/media/manager.py`, `tools/mqtt_dock3_media_test.py` | 后续精校 OSS 凭证、断点续传和上传完成事件 |
 | 6 | 航线 wayline | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html | P1 基础闭环和 mock KMZ 解析已通过 Ubuntu 专项复测；基础 flighttask services/reply 和进度事件已收敛；纯模拟任务不强制真实飞控 `AUTO/LOITER/返航/降落` 控制 | `src/mission/manager.py`, `src/cloud_api/dock3_wayline.py`, `src/modules/waypoint_manager.py`, `tools/mqtt_dock3_wayline_test.py`, `tests/test_dock3_wayline.py` | 后续继续远端 KMZ 下载、媒体计数、真实 SITL 航点执行、返航事件字段精校 |
-| 7 | HMS | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/hms.html | 待迁移 | `src/device/manager.py`, `src/database/alarm_db.py` | 明确 HMS 文案 key、错误码、告警上报结构 |
+| 7 | HMS | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/hms.html | 部分完成，代码和专项脚本待 Ubuntu 复测 | `src/cloud_api/dock3_hms_log.py`, `src/device/manager.py`, `src/database/alarm_db.py`, `tools/mqtt_dock3_hms_log_test.py` | 跑通专项后接入机巢故障位和 HMS 文案 key 精校 |
 | 8 | 远程调试 cmd | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/cmd.html | 已通过 Ubuntu 专项复测，代码已按 `output.status`、枚举校验、进度事件和模拟安全重启收敛 | `src/device/manager.py`, `src/cloud_api/dock3_cmd.py`, `tools/mqtt_dock3_cmd_test.py`, `tests/test_dock3_cmd.py` | 后续精校真实 Dock3 任务耗时、失败码、设备重启/格式化真实执行开关 |
 | 9 | 固件升级 firmware | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/firmware.html | 待迁移 | `src/device/manager.py` | 保持后台化，补升级任务状态、失败码、进度事件 |
-| 10 | 远程日志 log | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/log.html | 待迁移 | `src/modules/log_manager.py`, `src/database/operation_db.py` | 对齐日志列表、日志上传、压缩超时和错误码 |
+| 10 | 远程日志 log | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/log.html | 部分完成，代码和专项脚本待 Ubuntu 复测 | `src/cloud_api/dock3_hms_log.py`, `src/modules/log_manager.py`, `src/device/manager.py`, `tools/mqtt_dock3_hms_log_test.py` | 跑通日志列表/上传模拟，后续补压缩、真实 OSS 上传和超时策略 |
 | 11 | 配置更新 config | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/config.html | 待迁移 | `src/device/manager.py`, `src/cloud_api/connection_manager.py` | 明确 requests/config 与 services/config_update 的边界 |
 | 12 | 指令飞行 drc | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html | 部分完成，控制数据、P0 总批量、DRC 官方字段、心跳、`takeoff_to_point` 和指点飞行基础闭环均已通过 Ubuntu 复测 | `src/drc/controller.py`, `src/cloud_api/dock3_drc.py`, `src/mission/manager.py`, `src/modules/flight_control.py`, `tools/mqtt_drc_batch_test.py`, `tools/mqtt_dock3_drc_test.py`, `tools/mqtt_dock3_p0_batch_test.py` | 继续精校超时恢复边界和 MAVLink 模式语义 |
 | 13 | 自定义飞行区 custom-fly-region | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/custom-fly-region.html | 待迁移 | `src/modules/flight_area_manager.py` | 对齐 `flight_areas_update/get` 和缓存模型 |
@@ -391,9 +392,10 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 4.1 | device topology | `update_topo` 完整 topic/payload/status_reply；严格字段校验和专项脚本已通过 Ubuntu 复测 | 已完成本轮专项；后续继续精校官方设备类型枚举 |
 | Batch 4.2 | cmd/远程调试 | `debug_mode_*`、`cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_*`、`*_switch` 已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；后续清理旧回包源后用 `--fail-on-stale` 做严格环境验证 |
 | Batch 5 | wayline | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环和 mock KMZ 解析已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；下一步进入 media/live 或 HMS，Wayline 后续补远端 KMZ 下载、媒体计数、真实 SITL 航点执行 |
-| Batch 6 | P0/P1 E2E 回归 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，全部 `exit=0`，总耗时 19.0s | 已完成当前核心 MQTT 域 E2E 编排；media 已接入且专项通过，live 已接入待复测，后续把 HMS/log/config 接入同一入口 |
+| Batch 6 | P0/P1 E2E 回归 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，全部 `exit=0`，总耗时 19.0s | 已完成当前核心 MQTT 域 E2E 编排；media/live 已通过专项，后续把 HMS/log/config 接入同一入口 |
 | Batch 7 | media 基础 | `tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，输出 `accepted=6, events=2, ignored_total=0` | 已完成当前 media 基础专项；后续精校真实上传 adapter |
-| Batch 8 | live 基础 | 已新增 `src/cloud_api/dock3_live.py`、`tools/mqtt_dock3_live_test.py`，覆盖 mock 推流、画质、镜头、停止、能力查询和状态事件；本地单测与 E2E dry-run 已通过 | 待 Ubuntu 网关实跑 `python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` |
+| Batch 8 | live 基础 | `src/cloud_api/dock3_live.py`、`tools/mqtt_dock3_live_test.py` 已通过 Ubuntu 专项，覆盖 mock 推流、画质、镜头、停止、能力查询、状态事件和非法参数拒绝 | 已完成本轮专项；后续接真实推流 adapter |
+| Batch 9 | HMS/log 基础 | 已新增 `src/cloud_api/dock3_hms_log.py`、`tools/mqtt_dock3_hms_log_test.py`，覆盖 HMS 查询/清除、日志列表、上传模拟、取消和进度事件；本地单测通过 | 待 Ubuntu 网关实跑 `python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` |
 
 ## 5. 更新规则
 
