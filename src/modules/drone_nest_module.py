@@ -685,10 +685,6 @@ class DroneNestModule(BaseModule):
         """终止起飞"""
         self.send_gcs_command(GCSCommand.TAKEOFF_ABORT)
 
-    def request_landing(self):
-        """请求降落"""
-        self.send_gcs_command(GCSCommand.LANDING_START)
-
     def abort_landing(self):
         """终止降落"""
         self.send_gcs_command(GCSCommand.LANDING_ABORT)
@@ -732,10 +728,6 @@ class DroneNestModule(BaseModule):
     def deactivate_estop(self):
         """解除急停"""
         self.send_gcs_command(GCSCommand.ESTOP_DEACTIVATE)
-
-    def calibrate_r(self):
-        """R轴校准"""
-        self.send_gcs_command(GCSCommand.CALIBRATE_R)
 
     def initialize_device(self):
         """设备初始化"""

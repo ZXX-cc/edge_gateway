@@ -44,11 +44,9 @@ NEST_COMMANDS = {
     "clamp-stop": (GCSCommand.CLAMP_STOP.value, 0),
     "takeoff-start": (0, GCSCommand.TAKEOFF_START.value),
     "takeoff-abort": (0, GCSCommand.TAKEOFF_ABORT.value),
-    "landing-start": (0, GCSCommand.LANDING_START.value),
     "landing-abort": (0, GCSCommand.LANDING_ABORT.value),
     "estop-on": (GCSCommand.ESTOP_ACTIVATE.value, 0),
     "estop-off": (GCSCommand.ESTOP_DEACTIVATE.value, 0),
-    "calibrate-r": (GCSCommand.CALIBRATE_R.value, 0),
     "initialize": (GCSCommand.INITIALIZE.value, 0),
     "fault-recovery": (GCSCommand.FAULT_RECOVERY.value, 0),
 }
@@ -68,7 +66,6 @@ ORDINARY_COMMAND_LABELS = {
     GCSCommand.CLAMP_STOP.value: "夹紧停止",
     GCSCommand.ESTOP_ACTIVATE.value: "急停触发",
     GCSCommand.ESTOP_DEACTIVATE.value: "急停解除",
-    GCSCommand.CALIBRATE_R.value: "R轴校准",
     GCSCommand.INITIALIZE.value: "初始化",
     GCSCommand.FAULT_RECOVERY.value: "故障恢复",
 }
@@ -77,6 +74,5 @@ ORDINARY_COMMAND_LABELS = {
 TAKEOFF_LAND_COMMAND_LABELS = {
     GCSCommand.TAKEOFF_START.value: "起飞流程开始",
     GCSCommand.TAKEOFF_ABORT.value: "起飞流程终止",
-    GCSCommand.LANDING_START.value: "降落流程开始",
     GCSCommand.LANDING_ABORT.value: "降落流程终止",
 }

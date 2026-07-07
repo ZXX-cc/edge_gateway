@@ -16,21 +16,25 @@ from web.mavlink.nest.protocol import NEST_COMMANDS, TAKEOFF_LAND_COMMAND_LABELS
 
 
 class GCSOrderProtocolTest(unittest.TestCase):
-    def test_takeoff_land_commands_include_landing_start(self):
+    def test_takeoff_land_commands_exclude_unsupported_landing_start(self):
         codec = GCSOrderCodec()
 
         cases = {
             GCSCommand.TAKEOFF_START: 0x01,
             GCSCommand.TAKEOFF_ABORT: 0x02,
-            GCSCommand.LANDING_START: 0x03,
             GCSCommand.LANDING_ABORT: 0x04,
         }
         for command, expected_value in cases.items():
             encoded = codec.encode_gcs_command(command)
             self.assertEqual(encoded & 0xFF, expected_value)
 
-        self.assertEqual(NEST_COMMANDS["landing-start"], (0, 0x03))
-        self.assertEqual(TAKEOFF_LAND_COMMAND_LABELS[0x03], "降落流程开始")
+        self.assertFalse(hasattr(GCSCommand, "LANDING_START"))
+        self.assertNotIn("landing-start", NEST_COMMANDS)
+        self.assertNotIn(0x03, TAKEOFF_LAND_COMMAND_LABELS)
+
+    def test_deprecated_calibrate_r_is_not_exposed(self):
+        self.assertFalse(hasattr(GCSCommand, "CALIBRATE_R"))
+        self.assertNotIn("calibrate-r", NEST_COMMANDS)
 
 
 if __name__ == "__main__":

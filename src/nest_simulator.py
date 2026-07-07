@@ -140,10 +140,6 @@ class NestSimulator:
         elif takeoff_land_order == 0x02:
             self.env_data['boolstate2'] &= ~(1 << 0)
             print("模拟器：起飞流程终止")
-        elif takeoff_land_order == 0x03:
-            self.env_data['boolstate2'] |= (1 << 1)
-            self.env_data['boolstate2'] &= ~(1 << 3)
-            print("模拟器：降落流程开始")
         elif takeoff_land_order == 0x04:
             self.env_data['boolstate2'] &= ~(1 << 1)
             self.env_data['boolstate2'] |= (1 << 3)

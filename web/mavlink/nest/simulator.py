@@ -179,8 +179,6 @@ class NestSimulator:
         ):
             self.env_data["boolstate1"] &= ~(1 << BIT_ESTOP)
             self.env_data["error_code"] = 0
-        elif ordinary_order == NEST_COMMANDS["calibrate-r"][0]:
-            self.env_data["boolstate1"] |= 1 << BIT_CALIBRATE
         elif ordinary_order == NEST_COMMANDS["initialize"][0]:
             self.env_data["boolstate1"] &= ~(1 << BIT_ESTOP)
             self.env_data["boolstate1"] |= (1 << BIT_INIT) | (1 << BIT_PLC_READY)
@@ -192,9 +190,6 @@ class NestSimulator:
         elif takeoff_land_order == 0x02:
             self.env_data["boolstate2"] &= ~(1 << BIT_TAKEOFF_IN_PROGRESS)
             self.env_data["boolstate2"] |= 1 << BIT_TAKEOFF_ABORT_PROGRESS
-        elif takeoff_land_order == NEST_COMMANDS["landing-start"][1]:
-            self.env_data["boolstate2"] |= 1 << BIT_LANDING_IN_PROGRESS
-            self.env_data["boolstate2"] &= ~(1 << BIT_LANDING_ABORT_PROGRESS)
         elif takeoff_land_order == NEST_COMMANDS["landing-abort"][1]:
             self.env_data["boolstate2"] &= ~(1 << BIT_LANDING_IN_PROGRESS)
             self.env_data["boolstate2"] |= 1 << BIT_LANDING_ABORT_PROGRESS
