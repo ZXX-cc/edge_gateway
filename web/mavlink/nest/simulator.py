@@ -230,11 +230,12 @@ class NestSimulator:
             ordinary = getattr(msg, "ordinary_order", 0)
             takeoff_land = getattr(msg, "takeoff_land_order", 0)
             self._update_state_from_command(ordinary, takeoff_land)
-            self._print_block("收到 DRONE_NEST_COMMAND", [
-                ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
-                ("ordinary", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
-                ("takeoff_land", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
-            ])
+            if ordinary or takeoff_land:
+                self._print_block("收到 DRONE_NEST_COMMAND", [
+                    ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
+                    ("ordinary", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
+                    ("takeoff_land", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
+                ])
             self._send_order_response()
             self._send_nest_response()
 

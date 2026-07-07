@@ -4,6 +4,8 @@
 
 本文记录 Edge Gateway 接入 DJI Cloud API Demo Docker 环境的当前状态、已验证链路、关键命令和后续事项。该记录针对 Ubuntu 服务器内的联调环境，不代表真实 DJI Dock 3 设备接入完成。
 
+设备在线的可复现操作手册见：[DJI_CLOUD_API_DEMO_DEVICE_ONLINE_GUIDE.md](DJI_CLOUD_API_DEMO_DEVICE_ONLINE_GUIDE.md)。
+
 ## 当前结论
 
 Edge Gateway 已成功接入 DJI Cloud API Demo：

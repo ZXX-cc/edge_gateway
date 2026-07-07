@@ -536,7 +536,6 @@ class DroneNestModule(BaseModule):
                 })
 
             result["ordinary_response"] = ordinary_info
-            self.log(f"检测到常规回复: {result['ordinary_response']}", "INFO")
 
             # ==================== 解析起飞/降落命令回复 (字节14-17) ====================
             takeoff_info = self._decode_takeoff_land_order_response(msg.takeoff_land_order_response)
@@ -560,6 +559,16 @@ class DroneNestModule(BaseModule):
                 })
 
             result["takeoff_land_response"] = takeoff_info
+
+            is_empty_poll_response = (
+                ordinary_info["raw"] == 0
+                and takeoff_info["raw"] == 0
+                and not result["rejections"]
+            )
+            if is_empty_poll_response:
+                return
+
+            self.log(f"检测到常规回复: {result['ordinary_response']}", "INFO")
             self.log(f"检测到起飞回复: {result['takeoff_land_response']}", "INFO")
 
             # ==================== 多拒绝优先级处理 ====================
