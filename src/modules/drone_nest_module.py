@@ -75,6 +75,8 @@ class DroneNestModule(BaseModule):
 
         # 数据超时设置（秒）
         self.data_timeout = 5.0
+        self.status_poll_interval = 2.0
+        self._last_status_poll_time = 0.0
 
         # ⭐ 飞行控制模块引用（用于一键启航协议）
         self.flight_control = None
@@ -612,7 +614,12 @@ class DroneNestModule(BaseModule):
             import traceback
             traceback.print_exc()
 
-    def send_gcs_order_response(self, ordinary_order: int, takeoff_land_order: int):
+    def send_gcs_order_response(
+        self,
+        ordinary_order: int,
+        takeoff_land_order: int,
+        verbose: bool = True,
+    ):
         """
         向机巢发送指令
 
@@ -654,15 +661,20 @@ class DroneNestModule(BaseModule):
                 elif hasattr(connection, 'write'):
                     connection.write(msgbuf)
 
-            self.log(
-                f"📤 已发送指令: ordinary=0x{ordinary_order:04X}, "
-                f"takeoff_land=0x{takeoff_land_order:02X}"
-            )
+            if verbose:
+                self.log(
+                    f"📤 已发送指令: ordinary=0x{ordinary_order:04X}, "
+                    f"takeoff_land=0x{takeoff_land_order:02X}"
+                )
 
         except Exception as e:
             self.log(f"发送指令失败: {e}", "ERROR")
             import traceback
             traceback.print_exc()
+
+    def poll_nest_status(self):
+        """定期发送空机巢命令，用于 UDP 握手和状态查询。"""
+        self.send_gcs_order_response(0, 0, verbose=False)
     # ⭐ 便捷命令方法
     # ⭐ 便捷命令方法
     def request_takeoff(self):
@@ -882,6 +894,10 @@ class DroneNestModule(BaseModule):
     def idle_task(self, dispatcher: MessageDispatcher):
         """空闲任务：定期检查数据超时状态"""
         current_time = time.time()
+
+        if current_time - self._last_status_poll_time >= self.status_poll_interval:
+            self._last_status_poll_time = current_time
+            self.poll_nest_status()
 
         if self.environment_data["data_valid"]:
             if current_time - self.environment_data["last_update"] > self.data_timeout:
