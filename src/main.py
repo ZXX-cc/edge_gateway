@@ -921,6 +921,8 @@ class EdgeGateway:
         self.router.register_batch({
             'drc_mode_enter': self.drc.handle_drc_mode_enter,
             'drc_mode_exit': self.drc.handle_drc_mode_exit,
+            'heart_beat': self.drc.handle_drc_heart_beat,
+            'drc_heartbeat': self.drc.handle_drc_heartbeat,
             'drc_speed_push': self.drc.handle_drc_speed_push,
             'drc_heading_push': self.drc.handle_drc_heading_push,
             'drc_altitude_push': self.drc.handle_drc_altitude_push,

@@ -4,6 +4,7 @@
 import argparse
 import json
 import sys
+import time
 
 from mqtt_test_client import MqttRequestClient
 from tool_config import add_config_argument, resolve_mqtt_settings
@@ -71,6 +72,7 @@ def main():
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--no-reset-first", action="store_true")
     parser.add_argument("--skip-state-check", action="store_true")
+    parser.add_argument("--skip-heartbeat", action="store_true")
     parser.add_argument("--skip-exit", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true", help="Only count stale duplicate replies instead of printing their JSON payloads.")
     parser.add_argument("--fail-on-stale", action="store_true", help="Fail if duplicate legacy/stale replies are observed. Useful after the broker environment is cleaned.")
@@ -129,6 +131,16 @@ def main():
             if state_reply.get("data", {}).get("drc_state") != 2:
                 print(f"expected drc_state=2 after enter, actual={state_reply.get('data', {}).get('drc_state')}", file=sys.stderr)
                 return 5
+
+        if not args.skip_heartbeat:
+            rc, _ = client.request(
+                "heart_beat",
+                {"seq": 1, "timestamp": int(time.time() * 1000)},
+                args.timeout,
+                channel="drc",
+            )
+            if rc != 0:
+                return rc
 
         control_cases = [] if args.only_custom_cases else list(DEFAULT_CONTROL_CASES)
         control_cases.extend(args.control_case)

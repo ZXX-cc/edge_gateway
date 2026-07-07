@@ -10,6 +10,7 @@ The current gateway still keeps legacy simulated fields during migration, but
 official Dock3 fields should be preferred by new tests.
 """
 import math
+import time
 from typing import Any, Dict, List, Tuple
 
 
@@ -28,6 +29,10 @@ DRONE_DOWN_SPEED_MIN = -4.0
 DRONE_UP_SPEED_MAX = 5.0
 DRONE_YAW_SPEED_MIN = -90.0
 DRONE_YAW_SPEED_MAX = 90.0
+
+TAKEOFF_POINT_MIN_HEIGHT = 5.0
+TAKEOFF_POINT_MAX_HEIGHT = 500.0
+TAKEOFF_POINT_MAX_SPEED = 17.0
 
 
 def _is_number(value: Any) -> bool:
@@ -218,3 +223,96 @@ def validate_gimbal_speed_push(data: Any) -> Tuple[bool, List[str]]:
         if name in data and not _is_number(data.get(name)):
             errors.append(f"{name} must be number")
     return not errors, errors
+
+
+def validate_drc_heartbeat(data: Any) -> Tuple[bool, Dict[str, Any], List[str]]:
+    """Validate cloud-origin DRC heartbeat payload and return normalized fields."""
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return False, {}, ["heart_beat data must be object"]
+
+    errors: List[str] = []
+    timestamp = data.get("timestamp", int(time.time() * 1000))
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        errors.append("timestamp must be positive number milliseconds")
+
+    seq = data.get("seq", data.get("sequence"))
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        errors.append("seq must be non-negative int")
+
+    normalized = {
+        "timestamp": int(timestamp) if _is_number(timestamp) else int(time.time() * 1000),
+    }
+    if seq is not None and not isinstance(seq, bool):
+        normalized["seq"] = int(seq)
+    return not errors, normalized, errors
+
+
+def normalize_takeoff_to_point(data: Any, default_flight_id: str = "") -> Tuple[bool, Dict[str, Any], List[str]]:
+    """Validate and normalize Dock3 takeoff_to_point payload."""
+    if not isinstance(data, dict):
+        return False, {}, ["takeoff_to_point data must be object"]
+
+    errors: List[str] = []
+
+    def get_first(*names: str):
+        for name in names:
+            if name in data:
+                return data.get(name)
+        return None
+
+    latitude = get_first("target_latitude", "latitude")
+    longitude = get_first("target_longitude", "longitude")
+    height = get_first("target_height", "height", "altitude")
+    takeoff_height = get_first("security_takeoff_height", "takeoff_height")
+    rth_altitude = data.get("rth_altitude")
+    commander_height = data.get("commander_flight_height")
+    max_speed = data.get("max_speed", 12)
+    flight_id = data.get("flight_id", default_flight_id)
+
+    missing = []
+    if latitude is None:
+        missing.append("target_latitude")
+    if longitude is None:
+        missing.append("target_longitude")
+    if height is None:
+        missing.append("target_height")
+    if missing:
+        errors.append(f"missing takeoff_to_point keys: {', '.join(missing)}")
+
+    if latitude is not None and not _in_range(latitude, -90.0, 90.0):
+        errors.append("target_latitude must be in range -90..90")
+    if longitude is not None and not _in_range(longitude, -180.0, 180.0):
+        errors.append("target_longitude must be in range -180..180")
+    if height is not None and not _in_range(height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
+        errors.append("target_height must be in range 5..500 m")
+    if takeoff_height is not None and not _in_range(takeoff_height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
+        errors.append("security_takeoff_height must be in range 5..500 m")
+    if rth_altitude is not None and not _in_range(rth_altitude, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
+        errors.append("rth_altitude must be in range 5..500 m")
+    if commander_height is not None and not _in_range(commander_height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
+        errors.append("commander_flight_height must be in range 5..500 m")
+    if not _in_range(max_speed, 0.1, TAKEOFF_POINT_MAX_SPEED):
+        errors.append("max_speed must be in range 0.1..17 m/s")
+    if flight_id is not None and not isinstance(flight_id, str):
+        errors.append("flight_id must be string")
+
+    for action_name in ("rc_lost_action", "commander_mode_lost_action"):
+        value = data.get(action_name)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            errors.append(f"{action_name} must be non-negative int")
+
+    normalized = {
+        "target_latitude": _to_float(latitude),
+        "target_longitude": _to_float(longitude),
+        "target_height": _to_float(height, TAKEOFF_POINT_MIN_HEIGHT),
+        "security_takeoff_height": _to_float(takeoff_height, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
+        "rth_altitude": _to_float(rth_altitude, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
+        "commander_flight_height": _to_float(commander_height, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
+        "max_speed": _to_float(max_speed, 12.0),
+        "flight_id": flight_id or default_flight_id,
+        "rc_lost_action": _to_int(data.get("rc_lost_action", 0), 0),
+        "commander_mode_lost_action": _to_int(data.get("commander_mode_lost_action", 0), 0),
+    }
+    return not errors, normalized, errors

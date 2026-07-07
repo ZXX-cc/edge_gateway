@@ -23,6 +23,8 @@ METHOD_CHANNEL_HINTS = {
     "drc_mode_enter": "services",
     "drc_mode_exit": "services",
     "takeoff_to_point": "services",
+    "heart_beat": "drc",
+    "drc_heartbeat": "drc",
     "stick_control": "drc",
     "drone_control": "drc",
     "payload_control": "drc",

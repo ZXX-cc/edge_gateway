@@ -12,10 +12,12 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.utils.field_labels import format_with_labels
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 from src.cloud_api.dock3_drc import (
     normalize_drone_control,
     normalize_stick_control,
+    normalize_takeoff_to_point,
+    validate_drc_heartbeat,
     validate_drc_mode_enter,
     validate_gimbal_speed_push,
 )
@@ -208,10 +210,19 @@ class DrcController:
                 'track_id': track_id,
                 'way_point_index': way_point_index,
                 'remaining_distance': remaining_distance,
-                'remaining_time': remaining_time
+                'remaining_time': remaining_time,
+                'output': {
+                    'status': status,
+                    'progress': {
+                        'way_point_index': way_point_index,
+                        'remaining_distance': remaining_distance,
+                        'remaining_time': remaining_time
+                    }
+                }
             }
             if planned_path_points:
                 data['planned_path_points'] = planned_path_points
+                data['output']['ext'] = {'planned_path_points': planned_path_points}
             event = MessageBuilder.build_event(
                 'takeoff_to_point_progress', data, self.gateway_sn
             )
@@ -333,10 +344,12 @@ class DrcController:
 
         # 更新状态
         self._drc_enabled = False
+        self._session_id = ""
         self._original_mode = None
 
         # 上报退出事件
-        self.report_drc_status_notify(drc_state=0, result=-1)
+        result = DEVICE_COMMAND_TIMEOUT if reason == "heartbeat_timeout" else -1
+        self.report_drc_status_notify(drc_state=0, result=result)
         self._write_audit_log("auto_exit", reason)
 
     def _write_audit_log(self, action: str, details: str):
@@ -460,6 +473,33 @@ class DrcController:
         self._write_audit_log("mode_exit", f"restore_mission={restore_mission}")
 
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_drc_heart_beat(self, msg: dict) -> dict:
+        """Handle cloud-origin DRC heartbeat on the drc/down channel."""
+        data = msg.get('data', {})
+        valid, normalized, errors = validate_drc_heartbeat(data)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("DRC heartbeat payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        if not self._drc_enabled:
+            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str="DRC not enabled")
+
+        self._last_cloud_heartbeat = time.time()
+        reply_data = {
+            "drc_state": 2,
+            "session_id": self._session_id,
+            "timestamp": normalized["timestamp"],
+        }
+        if "seq" in normalized:
+            reply_data["seq"] = normalized["seq"]
+        logger.debug("DRC cloud heartbeat received: %s", format_with_labels(reply_data))
+        return MessageBuilder.build_reply(msg, result=0, data=reply_data)
+
+    def handle_drc_heartbeat(self, msg: dict) -> dict:
+        """Compatibility alias for older local tests."""
+        return self.handle_drc_heart_beat(msg)
 
     # ---- DRC实时控制 ----
 
@@ -1121,15 +1161,105 @@ class DrcController:
         }
         """
         data = msg.get('data', {})
-        target_latitude = data.get('target_latitude', 0)
-        target_longitude = data.get('target_longitude', 0)
-        target_height = data.get('target_height', 50)
-        flight_id = data.get('flight_id', '')
-        max_speed = data.get('max_speed', 12)
-        logger.info(f"Takeoff to point: lat={target_latitude}, lon={target_longitude}, "
-                   f"height={target_height}, flight_id={flight_id}, max_speed={max_speed}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        default_flight_id = msg.get('tid') or self._session_id or str(int(time.time() * 1000))
+        valid, target, errors = normalize_takeoff_to_point(data, default_flight_id=default_flight_id)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("takeoff_to_point payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        target_latitude = target["target_latitude"]
+        target_longitude = target["target_longitude"]
+        target_height = target["target_height"]
+        flight_id = target["flight_id"]
+        max_speed = target["max_speed"]
+        track_id = f"track-{flight_id}"
+        self._last_flyto_cmd = {
+            **target,
+            "track_id": track_id,
+            "timestamp": time.time(),
+            "source": "takeoff_to_point",
+        }
+
+        logger.info(
+            "Takeoff to point: lat=%s, lon=%s, height=%s, flight_id=%s, max_speed=%s",
+            target_latitude,
+            target_longitude,
+            target_height,
+            flight_id,
+            max_speed,
+        )
+        self.report_takeoff_to_point_progress(
+            flight_id,
+            "task_ready",
+            result=0,
+            track_id=track_id,
+            planned_path_points=[{
+                "latitude": target_latitude,
+                "longitude": target_longitude,
+                "height": target_height,
+            }],
+        )
+
+        simulated = True
+        guidance_message = "simulated"
+        guidance_warning = ""
+        if self._mode_control and hasattr(self._mode_control, 'guided_goto'):
+            try:
+                can_send_guided_target = True
+                if hasattr(self._mode_control, 'set_mode'):
+                    mode_result = self._mode_control.set_mode("GUIDED")
+                    if not mode_result.get("success"):
+                        guidance_warning = mode_result.get("message", "GUIDED mode switch failed")
+                        can_send_guided_target = False
+                        logger.warning("takeoff_to_point GUIDED mode failed: %s", guidance_warning)
+                    else:
+                        simulated = False
+                if can_send_guided_target:
+                    goto_result = self._mode_control.guided_goto(target_latitude, target_longitude, target_height)
+                    if not goto_result.get("success"):
+                        guidance_warning = goto_result.get("message", "guided_goto failed")
+                        logger.warning("takeoff_to_point guided_goto failed: %s", guidance_warning)
+                    else:
+                        simulated = False
+                        guidance_message = goto_result.get("message", "guided target sent")
+            except Exception as exc:
+                guidance_warning = str(exc)
+                logger.warning("takeoff_to_point guidance dispatch failed: %s", guidance_warning)
+
+        self.report_takeoff_to_point_progress(
+            flight_id,
+            "wayline_progress",
+            result=0,
+            track_id=track_id,
+            remaining_distance=0,
+            remaining_time=0,
+            planned_path_points=[{
+                "latitude": target_latitude,
+                "longitude": target_longitude,
+                "height": target_height,
+            }],
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "flight_id": flight_id,
+                "track_id": track_id,
+                "target_point": {
+                    "latitude": target_latitude,
+                    "longitude": target_longitude,
+                    "height": target_height,
+                },
+                "max_speed": max_speed,
+                "output": {
+                    "status": "ok",
+                    "message": guidance_message,
+                    "simulated": simulated,
+                    "warning": guidance_warning,
+                },
+            },
+        )
 
     # ---- 状态查询 ----
 
@@ -1141,5 +1271,10 @@ class DrcController:
             "last_speed_cmd": self._last_speed_cmd,
             "last_heading_cmd": self._last_heading_cmd,
             "last_altitude_cmd": self._last_altitude_cmd,
-            "last_flyto_cmd": self._last_flyto_cmd
+            "last_flyto_cmd": self._last_flyto_cmd,
+            "heartbeat_timeout": self._heartbeat_timeout,
+            "last_cloud_heartbeat_age": (
+                time.time() - self._last_cloud_heartbeat
+                if self._last_cloud_heartbeat else None
+            )
         }

@@ -66,6 +66,7 @@ class MqttTestClientHelpersTest(unittest.TestCase):
     def test_resolve_channel_uses_method_hints(self):
         self.assertEqual(resolve_channel("property_set"), "property")
         self.assertEqual(resolve_channel("stick_control"), "drc")
+        self.assertEqual(resolve_channel("heart_beat"), "drc")
         self.assertEqual(resolve_channel("dock_status_query"), "services")
         self.assertEqual(resolve_channel("dock_status_query", "property"), "property")
 

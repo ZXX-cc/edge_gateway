@@ -103,6 +103,7 @@ class MqttDrcBatchTest(unittest.TestCase):
         self.assertEqual(calls[0], ("drc_mode_exit", "services"))
         self.assertEqual(calls[1], ("drc_mode_enter", "services"))
         self.assertEqual(calls[2], ("property_get", "services"))
+        self.assertEqual(calls[3], ("heart_beat", "drc"))
         self.assertIn(("stick_control", "drc"), calls)
         self.assertEqual(calls[-2], ("drc_mode_exit", "services"))
         self.assertEqual(calls[-1], ("property_get", "services"))

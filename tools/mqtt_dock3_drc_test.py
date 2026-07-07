@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ def main():
         args.qos,
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_dock3_drc",
+        subscribe_events=True,
     )
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)
@@ -88,6 +90,16 @@ def main():
         if state_reply.get("data", {}).get("drc_state") != 2:
             print(f"expected drc_state=2 after enter, actual={state_reply.get('data', {}).get('drc_state')}", file=sys.stderr)
             return 5
+
+        rc, _ = client.request(
+            "heart_beat",
+            {"seq": 1, "timestamp": int(time.time() * 1000)},
+            args.timeout,
+            channel="drc",
+            allowed_results={0},
+        )
+        if rc != 0:
+            return rc
 
         rc, _ = client.request(
             "stick_control",
@@ -139,6 +151,50 @@ def main():
         if rc != 0:
             return rc
 
+        takeoff_events_before = client.event_count("takeoff_to_point_progress")
+        rc, _ = client.request(
+            "takeoff_to_point",
+            {
+                "flight_id": "drc-test-flight",
+                "target_latitude": -35.3632622,
+                "target_longitude": 149.1652375,
+                "target_height": 50,
+                "security_takeoff_height": 30,
+                "rth_altitude": 80,
+                "rc_lost_action": 0,
+                "commander_mode_lost_action": 1,
+                "commander_flight_height": 70,
+                "max_speed": 12,
+            },
+            args.timeout,
+            channel="services",
+            allowed_results={0},
+            expected_status="ok",
+        )
+        if rc != 0:
+            return rc
+        rc, event = client.wait_event(
+            "takeoff_to_point_progress",
+            takeoff_events_before,
+            args.timeout,
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc
+        if event.get("data", {}).get("status") not in {"task_ready", "wayline_progress"}:
+            print(f"unexpected takeoff_to_point_progress status: {event.get('data', {}).get('status')}", file=sys.stderr)
+            return 7
+
+        rc, _ = client.request(
+            "takeoff_to_point",
+            {"target_latitude": 100, "target_longitude": 149.1652375, "target_height": 50},
+            args.timeout,
+            channel="services",
+            allowed_results={INVALID_COMMAND_FORMAT},
+        )
+        if rc != 0:
+            return rc
+
         rc, _ = client.request("drc_mode_exit", {}, args.timeout, channel="services", allowed_results={0})
         if rc != 0:
             return rc
@@ -171,6 +227,7 @@ def main():
         print(
             "dock3 drc test ok "
             f"(accepted={client.stats['accepted']}, "
+            f"events={client.stats['events']}, "
             f"ignored_mismatched={client.stats['ignored_mismatched']}, "
             f"ignored_legacy={client.stats['ignored_legacy']}, "
             f"ignored_late={client.stats['ignored_late']}, "
