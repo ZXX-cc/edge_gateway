@@ -363,6 +363,14 @@ python tools/mqtt_dock3_device_test.py --timeout 12
 
 该脚本验证 `update_topo` 的官方 status 链路：网关发布 `sys/product/{sn}/status`，云端回复 `sys/product/{sn}/status_reply`；同时覆盖在线子设备、离线子设备和无效拓扑拒绝。成功标志为 `dock3 device topology test ok (...)`。
 
+按大类验收 OSD/state 时使用专项脚本：
+
+```bash
+python tools/mqtt_dock3_osd_state_test.py --timeout 15
+```
+
+该脚本监听 `thing/product/EDGEGW001/osd`、`thing/product/DRONESIM001/osd` 和 `thing/product/EDGEGW001/state`，并主动下发一次 `property_set silent_mode` 触发状态变化。验收重点是：网关 SN 的 OSD 必须是 Dock3 机场物模型结构，不能混用飞行器 `battery/attitude` 裸遥测；飞行器 SN 的 OSD 必须包含经纬度、高度、姿态、速度、电池、GPS、飞行时间；`state` 必须能按 Dock3 property 结构上报属性变化。成功标志为 `dock3 osd/state test ok`。
+
 脚本会按 `tid + method` 精确匹配回包。如果同一 `tid` 先收到旧格式回包，例如 `method=null`、`data={"silent_mode":-1}` 或 `data.result=-2`，脚本会统计为 `ignored_mismatched` 或 `ignored_legacy` 并继续等待正确回包。出现非零统计时，应检查本地 broker 上是否有旧网关、Web 调试台、模拟器或 broker 规则在抢答。清理环境后可加 `--fail-on-stale`，把旧格式重复回包作为失败。
 
 `airport_bind_status` 不属于 P0 总批量必过项。Dock3 官方 organization 验收必须走 `requests -> requests_reply` 云端模拟器流程；services 兼容路径可用 `python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --include-legacy-bind-status` 单独附加验证。
@@ -687,10 +695,10 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | `nonce` | 随机数 | string | - | `DeviceManager.build_topo_payload()` | `status.update_topo` | device/topology 专项待复测，当前模拟可配置 |
 | `thing_version` | 物模型版本 | string | semantic version | `DeviceManager.build_topo_payload()` | `status.update_topo` | device/topology 专项待复测，当前默认 `1.1.2` |
 | `sub_devices[]` | 子设备列表 | array | 官方在线非空、离线为空 | `DeviceManager` 子设备缓存 | `status.update_topo` | device/topology 专项待复测，覆盖在线/离线/必填字段 |
-| `air_transfer_enable` | 空中回传 | bool | `false/true` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，代码已强校验 bool，待专项复测 |
-| `silent_mode` | 静音模式 | int | `0/1` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，代码已强校验枚举，待专项复测 |
+| `air_transfer_enable` | 空中回传 | bool | `false/true` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；state 由 OSD/state 专项覆盖 |
+| `silent_mode` | 静音模式 | int | `0/1` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；OSD/state 专项会主动触发并验证 state |
 | `drc_state` | DRC 链路状态 | int | `0` 关闭，`2` 已进入 | DrcController -> DeviceManager | `property_get`、`state/events` | P0 已跑通 |
-| `user_experience_improvement` | 用户体验改善计划 | int | `0/1/2` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，代码已强校验枚举，待专项复测 |
+| `user_experience_improvement` | 用户体验改善计划 | int | `0/1/2` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；state 仍按属性变化统一验证 |
 | `battery_store_mode` | 电池运行模式 | int | `1/2` | DeviceManager 属性缓存 | `property_get`、`property_set` 拒绝 | 官方 `r`，property/set 返回 `state.result=1` |
 | `alarm_state` | 机场声光报警状态 | int | `0/1` | DeviceManager 属性缓存 | `property_get`、`property_set` 拒绝 | 官方 `r`，property/set 返回 `state.result=1` |
 | `air_conditioner_mode` | 空调模式 | int | 当前模拟值 | DeviceManager 属性缓存 | `property_get`、`dock_status_query` | 历史模拟字段，property/set 只读，待 Dock3 其他分组精校 |
@@ -749,7 +757,7 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | Payload | 93 | 已路由，多数为模拟/占位，包含 ViewLink 调试入口，待负载协议补齐 |
 | Media / Live | 13 | 已路由，待 Dock3 `media.html`、`live.html` 校验 |
 | DRC | 24 | P0 覆盖 `drc_mode_enter`、`drc_mode_exit`；`tools/mqtt_dock3_drc_test.py` 已通过 Ubuntu 专项复测，覆盖官方 DRC 字段和值域；旧批量工具覆盖兼容控制数据 |
-| Dock | 8 | P0 覆盖 `dock_status_query`，字段待精校 |
+| Dock | 8 | P0 覆盖 `dock_status_query`；新增 `mqtt_dock3_osd_state_test.py` 覆盖 Dock3 机场 OSD 基础结构，字段枚举仍待精校 |
 | Log | 3 | 已路由，待 Dock3 远程日志文档校验 |
 | FlySafe | 3 | 已路由，暂缓 |
 | Flight Area | 2 | 已路由，待 `custom-fly-region.html` 校验 |
@@ -782,6 +790,7 @@ python tools/mqtt_smoke_test.py --method drc_mode_enter --payload '{}' --timeout
 python tools/mqtt_smoke_test.py --method property_get --payload '{"properties":["drc_state"]}' --timeout 8
 python tools/mqtt_smoke_test.py --method drc_mode_exit --payload '{}' --timeout 12
 python tools/mqtt_smoke_test.py --method dock_status_query --timeout 8
+python tools/mqtt_dock3_osd_state_test.py --timeout 15
 ```
 
 `airport_bind_status` 官方 organization 路径验收需要云端模拟器配合。先开云端模拟器，再重启网关触发启动自动查询：
