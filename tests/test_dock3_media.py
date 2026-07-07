@@ -44,6 +44,7 @@ from src.cloud_api.dock3_media import (
     normalize_priority_items,
     paginate,
 )
+from src.cloud_api.dock3_live import validate_live_start_payload
 from src.media.manager import MediaManager
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 
@@ -145,6 +146,56 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(item["name"], "sample.mp4")
         self.assertTrue(item["file_id"])
         self.assertEqual(item["fingerprint"], item["file_id"])
+
+    def test_live_mock_lifecycle_emits_status_events(self):
+        events = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+        video_id = "EDGEGW001/0/normal"
+
+        start = manager.handle_live_start(base_msg("live_start", {
+            "url": "mock://dock3/live",
+            "url_type": 4,
+            "video_id": video_id,
+            "video_quality": 2,
+        }))
+        self.assertEqual(start["data"]["result"], 0)
+        self.assertEqual(start["data"]["output"]["status"], "in_progress")
+        self.assertTrue(manager._live_streaming)
+
+        quality = manager.handle_live_set_quality(base_msg("live_set_quality", {
+            "video_id": video_id,
+            "video_quality": 3,
+        }))
+        self.assertEqual(quality["data"]["result"], 0)
+        self.assertEqual(manager._live_quality, 3)
+
+        lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
+            "video_id": video_id,
+            "video_type": "zoom",
+        }))
+        self.assertEqual(lens["data"]["result"], 0)
+        self.assertEqual(manager._live_video_type, "zoom")
+
+        stop = manager.handle_live_stop(base_msg("live_stop", {"video_id": video_id}))
+        self.assertEqual(stop["data"]["result"], 0)
+        self.assertFalse(manager._live_streaming)
+        self.assertGreaterEqual(
+            len([event for event in events if event.get("method") == "live_status_notify"]),
+            4,
+        )
+
+    def test_live_start_rejects_invalid_payload(self):
+        ok, _, errors = validate_live_start_payload({"url": "", "video_id": ""})
+        self.assertFalse(ok)
+        self.assertTrue(errors)
+
+        manager = MediaManager()
+        reply = manager.handle_live_start(base_msg("live_start", {}))
+
+        self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
 
 
 if __name__ == "__main__":

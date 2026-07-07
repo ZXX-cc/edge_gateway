@@ -26,6 +26,18 @@ from src.cloud_api.dock3_media import (
     paginate,
     upload_progress_event_data,
 )
+from src.cloud_api.dock3_live import (
+    TASK_STATUS_IN_PROGRESS,
+    TASK_STATUS_OK,
+    TASK_STATUS_REJECTED,
+    is_mock_live_url,
+    live_capability_data,
+    live_status_event_data,
+    live_task_output,
+    validate_live_lens_payload,
+    validate_live_quality_payload,
+    validate_live_start_payload,
+)
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 
@@ -641,6 +653,24 @@ class MediaManager:
             finally:
                 self._ffmpeg_process = None
 
+    def _publish_live_status_event(self, status: str, reason: str = ""):
+        if not self._event_callback:
+            return
+        self._event_callback(MessageBuilder.build_event(
+            "live_status_notify",
+            live_status_event_data(
+                status=status,
+                video_id=self._live_video_id,
+                session_id=self._live_session_id,
+                url_type=self._live_protocol,
+                video_quality=self._live_quality,
+                video_type=self._live_video_type,
+                url=self._live_url,
+                reason=reason,
+            ),
+            self.gateway_sn,
+        ))
+
     def _ffmpeg_monitor(self):
         """监控 ffmpeg 进程状态"""
         if not self._ffmpeg_process:
@@ -670,17 +700,28 @@ class MediaManager:
             video_quality: 0=自适应, 1=流畅, 2=标清, 3=高清, 4=超清
         }
         """
-        data = msg.get('data', {})
-        url_type = data.get('url_type', 4)
-        url = data.get('url', '')
-        video_id = data.get('video_id', '')
-        video_quality = data.get('video_quality', 0)
+        ok, data, errors = validate_live_start_payload(msg.get('data', {}))
+        if not ok:
+            logger.warning("Rejected live_start payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
 
-        if not url:
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="URL required")
+        url_type = data["url_type"]
+        url = data["url"]
+        video_id = data["video_id"]
+        video_quality = data["video_quality"]
 
         if self._live_streaming:
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="Already streaming")
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"reason": "already streaming"}),
+                msg_str="Already streaming",
+            )
 
         self._live_streaming = True
         self._live_session_id = str(int(time.time() * 1000))
@@ -692,12 +733,19 @@ class MediaManager:
         logger.info(f"Live start: url_type={url_type}, video_id={video_id}, "
                    f"quality={video_quality}, url={url}")
 
-        # 启动 ffmpeg 推流
-        self._start_ffmpeg(url, url_type, video_quality, self._live_video_type)
+        if is_mock_live_url(url):
+            logger.info("Live mock stream enabled: video_id=%s, url=%s", video_id, url)
+        else:
+            self._start_ffmpeg(url, url_type, video_quality, self._live_video_type)
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'session_id': self._live_session_id
-        })
+        self._publish_live_status_event(TASK_STATUS_IN_PROGRESS)
+        return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_IN_PROGRESS, {
+            'session_id': self._live_session_id,
+            'video_id': self._live_video_id,
+            'url_type': self._live_protocol,
+            'video_quality': self._live_quality,
+            'video_type': self._live_video_type,
+        }))
 
     def handle_live_stop(self, msg: dict) -> dict:
         """
@@ -706,23 +754,35 @@ class MediaManager:
         文档格式：
         Request: { video_id: '{sn}/{camera_index}/{video_index}' }
         """
-        data = msg.get('data', {})
-        video_id = data.get('video_id', '')
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        video_id = data.get('video_id', self._live_video_id)
 
         if not self._live_streaming:
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="Not streaming")
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"reason": "not streaming"}),
+                msg_str="Not streaming",
+            )
 
         logger.info(f"Live stop: video_id={video_id}")
 
         # 停止 ffmpeg 推流
         self._stop_ffmpeg()
 
+        self._live_video_id = video_id or self._live_video_id
+        self._publish_live_status_event(TASK_STATUS_OK)
+
+        stopped_session = self._live_session_id
         self._live_streaming = False
         self._live_session_id = ""
         self._live_video_id = ""
         self._live_url = ""
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
+            "session_id": stopped_session,
+            "video_id": video_id,
+        }))
 
     def handle_set_livestream_lens(self, msg: dict) -> dict:
         """
@@ -734,19 +794,32 @@ class MediaManager:
             video_type: 'ir'/'normal'/'wide'/'zoom'
         }
         """
-        data = msg.get('data', {})
-        video_id = data.get('video_id', '')
-        video_type = data.get('video_type', 'normal')
+        ok, data, errors = validate_live_lens_payload(msg.get('data', {}))
+        if not ok:
+            logger.warning("Rejected live_lens_change payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
+
+        video_id = data["video_id"]
+        video_type = data["video_type"]
 
         logger.info(f"Livestream lens change: video_id={video_id}, type={video_type}")
 
         self._live_video_type = video_type
 
         # 如果正在推流，重启 ffmpeg 切换视频源
-        if self._live_streaming and self._live_url:
+        if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
             self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, video_type)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._publish_live_status_event(TASK_STATUS_OK)
+        return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
+            "video_id": video_id,
+            "video_type": self._live_video_type,
+        }))
 
     def handle_set_livestream_quality(self, msg: dict) -> dict:
         """
@@ -758,18 +831,31 @@ class MediaManager:
             video_quality: 0=自适应, 1=流畅, 2=标清, 3=高清, 4=超清
         }
         """
-        data = msg.get('data', {})
-        video_id = data.get('video_id', '')
-        video_quality = data.get('video_quality', 0)
+        ok, data, errors = validate_live_quality_payload(msg.get('data', {}))
+        if not ok:
+            logger.warning("Rejected live_set_quality payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
+
+        video_id = data["video_id"]
+        video_quality = data["video_quality"]
 
         self._live_quality = video_quality
         logger.info(f"Livestream quality set: video_id={video_id}, quality={video_quality}")
 
         # 如果正在推流，重启 ffmpeg 调整画质
-        if self._live_streaming and self._live_url:
+        if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
             self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_video_type)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        self._publish_live_status_event(TASK_STATUS_OK)
+        return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
+            "video_id": video_id,
+            "video_quality": self._live_quality,
+        }))
 
     # ---- 存储管理 ----
 
@@ -869,13 +955,7 @@ class MediaManager:
         Request: { }
         """
         logger.info("Live capability query")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'supported_protocols': ['webrtc', 'rtmp', 'rtsp'],
-            'supported_resolutions': ['720p', '1080p', '4k'],
-            'supported_video_sources': ['wide', 'zoom', 'ir', 'fpv'],
-            'max_bitrate': 8000,
-            'max_framerate': 60
-        })
+        return MessageBuilder.build_reply(msg, result=0, data=live_capability_data())
 
     def handle_highest_priority_upload_flighttask_media(self, msg: dict) -> dict:
         """

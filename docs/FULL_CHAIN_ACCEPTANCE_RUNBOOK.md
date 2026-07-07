@@ -55,8 +55,9 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
-| `tools/mqtt_dock3_media_test.py` | Media 专项，待 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
-| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline；media 已接入代码编排，待 Ubuntu 复测 |
+| `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
+| `tools/mqtt_dock3_live_test.py` | Live 专项，待 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media；live 已接入代码编排，待 Ubuntu 复测 |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须补齐：
@@ -64,12 +65,12 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 脚本 | 必须覆盖 | 优先级 |
 |---|---|---|
 | `tools/nest_v13_protocol_test.py` | `DRONE_NEST_COMMAND/RESPONSE/ORDER_RESPONSE`、命令条件、状态位、拒绝原因 | P0/P1 |
-| Ubuntu 复测 `tools/mqtt_dock3_media_test.py` | 文件列表、删除、上传优先级、上传事件 | P1 |
-| `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
+| 已通过 `tools/mqtt_dock3_media_test.py` | 文件列表、删除、上传优先级、上传事件 | P1 |
+| Ubuntu 复测 `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
 | `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/压缩/上传 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
 | `tools/e2e_takeoff_flow_test.py` | 一键启航：起飞前检查、机巢动作、起飞、任务、返航、降落、充电 | P1 |
-| 扩展 `tools/e2e_full_chain_test.py` | 接入 media/live/HMS/log/firmware/config 等剩余 P1 域 | P1 |
+| 扩展 `tools/e2e_full_chain_test.py` | 复测 live，并继续接入 HMS/log/firmware/config 等剩余 P1 域 | P1 |
 
 ## 3. 启动前检查
 
@@ -218,8 +219,8 @@ P1 当前部分脚本尚未实现。30 天交付前必须补齐，并纳入同�
 
 ```bash
 python tools/nest_v13_protocol_test.py --timeout 12
-python tools/mqtt_dock3_media_test.py --timeout 12
-python tools/mqtt_dock3_live_test.py --timeout 12
+python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale
+python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_hms_log_test.py --timeout 20
 python tools/mqtt_dock3_firmware_config_test.py --timeout 20
 python tools/e2e_takeoff_flow_test.py --timeout 60
@@ -236,7 +237,7 @@ P1 通过标准：
 | Live | 开始/停止直播、质量、镜头、状态事件可用 |
 | HMS/Log | 告警事件、日志列表、压缩、上传、失败码可用 |
 | Firmware/Config | 升级模拟、进度、配置下发、持久化、回滚可用 |
-| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline 可重复通过 |
+| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、media 可重复通过；live 接入后需复测 |
 | 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |
 
 ## 7. P2 验收边界

@@ -68,8 +68,8 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-04 | `takeoff_to_point` 和指点飞行 | 指令飞行 | `drc` / remote control | 已可用 | Dock3 云端模拟下起飞到点、导航中、取消/停止状态可用；真实 SITL 航点语义归入 P1-06 | DRC + SITL |
 | P1-05 | KMZ/WPML 基础解析 | 航线管理 | `wayline` | 已可用 | mock KMZ 下载/校验/解析并转换到内部 mission 已通过 Wayline 与 E2E 复测 | Wayline 专项 |
 | P1-06 | 真实 SITL 航点执行 | 飞控/航线 | MAVLink mission + Dock3 progress | 部分可用 | 不只模拟回包，至少一条 SITL 航线能执行并回 progress | SITL Wayline E2E |
-| P1-07 | 媒体基础 | 媒体管理 | Dock3 `media` | Needs Test | 文件列表、删除、上传优先级、上传事件代码和脚本已补齐，需 Ubuntu 网关实跑验证 | `mqtt_dock3_media_test.py` |
-| P1-08 | 直播基础 | 直播功能 | Dock3 `live` | 待实现 | 开始/停止直播、质量、镜头、状态事件可用；可先 mock 推流 | `mqtt_dock3_live_test.py` |
+| P1-07 | 媒体基础 | 媒体管理 | Dock3 `media` | 已可用 | 文件列表、删除、上传优先级、上传事件已通过 Ubuntu 专项；真实 OSS 凭证和断点续传后续精校 | `mqtt_dock3_media_test.py` |
+| P1-08 | 直播基础 | 直播功能 | Dock3 `live` | Needs Test | 开始/停止直播、质量、镜头、状态事件代码和脚本已补齐，mock 推流需 Ubuntu 网关实跑验证 | `mqtt_dock3_live_test.py` |
 | P1-09 | 相机/云台基础控制 | P 类负载、云台 | payload/camera/gimbal、DRC payload | 部分可用 | 拍照、录像、变焦、云台角度、云台速度基础命令可用 | Payload 专项 |
 | P1-10 | HMS 告警 | HMS 管理 | Dock3 `hms` | 待实现 | 告警 key、设备、级别、恢复/清除和事件结构可用 | `mqtt_dock3_hms_log_test.py` |
 | P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 待实现 | 日志列表、压缩、上传模拟、超时和失败码可用 | `mqtt_dock3_hms_log_test.py` |
@@ -78,7 +78,7 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、遥测保留、告警保留和清理策略可用 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media 已接入编排待复测，live/HMS/log/firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media 已通过专项并接入编排，live 已接入待复测，HMS/log/firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
 
 ## 4. P2 允许带问题但必须有边界
 
@@ -124,6 +124,6 @@ P2 可以在 30 天末保留问题，但不能空白、不能影响 P0/P1、不�
 | `python tools/mqtt_dock3_hms_log_test.py --timeout 20` | P1 HMS/log |
 | `python tools/mqtt_dock3_firmware_config_test.py --timeout 20` | P1 firmware/config |
 | `python tools/e2e_takeoff_flow_test.py --timeout 60` | P1 一键启航 |
-| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路，含 media 待复测阶段 |
+| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路，含 media 和 live 阶段 |
 
 执行顺序和证据保存要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。

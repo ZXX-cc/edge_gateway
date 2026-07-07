@@ -39,6 +39,7 @@ STEPS: tuple[Step, ...] = (
     Step("drc", "P1 DRC", "p1", "mqtt_dock3_drc_test.py"),
     Step("wayline", "P1 Wayline", "p1", "mqtt_dock3_wayline_test.py"),
     Step("media", "P1 Media", "p1", "mqtt_dock3_media_test.py"),
+    Step("live", "P1 Live", "p1", "mqtt_dock3_live_test.py"),
 )
 
 
