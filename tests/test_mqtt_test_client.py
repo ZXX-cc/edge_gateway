@@ -146,6 +146,21 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             self.assertTrue(status_client.connect(0.1))
         self.assertIn(("sys/product/EDGEGW001/status", 1), status_client.client.subscriptions)
 
+    def test_connect_subscribes_observed_topics_when_requested(self):
+        observed_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            observe_topics={"thing/product/EDGEGW001/osd", "thing/product/EDGEGW001/state"},
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(observed_client.connect(0.1))
+        self.assertIn(("thing/product/EDGEGW001/osd", 1), observed_client.client.subscriptions)
+        self.assertIn(("thing/product/EDGEGW001/state", 1), observed_client.client.subscriptions)
+
     def test_connect_returns_false_on_nonzero_rc(self):
         FakeMqttClient.connect_rc = 5
         failed_client = MqttRequestClient(
@@ -289,6 +304,28 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(status_client.stats["status"], 1)
         observed = status_client.wait_status("update_topo", 0, 0.1)
         self.assertEqual(observed, status)
+
+    def test_observed_topic_is_recorded_and_waitable(self):
+        observed_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            observe_topics={"thing/product/EDGEGW001/osd"},
+            mqtt_module=FakeMqttModule,
+        )
+        payload = {
+            "tid": "osd-tid",
+            "method": "osd",
+            "data": {"mode_code": 0},
+        }
+
+        observed_client._on_message(None, None, mqtt_message("thing/product/EDGEGW001/osd", payload))
+
+        self.assertEqual(observed_client.observed_count("thing/product/EDGEGW001/osd"), 1)
+        self.assertEqual(observed_client.stats["observed"], 1)
+        observed = observed_client.wait_observed("thing/product/EDGEGW001/osd", 0, 0.1)
+        self.assertEqual(observed, payload)
 
     def test_no_reply_request_omits_need_reply_and_succeeds_without_reply(self):
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):

@@ -6,7 +6,7 @@ import sys
 import time
 import uuid
 from threading import Event
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 
 CHANNELS = {
@@ -135,6 +135,7 @@ class MqttRequestClient:
         client_id_prefix: str = "edge_gateway_mqtt_test",
         subscribe_events: bool = False,
         subscribe_status: bool = False,
+        observe_topics: Optional[Iterable[str]] = None,
         mqtt_module=None,
     ):
         if mqtt_module is None:
@@ -156,6 +157,9 @@ class MqttRequestClient:
         self.status_topics = {self.status_topic} if subscribe_status else set()
         self.status_messages_by_method: dict[str, list[dict[str, Any]]] = {}
         self.status_signal = Event()
+        self.observed_topics = set(observe_topics or ())
+        self.observed_by_topic: dict[str, list[Any]] = {}
+        self.observed_signal = Event()
         self.connected = Event()
         self.connect_rc: Optional[int] = None
         self.pending: dict[str, dict[str, Any]] = {}
@@ -167,6 +171,7 @@ class MqttRequestClient:
             "ignored_wrong_topic": 0,
             "events": 0,
             "status": 0,
+            "observed": 0,
         }
         self.client = build_client(mqtt_module, f"{client_id_prefix}_{uuid.uuid4().hex[:8]}")
 
@@ -197,13 +202,16 @@ class MqttRequestClient:
         for topic in sorted(self.status_topics):
             self.client.subscribe(topic, qos=self.qos)
             print(f"mqtt test subscribed -> {topic}")
+        for topic in sorted(self.observed_topics):
+            self.client.subscribe(topic, qos=self.qos)
+            print(f"mqtt test subscribed -> {topic}")
         self.connected.set()
 
     def _on_message(self, client, userdata, msg):
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
         except Exception as exc:
-            print(f"invalid JSON on {msg.topic}: {exc}", file=sys.stderr)
+            self._handle_invalid_json(msg.topic, exc)
             return
 
         if msg.topic in self.event_topics:
@@ -217,6 +225,10 @@ class MqttRequestClient:
 
         if msg.topic in self.status_topics:
             self._handle_status_message(payload)
+            return
+
+        if msg.topic in self.observed_topics:
+            self._handle_observed_message(msg.topic, payload)
             return
 
         tid = payload.get("tid") if isinstance(payload, dict) else None
@@ -399,6 +411,35 @@ class MqttRequestClient:
         self.status_signal.set()
         if not self.quiet_stale:
             print(f"status observed: method={method}, tid={payload.get('tid') if isinstance(payload, dict) else None}")
+
+    def _handle_invalid_json(self, topic: str, exc: Exception) -> None:
+        print(f"invalid JSON on {topic}: {exc}", file=sys.stderr)
+
+    def _handle_observed_message(self, topic: str, payload: Any) -> None:
+        self.observed_by_topic.setdefault(topic, []).append(payload)
+        self.stats["observed"] += 1
+        self.observed_signal.set()
+        if not self.quiet_stale:
+            tid = payload.get("tid") if isinstance(payload, dict) else None
+            method = payload.get("method") if isinstance(payload, dict) else None
+            print(f"observed <- {topic}, method={method}, tid={tid}")
+
+    def observed_count(self, topic: str) -> int:
+        return len(self.observed_by_topic.get(topic, []))
+
+    def wait_observed(self, topic: str, previous_count: int, timeout: float) -> Optional[Any]:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            messages = self.observed_by_topic.get(topic, [])
+            if len(messages) > previous_count:
+                return messages[-1]
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            self.observed_signal.wait(max(0.05, min(0.5, remaining)))
+            self.observed_signal.clear()
+        return None
 
     def status_count(self, method: str) -> int:
         return len(self.status_messages_by_method.get(method, []))

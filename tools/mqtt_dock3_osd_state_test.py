@@ -5,30 +5,15 @@ import argparse
 import json
 import sys
 import time
-import uuid
 from threading import Event, Lock
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from mqtt_test_client import MqttRequestClient, property_result
 from tool_config import add_config_argument, resolve_mqtt_settings
-
-mqtt = None
 
 
 DEFAULT_DRONE_SN = "DRONESIM001"
 THING_VERSION = "1.1.2"
-
-
-def build_client(client_id):
-    if hasattr(mqtt, "CallbackAPIVersion"):
-        try:
-            return mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=client_id)
-        except TypeError:
-            pass
-    return mqtt.Client(client_id=client_id)
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def is_number(value: Any) -> bool:
@@ -193,16 +178,6 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
     return errors
 
 
-def property_result(reply: Dict[str, Any], property_name: str) -> Optional[int]:
-    node = reply.get("data", {}).get(property_name)
-    if not isinstance(node, dict):
-        return None
-    state = node.get("state")
-    if not isinstance(state, dict):
-        return None
-    return state.get("result")
-
-
 def build_update_topo_payload(args) -> Dict[str, Any]:
     return {
         "domain": args.gateway_domain,
@@ -226,187 +201,107 @@ def build_update_topo_payload(args) -> Dict[str, Any]:
     }
 
 
-class Dock3OsdStateClient:
-    def __init__(self, host: str, port: int, sn: str, drone_sn: str, qos: int, expected_state_property: str):
-        self.host = host
-        self.port = port
-        self.sn = sn
+class Dock3OsdStateClient(MqttRequestClient):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        sn: str,
+        drone_sn: str,
+        qos: int,
+        expected_state_property: str,
+        quiet_stale: bool = False,
+        mqtt_module=None,
+    ):
         self.drone_sn = drone_sn
-        self.qos = qos
         self.expected_state_property = expected_state_property
-        self.connected = Event()
         self.changed = Event()
         self.lock = Lock()
         self.dock_osd_topic = f"thing/product/{sn}/osd"
         self.drone_osd_topic = f"thing/product/{drone_sn}/osd"
         self.state_topic = f"thing/product/{sn}/state"
-        self.services_topic = f"thing/product/{sn}/services"
-        self.services_reply_topic = f"thing/product/{sn}/services_reply"
-        self.property_topic = f"thing/product/{sn}/property/set"
-        self.property_reply_topic = f"thing/product/{sn}/property/set_reply"
-        self.pending_replies: Dict[str, Dict[str, Any]] = {}
         self.valid_dock_osd: List[Dict[str, Any]] = []
         self.valid_drone_osd: List[Dict[str, Any]] = []
         self.valid_state: List[Dict[str, Any]] = []
         self.invalid_samples: List[str] = []
-        self.client = build_client(f"edge_gateway_dock3_osd_state_{uuid.uuid4().hex[:8]}")
+        super().__init__(
+            host,
+            port,
+            sn,
+            qos,
+            quiet_stale=quiet_stale,
+            client_id_prefix="edge_gateway_dock3_osd_state",
+            observe_topics={self.dock_osd_topic, self.drone_osd_topic, self.state_topic},
+            mqtt_module=mqtt_module,
+        )
 
-    def connect(self, timeout: float) -> bool:
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
-        self.client.connect(self.host, self.port, keepalive=30)
-        self.client.loop_start()
-        return self.connected.wait(timeout)
-
-    def disconnect(self) -> None:
-        self.client.loop_stop()
-        self.client.disconnect()
-
-    def _on_connect(self, client, userdata, flags, rc):
-        if rc != 0:
-            print(f"connect failed: rc={rc}", file=sys.stderr)
-            self.connected.set()
-            return
-        for topic in (
-            self.dock_osd_topic,
-            self.drone_osd_topic,
-            self.state_topic,
-            self.services_reply_topic,
-            self.property_reply_topic,
-        ):
-            client.subscribe(topic, qos=self.qos)
-            print(f"dock3 osd/state subscribed -> {topic}")
-        self.connected.set()
-
-    def _record_invalid(self, topic: str, errors: List[str], payload: Dict[str, Any]) -> None:
+    def _record_invalid(self, topic: str, errors: List[str], payload: Any) -> None:
         preview = json.dumps(payload, ensure_ascii=False)[:500]
         self.invalid_samples.append(f"{topic}: {'; '.join(errors)}; payload={preview}")
 
-    def _on_message(self, client, userdata, msg):
-        try:
-            payload = json.loads(msg.payload.decode("utf-8"))
-        except Exception as exc:
+    def _handle_invalid_json(self, topic: str, exc: Exception) -> None:
+        if topic in self.observed_topics:
             with self.lock:
-                self.invalid_samples.append(f"{msg.topic}: invalid JSON: {exc}")
+                self.invalid_samples.append(f"{topic}: invalid JSON: {exc}")
                 self.changed.set()
             return
+        super()._handle_invalid_json(topic, exc)
 
+    def _handle_observed_message(self, topic: str, payload: Any) -> None:
         with self.lock:
-            if msg.topic == self.dock_osd_topic:
+            self.observed_by_topic.setdefault(topic, []).append(payload)
+            self.stats["observed"] += 1
+            self.observed_signal.set()
+
+            if not isinstance(payload, dict):
+                self._record_invalid(topic, ["payload must be object"], payload)
+                self.changed.set()
+                return
+
+            if topic == self.dock_osd_topic:
                 errors = validate_dock_osd(payload, self.sn)
                 if errors:
-                    self._record_invalid(msg.topic, errors, payload)
+                    self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_dock_osd.append(payload)
-                    print(f"valid dock osd <- {msg.topic}, count={len(self.valid_dock_osd)}")
+                    print(f"valid dock osd <- {topic}, count={len(self.valid_dock_osd)}")
 
-            elif msg.topic == self.drone_osd_topic:
+            elif topic == self.drone_osd_topic:
                 errors = validate_drone_osd(payload, self.sn)
                 if errors:
-                    self._record_invalid(msg.topic, errors, payload)
+                    self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_drone_osd.append(payload)
-                    print(f"valid drone osd <- {msg.topic}, count={len(self.valid_drone_osd)}")
+                    print(f"valid drone osd <- {topic}, count={len(self.valid_drone_osd)}")
 
-            elif msg.topic == self.state_topic:
+            elif topic == self.state_topic:
                 errors = validate_state(payload, self.sn, self.expected_state_property)
                 if errors and all(error.startswith("ignored state ") for error in errors):
                     pass
                 elif errors:
-                    self._record_invalid(msg.topic, errors, payload)
+                    self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_state.append(payload)
-                    print(f"valid state <- {msg.topic}, count={len(self.valid_state)}")
-
-            elif msg.topic in (self.services_reply_topic, self.property_reply_topic):
-                tid = payload.get("tid")
-                waiter = self.pending_replies.get(tid)
-                if waiter is not None:
-                    waiter["topic"] = msg.topic
-                    waiter["payload"] = payload
-                    waiter["event"].set()
+                    print(f"valid state <- {topic}, count={len(self.valid_state)}")
 
             self.changed.set()
 
     def publish_services_request(self, method: str, data: Dict[str, Any], timeout: float) -> Tuple[int, Optional[Dict[str, Any]]]:
-        tid = str(uuid.uuid4())
-        message = {
-            "tid": tid,
-            "bid": str(uuid.uuid4()),
-            "timestamp": now_ms(),
-            "gateway": self.sn,
-            "method": method,
-            "need_reply": 1,
-            "data": data,
-        }
-        waiter = {"event": Event(), "payload": None, "topic": ""}
-        with self.lock:
-            self.pending_replies[tid] = waiter
-
-        self.client.publish(self.services_topic, json.dumps(message, ensure_ascii=False), qos=self.qos)
-        print(f"published {method} -> {self.services_topic}, tid={tid}")
-
-        deadline = time.time() + timeout
-        last_reply = None
-        while time.time() < deadline:
-            if not waiter["event"].wait(max(0.05, deadline - time.time())):
-                break
-            reply = waiter["payload"]
-            waiter["event"].clear()
-            last_reply = reply
-            print(f"received <- {waiter['topic']}, method={reply.get('method')}, tid={tid}")
-            print(json.dumps(reply, ensure_ascii=False, indent=2))
-            result = reply.get("data", {}).get("result")
-            if result == 0:
-                with self.lock:
-                    self.pending_replies.pop(tid, None)
-                return 0, reply
-            print(f"ignored non-success {method} reply while waiting for result=0: result={result}")
-
-        with self.lock:
-            self.pending_replies.pop(tid, None)
-        print(f"timeout waiting for successful {method} reply, tid={tid}", file=sys.stderr)
-        return 2, last_reply
+        return self.request(method, data, timeout, channel="services", allowed_results={0})
 
     def publish_property_set(self, property_name: str, value: Any, timeout: float) -> Tuple[int, Optional[Dict[str, Any]]]:
-        tid = str(uuid.uuid4())
-        message = {
-            "tid": tid,
-            "bid": str(uuid.uuid4()),
-            "timestamp": now_ms(),
-            "gateway": self.sn,
-            "method": "property_set",
-            "need_reply": 1,
-            "data": {property_name: value},
-        }
-        waiter = {"event": Event(), "payload": None, "topic": ""}
-        with self.lock:
-            self.pending_replies[tid] = waiter
-
-        self.client.publish(self.property_topic, json.dumps(message, ensure_ascii=False), qos=self.qos)
-        print(f"published property_set {property_name}={value} -> {self.property_topic}, tid={tid}")
-
-        deadline = time.time() + timeout
-        last_reply = None
-        while time.time() < deadline:
-            if not waiter["event"].wait(max(0.05, deadline - time.time())):
-                break
-            reply = waiter["payload"]
-            waiter["event"].clear()
-            last_reply = reply
-            print(f"received <- {waiter['topic']}, method={reply.get('method')}, tid={tid}")
-            print(json.dumps(reply, ensure_ascii=False, indent=2))
-            result = property_result(reply, property_name)
-            if result == 0:
-                with self.lock:
-                    self.pending_replies.pop(tid, None)
-                return 0, reply
-            print(f"ignored non-success property_set reply while waiting for state.result=0: result={result}")
-
-        with self.lock:
-            self.pending_replies.pop(tid, None)
-        print(f"timeout waiting for successful property_set reply, tid={tid}", file=sys.stderr)
-        return 2, last_reply
+        print(f"setting {property_name}={value}")
+        rc, reply = self.request("property_set", {property_name: value}, timeout, channel="property")
+        if rc != 0:
+            return rc, reply
+        result = property_result(reply, property_name)
+        if result != 0:
+            print(
+                f"property_set {property_name} unexpected state.result: expected=0, actual={result}",
+                file=sys.stderr,
+            )
+            return 4, reply
+        return 0, reply
 
     def counts(self) -> Tuple[int, int, int]:
         with self.lock:
@@ -478,8 +373,6 @@ def seed_topology(client: Dock3OsdStateClient, args) -> int:
 
 
 def main() -> int:
-    global mqtt
-
     parser = argparse.ArgumentParser(description="Validate Dock3 OSD/state MQTT reports from a running gateway")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
@@ -497,6 +390,7 @@ def main() -> int:
     parser.add_argument("--no-trigger-state", action="store_true", help="Only listen for state messages; do not publish property_set.")
     parser.add_argument("--state-property", default="silent_mode")
     parser.add_argument("--allow-invalid", action="store_true", help="Do not fail when invalid samples are observed before valid samples.")
+    parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--gateway-domain", default="3")
     parser.add_argument("--gateway-type", type=int, default=2)
     parser.add_argument("--gateway-sub-type", type=int, default=0)
@@ -512,14 +406,16 @@ def main() -> int:
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
-    try:
-        import paho.mqtt.client as mqtt_module
-    except ImportError as exc:
-        raise SystemExit("paho-mqtt is required. Install requirements-ubuntu.txt first.") from exc
-    mqtt = mqtt_module
-
     expected_state_property = "" if args.skip_state else args.state_property
-    client = Dock3OsdStateClient(args.host, args.port, args.sn, args.drone_sn, args.qos, expected_state_property)
+    client = Dock3OsdStateClient(
+        args.host,
+        args.port,
+        args.sn,
+        args.drone_sn,
+        args.qos,
+        expected_state_property,
+        quiet_stale=args.quiet_stale,
+    )
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)
         return 2
