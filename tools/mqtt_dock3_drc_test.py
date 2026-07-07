@@ -185,6 +185,72 @@ def main():
             print(f"unexpected takeoff_to_point_progress status: {event.get('data', {}).get('status')}", file=sys.stderr)
             return 7
 
+        flyto_events_before = client.event_count("fly_to_point_progress")
+        rc, _ = client.request(
+            "fly_to_point_update",
+            {
+                "fly_to_id": "drc-flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+            args.timeout,
+            channel="services",
+            allowed_results={0},
+            expected_status="ok",
+        )
+        if rc != 0:
+            return rc
+        rc, event = client.wait_event(
+            "fly_to_point_progress",
+            flyto_events_before,
+            args.timeout,
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc
+        if event.get("data", {}).get("status") != "wayline_progress":
+            print(f"unexpected fly_to_point_progress status: {event.get('data', {}).get('status')}", file=sys.stderr)
+            return 8
+
+        flyto_stop_events_before = client.event_count("fly_to_point_progress")
+        takeoff_stop_events_before = client.event_count("takeoff_to_point_progress")
+        rc, _ = client.request(
+            "fly_to_point_stop",
+            {},
+            args.timeout,
+            channel="services",
+            allowed_results={0},
+            expected_status="ok",
+        )
+        if rc != 0:
+            return rc
+        rc, event = client.wait_event(
+            "fly_to_point_progress",
+            flyto_stop_events_before,
+            args.timeout,
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc
+        if event.get("data", {}).get("status") != "wayline_cancel":
+            print(f"unexpected fly_to_point_stop status: {event.get('data', {}).get('status')}", file=sys.stderr)
+            return 9
+        rc, event = client.wait_event(
+            "takeoff_to_point_progress",
+            takeoff_stop_events_before,
+            args.timeout,
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc
+        if event.get("data", {}).get("status") != "wayline_cancel":
+            print(f"unexpected takeoff_to_point cancel status: {event.get('data', {}).get('status')}", file=sys.stderr)
+            return 10
+
         rc, _ = client.request(
             "takeoff_to_point",
             {"target_latitude": 100, "target_longitude": 149.1652375, "target_height": 50},

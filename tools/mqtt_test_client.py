@@ -33,6 +33,8 @@ METHOD_CHANNEL_HINTS = {
     "drc_altitude_push": "drc",
     "drc_flyto_point_push": "drc",
     "drc_gimbal_speed_push": "drc",
+    "fly_to_point_update": "services",
+    "fly_to_point_stop": "services",
 }
 
 

@@ -10,6 +10,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.cloud_api.dock3_drc import (
     STICK_CENTER,
+    normalize_fly_to_point_update,
     normalize_drone_control,
     normalize_stick_control,
     normalize_takeoff_to_point,
@@ -30,7 +31,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink.mavutil"] = fake_mavutil
 
 from src.drc.controller import DrcController
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, INVALID_COMMAND_FORMAT
 
 
 class Dock3DrcTest(unittest.TestCase):
@@ -148,6 +149,28 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("target_latitude" in error for error in errors))
 
+    def test_fly_to_point_update_normalizes_points(self):
+        ok, normalized, errors = normalize_fly_to_point_update({
+            "fly_to_id": "flyto-001",
+            "max_speed": 8,
+            "points": [{
+                "latitude": -35.3632622,
+                "longitude": 149.1652375,
+                "height": 45,
+            }],
+        })
+
+        self.assertTrue(ok, errors)
+        self.assertEqual(normalized["fly_to_id"], "flyto-001")
+        self.assertEqual(normalized["max_speed"], 8.0)
+        self.assertEqual(normalized["points"][0]["height"], 45.0)
+
+    def test_fly_to_point_update_rejects_empty_points(self):
+        ok, _, errors = normalize_fly_to_point_update({"points": []})
+
+        self.assertFalse(ok)
+        self.assertTrue(any("points" in error for error in errors))
+
     def test_controller_heartbeat_updates_cloud_timestamp(self):
         controller = DrcController()
         controller._drc_enabled = True
@@ -164,6 +187,24 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertGreater(controller._last_cloud_heartbeat, before)
         self.assertEqual(reply["data"]["drc_state"], 2)
         self.assertEqual(reply["data"]["seq"], 1)
+
+    def test_controller_heartbeat_timeout_auto_exits_and_reports(self):
+        controller = DrcController()
+        events = []
+        controller.set_event_callback(events.append)
+        controller._drc_enabled = True
+        controller._heartbeat_running = True
+        controller._heartbeat_timeout = 10
+        controller._last_cloud_heartbeat = 100
+        controller._session_id = "session-timeout"
+
+        timed_out = controller._check_heartbeat_timeout_once(current_time=111)
+
+        self.assertTrue(timed_out)
+        self.assertFalse(controller.get_drc_status()["enabled"])
+        self.assertEqual(events[-1]["method"], "drc_status_notify")
+        self.assertEqual(events[-1]["data"]["drc_state"], 0)
+        self.assertEqual(events[-1]["data"]["result"], DEVICE_COMMAND_TIMEOUT)
 
     def test_controller_takeoff_to_point_reports_progress_event(self):
         controller = DrcController()
@@ -192,6 +233,42 @@ class Dock3DrcTest(unittest.TestCase):
         ])
         self.assertEqual(events[0]["data"]["status"], "task_ready")
         self.assertEqual(events[1]["data"]["status"], "wayline_progress")
+
+    def test_controller_fly_to_point_update_and_stop_report_events(self):
+        controller = DrcController()
+        events = []
+        controller.set_event_callback(events.append)
+
+        update = controller.handle_fly_to_point_update({
+            "method": "fly_to_point_update",
+            "tid": "tid-flyto",
+            "gateway": "EDGEGW001",
+            "data": {
+                "fly_to_id": "flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+        })
+
+        self.assertEqual(update["data"]["result"], 0)
+        self.assertEqual(update["data"]["fly_to_id"], "flyto-001")
+        self.assertEqual(events[-1]["method"], "fly_to_point_progress")
+        self.assertEqual(events[-1]["data"]["status"], "wayline_progress")
+
+        stop = controller.handle_fly_to_point_stop({
+            "method": "fly_to_point_stop",
+            "tid": "tid-stop",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+
+        self.assertEqual(stop["data"]["result"], 0)
+        self.assertTrue(stop["data"]["output"]["stopped"])
+        self.assertEqual(events[-1]["data"]["status"], "wayline_cancel")
 
     def test_controller_takeoff_to_point_rejects_bad_payload(self):
         controller = DrcController()

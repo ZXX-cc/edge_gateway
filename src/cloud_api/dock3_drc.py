@@ -316,3 +316,66 @@ def normalize_takeoff_to_point(data: Any, default_flight_id: str = "") -> Tuple[
         "commander_mode_lost_action": _to_int(data.get("commander_mode_lost_action", 0), 0),
     }
     return not errors, normalized, errors
+
+
+def normalize_fly_to_point_update(data: Any, default_fly_to_id: str = "") -> Tuple[bool, Dict[str, Any], List[str]]:
+    """Validate and normalize Dock3 fly_to_point_update style payload."""
+    if not isinstance(data, dict):
+        return False, {}, ["fly_to_point_update data must be object"]
+
+    errors: List[str] = []
+    max_speed = data.get("max_speed", data.get("speed", 12))
+    fly_to_id = data.get("fly_to_id", data.get("flight_id", default_fly_to_id))
+    points = data.get("points")
+    if points is None:
+        single_point = {
+            "latitude": data.get("latitude"),
+            "longitude": data.get("longitude"),
+            "height": data.get("height", data.get("altitude")),
+        }
+        points = [single_point]
+
+    if not isinstance(points, list) or not points:
+        errors.append("points must be non-empty list")
+        points = []
+
+    if not _in_range(max_speed, 0.1, TAKEOFF_POINT_MAX_SPEED):
+        errors.append("max_speed must be in range 0.1..17 m/s")
+    if fly_to_id is not None and not isinstance(fly_to_id, str):
+        errors.append("fly_to_id must be string")
+
+    normalized_points: List[Dict[str, float]] = []
+    for index, point in enumerate(points):
+        if not isinstance(point, dict):
+            errors.append(f"points[{index}] must be object")
+            continue
+        latitude = point.get("latitude")
+        longitude = point.get("longitude")
+        height = point.get("height", point.get("altitude"))
+        missing = []
+        if latitude is None:
+            missing.append("latitude")
+        if longitude is None:
+            missing.append("longitude")
+        if height is None:
+            missing.append("height")
+        if missing:
+            errors.append(f"points[{index}] missing keys: {', '.join(missing)}")
+        if latitude is not None and not _in_range(latitude, -90.0, 90.0):
+            errors.append(f"points[{index}].latitude must be in range -90..90")
+        if longitude is not None and not _in_range(longitude, -180.0, 180.0):
+            errors.append(f"points[{index}].longitude must be in range -180..180")
+        if height is not None and not _in_range(height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
+            errors.append(f"points[{index}].height must be in range 5..500 m")
+        normalized_points.append({
+            "latitude": _to_float(latitude),
+            "longitude": _to_float(longitude),
+            "height": _to_float(height, TAKEOFF_POINT_MIN_HEIGHT),
+        })
+
+    normalized = {
+        "fly_to_id": fly_to_id or default_fly_to_id,
+        "max_speed": _to_float(max_speed, 12.0),
+        "points": normalized_points,
+    }
+    return not errors, normalized, errors

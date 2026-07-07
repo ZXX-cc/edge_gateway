@@ -14,6 +14,7 @@ from src.utils.message import MessageBuilder
 from src.utils.field_labels import format_with_labels
 from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 from src.cloud_api.dock3_drc import (
+    normalize_fly_to_point_update,
     normalize_drone_control,
     normalize_stick_control,
     normalize_takeoff_to_point,
@@ -54,6 +55,8 @@ class DrcController:
         self._last_heading_cmd = None
         self._last_altitude_cmd = None
         self._last_flyto_cmd = None
+        self._active_fly_to_point = None
+        self._active_takeoff_to_point = None
 
         # MAVLink模块引用(由外部注入)
         self._mode_control = None
@@ -300,12 +303,7 @@ class DrcController:
             try:
                 current_time = time.time()
 
-                # 检查云端心跳超时
-                if current_time - self._last_cloud_heartbeat > self._heartbeat_timeout:
-                    logger.warning(f"DRC heartbeat timeout! Last cloud heartbeat: "
-                                  f"{current_time - self._last_cloud_heartbeat:.1f}s ago")
-                    # 自动退出DRC模式
-                    self._auto_exit_drc("heartbeat_timeout")
+                if self._check_heartbeat_timeout_once(current_time):
                     break
 
                 # 定期发送设备心跳（每10秒）
@@ -316,6 +314,18 @@ class DrcController:
                 time.sleep(1)
             except Exception as e:
                 logger.error(f"Heartbeat monitor error: {e}")
+
+    def _check_heartbeat_timeout_once(self, current_time: float = None) -> bool:
+        """Check DRC cloud heartbeat timeout once. Returns True when auto-exited."""
+        if not self._heartbeat_running or not self._drc_enabled:
+            return False
+        current_time = current_time or time.time()
+        elapsed = current_time - self._last_cloud_heartbeat
+        if elapsed <= self._heartbeat_timeout:
+            return False
+        logger.warning("DRC heartbeat timeout! Last cloud heartbeat: %.1fs ago", elapsed)
+        self._auto_exit_drc("heartbeat_timeout")
+        return True
 
     def _send_device_heartbeat(self):
         """发送设备DRC心跳"""
@@ -346,6 +356,8 @@ class DrcController:
         self._drc_enabled = False
         self._session_id = ""
         self._original_mode = None
+        self._active_fly_to_point = None
+        self._active_takeoff_to_point = None
 
         # 上报退出事件
         result = DEVICE_COMMAND_TIMEOUT if reason == "heartbeat_timeout" else -1
@@ -464,6 +476,8 @@ class DrcController:
         self._drc_enabled = False
         self._session_id = ""
         self._original_mode = None
+        self._active_fly_to_point = None
+        self._active_takeoff_to_point = None
         logger.info("DRC mode exited")
 
         # 5. 上报退出状态事件
@@ -928,8 +942,31 @@ class DrcController:
         Request: { }
         """
         logger.info("Fly to point stop")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        stopped = False
+        fly_to_id = ""
+        if self._active_fly_to_point:
+            fly_to_id = self._active_fly_to_point.get("fly_to_id", "")
+            self.report_flyto_progress(fly_to_id, "wayline_cancel", result=0)
+            self._active_fly_to_point = None
+            stopped = True
+        if self._active_takeoff_to_point:
+            flight_id = self._active_takeoff_to_point.get("flight_id", "")
+            track_id = self._active_takeoff_to_point.get("track_id", "")
+            self.report_takeoff_to_point_progress(flight_id, "wayline_cancel", result=0, track_id=track_id)
+            self._active_takeoff_to_point = None
+            stopped = True
+            fly_to_id = fly_to_id or flight_id
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "fly_to_id": fly_to_id,
+                "output": {
+                    "status": "ok",
+                    "stopped": stopped,
+                },
+            },
+        )
 
     def handle_fly_to_point_update(self, msg: dict) -> dict:
         """
@@ -941,11 +978,64 @@ class DrcController:
         }
         """
         data = msg.get('data', {})
-        max_speed = data.get('max_speed', 12)
-        points = data.get('points', [])
-        logger.info(f"Fly to point update: max_speed={max_speed}, points={points}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        default_fly_to_id = msg.get('tid') or str(int(time.time() * 1000))
+        valid, target, errors = normalize_fly_to_point_update(data, default_fly_to_id=default_fly_to_id)
+        if not valid:
+            reason = "; ".join(errors)
+            logger.warning("fly_to_point_update payload invalid: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        max_speed = target["max_speed"]
+        points = target["points"]
+        fly_to_id = target["fly_to_id"]
+        first_point = points[0]
+        self._active_fly_to_point = {
+            "fly_to_id": fly_to_id,
+            "max_speed": max_speed,
+            "points": points,
+            "timestamp": time.time(),
+        }
+        logger.info("Fly to point update: id=%s, max_speed=%s, points=%s", fly_to_id, max_speed, points)
+
+        simulated = True
+        warning = ""
+        if self._mode_control and hasattr(self._mode_control, 'guided_goto'):
+            try:
+                result = self._mode_control.guided_goto(
+                    first_point["latitude"],
+                    first_point["longitude"],
+                    first_point["height"],
+                )
+                if result.get("success"):
+                    simulated = False
+                else:
+                    warning = result.get("message", "guided_goto failed")
+                    logger.warning("fly_to_point_update guided_goto failed: %s", warning)
+            except Exception as exc:
+                warning = str(exc)
+                logger.warning("fly_to_point_update guidance dispatch failed: %s", warning)
+
+        self.report_flyto_progress(
+            fly_to_id,
+            "wayline_progress",
+            result=0,
+            way_point_index=0,
+            planned_path_points=points,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "fly_to_id": fly_to_id,
+                "max_speed": max_speed,
+                "target_point": first_point,
+                "output": {
+                    "status": "ok",
+                    "simulated": simulated,
+                    "warning": warning,
+                },
+            },
+        )
 
     # ---- 相机控制接口 ----
 
@@ -1180,6 +1270,12 @@ class DrcController:
             "timestamp": time.time(),
             "source": "takeoff_to_point",
         }
+        self._active_takeoff_to_point = {
+            "flight_id": flight_id,
+            "track_id": track_id,
+            "target": target,
+            "timestamp": time.time(),
+        }
 
         logger.info(
             "Takeoff to point: lat=%s, lon=%s, height=%s, flight_id=%s, max_speed=%s",
@@ -1270,6 +1366,8 @@ class DrcController:
             "last_heading_cmd": self._last_heading_cmd,
             "last_altitude_cmd": self._last_altitude_cmd,
             "last_flyto_cmd": self._last_flyto_cmd,
+            "active_fly_to_point": self._active_fly_to_point,
+            "active_takeoff_to_point": self._active_takeoff_to_point,
             "heartbeat_timeout": self._heartbeat_timeout,
             "last_cloud_heartbeat_age": (
                 time.time() - self._last_cloud_heartbeat
