@@ -74,7 +74,7 @@ nest_mavlink:
   connection:
     type: "udp"
     host: "127.0.0.1"
-    port: 14551
+    port: 14551 # 与主飞控 MAVLink 14550 分离，避免端口/协议冲突
   system_id: 1
   component_id: 190
 

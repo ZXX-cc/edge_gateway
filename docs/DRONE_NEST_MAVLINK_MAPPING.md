@@ -44,6 +44,35 @@
 | `ordinary_order_response` | `uint32_t` | bit/枚举结果 | 普通机巢命令执行结果，当前模拟器 `0` 表示成功 |
 | `takeoff_land_order_response` | `uint32_t` | bit/枚举结果 | 起降命令执行结果，当前模拟器 `0` 表示成功 |
 
+## 机巢状态到上云字段映射
+
+当前转换入口：
+
+| 入口 | 作用 |
+|---|---|
+| `src/device/nest_property_mapper.py` | 统一将 `DroneNestModule` 输出转换为当前上云属性/状态字段 |
+| `DeviceManager.update_from_nest()` | 更新设备物模型属性，供 `state/osd/property` 链路使用 |
+| `DockManager.update_dock_status()` | 更新 `dock_status_query` 使用的机场状态快照 |
+
+字段映射：
+
+| MAVLink/内部字段 | 转换后字段 | 单位/枚举 | 用途 |
+|---|---|---|---|
+| `env_temperature` | `environment_temperature` | °C | 机场环境温度 |
+| `nest_temperature` | `temperature`, `nest_temperature` | °C | 舱内温度/机场状态快照 |
+| `wind_speed` | `wind_speed` | m/s | 风速 |
+| `rainfall` | `rainfall` | 0 无雨，1 小雨，2 中雨，3 大雨 | 降雨等级 |
+| `charge_volt` | `working_voltage` | mV | 工作/充电电压 |
+| `charge_current` | `working_current` | mA | 工作/充电电流 |
+| `estop_state` | `emergency_stop_state` | 0 关闭，1 开启 | 急停状态 |
+| `charging_state` | `charging_state`, `drone_charge_state.state` | 0 空闲，1 充电中 | 机场充电状态 |
+| `gate_state` | `cover_state` | 0 关闭，1 打开，2 动作中，3 异常 | 舱盖状态 |
+| `clamp_state` | `putter_state` | 0 收回/夹紧，1 推出/释放，2 动作中，3 异常 | 推杆/夹紧机构状态 |
+| `landing_light_state` | `supplement_light_state` | 0 关闭，1 打开 | 补光/降落灯状态 |
+| `ac_temp` | `air_conditioner.air_conditioner_state` | 0 关闭，1 开启 | 空调状态 |
+
+注意：上表是当前项目上云属性字段的集中映射层。Dock3 官方 properties 最终枚举确认后，应优先修改 `nest_property_mapper.py`，再同步本表。
+
 ## 联调注意事项
 
 | 注意项 | 要求 |
@@ -52,4 +81,3 @@
 | 端口占用 | `src/nest_simulator.py` 默认监听 `0.0.0.0:14550`，不能和 SITL 同时绑定同一个 UDP 端口 |
 | 业务状态落地 | 机巢状态进入 `DroneNestModule` 后，需要同步到 `DeviceManager`、MQTT state/event 和 operation record |
 | 解析异常 | 自定义 MAVLink 消息解析失败时，应记录消息 ID、原始长度、来源 sysid/compid 和异常原因 |
-

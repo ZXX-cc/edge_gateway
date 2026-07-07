@@ -61,12 +61,36 @@ from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
 from src.database.retention_manager import DataRetentionManager
 from src.database.cloud_sync_manager import CloudSyncManager
-from src.device.nest_property_mapper import (
-    filter_dock_status_fields,
-    map_nest_to_cloud_properties,
-)
+from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 logger = get_logger("main")
+
+
+def filter_dock_status_fields(updates: dict) -> dict:
+    """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
+    dock_updates = {}
+    direct_fields = {
+        "cover_state",
+        "putter_state",
+        "drone_in_dock",
+        "environment_temperature",
+        "wind_speed",
+        "rainfall",
+        "humidity",
+        "supplement_light_state",
+        "alarm_state",
+    }
+    for key in direct_fields:
+        if key in updates:
+            dock_updates[key] = updates[key]
+
+    if "temperature" in updates:
+        dock_updates["nest_temperature"] = updates["temperature"]
+    charge_state = updates.get("drone_charge_state")
+    if isinstance(charge_state, dict) and "state" in charge_state:
+        dock_updates["charging_state"] = charge_state["state"]
+
+    return dock_updates
 
 
 class EdgeGateway:
@@ -372,9 +396,7 @@ class EdgeGateway:
             if self.device:
                 self.device.update_from_nest(nest_data)
             if self.dock:
-                dock_updates = filter_dock_status_fields(
-                    map_nest_to_cloud_properties(nest_data)
-                )
+                dock_updates = filter_dock_status_fields(build_dock3_properties_from_nest(nest_data))
                 if dock_updates:
                     self.dock.update_dock_status(dock_updates)
 
@@ -805,6 +827,27 @@ class EdgeGateway:
             'gimbal_reset': self.gimbal.handle_gimbal_reset,
             'gimbal_capability_query': self.gimbal.handle_gimbal_capability_query,
             'gimbal_status_query': self.gimbal.handle_gimbal_status_query,
+        }, category='payload')
+
+        # ---- ViewLink SDK 调试/降级控制入口 ----
+        self.router.register_batch({
+            'viewlink_initialize': self.gimbal.handle_viewlink_service,
+            'viewlink_connect': self.gimbal.handle_viewlink_service,
+            'viewlink_disconnect': self.gimbal.handle_viewlink_service,
+            'viewlink_is_connected': self.gimbal.handle_viewlink_service,
+            'viewlink_move': self.gimbal.handle_viewlink_service,
+            'viewlink_stop': self.gimbal.handle_viewlink_service,
+            'viewlink_home': self.gimbal.handle_viewlink_service,
+            'viewlink_turn_to': self.gimbal.handle_viewlink_service,
+            'viewlink_zoom_in': self.gimbal.handle_viewlink_service,
+            'viewlink_zoom_out': self.gimbal.handle_viewlink_service,
+            'viewlink_stop_zoom': self.gimbal.handle_viewlink_service,
+            'viewlink_start_track': self.gimbal.handle_viewlink_service,
+            'viewlink_stop_track': self.gimbal.handle_viewlink_service,
+            'viewlink_take_photo': self.gimbal.handle_viewlink_service,
+            'viewlink_start_recording': self.gimbal.handle_viewlink_service,
+            'viewlink_stop_recording': self.gimbal.handle_viewlink_service,
+            'viewlink_set_record_mode': self.gimbal.handle_viewlink_service,
         }, category='payload')
 
         # ---- 红外相机API (IR Thermal) ----

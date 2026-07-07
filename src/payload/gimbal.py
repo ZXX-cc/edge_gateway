@@ -2,12 +2,13 @@
 云台控制模块
 处理云台角度、模式、目标指向
 """
-import math
 from typing import Optional, Callable
-from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.modules.gimbal_control import VLKConnType, VLKRecordMode, VLKSensor, VLKTrackTemplateSize
+from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
+from web.mavlink.viewlink import build_viewlink_call
 
 logger = get_logger("gimbal")
 
@@ -81,6 +82,64 @@ class GimbalController:
             logger.error(f"Gimbal command send failed: {e}")
             return False
 
+    def _send_mapped_gimbal_command(self, method: str, data: dict) -> tuple[bool, dict]:
+        """按 web/mavlink 云台映射发送 MAVLink COMMAND_LONG。"""
+        mapping = build_gimbal_command(method, data)
+        mavlink = mapping["mavlink"]
+        success = self._send_mavlink_command(mavlink["command"], mavlink["params"])
+        logger.info(
+            "Gimbal MAVLink mapped: method=%s command=%s params=%s success=%s",
+            method,
+            mavlink["command_name"],
+            mavlink["params"],
+            success,
+        )
+        return success, mapping
+
+    def _execute_viewlink_call(self, mapping: dict) -> dict:
+        """执行 web/mavlink/viewlink 生成的 SDK 调用描述。"""
+        if not self._gimbal_control:
+            return {"success": False, "message": "ViewLink control is not configured"}
+
+        method = mapping["sdk_method"]
+        args = mapping.get("args", {})
+
+        try:
+            if method == "initialize":
+                sdk_dir = args.get("sdk_dir")
+                if sdk_dir:
+                    self._gimbal_control.sdk_dir = sdk_dir
+                return self._gimbal_control.initialize()
+            if method == "connect":
+                conn_type = VLKConnType(args.get("conn_type", VLKConnType.TCP))
+                return self._gimbal_control.connect(
+                    ip=args.get("ip"),
+                    port=args.get("port"),
+                    conn_type=conn_type,
+                )
+            if method == "is_connected":
+                connected = self._gimbal_control.is_connected()
+                return {"success": True, "connected": connected}
+            if method == "start_track":
+                return self._gimbal_control.start_track(
+                    args.get("x", 0),
+                    args.get("y", 0),
+                    args.get("width", 0),
+                    args.get("height", 0),
+                    VLKTrackTemplateSize(args.get("template_size", VLKTrackTemplateSize.AUTO)),
+                    VLKSensor(args.get("sensor", VLKSensor.VISIBLE1)),
+                )
+            if method == "set_record_mode":
+                return self._gimbal_control.set_record_mode(
+                    VLKRecordMode(args.get("mode", VLKRecordMode.NONE))
+                )
+
+            func = getattr(self._gimbal_control, method)
+            return func(**args)
+        except Exception as exc:
+            logger.error(f"ViewLink call failed: {method}, error={exc}")
+            return {"success": False, "message": str(exc)}
+
     # ---- API处理器 ----
 
     def handle_gimbal_rotate(self, msg: dict) -> dict:
@@ -118,28 +177,31 @@ class GimbalController:
         # 优先使用 ViewLink SDK 云台控制
         if self._gimbal_control and self._gimbal_control.is_connected():
             if pitch is not None or yaw is not None:
+                logger.info("ViewLink mapped: %s", build_viewlink_call("turn_to", {
+                    "yaw": self._yaw,
+                    "pitch": self._pitch,
+                }))
                 result = self._gimbal_control.turn_to(self._yaw, self._pitch)
                 success = result.get('success', False)
                 logger.info(f"ViewLink turn_to: {result}")
             elif pitch_speed is not None or yaw_speed is not None:
                 yaw_spd = int((yaw_speed or 0) * 100)
                 pitch_spd = int((pitch_speed or 0) * 100)
+                logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
+                    "yaw_speed": yaw_spd,
+                    "pitch_speed": pitch_spd,
+                }))
                 result = self._gimbal_control.move(yaw_spd, pitch_spd)
                 success = result.get('success', False)
                 logger.info(f"ViewLink move: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success and (pitch is not None or yaw is not None or roll is not None):
-            success = self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
-                [
-                    self._pitch * 100,   # param1: pitch (centidegrees)
-                    self._roll * 100,    # param2: roll (centidegrees)
-                    self._yaw * 100,     # param3: yaw (centidegrees)
-                    0, 0, 0,
-                    2 if self._mode == self.MODE_FPV else 0  # param7: 2=FPV, 0=MAV_MOUNT_MODE_RETRACT
-                ]
-            )
+            mapped_data = dict(data)
+            mapped_data["pitch"] = self._pitch
+            mapped_data["roll"] = self._roll
+            mapped_data["yaw"] = self._yaw
+            success, _ = self._send_mapped_gimbal_command('gimbalRotate', mapped_data)
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -156,13 +218,9 @@ class GimbalController:
 
         logger.info(f"Camera look at: lat={target_lat}, lon={target_lon}, alt={target_alt}")
 
-        # 通过MAVLink发送目标指向 (MAV_CMD_DO_SET_ROI_LOCATION)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_DO_SET_ROI_LOCATION,
-            [0, 0, 0, 0, target_lat, target_lon, target_alt]
-        )
+        success, _ = self._send_mapped_gimbal_command('camera_look_at', data)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_set_gimbal_mode(self, msg: dict) -> dict:
         """
@@ -171,7 +229,7 @@ class GimbalController:
         Request: { mode: FOLLOW/FREE/FPV/RESET }
         """
         data = msg.get('data', {})
-        mode_str = data.get('mode', 'FOLLOW')
+        mode_str = str(data.get('mode', 'FOLLOW')).upper()
 
         mode_map = {
             'FOLLOW': self.MODE_FOLLOW,
@@ -183,31 +241,16 @@ class GimbalController:
 
         logger.info(f"Gimbal mode: {mode_str}")
 
-        # 通过MAVLink设置云台模式
-        mount_mode = 0  # MAV_MOUNT_MODE_RETRACT
-        if self._mode == self.MODE_FPV:
-            mount_mode = 2  # MAV_MOUNT_MODE_FPV
-        elif self._mode == self.MODE_FREE:
-            mount_mode = 3  # MAV_MOUNT_MODE_RC_TARGETING
-        elif self._mode == self.MODE_FOLLOW:
-            mount_mode = 4  # MAV_MOUNT_MODE_GPS_POINT
-
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_DO_MOUNT_CONFIGURE,
-            [mount_mode, 0, 0, 0, 0, 0, 0]
-        )
+        success, _ = self._send_mapped_gimbal_command('set_gimbal_mode', data)
 
         # RESET模式下自动回中
         if self._mode == self.MODE_RESET:
             self._pitch = 0
             self._roll = 0
             self._yaw = 0
-            self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
-                [0, 0, 0, 0, 0, 0, 0]
-            )
+            success, _ = self._send_mapped_gimbal_command('gimbal_reset', data)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     # ---- 云台扩展接口 ----
 
@@ -222,16 +265,14 @@ class GimbalController:
 
         # 优先使用 ViewLink SDK 回中
         if self._gimbal_control and self._gimbal_control.is_connected():
+            logger.info("ViewLink mapped: %s", build_viewlink_call("home", msg.get('data', {})))
             result = self._gimbal_control.home()
             success = result.get('success', False)
             logger.info(f"ViewLink home: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
-            success = self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
-                [0, 0, 0, 0, 0, 0, 0]
-            )
+            success, _ = self._send_mapped_gimbal_command('gimbal_reset', msg.get('data', {}))
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -240,10 +281,7 @@ class GimbalController:
         logger.info("Gimbal capability query")
         return MessageBuilder.build_reply(msg, result=0, data={
             'supported_modes': ['FOLLOW', 'FREE', 'FPV', 'RESET'],
-            'max_pitch_speed': 180,
-            'max_yaw_speed': 180,
-            'pitch_range': [-90, 30],
-            'yaw_range': [-180, 180]
+            **GIMBAL_CAPABILITY,
         })
 
     def handle_gimbal_status_query(self, msg: dict) -> dict:
@@ -294,3 +332,23 @@ class GimbalController:
         ratio = data.get('zoom_ratio', 1.0)
         logger.info(f"IR zoom: {ratio}x")
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_viewlink_service(self, msg: dict) -> dict:
+        """ViewLink SDK services 入口，方法名支持 viewlink_xxx 或文档原始 SDK 方法名。"""
+        method = msg.get('method', '')
+        sdk_method = method[len('viewlink_'):] if method.startswith('viewlink_') else method
+        data = msg.get('data', {})
+
+        mapping = build_viewlink_call(sdk_method, data)
+        result = self._execute_viewlink_call(mapping)
+        success = bool(result.get("success", False))
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str=result.get("message", ""),
+            data={
+                "mapping": mapping,
+                "viewlink_result": result,
+            },
+        )

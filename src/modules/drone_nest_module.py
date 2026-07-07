@@ -19,6 +19,7 @@ from src.generated_dialect.gcs_order_protocol import (
     GCSOrderDecoded,
     REJECT_REASONS
 )
+from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 
 class DroneNestModule(BaseModule):
@@ -266,43 +267,7 @@ class DroneNestModule(BaseModule):
 
         这里只负责 MAVLink 层字段构造，不发布 MQTT。
         """
-        if not nest_data.get("data_valid", False):
-            return {}
-
-        properties: Dict[str, Any] = {}
-
-        if "env_temperature" in nest_data:
-            properties["environment_temperature"] = nest_data["env_temperature"]
-        if "nest_temperature" in nest_data:
-            properties["temperature"] = nest_data["nest_temperature"]
-            properties["nest_temperature"] = nest_data["nest_temperature"]
-        if "wind_speed" in nest_data:
-            properties["wind_speed"] = nest_data["wind_speed"]
-        if "rainfall" in nest_data:
-            properties["rainfall"] = self._map_rainfall(nest_data["rainfall"])
-        if "charge_volt" in nest_data:
-            properties["working_voltage"] = int(nest_data["charge_volt"] * 1000)
-        if "charge_current" in nest_data:
-            properties["working_current"] = nest_data["charge_current"] * 1000
-        if "estop_state" in nest_data:
-            properties["emergency_stop_state"] = 1 if nest_data["estop_state"] else 0
-        if "charging_state" in nest_data:
-            charging_state = 1 if nest_data["charging_state"] else 0
-            properties["charging_state"] = charging_state
-            properties["drone_charge_state"] = {"state": charging_state}
-        if "gate_state" in nest_data:
-            properties["cover_state"] = self._map_gate_state(nest_data["gate_state"])
-        if "clamp_state" in nest_data:
-            properties["putter_state"] = self._map_clamp_state(nest_data["clamp_state"])
-        if "landing_light_state" in nest_data:
-            properties["supplement_light_state"] = 1 if nest_data["landing_light_state"] == 1 else 0
-        if "ac_temp" in nest_data:
-            properties["air_conditioner"] = {
-                "air_conditioner_state": 1 if nest_data["ac_temp"] > 0 else 0,
-                "switch_time": 0,
-            }
-
-        return properties
+        return build_dock3_properties_from_nest(nest_data)
 
     @staticmethod
     def _decode_ordinary_order_response(raw_value: int) -> Dict[str, Any]:

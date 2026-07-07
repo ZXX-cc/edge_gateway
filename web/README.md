@@ -4,6 +4,7 @@
 
 - 替代终端 3：订阅 MQTT topic，把 `osd/state/events/reply` 解析成仪表盘和消息流。
 - 替代终端 1 的常用操作：可启动/停止 SITL 进程，并通过 MAVLink 发送 `GUIDED/ARM/TAKEOFF/LAND/RTL` 等命令。
+- `web/mavlink` 提供机巢自定义 MAVLink 调试工具，可测试 `DRONE_NEST_COMMAND/RESPONSE/ORDER_RESPONSE`。
 - 不依赖 `src/` 代码，不嵌入当前网关程序；只连接本机 MQTT broker 和 MAVLink 端口。
 
 ## 安装
@@ -111,6 +112,22 @@ payload 填：
 然后点击“发送”。如果网关正常，会在右侧看到 `services` 请求和 `services_reply` 回包。
 
 ## 常见问题
+
+### 如何启动机巢自定义 MAVLink 模拟器
+
+启动模拟器：
+
+```bash
+python web/mavlink/nest/simulator.py
+```
+
+如需避开飞控 SITL 端口，可改端口：
+
+```bash
+python web/mavlink/nest/simulator.py --port 14551
+```
+
+网关的 `nest_mavlink.connection.port` 要和模拟器端口保持一致。
 
 ### 点击“启动 SITL”提示 `ModuleNotFoundError: No module named 'pexpect'`
 

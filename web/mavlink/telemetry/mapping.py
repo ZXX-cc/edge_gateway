@@ -2,6 +2,11 @@
 
 这里的代码只服务 web/mavlink 调试链路，不修改主网关运行时模块。
 输入可以是真实 pymavlink 消息，也可以是带同名字段的测试对象。
+
+字段目标同时兼顾：
+- 本地《MAVLink协议字段映射文档》中的 OSD/遥测键。
+- DJI Dock3 properties 官方字段，例如 latitude、longitude、height、
+  electricity、drone_charge_state、position_state、wind_speed。
 """
 from __future__ import annotations
 
@@ -133,6 +138,12 @@ DJI_MODE_CODE_MAP = {
 }
 
 
+DOCK3_POSITION_FIXED_STATE = {
+    0: 0,  # 未开始/未定位
+    1: 2,  # 本地文档 gps_fixed=1 映射为 Dock3 收敛成功
+}
+
+
 def new_telemetry_state() -> Dict[str, Any]:
     """返回一份新的遥测状态字典。"""
     return TELEMETRY_DEFAULTS.copy()
@@ -164,6 +175,11 @@ def parse_flight_mode(custom_mode: int, mav_type: Optional[int] = None) -> str:
 def mode_to_dji_code(mode: str) -> int:
     """把飞行模式字符串转成 OSD mode_code。"""
     return DJI_MODE_CODE_MAP.get(str(mode).upper(), 0)
+
+
+def gps_fixed_to_dock3_state(gps_fixed: int) -> int:
+    """把本地 gps_fixed(0/1) 转成 Dock3 position_state.is_fixed 枚举。"""
+    return DOCK3_POSITION_FIXED_STATE.get(int(gps_fixed), 0)
 
 
 def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -299,6 +315,41 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     return osd
 
 
+def build_dock3_properties_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str, Any]:
+    """把标准飞控遥测转换成 DJI Dock3 properties 字段。
+
+    说明：
+    - 官方 Dock3 `height` 是机场椭球高度字段；本地映射文档当前要求
+      使用 `altitudeRelative` 驱动 `height`，这里按本地文档执行。
+    - 官方 Dock3 `position_state.is_fixed` 是 0/1/2/3 枚举，本地遥测只
+      有 `gps_fixed` 0/1，因此 1 映射为 2（收敛成功）。
+    """
+    battery_remaining = telemetry.get("batteryRemaining", 0)
+    gps_fixed = telemetry.get("gps_fixed", 0)
+
+    properties = {
+        "longitude": telemetry.get("longitude", 0.0),
+        "latitude": telemetry.get("latitude", 0.0),
+        "height": telemetry.get("altitudeRelative", 0.0),
+        "mode_code": mode_to_dji_code(telemetry.get("flight_mode", "UNKNOWN")),
+        "electricity": battery_remaining,
+        "drone_charge_state": {
+            "capacity_percent": battery_remaining,
+            "state": 0,
+        },
+        "position_state": {
+            "is_calibration": 1 if gps_fixed else 0,
+            "is_fixed": gps_fixed_to_dock3_state(gps_fixed),
+            "quality": _gps_quality_from_satellites(telemetry.get("satelliteNumber", 0), gps_fixed),
+            "gps_number": telemetry.get("satelliteNumber", 0),
+            "rtk_number": telemetry.get("rtkNumber", 0),
+        },
+        "wind_speed": telemetry.get("windSpeed", 0.0),
+    }
+
+    return {key: value for key, value in properties.items() if value is not None}
+
+
 def _valid_cell_voltages(voltages: Optional[Iterable[int]]) -> list[int]:
     if not voltages:
         return []
@@ -312,3 +363,15 @@ def _fill_altitude_agl(data: Dict[str, Any]) -> None:
     terrain = data.get("terrainAltitude", 0.0)
     if altitude > 0 and terrain > 0:
         data["altitudeAGL"] = altitude - terrain
+
+
+def _gps_quality_from_satellites(satellites: int, gps_fixed: int) -> int:
+    if gps_fixed and satellites >= 20:
+        return 5
+    if gps_fixed and satellites >= 16:
+        return 4
+    if gps_fixed and satellites >= 12:
+        return 3
+    if gps_fixed and satellites >= 8:
+        return 2
+    return 1

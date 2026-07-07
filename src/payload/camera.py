@@ -7,12 +7,17 @@ import threading
 import asyncio
 from typing import Optional, Callable
 from uuid import UUID
-from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
+from web.mavlink.camera import (
+    build_camera_command,
+    build_camera_setting,
+    build_media_metadata,
+)
+from web.mavlink.viewlink import build_viewlink_call
 
 logger = get_logger("camera")
 
@@ -108,6 +113,31 @@ class CameraController:
             logger.error(f"Camera command send failed: {e}")
             return False
 
+    def _send_mapped_camera_command(self, method: str, data: dict) -> tuple[bool, dict]:
+        """按 web/mavlink 相机映射发送 MAVLink COMMAND_LONG。"""
+        mapping = build_camera_command(method, data)
+        mavlink = mapping["mavlink"]
+        success = self._send_mavlink_command(mavlink["command"], mavlink["params"])
+        logger.info(
+            "Camera MAVLink mapped: method=%s command=%s params=%s success=%s",
+            method,
+            mavlink["command_name"],
+            mavlink["params"],
+            success,
+        )
+        return success, mapping
+
+    def _log_camera_setting_mapping(self, method: str, data: dict) -> dict:
+        """记录相机参数设置映射，实际设置仍由当前控制器状态维护。"""
+        mapping = build_camera_setting(method, data)
+        logger.info(
+            "Camera setting mapped: method=%s canonical=%s setting=%s",
+            method,
+            mapping["canonical_method"],
+            mapping["setting"],
+        )
+        return mapping
+
     # ---- 拍照API ----
 
     def handle_camera_photo_take(self, msg: dict) -> dict:
@@ -125,16 +155,14 @@ class CameraController:
 
         # 优先使用 ViewLink SDK 拍照
         if self._gimbal_control and self._gimbal_control.is_connected():
+            logger.info("ViewLink mapped: %s", build_viewlink_call("take_photo", data))
             result = self._gimbal_control.take_photo()
             success = result.get('success', False)
             logger.info(f"ViewLink photo: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
-            success = self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_DO_DIGICAM_CONTROL,
-                [0, 0, 0, 0, 1, 0, 0]  # param5=1 触发拍照
-            )
+            success, _ = self._send_mapped_camera_command('camera_photo_take', data)
 
         self._photo_count += 1
 
@@ -157,25 +185,17 @@ class CameraController:
 
         logger.info(f"Start photo: mode={mode}, count={count}, interval={interval}s")
 
-        # 通过MAVLink发送连拍命令 (MAV_CMD_IMAGE_START_CAPTURE)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_IMAGE_START_CAPTURE,
-            [0, interval * 1000, count, 0, 0, 0, 0]  # param2=间隔(ms), param3=张数
-        )
+        success, _ = self._send_mapped_camera_command('start_photo', data)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_stop_photo(self, msg: dict) -> dict:
         """停止连续拍照"""
         logger.info("Stop photo")
 
-        # 通过MAVLink停止拍照 (MAV_CMD_IMAGE_STOP_CAPTURE)
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_IMAGE_STOP_CAPTURE,
-            [0, 0, 0, 0, 0, 0, 0]
-        )
+        success, _ = self._send_mapped_camera_command('stop_photo', msg.get('data', {}))
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     # ---- 录像API ----
 
@@ -200,16 +220,14 @@ class CameraController:
 
         # 优先使用 ViewLink SDK 开始录像
         if self._gimbal_control and self._gimbal_control.is_connected():
+            logger.info("ViewLink mapped: %s", build_viewlink_call("start_recording", data))
             result = self._gimbal_control.start_recording()
             success = result.get('success', False)
             logger.info(f"ViewLink start recording: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
-            success = self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_VIDEO_START_CAPTURE,
-                [0, 30, 0, 0, 0, 0, 0]  # param2=帧率
-            )
+            success, _ = self._send_mapped_camera_command('start_record', data)
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -226,16 +244,14 @@ class CameraController:
 
         # 优先使用 ViewLink SDK 停止录像
         if self._gimbal_control and self._gimbal_control.is_connected():
+            logger.info("ViewLink mapped: %s", build_viewlink_call("stop_recording", data))
             result = self._gimbal_control.stop_recording()
             success = result.get('success', False)
             logger.info(f"ViewLink stop recording: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
-            success = self._send_mavlink_command(
-                mavutil.mavlink.MAV_CMD_VIDEO_STOP_CAPTURE,
-                [0, 0, 0, 0, 0, 0, 0]
-            )
+            success, _ = self._send_mapped_camera_command('stop_record', data)
 
         # 异步写入媒体文件元数据到数据库
         if success:
@@ -253,6 +269,7 @@ class CameraController:
         """
         data = msg.get('data', {})
         mode_str = data.get('mode', 'photo')
+        self._log_camera_setting_mapping('set_camera_mode', data)
 
         mode_map = {'photo': self.MODE_PHOTO, 'video': self.MODE_VIDEO, 'playback': self.MODE_PLAYBACK}
         self._mode = mode_map.get(mode_str, self.MODE_PHOTO)
@@ -270,6 +287,7 @@ class CameraController:
         data = msg.get('data', {})
         mode = data.get('mode', 'auto')
         ev = data.get('ev', 0)
+        self._log_camera_setting_mapping('set_exposure_mode', data)
 
         self._exposure_mode = mode
         logger.info(f"Exposure mode: {mode}, EV={ev}")
@@ -284,6 +302,7 @@ class CameraController:
         """
         data = msg.get('data', {})
         ratio = data.get('zoom_ratio')
+        self._log_camera_setting_mapping('zoom', data)
 
         if ratio is not None:
             self._zoom_level = ratio
@@ -303,6 +322,7 @@ class CameraController:
         """
         data = msg.get('data', {})
         mode = data.get('mode', 'auto_focus')
+        self._log_camera_setting_mapping('set_focus_mode', data)
 
         logger.info(f"Focus mode: {mode}")
 
@@ -316,6 +336,7 @@ class CameraController:
         """
         data = msg.get('data', {})
         distance = data.get('focus_distance', 0)
+        self._log_camera_setting_mapping('set_focus_value', data)
 
         logger.info(f"Focus distance: {distance}")
 
@@ -330,6 +351,7 @@ class CameraController:
         data = msg.get('data', {})
         x = data.get('x', 0.5)
         y = data.get('y', 0.5)
+        self._log_camera_setting_mapping('spot_focus', data)
 
         logger.info(f"Spot focus: ({x}, {y})")
 
@@ -391,32 +413,40 @@ class CameraController:
             AsyncSessionLocal = get_async_session_local()
 
             # 获取当前遥测数据（位置信息）
-            lat, lon, alt = 0.0, 0.0, 0.0
+            telemetry = {}
             if self._telemetry_module and hasattr(self._telemetry_module, 'get_gps'):
                 gps = self._telemetry_module.get_gps()
                 if gps:
-                    lat = gps.get('lat', 0.0)
-                    lon = gps.get('lon', 0.0)
-                    alt = gps.get('alt', 0.0)
+                    telemetry = gps
 
             capture_time = int(time.time())
-            file_name = f"{capture_time}_{file_type}.{file_type}"
+            metadata = build_media_metadata(
+                file_type,
+                telemetry=telemetry,
+                context={
+                    "mission_id": self._current_mission_id,
+                    "device_sn": self.gateway_sn,
+                    "capture_time": capture_time,
+                },
+                duration=duration,
+            )
+            file_name = metadata["file_name"]
 
             async with AsyncSessionLocal() as session:
                 media_data = {
-                    'mission_id': self._current_mission_id,
-                    'device_sn': self.gateway_sn,
-                    'file_name': file_name,
+                    'mission_id': metadata["mission_id"],
+                    'device_sn': metadata["device_sn"],
+                    'file_name': metadata["file_name"],
                     'file_path': f"/data/media/{file_name}",
                     'file_size': 0,
-                    'file_type': file_type,
+                    'file_type': metadata["file_type"],
                     'resolution': '1080p',
-                    'duration': duration,
-                    'capture_time': capture_time,
-                    'latitude': lat,
-                    'longitude': lon,
-                    'altitude': alt,
-                    'upload_status': 'pending',
+                    'duration': metadata.get("duration"),
+                    'capture_time': metadata["capture_time"],
+                    'latitude': metadata["latitude"],
+                    'longitude': metadata["longitude"],
+                    'altitude': metadata["altitude"],
+                    'upload_status': metadata["upload_status"],
                 }
                 await MediaDB.create_media_file(session, media_data)
                 await session.commit()
@@ -431,13 +461,7 @@ class CameraController:
                         'current': self._photo_count,
                         'total': self._photo_count,
                         'storage_path': f"/data/media/{file_name}",
-                        'metadata': {
-                            'latitude': lat,
-                            'longitude': lon,
-                            'altitude': alt,
-                            'capture_time': capture_time,
-                            'file_type': file_type,
-                        }
+                        'metadata': metadata
                     },
                     self.gateway_sn
                 )
@@ -476,6 +500,7 @@ class CameraController:
         """设置快门速度"""
         data = msg.get('data', {})
         shutter = data.get('shutter_speed', 'auto')
+        self._log_camera_setting_mapping('set_shutter_speed', data)
         logger.info(f"Shutter speed: {shutter}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -483,6 +508,7 @@ class CameraController:
         """设置ISO"""
         data = msg.get('data', {})
         iso = data.get('iso', 'auto')
+        self._log_camera_setting_mapping('set_iso', data)
         logger.info(f"ISO: {iso}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -490,6 +516,7 @@ class CameraController:
         """设置白平衡"""
         data = msg.get('data', {})
         wb = data.get('white_balance', 'auto')
+        self._log_camera_setting_mapping('set_white_balance', data)
         logger.info(f"White balance: {wb}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -497,6 +524,7 @@ class CameraController:
         """设置光圈"""
         data = msg.get('data', {})
         aperture = data.get('aperture', 'auto')
+        self._log_camera_setting_mapping('set_aperture', data)
         logger.info(f"Aperture: {aperture}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -511,6 +539,7 @@ class CameraController:
         """设置分辨率"""
         data = msg.get('data', {})
         resolution = data.get('resolution', '1080p')
+        self._log_camera_setting_mapping('set_resolution', data)
         logger.info(f"Resolution: {resolution}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -518,6 +547,7 @@ class CameraController:
         """设置帧率"""
         data = msg.get('data', {})
         fps = data.get('frame_rate', 30)
+        self._log_camera_setting_mapping('set_frame_rate', data)
         logger.info(f"Frame rate: {fps}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -525,6 +555,7 @@ class CameraController:
         """设置视频编码"""
         data = msg.get('data', {})
         encoding = data.get('encoding', 'h264')
+        self._log_camera_setting_mapping('set_video_encoding', data)
         logger.info(f"Video encoding: {encoding}")
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -592,4 +623,3 @@ class CameraController:
     def handle_camera_focus_value_set(self, msg: dict) -> dict:
         """Camera focus value set (camera_focus_value_set) - alias of set_focus_value"""
         return self.handle_set_focus_value(msg)
-

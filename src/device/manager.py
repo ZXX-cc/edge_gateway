@@ -56,10 +56,11 @@ from src.utils.dji_error_codes import (
     DOCK_COMMUNICATION_ERROR,
     INVALID_COMMAND_FORMAT,
 )
-from src.device.nest_property_mapper import map_nest_to_cloud_properties
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.device_db import DeviceDB
 from src.database.alarm_db import AlarmDB
+from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
+from web.mavlink.properties.mapping import build_properties_from_osd, merge_properties
 
 logger = get_logger("device")
 
@@ -686,45 +687,8 @@ class DeviceManager:
         从遥测处理器接收MAVLink遥测数据，更新OSD属性
         由 main.py 在 TelemetryProcessor.build_osd_data() 后调用
         """
-        updates = {}
-
-        # 位置信息
-        if 'latitude' in osd_data:
-            updates['latitude'] = osd_data['latitude']
-        if 'longitude' in osd_data:
-            updates['longitude'] = osd_data['longitude']
-        if 'height' in osd_data:
-            updates['height'] = osd_data['height']
-
-        # 飞行模式
-        if 'mode_code' in osd_data:
-            updates['mode_code'] = osd_data['mode_code']
-
-        # 电量
-        if 'battery' in osd_data:
-            bat = osd_data['battery']
-            updates['electricity'] = bat.get('capacity_percent', 100)
-            # 更新无人机充电状态中的电量
-            charge_state = self._properties.get('drone_charge_state', {}).copy()
-            charge_state['capacity_percent'] = bat.get('capacity_percent', 100)
-            updates['drone_charge_state'] = charge_state
-
-        # GPS/搜星状态
-        if 'position_state' in osd_data:
-            updates['position_state'] = osd_data['position_state']
-
-        # 风速
-        if 'wind_speed' in osd_data:
-            updates['wind_speed'] = osd_data['wind_speed']
-        if 'wind_direction' in osd_data:
-            # wind_direction 不在物模型中，但可用于内部逻辑
-            pass
-
-        # 飞行器是否在舱内（根据高度和模式推断，或从机巢获取）
-        if 'gear' in osd_data and osd_data.get('gear') == 1:
-            # 飞行器已解锁/起飞，不在舱内
-            if self._properties.get('drone_in_dock') == 1:
-                updates['drone_in_dock'] = 0
+        updates = build_properties_from_osd(osd_data)
+        updates = self._merge_updates_with_current(updates)
 
         if updates:
             self.update_properties(updates, notify=False)  # OSD属性不触发state，由TelemetryProcessor定时推送
@@ -734,13 +698,8 @@ class DeviceManager:
         从机巢模块接收机巢环境/状态数据，更新OSD属性
         由 main.py 在 DroneNestModule 收到 DRONE_NEST_RESPONSE 后调用
         """
-        updates = map_nest_to_cloud_properties(nest_data)
-
-        if 'charging_state' in updates:
-            # 联动更新无人机充电状态
-            charge_state = self._properties.get('drone_charge_state', {}).copy()
-            charge_state['state'] = updates['charging_state']
-            updates['drone_charge_state'] = charge_state
+        updates = build_dock3_properties_from_nest(nest_data)
+        updates = self._merge_updates_with_current(updates)
 
         # 一键起飞允许状态
         if 'takeoff_allowed' in nest_data:
@@ -756,6 +715,16 @@ class DeviceManager:
 
         if updates:
             self.update_properties(updates, notify=False)
+
+    def _merge_updates_with_current(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """把嵌套属性更新与当前属性深合并，避免局部字段互相覆盖。"""
+        merged: Dict[str, Any] = {}
+        for key, value in updates.items():
+            if isinstance(value, dict) and isinstance(self._properties.get(key), dict):
+                merged[key] = merge_properties(self._properties[key].copy(), value)
+            else:
+                merged[key] = value
+        return merged
 
     def update_from_mission(self, event: dict):
         """
