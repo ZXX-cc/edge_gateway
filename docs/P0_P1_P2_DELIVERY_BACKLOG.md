@@ -54,7 +54,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-14 | 错误码边界 | DJI 错误码、异常分支 | `services_reply`、`property/set_reply`、`drc/up` | 已可用 | 对外不暴露内部负数；未知 method、topic 错误、参数错误有官方码 | `tests/test_dji_error_codes.py` |
 | P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | 已可用 | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；properties 专项后 trace 已能统计三段事件和 `result=0/1` | `request_trace_query.py`、Ubuntu trace 断言通过 |
 | P0-16 | 非阻塞主链路 | 第六章技术栈和风险 | MQTT/MAVLink/DB/文件后台化 | 部分可用 | MQTT 回调、MAVLink 接收、状态机不得被 DB、文件、上传、压缩、升级阻塞 | 代码审计 + E2E 压测 |
-| P0-17 | 全链路最小闭环 | 业务流程全景 | 上线 -> 绑定 -> 拓扑 -> OSD -> 控制 -> 任务 -> 事件 | 待实现 | 一条命令或脚本可重复跑完整 P0 主链路 | `e2e_full_chain_test.py` |
+| P0-17 | 全链路最小闭环 | 业务流程全景 | 上线 -> 绑定 -> 拓扑 -> OSD -> 控制 -> 任务 -> 事件 | 已可用 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已串联 properties、device、OSD/state、CMD、DRC、Wayline，6 段全部通过且 `ignored_total=0` | `e2e_full_chain_test.py` |
 
 ## 3. P1 必须可用
 
@@ -64,9 +64,9 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 |---|---|---|---|---|---|---|
 | P1-01 | 一键启航主流程 | `BUSINESS_FLOW.docx` 一键启航 | `wayline` + `cmd` + `events/state` | 待实现 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电串联 | `e2e_takeoff_flow_test.py` |
 | P1-02 | 机巢 v1.3 完整状态机 | 机巢协议 v1.3 | 设备侧 adapter -> Dock3 state/HMS | 部分可用 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞全部落地 | `nest_v13_protocol_test.py` |
-| P1-03 | DRC 心跳和超时恢复 | DRC 业务流程 | `drc`、`drc_state`、events | 待实现 | 心跳丢失后自动退出或降级，状态和错误码一致 | DRC 专项 |
-| P1-04 | `takeoff_to_point` 和指点飞行 | 指令飞行 | `drc` / remote control | 待实现 | 起飞到点、导航中、取消/失败状态可用 | DRC + SITL |
-| P1-05 | KMZ/WPML 基础解析 | 航线管理 | `wayline` | 待实现 | 下载/校验/解析标准 mock KMZ，转换到内部 mission | Wayline 专项 |
+| P1-03 | DRC 心跳和超时恢复 | DRC 业务流程 | `drc`、`drc_state`、events | 已可用 | 官方心跳、状态事件和超时退出基础闭环已进入专项与 E2E；真实链路抖动边界继续精校 | DRC 专项 |
+| P1-04 | `takeoff_to_point` 和指点飞行 | 指令飞行 | `drc` / remote control | 已可用 | Dock3 云端模拟下起飞到点、导航中、取消/停止状态可用；真实 SITL 航点语义归入 P1-06 | DRC + SITL |
+| P1-05 | KMZ/WPML 基础解析 | 航线管理 | `wayline` | 已可用 | mock KMZ 下载/校验/解析并转换到内部 mission 已通过 Wayline 与 E2E 复测 | Wayline 专项 |
 | P1-06 | 真实 SITL 航点执行 | 飞控/航线 | MAVLink mission + Dock3 progress | 部分可用 | 不只模拟回包，至少一条 SITL 航线能执行并回 progress | SITL Wayline E2E |
 | P1-07 | 媒体基础 | 媒体管理 | Dock3 `media` | 待实现 | 文件列表、删除、上传优先级、上传事件可用 | `mqtt_dock3_media_test.py` |
 | P1-08 | 直播基础 | 直播功能 | Dock3 `live` | 待实现 | 开始/停止直播、质量、镜头、状态事件可用；可先 mock 推流 | `mqtt_dock3_live_test.py` |
@@ -78,7 +78,7 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、遥测保留、告警保留和清理策略可用 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 待实现 | P0/P1 可一键回归，输出明确通过/失败项 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live/HMS/log/firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
 
 ## 4. P2 允许带问题但必须有边界
 
@@ -124,6 +124,6 @@ P2 可以在 30 天末保留问题，但不能空白、不能影响 P0/P1、不�
 | `python tools/mqtt_dock3_hms_log_test.py --timeout 20` | P1 HMS/log |
 | `python tools/mqtt_dock3_firmware_config_test.py --timeout 20` | P1 firmware/config |
 | `python tools/e2e_takeoff_flow_test.py --timeout 60` | P1 一键启航 |
-| `python tools/e2e_full_chain_test.py --timeout 180` | P0/P1 全链路 |
+| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路 |
 
 执行顺序和证据保存要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。

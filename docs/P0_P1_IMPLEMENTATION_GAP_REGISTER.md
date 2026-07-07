@@ -35,7 +35,7 @@
 | G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞到 Dock3 state/properties/HMS 的映射仍不完整 | `src/device/nest_property_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py` | `nest_v13_protocol_test.py` + `mqtt_dock3_cmd_test.py` | Day 8-11 | In Progress |
 | G-P0-06 | P0-15 Request Trace | Ubuntu properties 专项后 trace 断言已通过，能按 method 汇总 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply`，并统计 Dock3 property/set 逐属性 `result=0/1` | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 后续全链路 E2E 保存 trace 证据 | Day 4-10 | Closed |
 | G-P0-07 | P0-16 非阻塞主链路 | DB、文件、媒体、日志、固件等路径需要系统性审计，缺自动化卡顿/超时验证 | `src/database/*`, `src/media/manager.py`, `src/modules/log_manager.py`, `src/device/manager.py` | E2E 压测和超时注入 | Day 8-15 | Open |
-| G-P0-08 | P0-17 全链路最小闭环 | 缺一键跑 P0 主链路的 E2E 脚本 | `tools/`, `src/main.py` | 新增 `tools/e2e_full_chain_test.py` 的 P0 子集 | Day 25-27 | Open |
+| G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `ignored_total=0` | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_shared.py` | 后续把 media/live/HMS/log/config 接入同一入口 | Day 25-27 | Closed |
 
 ## 2. P1 缺口
 
@@ -43,9 +43,9 @@
 |---|---|---|---|---|---|---|
 | G-P1-01 | P1-01 一键启航主流程 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电还没有可重复 E2E | `src/mission/manager.py`, `src/cloud_api/dock3_wayline.py`, `src/cloud_api/dock3_cmd.py`, `src/modules/drone_nest_module.py` | 新增 `tools/e2e_takeoff_flow_test.py` | Day 12-15 | Open |
 | G-P1-02 | P1-02 机巢 v1.3 完整状态机 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞未全部进入状态机和错误码 | `src/modules/drone_nest_module.py`, `src/device/nest_property_mapper.py`, `src/device/manager.py` | `tools/nest_v13_protocol_test.py` | Day 8-11 | Open |
-| G-P1-03 | P1-03 DRC 心跳和超时恢复 | DRC 基础批量链路已通过，`drc_mode_enter/exit`、`drc_state`、杆量、飞行器/负载控制和速度控制可用；剩余是官方心跳、超时退出、状态降级和事件验证 | `src/drc/controller.py`, `src/cloud_api/dock3_drc.py`, `src/device/manager.py` | 扩展 `tools/mqtt_dock3_drc_test.py` 和 `tools/mqtt_drc_batch_test.py` | Day 12-15 | In Progress |
-| G-P1-04 | P1-04 指点飞行/起飞到点 | `takeoff_to_point`、导航中、取消和失败状态未形成 Dock3/SITL 闭环 | `src/drc/controller.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | DRC + SITL 专项 | Day 12-15 | Open |
-| G-P1-05 | P1-05 KMZ/WPML 基础解析 | 当前 Wayline 已有模拟状态机，但未完成标准 mock KMZ 下载、校验、解析和内部 mission 转换 | `src/mission/manager.py`, `src/modules/waypoint_manager.py`, `src/database/mission_db.py` | 扩展 `tools/mqtt_dock3_wayline_test.py` | Day 12-15 | Open |
+| G-P1-03 | P1-03 DRC 心跳和超时恢复 | DRC 官方心跳、状态事件、超时退出基础闭环已进入专项脚本；最新 E2E DRC 阶段输出 `dock3 drc test ok (accepted=14, events=7, ignored_total=0)` | `src/drc/controller.py`, `src/cloud_api/dock3_drc.py`, `src/device/manager.py` | 保留真实 MAVLink/链路抖动边界到 SITL 专项 | Day 12-15 | Closed |
+| G-P1-04 | P1-04 指点飞行/起飞到点 | `takeoff_to_point`、指点飞行更新/停止和导航事件在 Dock3 云端模拟链路已通过，E2E DRC 阶段纳入回归；真实 SITL 语义继续归入 G-P1-06 | `src/drc/controller.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | SITL 指点飞行语义复测 | Day 12-15 | Closed |
+| G-P1-05 | P1-05 KMZ/WPML 基础解析 | Wayline 已支持 mock KMZ 下载/校验/解析并转换到内部任务准备链路；最新 E2E Wayline 阶段输出 `dock3 wayline test ok (accepted=11, events=9, ignored_total=0)` | `src/mission/manager.py`, `src/modules/waypoint_manager.py`, `src/database/mission_db.py` | 真实 SITL 航点执行继续归入 G-P1-06 | Day 12-15 | Closed |
 | G-P1-06 | P1-06 真实 SITL 航点执行 | 当前 Wayline 脚本以纯模拟为主，不证明真实 SITL 航点执行 | `src/modules/waypoint_manager.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | SITL Wayline E2E | Day 12-15 | Open |
 | G-P1-07 | P1-07 媒体基础 | Dock3 media 文件列表、删除、上传优先级、上传事件未迁移 | `src/media/manager.py`, `src/database/media_db.py`, `src/payload/camera.py` | 新增 `tools/mqtt_dock3_media_test.py` | Day 16-20 | Open |
 | G-P1-08 | P1-08 直播基础 | Dock3 live 开始/停止、质量、镜头、状态事件未迁移；推流可先 mock | `src/media/manager.py`, `src/payload/camera.py` | 新增 `tools/mqtt_dock3_live_test.py` | Day 16-20 | Open |
@@ -57,22 +57,22 @@
 | G-P1-14 | P1-14 多设备/解绑/离线 | 当前单子设备拓扑、组织绑定、绑定后 `device_binding/update_topo` 和 `status_reply` 已通过；仍需多子设备、解绑、离线、重连回归 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py` | 扩展 `tools/mqtt_dock3_device_test.py` 和 `tools/mqtt_organization_test.py` | Day 21-24 | In Progress |
 | G-P1-15 | P1-15 CMD 进阶失败码 | CMD 基础已通过，但真实耗时、失败码、安全拒绝和任务进度需更贴近 Dock3 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 扩展 `tools/mqtt_dock3_cmd_test.py` | Day 21-24 | Needs Test |
 | G-P1-16 | P1-16 数据保留和操作记录 | 操作记录、遥测保留、告警保留和清理策略有基础，但缺 P1 验收证据 | `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
-| G-P1-17 | P1-17 P0/P1 E2E 回归 | 缺 P0/P1 全链路一键回归脚本和通过声明输出 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 新增 `tools/e2e_full_chain_test.py` | Day 25-27 | Open |
+| G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已迁移的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 一键输出 6 段成功；未迁移的 media/live/HMS/log/config 后续按域加入 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | E2E 后续扩展剩余 P1 域 | Day 25-27 | Closed |
 
 ## 3. 缺失脚本优先级
 
 | 顺序 | 脚本 | 关闭缺口 |
 |---:|---|---|
 | 1 | `tools/nest_v13_protocol_test.py` | G-P0-04、G-P0-05、G-P1-02 |
-| 2 | 扩展 `tools/mqtt_dock3_drc_test.py` / `tools/mqtt_drc_batch_test.py` | G-P1-03、G-P1-04 |
-| 3 | 扩展 `tools/mqtt_dock3_wayline_test.py` | G-P1-05、G-P1-06 |
+| 2 | 扩展 `tools/mqtt_dock3_drc_test.py` / `tools/mqtt_drc_batch_test.py` | G-P1-03、G-P1-04 已完成当前 Dock3 云端模拟闭环；后续补 G-P1-06 真实 SITL 语义 |
+| 3 | 扩展 `tools/mqtt_dock3_wayline_test.py` | G-P1-05 已完成 mock KMZ 基础解析；G-P1-06 真实 SITL 航点执行待补 |
 | 4 | `tools/e2e_takeoff_flow_test.py` | G-P1-01 |
 | 5 | `tools/mqtt_dock3_media_test.py` | G-P1-07 |
 | 6 | `tools/mqtt_dock3_live_test.py` | G-P1-08 |
 | 7 | `tools/mqtt_dock3_hms_log_test.py` | G-P1-10、G-P1-11 |
 | 8 | `tools/mqtt_dock3_firmware_config_test.py` | G-P1-12、G-P1-13 |
 | 9 | 扩展 device/organization/cmd 测试 | G-P1-14、G-P1-15 |
-| 10 | `tools/e2e_full_chain_test.py` | G-P0-08、G-P1-17 |
+| 10 | `tools/e2e_full_chain_test.py` | G-P0-08、G-P1-17 已完成当前核心 MQTT 域；后续接入 media/live/HMS/log/config |
 
 ## 4. 关项规则
 

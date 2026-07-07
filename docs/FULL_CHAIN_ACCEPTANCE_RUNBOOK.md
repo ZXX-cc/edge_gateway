@@ -55,6 +55,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须补齐：
@@ -67,7 +68,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/压缩/上传 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
 | `tools/e2e_takeoff_flow_test.py` | 一键启航：起飞前检查、机巢动作、起飞、任务、返航、降落、充电 | P1 |
-| `tools/e2e_full_chain_test.py` | P0/P1 全链路串联 | P1 |
+| 扩展 `tools/e2e_full_chain_test.py` | 接入 media/live/HMS/log/firmware/config 等剩余 P1 域 | P1 |
 
 ## 3. 启动前检查
 
@@ -190,6 +191,7 @@ python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
 python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
+python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
 ```
 
 P0 通过标准：
@@ -205,6 +207,7 @@ P0 通过标准：
 | DRC 批量 | 输出 `drc batch test ok`，且 `ignored_total=0` |
 | CMD | 输出 `dock3 cmd test ok` |
 | Wayline | 输出 `dock3 wayline test ok` |
+| 当前核心 E2E | 输出 `dock3 e2e full-chain test ok`，6 个子阶段 `exit=0` 且 `ignored_total=0` |
 | 错误码 | 对外不出现内部 `-1/-2/-3` |
 | Topic | `airport_bind_status` 最终走 `requests/requests_reply`，`update_topo` 最终走 `status/status_reply` |
 
@@ -219,7 +222,7 @@ python tools/mqtt_dock3_live_test.py --timeout 12
 python tools/mqtt_dock3_hms_log_test.py --timeout 20
 python tools/mqtt_dock3_firmware_config_test.py --timeout 20
 python tools/e2e_takeoff_flow_test.py --timeout 60
-python tools/e2e_full_chain_test.py --timeout 180
+python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
 ```
 
 P1 通过标准：
@@ -232,7 +235,8 @@ P1 通过标准：
 | Live | 开始/停止直播、质量、镜头、状态事件可用 |
 | HMS/Log | 告警事件、日志列表、压缩、上传、失败码可用 |
 | Firmware/Config | 升级模拟、进度、配置下发、持久化、回滚可用 |
-| E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |
+| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline 可重复通过 |
+| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |
 
 ## 7. P2 验收边界
 
