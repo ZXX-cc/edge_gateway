@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import socket
 import struct
 import threading
@@ -92,13 +91,28 @@ class NestSimulator:
             return
         try:
             self.command_log.parent.mkdir(parents=True, exist_ok=True)
-            record = {
-                "time": datetime.now().isoformat(timespec="milliseconds"),
-                "event": event,
+            labels = {
+                "simulator_command_received": "机巢收到命令",
+                "simulator_order_response_sent": "机巢发送回包",
             }
-            record.update(fields)
+            label = labels.get(event, event)
+            preferred_keys = (
+                "command",
+                "src",
+                "target",
+                "ordinary",
+                "takeoff_land",
+                "ordinary_response",
+                "takeoff_land_response",
+            )
+            ordered_keys = [key for key in preferred_keys if key in fields]
+            ordered_keys.extend(key for key in fields if key not in ordered_keys)
+            detail = " ".join(f"{key}={fields[key]}" for key in ordered_keys)
             with self.command_log.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                file.write(
+                    f"{datetime.now().isoformat(timespec='milliseconds')} "
+                    f"[{label}] {detail}\n"
+                )
         except Exception:
             pass
 
@@ -165,7 +179,13 @@ class NestSimulator:
                 ("error_code", f"0x{self.env_data['error_code']:04X}"),
             ])
 
-    def _send_order_response(self, ordinary_response=0, takeoff_land_response=0, triggered_by_command=False):
+    def _send_order_response(
+        self,
+        ordinary_response=0,
+        takeoff_land_response=0,
+        triggered_by_command=False,
+        command="-",
+    ):
         msg = drone_nest.MAVLink_drone_nest_order_response_message(
             ordinary_order_response=ordinary_response,
             takeoff_land_order_response=takeoff_land_response,
@@ -180,6 +200,7 @@ class NestSimulator:
         if triggered_by_command or ordinary_response or takeoff_land_response:
             self._trace_command(
                 "simulator_order_response_sent",
+                command=command,
                 target=str(self.client_addr),
                 ordinary_response=f"0x{ordinary_response:08X}",
                 takeoff_land_response=f"0x{takeoff_land_response:08X}",
@@ -261,21 +282,23 @@ class NestSimulator:
             takeoff_land = getattr(msg, "takeoff_land_order", 0)
             has_command = bool(ordinary or takeoff_land)
             self._update_state_from_command(ordinary, takeoff_land)
+            command = self._ordinary_command_label(ordinary)
+            if takeoff_land:
+                command = self._takeoff_land_command_label(takeoff_land)
             if has_command:
                 self._trace_command(
                     "simulator_command_received",
+                    command=command,
                     src=f"{msg.get_srcSystem()}/{msg.get_srcComponent()}",
                     ordinary=f"0x{ordinary:04X}",
-                    ordinary_label=self._ordinary_command_label(ordinary),
                     takeoff_land=f"0x{takeoff_land:02X}",
-                    takeoff_land_label=self._takeoff_land_command_label(takeoff_land),
                 )
                 self._print_block("收到 DRONE_NEST_COMMAND", [
                     ("src", f"{msg.get_srcSystem()}/{msg.get_srcComponent()}"),
                     ("ordinary", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
                     ("takeoff_land", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
                 ])
-            self._send_order_response(triggered_by_command=has_command)
+            self._send_order_response(triggered_by_command=has_command, command=command)
             self._send_nest_response(reason="command" if has_command else "poll")
 
     def _periodic_status_loop(self):

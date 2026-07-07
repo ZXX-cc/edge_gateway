@@ -78,13 +78,20 @@ tail -f logs/nest_simulator_command_trace.log
 典型事件顺序：
 
 ```text
-mqtt_command_received
-gateway_nest_command_send
-nest_command_encoded
-nest_command_mavlink_sent
-nest_order_response_received
-mqtt_handler_completed
-mqtt_reply_sent
+[MQTT收到命令] method=cover_open tid=...
+[网关下发机巢] method=cover_open gcs_command=DOOR_OPEN
+[网关编码机巢命令] commands=["DOOR_OPEN"] ordinary_order=0x...
+[网关发送MAVLink] ordinary_order=0x... takeoff_land_order=0x...
+[网关收到机巢回复] ordinary_raw=... ordinary_reply_status=...
+[网关处理完成] method=cover_open result=0
+[网关回复MQTT] method=cover_open tid=... result=0
+```
+
+机巢模拟器侧典型事件：
+
+```text
+[机巢收到命令] command=open-door ordinary=0x...
+[机巢发送回包] command=open-door ordinary_response=0x...
 ```
 
 机巢模拟器默认不再打印心跳和空轮询。如果需要看周期状态帧，启动模拟器时显式加 `--log-status`。

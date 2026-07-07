@@ -13,6 +13,18 @@ from src.utils.logger import DailyMonthlyFileHandler
 
 _LOGGER_NAME = "edge_gateway.command_trace"
 _configured = False
+_EVENT_LABELS = {
+    "mqtt_command_received": "MQTT收到命令",
+    "mqtt_handler_completed": "网关处理完成",
+    "mqtt_reply_sent": "网关回复MQTT",
+    "mqtt_error_reply_sent": "网关回复MQTT错误",
+    "gateway_nest_command_send": "网关下发机巢",
+    "gateway_nest_command_fallback": "网关模拟机巢",
+    "gateway_nest_command_unmapped": "网关机巢命令未映射",
+    "nest_command_encoded": "网关编码机巢命令",
+    "nest_command_mavlink_sent": "网关发送MAVLink",
+    "nest_order_response_received": "网关收到机巢回复",
+}
 
 
 def _log_dir() -> str:
@@ -45,15 +57,43 @@ def _json_default(value: Any):
     return str(value)
 
 
+def _compact_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, default=_json_default, separators=(",", ":"))
+    return str(value)
+
+
 def trace_command(event: str, **fields: Any) -> None:
-    """Write one JSONL command trace entry.
+    """Write one concise command trace entry.
 
     This logger is intentionally separate from the normal console logger so
     heartbeat, OSD, and poll noise do not hide command-chain evidence.
     """
-    record = {
-        "time": datetime.now().isoformat(timespec="milliseconds"),
-        "event": event,
-    }
-    record.update(fields)
-    _logger().info(json.dumps(record, ensure_ascii=False, default=_json_default))
+    timestamp = datetime.now().isoformat(timespec="milliseconds")
+    label = fields.pop("label", _EVENT_LABELS.get(event, event))
+    preferred_keys = (
+        "method",
+        "tid",
+        "result",
+        "ok",
+        "gcs_command",
+        "commands",
+        "ordinary_order",
+        "takeoff_land_order",
+        "ordinary_raw",
+        "ordinary_reply_status",
+        "ordinary_reject_reason_code",
+        "takeoff_raw",
+        "takeoff_reply_status",
+        "takeoff_reject_reason_code",
+        "reply_topic",
+        "source_topic",
+        "topic",
+        "reason",
+    )
+    ordered_keys = [key for key in preferred_keys if key in fields]
+    ordered_keys.extend(key for key in fields if key not in ordered_keys)
+    detail = " ".join(f"{key}={_compact_value(fields[key])}" for key in ordered_keys)
+    _logger().info("%s [%s] %s", timestamp, label, detail)
