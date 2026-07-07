@@ -166,8 +166,8 @@ mode LAND
 |---|---|---|---|
 | P0 | 协议目标从 Dock1 切到 DJI Dock 3 | 按 Dock3 官方文档建立属性、服务、事件、状态、请求、回包字段矩阵；标出当前实现缺失、字段名不一致、枚举不一致、单位不一致项 | 形成 Dock3 差异清单，后续每个改动都有明确验收字段 |
 | P0 | 机场状态模型仍有历史字段 | `dock_status_query` 已同步实时无人机遥测，但 `dock_status`、`osd/state/events` 的机场字段仍需按 Dock3 properties/cmd/config 精校 | MQTT 订阅端看到的机场属性符合 Dock3 文档 |
-| P0 | `set_flight_mode` 入参不兼容 | 支持 `{"mode":"GUIDED"}`、`{"mode":4}`、`{"mode_code":4}`、`{"flight_mode":"GUIDED"}`；底层失败时不能回 `result=0` | 发送 `GUIDED/LAND/RTL/LOITER` 后，网关日志和 SITL 模式一致，失败时回包非 0 |
-| P0 | 飞控模式表不适配 ArduCopter | 根据 heartbeat vehicle type 或配置选择 ArduCopter/ArduPlane/QuadPlane 模式表；Copter 至少支持 `STABILIZE=0, ACRO=1, ALT_HOLD=2, AUTO=3, GUIDED=4, LOITER=5, RTL=6, CIRCLE=7, LAND=9` | 手动/API 模式切换不再出现 `UNKNOWN(9)`，`LAND` 能识别 |
+| P0 | `set_flight_mode` 入参不兼容 | 已支持 `{"mode":"GUIDED"}`、`{"mode":4}`、`{"mode_code":4}`、`{"flight_mode":"GUIDED"}`；底层失败时返回非 0，待 Ubuntu SITL 复测 | 发送 `GUIDED/LAND/RTL/LOITER` 后，网关日志和 SITL 模式一致，失败时回包非 0 |
+| P0 | 飞控模式表不适配 ArduCopter | 已新增共享模式映射表，根据 HEARTBEAT.type 选择 ArduCopter/ArduPlane/QuadPlane；Copter 支持 `STABILIZE=0, ACRO=1, ALT_HOLD=2, AUTO=3, GUIDED=4, LOITER=5, RTL=6, CIRCLE=7, LAND=9` | 手动/API 模式切换不再出现 `UNKNOWN(9)`，`LAND` 能识别 |
 | P0 | `dock_status_query` 实时遥测同步 | 已使用当前 `TelemetryModule` 和 `FlightControl` 状态填充 online、armed、flight_mode、lat/lon/alt/height/speed/GPS/battery | Ubuntu 复测已通过；后续只做 Dock3 字段名、枚举和单位精校 |
 | P1 | API 起飞/降落链路待验证 | 在模式表修复后验证 `take_off`、`one_key_return_home`、`landing` 或等价 API | API 能让 SITL 起飞到 10m，并能降落/返航 |
 | P1 | 机巢模拟未联调 | 单独运行 `src/nest_simulator.py` 做 Dock-only；Combined 模式需 MAVLink Router 或多连接架构；输出字段按 Dock3 机场状态映射 | 能收到并解析机巢自定义 MAVLink 消息，并转换为 Dock3 机场属性 |

@@ -43,7 +43,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-04 | 设备拓扑 | 设备管理、飞机-机巢关系 | `sys/product/{sn}/status:update_topo` | 已可用 | 网关和子设备拓扑按 Dock3 字段发布，能处理离线拓扑 | `mqtt_dock3_device_test.py` |
 | P0-05 | Dock3 可写属性 | 设备属性 | `property/set`、`property/set_reply`、`property_get` | 已可用 | `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 可写，只读/非法拒绝 | `mqtt_dock3_properties_test.py` |
 | P0-06 | 飞行器 OSD 基础遥测 | F-023 到 F-050 等 OSD P0 | `thing/product/{sn}/osd`、`thing/product/{sn}/state` | 已可用 | 经纬度、高度、姿态、速度、电池、GPS、飞行时间、机场 OSD 和属性 state 可重复验证；字段单位和枚举继续按 Dock3 精校 | `mqtt_dock3_osd_state_test.py` 已通过，字段矩阵继续补 |
-| P0-07 | 飞行模式映射 | F-001 到 F-012、F-019 等 P0 | `mode_code`、`gear`、任务状态 | 部分可用 | ArduPilot 模式映射到 Dock3 状态，不再出现关键模式 UNKNOWN | SITL 模式切换测试 |
+| P0-07 | 飞行模式映射 | F-001 到 F-012、F-019 等 P0 | `mode_code`、`gear`、任务状态 | Needs Test | 已收敛共享 ArduPilot 模式映射表，Copter/Plane/QuadPlane 按 HEARTBEAT.type 自动选择；`set_flight_mode` 支持 `mode/mode_code/flight_mode`，失败不再回 `result=0` | `tests.test_flight_modes`、SITL 模式切换测试 |
 | P0-08 | 基础飞控控制 | F-051 到 F-060 等 P0 | `drc`、`wayline`、相关 services | 部分可用 | 起飞、FlyTo、返航、降落、解锁、任务开始/暂停/恢复/取消能在 SITL 或模拟链路跑通 | DRC/Wayline/SITL 专项 |
 | P0-09 | DRC 建链和杆量 | F-007、F-059 | `drc_mode_enter/exit`、`drc/down`、`drc/up` | 已可用 | 官方 payload、值域、错误 topic 和 `drc_state` 同步可用 | `mqtt_dock3_drc_test.py` |
 | P0-10 | Wayline 基础闭环 | 航线飞行、任务执行 | `flighttask_prepare/execute/progress/pause/resume/return/undo` | 已可用 | 纯模拟任务不误触发真实飞控，进度和错误码符合 Dock3 | `mqtt_dock3_wayline_test.py` |
@@ -51,7 +51,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-12 | 机巢 v1.3 基础通信 | `机巢协议v1.3` | 设备侧 `DRONE_NEST_*`，云端映射到 `cmd/properties/state` | 部分可用 | 12003/12004/12005、命令应答、周期状态、关键 bit 位可解析 | `nest_v13_protocol_test.py` |
 | P0-13 | 机巢关键状态 | D 类机场状态、I 类交互 | `cover_state`、`drone_charge_state`、急停、故障、ready/busy | 部分可用 | 舱盖、夹紧、充电、急停、故障、备飞能进入 Dock3 state/properties/HMS | 机巢专项 + CMD 专项 |
 | P0-14 | 错误码边界 | DJI 错误码、异常分支 | `services_reply`、`property/set_reply`、`drc/up` | 已可用 | 对外不暴露内部负数；未知 method、topic 错误、参数错误有官方码 | `tests/test_dji_error_codes.py` |
-| P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | Needs Test | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；当前已实现非阻塞 JSONL trace | `request_trace_query.py`、日志检索、E2E trace 证据 |
+| P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | 已可用 | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；properties 专项后 trace 已能统计三段事件和 `result=0/1` | `request_trace_query.py`、Ubuntu trace 断言通过 |
 | P0-16 | 非阻塞主链路 | 第六章技术栈和风险 | MQTT/MAVLink/DB/文件后台化 | 部分可用 | MQTT 回调、MAVLink 接收、状态机不得被 DB、文件、上传、压缩、升级阻塞 | 代码审计 + E2E 压测 |
 | P0-17 | 全链路最小闭环 | 业务流程全景 | 上线 -> 绑定 -> 拓扑 -> OSD -> 控制 -> 任务 -> 事件 | 待实现 | 一条命令或脚本可重复跑完整 P0 主链路 | `e2e_full_chain_test.py` |
 

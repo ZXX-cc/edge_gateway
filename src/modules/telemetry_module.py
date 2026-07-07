@@ -6,6 +6,7 @@ import time
 from typing import Optional, Dict, Any
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from src.mavlink.flight_modes import parse_flight_mode
 from web.mavlink.telemetry.mapping import apply_mavlink_message, new_telemetry_state
 
 class TelemetryModule(BaseModule):
@@ -186,18 +187,9 @@ class TelemetryModule(BaseModule):
                 self.log(f"回调执行错误: {e}", "ERROR")
 
     @staticmethod
-    def _parse_flight_mode(custom_mode: int) -> str:
-        """解析MAVLink飞行模式为字符串（ArduPlane/QuadPlane）"""
-        mode_map = {
-            0: 'MANUAL', 1: 'CIRCLE', 2: 'STABILIZE', 3: 'TRAINING',
-            4: 'ACRO', 5: 'FBWA', 6: 'FBWB', 7: 'CRUISE',
-            8: 'AUTOTUNE', 10: 'AUTO', 11: 'RTL', 12: 'LOITER',
-            13: 'TAKEOFF', 14: 'AVOID_ADSB', 15: 'GUIDED', 16: 'INITIALISING',
-            17: 'QSTABILIZE', 18: 'QHOVER', 19: 'QLOITER', 20: 'QLAND',
-            21: 'QRTL', 22: 'QAUTOTUNE', 23: 'QACRO', 24: 'THERMAL',
-            25: 'LOITER_ALT_QLAND',
-        }
-        return mode_map.get(custom_mode, f'UNKNOWN({custom_mode})')
+    def _parse_flight_mode(custom_mode: int, mav_type: int = None) -> str:
+        """解析MAVLink飞行模式为字符串。"""
+        return parse_flight_mode(custom_mode, mav_type)
 
     def get_telemetry_data(self) -> Dict[str, Any]:
         """

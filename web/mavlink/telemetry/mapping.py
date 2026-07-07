@@ -14,6 +14,12 @@ import math
 import time
 from typing import Any, Dict, Iterable, Optional
 
+from src.mavlink.flight_modes import (
+    parse_flight_mode,
+    flight_mode_profile,
+    mode_to_dji_code,
+)
+
 
 TELEMETRY_DEFAULTS: Dict[str, Any] = {
     "latitude": 0.0,
@@ -58,97 +64,6 @@ TELEMETRY_DEFAULTS: Dict[str, Any] = {
 }
 
 
-COPTER_MAV_TYPES = {2, 3, 4, 13, 14, 15, 29, 35}
-PLANE_MAV_TYPES = {1, 19, 20, 21, 22, 23, 24, 25}
-
-
-COPTER_MODE_MAP = {
-    0: "STABILIZE",
-    1: "ACRO",
-    2: "ALT_HOLD",
-    3: "AUTO",
-    4: "GUIDED",
-    5: "LOITER",
-    6: "RTL",
-    7: "CIRCLE",
-    9: "LAND",
-    11: "DRIFT",
-    13: "SPORT",
-    14: "FLIP",
-    15: "AUTOTUNE",
-    16: "POSHOLD",
-    17: "BRAKE",
-    18: "THROW",
-    19: "AVOID_ADSB",
-    20: "GUIDED_NOGPS",
-    21: "SMART_RTL",
-    22: "FLOWHOLD",
-    23: "FOLLOW",
-    24: "ZIGZAG",
-    25: "SYSTEMID",
-    26: "AUTOROTATE",
-    27: "AUTO_RTL",
-}
-
-
-PLANE_MODE_MAP = {
-    0: "MANUAL",
-    1: "CIRCLE",
-    2: "STABILIZE",
-    3: "TRAINING",
-    4: "ACRO",
-    5: "FBWA",
-    6: "FBWB",
-    7: "CRUISE",
-    8: "AUTOTUNE",
-    10: "AUTO",
-    11: "RTL",
-    12: "LOITER",
-    13: "TAKEOFF",
-    14: "AVOID_ADSB",
-    15: "GUIDED",
-    16: "INITIALISING",
-    17: "QSTABILIZE",
-    18: "QHOVER",
-    19: "QLOITER",
-    20: "QLAND",
-    21: "QRTL",
-    22: "QAUTOTUNE",
-    23: "QACRO",
-    24: "THERMAL",
-    25: "LOITER_ALT_QLAND",
-}
-
-
-DJI_MODE_CODE_MAP = {
-    "STABILIZE": 0,
-    "ACRO": 1,
-    "ALT_HOLD": 2,
-    "AUTO": 3,
-    "GUIDED": 4,
-    "LOITER": 5,
-    "RTL": 6,
-    "CIRCLE": 7,
-    "LAND": 9,
-    "DRIFT": 11,
-    "SPORT": 13,
-    "FLIP": 14,
-    "AUTOTUNE": 15,
-    "POSHOLD": 16,
-    "BRAKE": 17,
-    "THROW": 18,
-    "AVOID_ADSB": 19,
-    "GUIDED_NOGPS": 20,
-    "SMART_RTL": 21,
-    "FLOWHOLD": 22,
-    "FOLLOW": 23,
-    "ZIGZAG": 24,
-    "SYSTEMID": 25,
-    "AUTOROTATE": 26,
-    "AUTO_RTL": 27,
-}
-
-
 DOCK3_POSITION_FIXED_STATE = {
     0: 0,  # 未开始/未定位
     1: 2,  # 本地文档 gps_fixed=1 映射为 Dock3 收敛成功
@@ -165,27 +80,6 @@ def message_type(msg: Any) -> str:
     if hasattr(msg, "get_type"):
         return msg.get_type()
     return getattr(msg, "msg_type", getattr(msg, "_msg_type", ""))
-
-
-def flight_mode_profile(mav_type: Optional[int]) -> str:
-    """根据 HEARTBEAT.type 选择 ArduPilot 飞行模式表。"""
-    if mav_type in COPTER_MAV_TYPES:
-        return "copter"
-    if mav_type in PLANE_MAV_TYPES:
-        return "plane"
-    return "unknown"
-
-
-def parse_flight_mode(custom_mode: int, mav_type: Optional[int] = None) -> str:
-    """把 MAVLink custom_mode 转成飞行模式字符串。"""
-    profile = flight_mode_profile(mav_type)
-    mode_map = COPTER_MODE_MAP if profile == "copter" else PLANE_MODE_MAP
-    return mode_map.get(custom_mode, f"UNKNOWN({custom_mode})")
-
-
-def mode_to_dji_code(mode: str) -> int:
-    """把飞行模式字符串转成 OSD mode_code。"""
-    return DJI_MODE_CODE_MAP.get(str(mode).upper(), 0)
 
 
 def gps_fixed_to_dock3_state(gps_fixed: int) -> int:

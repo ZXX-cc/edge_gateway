@@ -12,7 +12,8 @@ from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.mavlink.flight_modes import normalize_flight_mode_request
 from src.cloud_api.dock3_wayline import (
     STATUS_CANCELED,
     STATUS_FAILED,
@@ -983,25 +984,47 @@ class MissionManager:
         """
         设置飞行模式
 
-        Request: { mode: 0=手动 1=姿态 2=GPS 3=自动 4=返航 5=降落 }
+        Request:
+        - { "flight_mode": "GUIDED" }
+        - { "mode": "GUIDED" }
+        - { "mode": 4 }
+        - { "mode_code": 4 }
         """
         data = msg.get('data', {})
-        mode = data.get('mode', 2)
+        ok, normalized, reason = normalize_flight_mode_request(data)
+        if not ok or normalized is None:
+            logger.warning(f"Invalid set_flight_mode payload: {reason}, data={data}")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
-        mode_map = {
-            0: 'STABILIZE', 1: 'ACRO', 2: 'ALT_HOLD', 3: 'AUTO',
-            4: 'GUIDED', 5: 'LOITER', 6: 'RTL', 9: 'LAND'
-        }
-        mode_name = mode_map.get(mode, 'UNKNOWN')
-        logger.info(f"Set flight mode: {mode_name} ({mode})")
+        mode_name = normalized.mode_name
+        logger.info(
+            "Set flight mode: %s (mode_code=%s, source=%s)",
+            mode_name,
+            normalized.mode_code,
+            normalized.source_key,
+        )
 
         # 通过MAVLink设置模式
-        if self._flight_control:
-            result = self._flight_control.set_mode(mode_name)
-            if not result.get("success"):
-                logger.warning(f"设置飞行模式失败: {result.get('message')}")
+        if not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(reason)
+            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
 
-        return MessageBuilder.build_reply(msg, result=0)
+        result = self._flight_control.set_mode(mode_name)
+        if not result.get("success"):
+            reason = result.get("message") or "set flight mode failed"
+            logger.warning(f"设置飞行模式失败: {reason}")
+            error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
+            return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "mode": mode_name,
+                "mode_code": normalized.mode_code,
+            },
+        )
 
     # ---- 进度上报 ----
 

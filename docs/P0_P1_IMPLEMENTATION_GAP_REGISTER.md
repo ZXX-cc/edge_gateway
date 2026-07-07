@@ -29,11 +29,11 @@
 | ID | Backlog | 当前缺口 | 主要代码入口 | 必补验收 | 目标窗口 | 状态 |
 |---|---|---|---|---|---|---|
 | G-P0-01 | P0-06 OSD 基础遥测 | OSD/state 专项已通过 Ubuntu 复测；客户需求相关 Dock3 字段单位、枚举、真实 SITL 动态值仍需逐项精校，客户未用字段可 Deferred | `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `src/device/manager.py` | 字段矩阵精校 + 真实 SITL 动态 OSD 验证 | Day 4-7 | In Progress |
-| G-P0-02 | P0-07 飞行模式映射 | ArduPilot Copter/Plane/QuadPlane 模式和 Dock3 `mode_code/gear` 仍需统一映射表 | `src/modules/mode_control.py`, `src/modules/flight_control.py`, `src/modules/telemetry_module.py` | SITL 模式切换专项；E2E 中检查 `mode_code` | Day 4-7 | Open |
+| G-P0-02 | P0-07 飞行模式映射 | 已新增共享 ArduPilot 模式映射表，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择；`set_flight_mode` 已兼容 `mode/mode_code/flight_mode` 且失败回非 0，仍需 Ubuntu SITL 复测 | `src/mavlink/flight_modes.py`, `src/modules/mode_control.py`, `src/modules/flight_control.py`, `src/modules/telemetry_module.py`, `src/mission/manager.py` | SITL 模式切换专项；E2E 中检查 `mode_code` | Day 4-7 | Needs Test |
 | G-P0-03 | P0-08 基础飞控控制 | 起飞、FlyTo、返航、降落、解锁、任务控制目前部分停留在模拟回包或未完整 SITL 行为验证 | `src/modules/flight_control.py`, `src/drc/controller.py`, `src/mission/manager.py` | DRC/Wayline/SITL 联合专项 | Day 8-15 | In Progress |
 | G-P0-04 | P0-12 机巢 v1.3 基础通信 | 自定义消息已存在，但缺 12003/12004/12005 协议级专项脚本和拒绝条件验证 | `src/modules/drone_nest_module.py`, `src/nest_simulator.py`, `src/generated_dialect/drone_nest.py` | 新增 `tools/nest_v13_protocol_test.py` | Day 8-11 | Open |
 | G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞到 Dock3 state/properties/HMS 的映射仍不完整 | `src/device/nest_property_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py` | `nest_v13_protocol_test.py` + `mqtt_dock3_cmd_test.py` | Day 8-11 | In Progress |
-| G-P0-06 | P0-15 Request Trace | 已新增非阻塞 JSONL request trace，覆盖 MQTT 收包、handler、reply、requests/status 回包和 requests 超时；仍待 Ubuntu 复测和 E2E 保存 trace 证据 | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 跑 P0 批量后用 `tools/request_trace_query.py` 按 tid/method 检索 | Day 4-10 | Needs Test |
+| G-P0-06 | P0-15 Request Trace | Ubuntu properties 专项后 trace 断言已通过，能按 method 汇总 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply`，并统计 Dock3 property/set 逐属性 `result=0/1` | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 后续全链路 E2E 保存 trace 证据 | Day 4-10 | Closed |
 | G-P0-07 | P0-16 非阻塞主链路 | DB、文件、媒体、日志、固件等路径需要系统性审计，缺自动化卡顿/超时验证 | `src/database/*`, `src/media/manager.py`, `src/modules/log_manager.py`, `src/device/manager.py` | E2E 压测和超时注入 | Day 8-15 | Open |
 | G-P0-08 | P0-17 全链路最小闭环 | 缺一键跑 P0 主链路的 E2E 脚本 | `tools/`, `src/main.py` | 新增 `tools/e2e_full_chain_test.py` 的 P0 子集 | Day 25-27 | Open |
 
