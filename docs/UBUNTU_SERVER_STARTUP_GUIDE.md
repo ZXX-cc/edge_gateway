@@ -4,6 +4,8 @@
 
 本文档内容依据前期 Ubuntu 服务器实测对话记录整理，包括 Ubuntu 版本、`.venv`、Mosquitto、ArduPilot SITL、Edge Gateway、Web 调试台和 MQTT 冒烟输出。本地开发机只用于维护本文档和提交 Git，不用于启动服务器服务或代替服务器环境验证。
 
+2026-07-07 后的交付口径以客户需求和 DJI Dock 3 为准：P0/P1 必须 100% 可用，P2 可以存在已记录问题但不能影响主链路。日常启动和排障继续使用本文档；正式全链路验收、P0/P1 命令顺序和证据归档以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。实际 topic 中的 SN 以 `config/gateway.yaml` 为准，DJI Demo 兼容联调当前使用过 `EDGEGW001`。
+
 当前目标是服务器内纯模拟跑通：
 
 ```text
@@ -1019,7 +1021,7 @@ pgrep -af 'mosquitto|sim_vehicle.py|mavproxy.py|src/main.py|web/app.py|nest_simu
 | 内容 | 当前问题 | 建议 |
 |---|---|---|
 | NanoMQ 官方 deb | Ubuntu 22.04 glibc 不兼容 | 当前继续用 Mosquitto；不要升级系统 glibc |
-| Dock3 协议字段 | 现有代码仍有 Dock/Dock1 风格 | 按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 分组台账逐项迁移 |
+| Dock3 协议字段 | 现有代码仍有 Dock/Dock1 风格 | 按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 迁移客户需求相关字段；客户未用字段标 Deferred |
 | `set_flight_mode` API | 当前入参和 Copter 模式映射存在问题 | 暂时优先用 MAVProxy/Web 手动飞控验证 |
 | `dock_status_query` 的 `drone_status` | 已同步 SITL 遥测快照，但 Dock3 字段仍待精校 | 可作为链路冒烟，不能单独作为 Dock3 合规验收 |
 | SITL + 机巢模拟器同时运行 | 默认端口会冲突 | 后续用 MAVLink Router 或网关多连接方案 |

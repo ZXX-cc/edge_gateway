@@ -146,7 +146,7 @@ ArduPilot SITL / 机巢模拟器
 | 差距 | 说明 |
 |---|---|
 | Dock3 未完成 | 当前代码仍保留 Dock/Dock1 风格字段和注释 |
-| 业务逻辑待补 | 当前优先链路通，业务正确性后续补齐 |
+| P0/P1 业务闭环待补 | 30 天内 P0/P1 必须按 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 达到可用 |
 | NoSQL 未接入 | 当前仍是 SQLite，MongoDB 是目标架构 |
 | 机巢模拟未完全合流 | SITL 与机巢模拟器同时联调仍需端口策略或路由器 |
 | README 旧信息已清理 | 新 README 已改为多人协同入口 |
@@ -162,5 +162,4 @@ ArduPilot SITL / 机巢模拟器
 - `services` 下发 method 后能收到 `services_reply`。
 - 文档能让人员1、人员2、人员3独立定位自己的接口和联调入口。
 
-Dock3 验收后续以 `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 为准。
-
+客户需求和 P0/P1/P2 优先级以 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 为准。全链路启动、验收命令和证据归档以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。Dock3 字段迁移细节以 `docs/DJI_DOCK3_MIGRATION_GUIDE.md` 和 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 为准。

@@ -1,8 +1,8 @@
 # Ubuntu 部署与联调推进计划
 
-本文档是当前仓库的部署推进基线。目标是在 Ubuntu 服务器内跑通“适配大疆上云 API 协议的边缘网关”模拟链路，不接实体无人机、飞控、机巢或负载设备。
+本文档是当前仓库的部署推进基线。目标是在 Ubuntu 服务器内跑通“按客户需求适配 DJI Dock 3 上云 API 的边缘网关”模拟链路，不接实体无人机、飞控、机巢或负载设备。
 
-开发人员日常接手服务器、从开机状态启动完整链路、排查端口和进程时，使用 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。本文档保留阶段计划、部署背景和验收推进。
+开发人员日常接手服务器、从开机状态启动完整链路、排查端口和进程时，使用 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。执行 P0/P1/P2 验收时，使用 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。本文档保留阶段计划、部署背景和验收推进。
 
 当前协议目标已调整为 **DJI Dock 3**：
 
@@ -23,7 +23,7 @@
 | 手动飞控验证 | 已完成 | MAVProxy 手动 `GUIDED/arm/takeoff 10/LAND` 成功；OSD 高度从 0 上升到 10m，再下降到 0m |
 | 协议版本判断 | 已确认原项目偏 DJI Dock/Dock1 | `src/mission/manager.py` 和 `src/main.py` 注释引用 `dock1/wayline.html`，`src/cloud_api/dock_manager.py` 标注 `DJI Dock 机场管理模块` |
 | 当前目标变更 | 已确定切换到 DJI Dock 3 | 后续所有属性、服务、事件、状态、回包验收以 DJI Dock 3 文档为准 |
-| 当前阻塞 | Dock3 全量字段迁移 | `dock_status_query.drone_status` 已同步模拟遥测；当前剩余重点是 Dock3 全量字段精校、组织管理 `requests/requests_reply`、DRC 控制数据和飞控模式映射 |
+| 当前阻塞 | 客户需求相关 Dock3 字段迁移 | `dock_status_query.drone_status` 已同步模拟遥测；当前剩余重点是客户需求相关 Dock3 字段精校、组织管理 `requests/requests_reply`、DRC 控制数据和飞控模式映射 |
 
 ## 2026-07-03 协议目标变更：Dock1 -> Dock3
 
@@ -35,15 +35,15 @@
 | 兼容策略 | 不默认认为 Dock1 字段与 Dock3 完全兼容 | 对每个 topic、method、payload、reply、event 做 Dock1/Dock3 差异审计 |
 | 验收重点 | 云端看到的行为要像 DJI Dock 3 | MQTT topic、属性、状态、服务回包、事件结构必须匹配 Dock3 |
 
-## 2026-07-06 多人协同当前阶段
+## 2026-07-07 客户需求驱动阶段
 
-当前项目进入多人并行联调阶段。阶段目标不是补全所有业务逻辑，而是先把上云 API 模拟器、网关、MAVLink/SITL、机巢模拟器之间的全链路调通。
+当前项目进入客户需求驱动开发阶段。阶段目标是按 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 推进：30 天内 P0/P1 必须 100% 可用，P2 可以存在已记录问题但不能影响主链路。部署和模拟环境必须支撑 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 中的全链路验收。
 
 | 角色 | 负责范围 | 当前输入 | 当前输出 | 验收标准 |
 |---|---|---|---|---|
-| 人员1 | 上云 API 与网关之间的相互通信 | Dock3 官方文档、MQTT broker、网关 method 路由 | Dock3 method 矩阵、云端模拟 payload、reply 验收规则 | services/requests/events/osd/state/drc topic 可按 Dock3 语义验证 |
-| 人员2 | MAVLink 与网关之间的相互通信 | ArduPilot SITL、MAVLink 机巢模拟器、网关 core/modules | MAVLink 遥测映射、飞控命令状态、机巢状态映射 | 网关可稳定收到遥测并能下发模拟飞控/机巢命令 |
-| 人员3 | 模拟器和联调环境部署 | Ubuntu、MQTT broker、ArduPilot、Web 调试台 | 可重复启动的模拟环境和 smoke test | 新环境按文档可启动 broker、网关、SITL、Web 调试台和机巢模拟器 |
+| 人员1 | Dock3 上云 API 与网关通信 | 客户需求、Dock3 官方文档、MQTT broker、网关 method 路由 | Dock3 method 矩阵、云端模拟 payload、reply 验收规则、P0/P1 上云专项证据 | P0/P1 的 services/requests/events/osd/state/drc topic 可按 Dock3 语义验证 |
+| 人员2 | MAVLink/SITL/机巢 v1.3 与网关通信 | ArduPilot SITL、机巢 v1.3 协议、网关 core/modules | MAVLink 遥测映射、飞控命令状态、机巢状态映射、一键启航设备侧证据 | P0/P1 的遥测、飞控、航线、机巢状态可被脚本和日志验证 |
+| 人员3 | 模拟器、Demo 和验收环境 | Ubuntu、MQTT broker、DJI Demo Docker、ArduPilot、Web 调试台 | 可重复启动的模拟环境、P0/P1 验收脚本、证据归档 | 新环境可按 runbook 启动并保存脚本输出、日志、MQTT 样例和 Demo 截图 |
 
 当前总体进度固定为：
 
@@ -53,7 +53,9 @@
 | MQTT 本地链路 | 基本完成，当前用 Mosquitto 替代 NanoMQ |
 | SITL 与网关 MAVLink 链路 | 基本完成 |
 | MQTT osd/state/events/services_reply 基础链路 | 基本完成 |
-| Dock3 协议矩阵 | 已建立全量分组台账，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`；properties Batch 1 已开始 |
+| Dock3 协议矩阵 | 已建立客户需求分组台账，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`；properties Batch 1 已开始，客户未用 Dock3 能力可 Deferred |
+| P0/P1/P2 backlog | 已建立，见 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` |
+| 全链路验收 runbook | 已建立，见 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` |
 | 上云 API 模拟器 | 待固化 |
 | MAVLink 机巢模拟器合流 | 待固化 |
 | MongoDB 服务型 NoSQL | 目标架构，当前未接入 |
@@ -66,7 +68,7 @@ MongoDB 说明：当前代码仍使用 SQLite + SQLAlchemy/aiosqlite。MongoDB �
 |---|---|---|
 | 项目性质 | Python 边缘网关，用 MQTT/NanoMQ 或 Mosquitto 对接大疆上云 API，用 MAVLink/SITL/模拟器提供设备侧行为 | 只做服务器内模拟，不接真实设备 |
 | 主入口 | `src/main.py`，`EdgeGateway` 初始化配置、MQTT、MAVLink、任务、设备、负载、媒体、云端上报和数据库 | Ubuntu 启动路径固定为 `python3 src/main.py -c /etc/edge_gateway/gateway.yaml` |
-| API 能力 | 当前主入口注册 224 个 MQTT API method，无重复 method，但机场/航线注释和字段偏 DJI Dock/Dock1 | 后续按 DJI Dock 3 的属性、服务、事件、状态、请求、回包重新分组验证 |
+| API 能力 | 当前主入口静态注册 243 个 MQTT API method，无重复 method；method 分组见 `docs/METHOD_COVERAGE_LEDGER.md`，部分机场/航线注释和字段仍偏 DJI Dock/Dock1 | 后续按 DJI Dock 3 的属性、服务、事件、状态、请求、回包重新分组验证 |
 | 默认配置 | MQTT `127.0.0.1:1883`，MAVLink UDP `127.0.0.1:14550`，cloud 默认关闭 | Ubuntu 22.04 第一阶段使用 Mosquitto + ArduPilot SITL；NanoMQ 后续换兼容包/源码编译/Ubuntu 24.04 再处理 |
 | ArduPilot 文档 | [Building Setup Linux](https://ardupilot.org/dev/docs/building-setup-linux.html) 是构建环境准备；[SITL on Linux](https://ardupilot.org/dev/docs/setting-up-sitl-on-linux.html) 才是模拟器联调入口 | 优先使用 ArduCopter SITL 模拟飞控 |
 | 仓库风险 | `README.md` 有合并冲突；原 `requirements.txt` 是 UTF-16 且含 Windows 本地 `setuptools` 引用 | Ubuntu 部署默认使用 `requirements-ubuntu.txt` |
@@ -81,8 +83,9 @@ MongoDB 说明：当前代码仍使用 SQLite + SQLAlchemy/aiosqlite。MongoDB �
 | P3 ArduPilot SITL 部署 | 模拟无人机/飞控 | 已完成 | 网关收到 heartbeat、GPS、姿态、电池等消息 |
 | P4 机巢模拟 | 模拟自定义 MAVLink 消息 | 单独运行 `src/nest_simulator.py`，或后续用 MAVLink Router 合并多路 MAVLink | 网关能解析 `DRONE_NEST_RESPONSE` 和 `DRONE_NEST_ORDER_RESPONSE` |
 | P5 网关启动 | 启动项目主服务 | 已完成 | 网关连接 MQTT 和 MAVLink，无启动阻塞 |
-| P6 Dock3 协议迁移 | 将 Dock/Dock1 风格接口迁移为 DJI Dock 3 | 建立 Dock3 字段矩阵，修正属性、状态、服务、事件和回包结构 | 云端模拟器按 Dock3 下发/订阅时，字段和回包符合官方文档 |
-| P7 纯模拟自动验收 | 在服务器内长期稳定跑通模拟链路 | 固化 Web 调试台、MQTT smoke test、SITL 启停、主要 method 批量验收 | 不接实体设备也能重复跑通 Dock3 云端双向通信 |
+| P6 P0/P1 Dock3 协议迁移 | 将客户 P0/P1 业务能力迁移为 DJI Dock 3 | 建立 Dock3 字段矩阵，修正属性、状态、服务、事件和回包结构 | P0/P1 云端协议按 Dock3 验收全部可用 |
+| P7 P0/P1 纯模拟自动验收 | 在服务器内长期稳定跑通模拟链路 | 固化 Web 调试台、MQTT 专项脚本、SITL 启停、机巢 v1.3、媒体/直播/运维 mock | 不接实体设备也能按 runbook 重复跑通 P0/P1 全链路 |
+| P8 P2 边界归档 | 给 P2 功能保留入口、日志、错误码和限制说明 | PSDK/ESDK、远程解禁、AirSense、高级直播等记录影响和绕过方式 | P2 问题不影响 P0/P1 |
 
 ## Ubuntu 首次部署命令
 

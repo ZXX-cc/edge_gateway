@@ -6,10 +6,10 @@
 
 | 项目 | 结论 |
 |---|---|
-| 当前已注册 method | 224 |
-| 统计来源 | `src/main.py` 中 `register_batch/register` |
+| 当前已注册 method | 243 |
+| 统计来源 | `src/main.py` 中 `register_batch/register`，method 覆盖台账见 `docs/METHOD_COVERAGE_LEDGER.md` |
 | 协议目标 | DJI Dock 3 |
-| 当前状态 | 已有 Dock/Dock1 风格实现，需要逐项迁移校验 |
+| 当前状态 | 已有 Dock/Dock1 风格实现，客户需求相关 method 需要按 Dock3 迁移校验；客户未用 Dock3 能力可标 Deferred |
 | 当前 broker topic 前缀 | `thing/product/{sn}` |
 | 主要验收人 | 人员1 |
 
@@ -21,7 +21,8 @@
 | 旧 Dock1 风格 | 当前字段、注释或语义偏 Dock/Dock1，需要 Dock3 迁移 |
 | 待 Dock3 校验 | 需要按 Dock3 官方文档核对请求体、响应体、枚举、单位和错误码 |
 | 模拟器可测 | 当前可用 MQTT/SITL/机巢模拟器做基础链路验证 |
-| 暂缓 | 保留接口或占位，等核心链路跑通后再补业务语义 |
+| 暂缓 | 保留接口或占位，客户未用或不阻塞主链路时可延期补业务语义 |
+| Deferred | Dock3 官方存在但客户暂未提及/当前业务未使用，记录原因和触发条件后延期 |
 
 ## 2. 错误码当前口径
 
@@ -63,7 +64,7 @@
 
 | 项目 | 结果 |
 |---|---|
-| 网关启动 | 成功，日志显示 `Registered 224 API handlers` |
+| 网关启动 | 历史联调成功；旧日志中的 method 数量已过期，当前源码静态计数为 243，后续以 `docs/METHOD_COVERAGE_LEDGER.md` 为准 |
 | MQTT 连接 | 成功，网关连接 `127.0.0.1:1883` |
 | MAVLink 连接 | 成功，日志显示 `[Connection] 已连接到系统 1` |
 | MAVLink 分发器 | 成功，日志显示 `MAVLink dispatcher started` |
@@ -79,13 +80,13 @@
 | P1-CLOUD-007 | `airport_organization_get` | `thing/product/EDGE-GW-001/requests` | `thing/product/EDGE-GW-001/requests_reply` | 2026-07-06 Ubuntu 复测通过：成功路径 `tid=9a738feb-97a8-4851-a797-02d17ab06343`；失败分支 `tid=b3816e96-c8f9-4b8e-b1be-c2f235f80d03 result=327000`；超时分支 `tid=8e21e5fc-3e64-4a30-8268-4763cc7f751f` | Dock3 官方 organization 上行请求成功/失败/超时路径已验证 | 继续字段精校 |
 | P1-CLOUD-008 | `airport_organization_bind` | `thing/product/EDGE-GW-001/requests` | `thing/product/EDGE-GW-001/requests_reply` | 2026-07-06 Ubuntu 复测通过：成功路径 `tid=8a0b1414-9853-4632-a172-913a207eff3f`；部分失败 `tid=d2bdf5d1-402f-45d1-82eb-da316c82e09e`；绑定后事件/DB 校验 `bind tid=9e38069d-5c64-4dfe-ba99-fe4808b90cf2`，捕获 `device_binding/update_topo`，SQLite `is_bound=true` | Dock3 官方 organization 绑定成功、`err_infos`、事件、内存状态、SQLite 持久化均已验证 | 继续字段精校、真实云端差异、多设备场景 |
 | P1-CLOUD-009 | `update_topo` | `sys/product/EDGE-GW-001/status` | `sys/product/EDGE-GW-001/status_reply` | 2026-07-06 Ubuntu 复测通过：基础拓扑 `tid=f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b`；多子设备拓扑 `tid=f318713c-767a-43d9-a4b2-13ade3a969b2`，`sub_devices[0].sn=DRONE-SIM-001`，均收到 `status_reply result=0` | device topology 基础 topic/reply 和 `sub_devices[]` 非空链路已验证 | 精校 `domain/type/sub_type/sub_devices` 官方字段 |
-| P1-CLOUD-010 | Dock3 P0 总批量 | `services`、`property/set`、`drc/down` | `services_reply`、`property/set_reply`、`drc/up` | 2026-07-06 Ubuntu 复测通过：`tools/mqtt_dock3_p0_batch_test.py --timeout 12` 输出 `dock3 p0 batch test ok`，覆盖状态查询、properties、只读属性拒绝、DRC enter/control/exit、错误 topic | P0 主链路已可作为后续全量迁移基线 | 后续日常使用 `--quiet-stale`，清理旧回包来源后用 `--fail-on-stale` 严格验证 |
-| P1-CLOUD-011 | properties 大类专项 | `thing/product/EDGE-GW-001/property/set`、`services` | `property/set_reply`、`services_reply` | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)` | 已通过 Ubuntu 专项复测 | 继续 `osd/state` 全量字段精校 |
+| P1-CLOUD-010 | Dock3 P0 总批量 | `services`、`property/set`、`drc/down` | `services_reply`、`property/set_reply`、`drc/up` | 2026-07-06 Ubuntu 复测通过：`tools/mqtt_dock3_p0_batch_test.py --timeout 12` 输出 `dock3 p0 batch test ok`，覆盖状态查询、properties、只读属性拒绝、DRC enter/control/exit、错误 topic | P0 主链路已可作为后续客户需求相关迁移基线 | 后续日常使用 `--quiet-stale`，清理旧回包来源后用 `--fail-on-stale` 严格验证 |
+| P1-CLOUD-011 | properties 大类专项 | `thing/product/EDGE-GW-001/property/set`、`services` | `property/set_reply`、`services_reply` | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)` | 已通过 Ubuntu 专项复测 | 继续 `osd/state` 客户需求相关字段精校 |
 | P1-CLOUD-012 | device/topology 大类专项 | `services` 测试触发、`sys/product/EDGE-GW-001/status` | `services_reply`、`sys/product/EDGE-GW-001/status_reply` | Ubuntu 复测通过：`tools/mqtt_dock3_device_test.py --timeout 12` 输出 `dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=3)` | 已按 Dock3 device `update_topo` 官方必填字段收敛，在线拓扑、离线拓扑、无效拓扑拒绝和 `status_reply` 已通过 | 继续官方 `domain/type/sub_type` 产品枚举精校 |
 | P1-CLOUD-013 | DRC 大类专项 | `services`、`drc/down` | `services_reply`、`drc/up` | Ubuntu 复测通过：`tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_total=5)`，覆盖官方 `drc_mode_enter`、`stick_control`、`drone_control`、`drc_gimbal_speed_push` 和错误分支 | 已按 Dock3 DRC 官方字段收敛并通过专项复测 | 继续 DRC 心跳、`takeoff_to_point` 和超时恢复 |
 | P1-CLOUD-014 | CMD/远程调试大类专项 | `services` | `services_reply`、`events` | Ubuntu 复测通过：`tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=55, events=13, ignored_total=55)`，覆盖调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝和进度事件 | 已按 Dock3 CMD/远程调试口径通过专项复测 | 继续真实任务耗时、失败码和环境旧回包清理 |
 | P1-CLOUD-015 | Wayline/航线管理大类专项 | `services` | `services_reply`、`events` | 2026-07-06 Ubuntu 复测通过：`tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` 输出 `dock3 wayline test ok (accepted=11, events=8, ignored_total=11)` | 已实现并验证 `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 的 Dock3 `output.status/progress/ext` 和错误码边界；`simulate_mission.is_enable=1` 时不强制真实飞控切模式 | Wayline P1 已验证；后续补 KMZ 下载解析、媒体计数、真实 SITL 航点执行、返航事件字段精校 |
-| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | Ubuntu 复测收到 `property/set_reply`，`data.silent_mode.state.result=0`；空 payload 返回 `data={}` | 已修复并通过 Ubuntu 服务器复测，回包结构已按 Dock3 property/set_reply 收敛；当前只允许 `air_transfer_enable`、`silent_mode`、`user_experience_improvement` | 继续补齐 Dock3 `osd/state` 全量字段矩阵 |
+| P1-CLOUD-003 | `property_set` | `thing/product/EDGE-GW-001/property/set` | `thing/product/EDGE-GW-001/property/set_reply` | Ubuntu 复测收到 `property/set_reply`，`data.silent_mode.state.result=0`；空 payload 返回 `data={}` | 已修复并通过 Ubuntu 服务器复测，回包结构已按 Dock3 property/set_reply 收敛；当前只允许 `air_transfer_enable`、`silent_mode`、`user_experience_improvement` | 继续补齐 Dock3 `osd/state` 客户需求相关字段矩阵 |
 | P1-CLOUD-004 | `drc_mode_enter` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | Ubuntu 复测收到 `services_reply`，`data.result=0`；随后 `property_get` 返回 `drc_state=2` | 已通过 Dock3 services 路径复测；误发到 `drc/down` 应返回 DJI 错误码 `325001` | 人员2继续核对 MAVLink 飞控模式/gear 映射 |
 | P1-CLOUD-006 | `drc_mode_exit` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | Ubuntu 复测收到 `services_reply`，`data.result=0`；随后 `property_get` 返回 `drc_state=0` | 已通过 Dock3 services 路径复测 | 人员2继续核对退出 DRC 后飞控模式恢复 |
 | P1-CLOUD-005 | `osd` 上报 | 无 | `thing/product/EDGE-GW-001/osd` | 持续收到经纬度、高度、姿态、电池、GPS | 设备遥测上报链路成功 | 对照 Dock3 properties/osd 字段校验名称、单位、枚举 |
@@ -123,16 +124,16 @@
 | `osd` 上报 | 已通 |
 | `dock_status_query` 实时状态 | 已修复并通过 Ubuntu 服务器复测 |
 | Dock3 字段合规 | 未完成 |
-| Dock3 全量迁移台账 | 已建立，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` |
+| Dock3 客户需求迁移台账 | 已建立，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` |
 | properties Batch 1 | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok` |
 | device topology Batch | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_device_test.py --timeout 12` 输出 `dock3 device topology test ok` |
 | DRC Batch | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok` |
 | CMD Batch | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=55, events=13, ignored_total=55)` |
 | Wayline Batch | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` 输出 `dock3 wayline test ok (accepted=11, events=8, ignored_total=11)` |
 
-## 5. Method 分组清单
+## 5. 243 Method 分组清单
 
-### 4.1 Device：51 个
+### 5.1 Device：51 个
 
 | 状态 | Method |
 |---|---|
@@ -143,7 +144,7 @@
 - `airport_bind_status` 已用于启动时自动查询绑定状态；Dock3 官方方向是 `requests/requests_reply`。当前已新增 `tools/mqtt_cloud_simulator.py` 作为云端模拟器，services handler 只作为本地兼容 smoke。
 - `cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_reboot/device_format`、`debug_mode_*` 和 `*_switch` 已按 Dock3 CMD/远程调试口径完成代码收敛，并已通过 Ubuntu 专项脚本 `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 验证。
 
-### 4.2 Mission / Wayline：42 个
+### 5.2 Mission / Wayline：42 个
 
 | 状态 | Method |
 |---|---|
@@ -155,12 +156,13 @@
 - 旧 `load_wayline/execute_task/wayline_task_*` 仍作为兼容入口保留，迁移时以 Dock3 `wayline.html` 和 `drc.html` 为准。
 - `set_flight_mode` 当前存在 ArduCopter 模式表适配问题，是人员2优先修复项。
 
-### 4.3 Payload：74 个
+### 5.3 Payload：93 个
 
 | 子类 | 状态 | Method |
 |---|---|---|
 | Camera | 已路由，待 Dock3 校验 | `camera_photo_take`, `start_photo`, `stop_photo`, `start_record`, `stop_record`, `set_camera_mode`, `set_exposure_mode`, `zoom`, `set_focus_mode`, `set_focus_value`, `spot_focus`, `photo_storage_set`, `camera_recover`, `camera_reset`, `set_shutter_speed`, `set_iso`, `set_white_balance`, `set_aperture`, `set_metering_mode`, `set_resolution`, `set_frame_rate`, `set_video_encoding`, `camera_capability_query`, `camera_photo_stop`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_point_focus_action`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set` |
-| Gimbal | 已路由，待 Dock3 校验 | `gimbalRotate`, `camera_look_at`, `set_gimbal_mode`, `gimbal_reset`, `gimbal_capability_query`, `gimbal_status_query` |
+| Gimbal | 已路由，待 Dock3 校验 | `gimbalRotate`, `gimbal_rotate`, `camera_look_at`, `set_gimbal_mode`, `gimbal_reset`, `gimbal_capability_query`, `gimbal_status_query` |
+| ViewLink | 已路由，设备侧 adapter/调试入口 | `viewlink_initialize`, `viewlink_connect`, `viewlink_disconnect`, `viewlink_is_connected`, `viewlink_move`, `viewlink_stop`, `viewlink_home`, `viewlink_turn_to`, `viewlink_zoom_in`, `viewlink_zoom_out`, `viewlink_stop_zoom`, `viewlink_start_track`, `viewlink_stop_track`, `viewlink_take_photo`, `viewlink_start_recording`, `viewlink_stop_recording`, `viewlink_is_recording`, `viewlink_set_record_mode` |
 | IR | 已路由，待 Dock3 校验 | `ir_metering_mode_set`, `ir_color_palette_set`, `ir_display_mode_set`, `ir_isotherm_set`, `ir_zoom_set` |
 | Third party / PSDK | 已路由，多数暂缓 | `drc_light_control_set`, `drc_light_calibration`, `drc_light_fine_tuning_set`, `drc_speaker_tts_set`, `drc_speaker_play_volume_set`, `drc_speaker_audio_play`, `drc_speaker_audio_pause`, `drc_speaker_audio_stop`, `psdk_function_set`, `set_thermal_mode`, `set_palette`, `payload_authority_grab`, `payload_authority_release`, `payload_status_query`, `parachute_open`, `parachute_status_query`, `night_vision_mode_set`, `gas_detector_data_get`, `radar_status_query`, `searchlight_status_query`, `speaker_status_query`, `payload_capability_query`, `psdk_ui_resource_upload_result`, `psdk_floating_window_text`, `psdk_widget_value_set`, `psdk_input_box_text_set`, `speaker_replay`, `speaker_play_mode_set`, `speaker_play_stop`, `speaker_audio_play_start`, `speaker_tts_play_start`, `speaker_play_volume_set` |
 
@@ -169,7 +171,7 @@
 - 当前阶段负载以模拟回包和状态 trace 为主。
 - PSDK/ESDK 透传属于暂缓范围，先保留接口和调试入口。
 
-### 4.4 Media / Live：13 个
+### 5.4 Media / Live：13 个
 
 | 状态 | Method |
 |---|---|
@@ -180,7 +182,7 @@
 - Dock3 中媒体管理文档路径为 `media.html`，Dock1 中为 `file.html`，迁移时不能沿用 Dock1 文件命名假设。
 - 当前可先模拟文件列表、上传状态、直播开关和质量设置。
 
-### 4.5 DRC：24 个
+### 5.5 DRC：24 个
 
 | 状态 | Method |
 |---|---|
@@ -193,7 +195,7 @@
 - Dock3 中 `drc/down/drc/up` 用于 DRC 建链后的控制数据，例如 `stick_control`、`drone_control`、`payload_control`。当前 `stick_control` 已支持官方 `roll/pitch/throttle/yaw/gimbal_pitch` 杆量字段；`drone_control` 已支持官方 `seq/x/y/h/w` 字段；`payload_control` 和更多 DRC method 仍待继续精校。
 - 当前不得在 DRC 热路径里阻塞等待长时间 ACK。
 
-### 4.6 Dock：8 个
+### 5.6 Dock：8 个
 
 | 状态 | Method |
 |---|---|
@@ -204,19 +206,19 @@
 - `dock_status_query` 当前只能证明旧机场查询链路可用，不代表符合 DJI Dock 3。
 - Dock3 迁移时应优先重构机场状态模型、属性输出、命令回包和事件。
 
-### 4.7 Log：3 个
+### 5.7 Log：3 个
 
 | 状态 | Method |
 |---|---|
 | 已路由，待 Dock3 校验 | `fileupload_list`, `fileupload_start`, `fileupload_update` |
 
-### 4.8 FlySafe：3 个
+### 5.8 FlySafe：3 个
 
 | 状态 | Method |
 |---|---|
 | 已路由，暂缓 | `unlock_license_switch`, `unlock_license_update`, `unlock_license_list` |
 
-### 4.9 Flight Area：2 个
+### 5.9 Flight Area：2 个
 
 | 状态 | Method |
 |---|---|
@@ -224,7 +226,7 @@
 
 说明：Dock3 文档使用 `custom-fly-region.html`，Dock1 文档使用 `custom-flight-area.html`，迁移时需要统一命名和字段。
 
-### 4.10 Custom Data：4 个
+### 5.10 Custom Data：4 个
 
 | 状态 | Method |
 |---|---|
@@ -244,7 +246,7 @@
 
 ## 7. 下一步
 
-1. 按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 逐组推进 Dock3 全量迁移。
+1. 按 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 逐组推进客户需求相关 Dock3 迁移，客户未提及/未使用的 Dock3 能力标 Deferred。
 2. 在 Ubuntu 上优先运行 `python tools/mqtt_dock3_p0_batch_test.py --timeout 12`，一次复测 P0 组合链路。
 3. 继续 organization：做字段精校、真实云端差异和多设备场景。
 4. 继续 device/topology：先用 `tools/mqtt_dock3_device_test.py --timeout 12` 验证在线/离线拓扑和无效拓扑拒绝，再补官方产品枚举。

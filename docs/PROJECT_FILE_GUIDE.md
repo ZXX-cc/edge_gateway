@@ -15,6 +15,24 @@
 | `requirements.txt` | 原依赖文件，存在历史编码风险，Ubuntu 默认不用它 |
 | `start.sh` | 生产/半自动启动脚本，当前仍偏 NanoMQ 和服务化部署 |
 
+## 1.1 规划与验收文档
+
+| 路径 | 职责 |
+|---|---|
+| `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md` | 客户需求覆盖矩阵，说明客户 Word 文档如何归一到 Dock3 开发口径 |
+| `docs/CUSTOMER_REQUIREMENTS_TRACEABILITY_MATRIX.md` | 客户需求可追溯矩阵，说明客户章节如何落到 Dock3 落点、P0/P1/P2、缺口和验收证据 |
+| `docs/METHOD_COVERAGE_LEDGER.md` | MQTT method 覆盖台账，说明当前 243 个注册 method 如何归入 P0/P1/P2 和验收域 |
+| `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 交付 backlog，定义功能优先级、当前状态、30 天交付要求和验收证据 |
+| `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 实现缺口登记，绑定代码入口、必补脚本、目标窗口和关项规则 |
+| `docs/30_DAY_MILESTONE_PLAN.md` | 30 天里程碑计划，定义阶段节奏和 P0/P1/P2 出口 |
+| `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板，定义日级任务、人员分工、缺失脚本顺序和证据目录 |
+| `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡，定义 44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
+| `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 runbook，定义启动顺序、验收命令、P2 边界和证据归档 |
+| `docs/DJI_DOCK3_MIGRATION_GUIDE.md` | Dock3 迁移方法、官方文档索引和粗粒度迁移顺序 |
+| `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 客户需求迁移台账和当前验证证据 |
+| `docs/DOCK3_MODULE_STATUS.md` | 模块状态总表和当前专项验收命令 |
+| `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 机巢 v1.3 MAVLink 消息和 Dock3 映射口径 |
+
 ## 2. 主入口
 
 | 路径 | 职责 |
@@ -27,7 +45,7 @@
 |---|---:|---|
 | device | 51 | 设备管理、绑定、OTA、配置、属性、HMS、基础机场动作 |
 | mission | 42 | 航线任务、飞行任务、指令飞行、返航、降落 |
-| payload | 74 | 相机、云台、红外、PSDK、喊话器、探照灯和第三方负载 |
+| payload | 93 | 相机、云台、ViewLink、红外、PSDK、喊话器、探照灯和第三方负载 |
 | media | 13 | 媒体文件、直播、上传优先级、存储配置 |
 | drc | 24 | DRC 模式和实时控制 |
 | dock | 8 | 旧 Dock/Dock1 风格机场查询、控制、告警、气象 |
@@ -35,7 +53,7 @@
 | flysafe | 3 | 远程解禁 |
 | flight_area | 2 | 自定义飞行区 |
 | custom_data | 4 | PSDK/ESDK 自定义数据透传 |
-| 合计 | 224 | 当前已注册 method 总数 |
+| 合计 | 243 | 当前已注册 method 总数，静态来源见 `docs/METHOD_COVERAGE_LEDGER.md` |
 
 ## 3. MQTT 与上云 API 层
 
@@ -152,6 +170,11 @@ src/core/connection.py
 | `tools/ubuntu_preflight.sh` | Ubuntu 部署前只读检查脚本，不安装、不启动、不修改 |
 | `tools/mqtt_smoke_test.py` | MQTT method 冒烟测试工具，可按 method 自动选择 services/property/drc topic 并等待 reply |
 | `tools/mqtt_dock3_p0_batch_test.py` | Dock3 P0 总批量验收工具，一次覆盖状态查询、properties、DRC 和错误 topic |
+| `tools/mqtt_dock3_properties_test.py` | Dock3 properties 专项验收，覆盖可写属性、只读属性和值域错误 |
+| `tools/mqtt_dock3_device_test.py` | Dock3 device topology 专项验收，覆盖 `update_topo` 和 `status_reply` |
+| `tools/mqtt_dock3_drc_test.py` | Dock3 DRC 专项验收，覆盖建链、杆量、官方字段和值域错误 |
+| `tools/mqtt_dock3_cmd_test.py` | Dock3 CMD/远程调试专项验收，覆盖舱盖、充电、推杆、灯和设备动作 |
+| `tools/mqtt_dock3_wayline_test.py` | Dock3 Wayline 专项验收，覆盖任务准备、执行、进度、暂停、恢复和返航 |
 | `tools/mqtt_drc_batch_test.py` | Dock3 DRC 控制数据批量验收工具，覆盖 `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` |
 | `tools/mqtt_cloud_simulator.py` | 上云 API 模拟器，支持 `requests_reply` 和 `status_reply` 模拟 |
 | `tools/mqtt_organization_test.py` | Dock3 organization 查询、绑定、事件、拓扑和持久化验收工具 |
@@ -160,6 +183,18 @@ src/core/connection.py
 | `web/README.md` | Web 调试台启动和页面操作说明 |
 
 人员3优先维护这些文件和部署文档，保证所有模拟组件可重复启动。
+
+30 天内还需要补齐以下 P1 验收工具。当前它们是交付缺口，不应在验收中记为已通过：
+
+| 计划路径 | 必须覆盖 |
+|---|---|
+| `tools/nest_v13_protocol_test.py` | 机巢 v1.3 命令、应答、状态位、拒绝条件 |
+| `tools/mqtt_dock3_media_test.py` | Dock3 media 文件列表、删除、上传优先级、上传事件 |
+| `tools/mqtt_dock3_live_test.py` | Dock3 live 开始/停止、质量、镜头、状态事件 |
+| `tools/mqtt_dock3_hms_log_test.py` | Dock3 HMS 告警和远程日志 |
+| `tools/mqtt_dock3_firmware_config_test.py` | Dock3 固件升级模拟和配置更新 |
+| `tools/e2e_takeoff_flow_test.py` | 一键启航主流程 |
+| `tools/e2e_full_chain_test.py` | P0/P1 全链路回归 |
 
 ## 10. 不应提交或依赖的文件
 
