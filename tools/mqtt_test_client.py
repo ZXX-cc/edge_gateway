@@ -14,6 +14,7 @@ CHANNELS = {
     "property": ("thing/product/{sn}/property/set", "thing/product/{sn}/property/set_reply"),
     "drc": ("thing/product/{sn}/drc/down", "thing/product/{sn}/drc/up"),
 }
+EVENTS_TOPIC = "thing/product/{sn}/events"
 
 METHOD_CHANNEL_HINTS = {
     "property_set": "property",
@@ -90,6 +91,19 @@ def property_results(message: Any) -> dict[str, int]:
     return results
 
 
+def output_status(message: Any) -> Optional[str]:
+    if not isinstance(message, dict):
+        return None
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    output = data.get("output")
+    if not isinstance(output, dict):
+        return None
+    status = output.get("status")
+    return status if isinstance(status, str) else None
+
+
 def looks_like_legacy_stale_reply(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
@@ -117,6 +131,7 @@ class MqttRequestClient:
         qos: int = 1,
         quiet_stale: bool = False,
         client_id_prefix: str = "edge_gateway_mqtt_test",
+        subscribe_events: bool = False,
         mqtt_module=None,
     ):
         if mqtt_module is None:
@@ -130,6 +145,9 @@ class MqttRequestClient:
         self.sn = sn
         self.qos = qos
         self.quiet_stale = quiet_stale
+        self.event_topics = {EVENTS_TOPIC.format(sn=self.sn)} if subscribe_events else set()
+        self.events_by_method: dict[str, list[dict[str, Any]]] = {}
+        self.event_signal = Event()
         self.connected = Event()
         self.connect_rc: Optional[int] = None
         self.pending: dict[str, dict[str, Any]] = {}
@@ -139,6 +157,7 @@ class MqttRequestClient:
             "ignored_mismatched": 0,
             "ignored_legacy": 0,
             "ignored_wrong_topic": 0,
+            "events": 0,
         }
         self.client = build_client(mqtt_module, f"{client_id_prefix}_{uuid.uuid4().hex[:8]}")
 
@@ -163,6 +182,9 @@ class MqttRequestClient:
             topic = reply_tpl.format(sn=self.sn)
             self.client.subscribe(topic, qos=self.qos)
             print(f"mqtt test subscribed -> {topic}")
+        for topic in sorted(self.event_topics):
+            self.client.subscribe(topic, qos=self.qos)
+            print(f"mqtt test subscribed -> {topic}")
         self.connected.set()
 
     def _on_message(self, client, userdata, msg):
@@ -170,6 +192,15 @@ class MqttRequestClient:
             payload = json.loads(msg.payload.decode("utf-8"))
         except Exception as exc:
             print(f"invalid JSON on {msg.topic}: {exc}", file=sys.stderr)
+            return
+
+        if msg.topic in self.event_topics:
+            method = payload.get("method") if isinstance(payload, dict) else None
+            self.events_by_method.setdefault(method, []).append(payload)
+            self.stats["events"] += 1
+            self.event_signal.set()
+            if not self.quiet_stale:
+                print(f"event observed: method={method}, tid={payload.get('tid') if isinstance(payload, dict) else None}")
             return
 
         tid = payload.get("tid") if isinstance(payload, dict) else None
@@ -210,6 +241,17 @@ class MqttRequestClient:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
             return
 
+        expected_status = waiter.get("expected_status")
+        if expected_status is not None and output_status(payload) is None and result_code(payload) == 0:
+            self.stats["ignored_legacy"] += 1
+            if not self.quiet_stale:
+                print(
+                    f"ignored legacy reply without data.output.status <- {msg.topic}, "
+                    f"method={actual_method}, tid={tid}"
+                )
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+
         self.stats["accepted"] += 1
         waiter["topic"] = msg.topic
         waiter["payload"] = payload
@@ -224,6 +266,7 @@ class MqttRequestClient:
         allowed_results: Optional[set[int]] = None,
         verbose: bool = True,
         need_reply: int = 1,
+        expected_status: Optional[str] = None,
     ) -> tuple[int, Optional[dict]]:
         selected_channel = resolve_channel(method, channel)
         publish_tpl, reply_tpl = CHANNELS[selected_channel]
@@ -246,6 +289,7 @@ class MqttRequestClient:
             "payload": None,
             "method": method,
             "expected_topic": reply_topic,
+            "expected_status": expected_status,
         }
         self.pending[tid] = waiter
 
@@ -278,11 +322,59 @@ class MqttRequestClient:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
 
         if allowed_results is not None:
+            allowed_results = set(allowed_results)
             actual = result_code(payload)
             if actual not in allowed_results:
                 print(f"{method} unexpected result: expected={sorted(allowed_results)}, actual={actual}", file=sys.stderr)
                 return 4, payload
+        if expected_status is not None:
+            actual_status = output_status(payload)
+            if actual_status != expected_status:
+                print(
+                    f"{method} unexpected output.status: expected={expected_status}, actual={actual_status}",
+                    file=sys.stderr,
+                )
+                return 5, payload
         return 0, payload
+
+    def event_count(self, method: str) -> int:
+        return len(self.events_by_method.get(method, []))
+
+    def has_event(self, method: str) -> bool:
+        return bool(self.events_by_method.get(method))
+
+    def wait_event(
+        self,
+        method: str,
+        previous_count: int,
+        timeout: float,
+        expected_status: Optional[str] = "ok",
+    ) -> tuple[int, Optional[dict]]:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            events = self.events_by_method.get(method, [])
+            if len(events) > previous_count:
+                event = events[-1]
+                print(f"event observed: method={method}, tid={event.get('tid')}")
+                if expected_status is not None:
+                    actual_status = output_status(event)
+                    if actual_status != expected_status:
+                        print(
+                            f"{method} event output.status mismatch: "
+                            f"expected={expected_status}, actual={actual_status}",
+                            file=sys.stderr,
+                        )
+                        return 6, event
+                return 0, event
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            self.event_signal.wait(max(0.05, min(0.5, remaining)))
+            self.event_signal.clear()
+
+        print(f"timeout waiting for event: method={method}", file=sys.stderr)
+        return 7, None
 
     def stale_total(self) -> int:
         return (

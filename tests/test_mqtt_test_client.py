@@ -15,6 +15,7 @@ if TOOLS_DIR not in sys.path:
 
 from mqtt_test_client import (  # noqa: E402
     MqttRequestClient,
+    output_status,
     property_result,
     property_results,
     resolve_channel,
@@ -76,6 +77,7 @@ class MqttTestClientHelpersTest(unittest.TestCase):
         reply = {
             "data": {
                 "result": 0,
+                "output": {"status": "ok"},
                 "silent_mode": {"state": {"result": 0}},
                 "battery_store_mode": {"state": {"result": 1}},
                 "ignored": {"state": {"result": "0"}},
@@ -83,6 +85,7 @@ class MqttTestClientHelpersTest(unittest.TestCase):
         }
 
         self.assertEqual(result_code(reply), 0)
+        self.assertEqual(output_status(reply), "ok")
         self.assertEqual(property_result(reply, "silent_mode"), 0)
         self.assertEqual(
             property_results(reply),
@@ -104,7 +107,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         FakeMqttClient.connect_rc = 0
 
     def test_connect_subscribes_all_reply_topics(self):
-        self.assertTrue(self.client.connect(0.1))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(self.client.connect(0.1))
         self.assertEqual(
             sorted(topic for topic, _ in self.client.client.subscriptions),
             [
@@ -113,6 +117,20 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
                 "thing/product/EDGEGW001/services_reply",
             ],
         )
+
+    def test_connect_subscribes_events_when_requested(self):
+        event_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            subscribe_events=True,
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(event_client.connect(0.1))
+        self.assertIn(("thing/product/EDGEGW001/events", 1), event_client.client.subscriptions)
 
     def test_connect_returns_false_on_nonzero_rc(self):
         FakeMqttClient.connect_rc = 5
@@ -184,6 +202,57 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_legacy"], 1)
+
+    def test_expected_status_ignores_legacy_reply_without_output_status(self):
+        self.client.pending[self.tid]["expected_status"] = "ok"
+        legacy = {
+            "tid": self.tid,
+            "method": "dock_status_query",
+            "gateway": "EDGEGW001",
+            "msg": "",
+            "data": {"result": 0},
+        }
+        current = {
+            "tid": self.tid,
+            "method": "dock_status_query",
+            "gateway": "EDGEGW001",
+            "msg": "",
+            "data": {"result": 0, "output": {"status": "ok"}},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.reply_topic, legacy))
+        self.assertFalse(self.client.pending[self.tid]["event"].is_set())
+        self.assertEqual(self.client.stats["ignored_legacy"], 1)
+
+        self.client._on_message(None, None, mqtt_message(self.reply_topic, current))
+        waiter = self.client.pending[self.tid]
+        self.assertTrue(waiter["event"].is_set())
+        self.assertEqual(waiter["payload"], current)
+
+    def test_event_topic_is_recorded_and_waitable(self):
+        event_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            subscribe_events=True,
+            mqtt_module=FakeMqttModule,
+        )
+        event = {
+            "tid": "event-tid",
+            "method": "cover_open",
+            "data": {"result": 0, "output": {"status": "ok"}},
+        }
+
+        event_client._on_message(None, None, mqtt_message("thing/product/EDGEGW001/events", event))
+
+        self.assertTrue(event_client.has_event("cover_open"))
+        self.assertEqual(event_client.event_count("cover_open"), 1)
+        self.assertEqual(event_client.stats["events"], 1)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc, observed = event_client.wait_event("cover_open", 0, 0.1, expected_status="ok")
+        self.assertEqual(rc, 0)
+        self.assertEqual(observed, event)
 
     def test_no_reply_request_omits_need_reply_and_succeeds_without_reply(self):
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
