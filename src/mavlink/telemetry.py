@@ -17,6 +17,7 @@ import threading
 from typing import Dict, Callable, Optional
 from src.utils.logger import get_logger
 from src.utils.config import Config
+from src.mavlink.flight_modes import mode_to_dji_code
 
 logger = get_logger("telemetry")
 
@@ -233,7 +234,7 @@ class TelemetryProcessor:
 
         # 飞行模式和状态
         flight_mode = data.get('flight_mode', 'UNKNOWN')
-        osd['mode_code'] = self._mode_to_code(flight_mode)
+        osd['mode_code'] = mode_to_dji_code(flight_mode)
         osd['gear'] = 1 if data.get('armed', False) else 0
 
         # 飞行时间
@@ -244,17 +245,7 @@ class TelemetryProcessor:
     @staticmethod
     def _mode_to_code(mode: str) -> int:
         """将飞行模式字符串转换为DJI mode_code"""
-        mode_codes = {
-            'STABILIZE': 0, 'ACRO': 1, 'ALT_HOLD': 2, 'AUTO': 3,
-            'GUIDED': 4, 'LOITER': 5, 'RTL': 6, 'CIRCLE': 7,
-            'LAND': 9, 'DRIFT': 11, 'SPORT': 13, 'FLIP': 14,
-            'AUTOTUNE': 15, 'POSHOLD': 16, 'BRAKE': 17,
-            'THROW': 18, 'AVOID_ADSB': 19, 'GUIDED_NOGPS': 20,
-            'SMART_RTL': 21, 'FLOWHOLD': 22, 'FOLLOW': 23,
-            'ZIGZAG': 24, 'SYSTEMID': 25, 'AUTOROTATE': 26,
-            'AUTO_RTL': 27,
-        }
-        return mode_codes.get(mode.upper(), 0)
+        return mode_to_dji_code(mode)
 
     def build_state_data(self, changed_fields: dict) -> dict:
         """构建状态变更数据"""

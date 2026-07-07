@@ -11,6 +11,11 @@ from threading import Event
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
 from threading import Event, Thread
+from src.mavlink.flight_modes import (
+    flight_mode_profile,
+    mode_map_for_profile,
+    parse_flight_mode,
+)
 
 # ① 枚举新增 ENDED
 class AutoTakeoffState(Enum):
@@ -48,24 +53,13 @@ class FlightControl(BaseModule):
         self.current_mode_name = None
         self.is_armed = False  # ⭐ 默认为False
         self.last_command_ack = None
+        self.mode_profile = "plane"
 
         # 任务信息
         self.mission_count = 0
         self.current_waypoint = 0
 
-        # ✅ ArduPlane完整模式映射
-        self.mode_mapping = {
-            "MANUAL": 0, "CIRCLE": 1, "STABILIZE": 2, "TRAINING": 3,
-            "ACRO": 4, "FBWA": 5, "FBWB": 6, "CRUISE": 7,
-            "AUTOTUNE": 8, "AUTO": 10, "RTL": 11, "LOITER": 12,
-            "TAKEOFF": 13, "AVOID_ADSB": 14, "GUIDED": 15,
-            "INITIALISING": 16, "QSTABILIZE": 17, "QHOVER": 18,
-            "QLOITER": 19, "QLAND": 20, "QRTL": 21, "QAUTOTUNE": 22,
-            "QACRO": 23, "THERMAL": 24, "LOITER_ALT_QLAND": 25,
-        }
-
-        # 反向映射
-        self.mode_id_to_name = {v: k for k, v in self.mode_mapping.items()}
+        self._set_mode_profile("plane")
 
         # ⭐ 机巢通信
         self.auto_takeoff_state = AutoTakeoffState.IDLE
@@ -101,6 +95,14 @@ class FlightControl(BaseModule):
         # ✅ 手动确认事件
         self.manual_confirm_event = Event()
         self.manual_confirm_result = None  # True=允许, False=拒绝
+
+    def _set_mode_profile(self, profile: str):
+        if profile not in {"copter", "plane"}:
+            return
+        self.mode_profile = profile
+        mode_by_id = mode_map_for_profile(profile)
+        self.mode_id_to_name = dict(mode_by_id)
+        self.mode_mapping = {name: mode_id for mode_id, name in mode_by_id.items()}
 
     def set_nest_module(self, nest_module):
         """注入机巢模块（用于发送响应消息）"""
@@ -425,13 +427,15 @@ class FlightControl(BaseModule):
         """
         result = {"success": False, "message": "", "mode": mode}
 
-        # 如果是数字，直接作为模式ID
-        if mode.isdigit():
-            modenum = int(mode)
+        mode_text = str(mode).strip()
+
+        # 如果是数字，直接作为当前 profile 的 MAVLink custom_mode
+        if mode_text.isdigit():
+            modenum = int(mode_text)
             mode_name = self.mode_id_to_name.get(modenum, f"MODE_{modenum}")
         else:
             # 转换为大写并查找
-            mode_upper = mode.upper()
+            mode_upper = mode_text.upper()
             if mode_upper not in self.mode_mapping:
                 result["message"] = f"未知模式: {mode}。可用模式: {', '.join(self.get_available_modes())}"
                 self.log(result["message"], "ERROR")
@@ -501,6 +505,9 @@ class FlightControl(BaseModule):
 
     def get_available_modes(self) -> list:
         """获取所有可用模式（按分类排序）"""
+        if self.mode_profile == "copter":
+            return list(self.mode_mapping.keys())
+
         basic_modes = ["MANUAL", "CIRCLE", "STABILIZE", "TRAINING", "ACRO",
                       "FBWA", "FBWB", "CRUISE", "AUTOTUNE"]
         auto_modes = ["AUTO", "RTL", "LOITER", "TAKEOFF", "AVOID_ADSB", "GUIDED"]
@@ -967,6 +974,10 @@ class FlightControl(BaseModule):
         # ... 保持原有心跳处理逻辑 ...
 
         raw_mode = msg.custom_mode
+        mav_type = getattr(msg, "type", None)
+        profile = flight_mode_profile(mav_type)
+        if profile != "unknown" and profile != self.mode_profile:
+            self._set_mode_profile(profile)
         raw_armed = bool(msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
         # ========== 模式防抖 ==========
@@ -980,9 +991,10 @@ class FlightControl(BaseModule):
             if raw_mode != self.current_mode:
                 old_mode_name = self.current_mode_name or "NONE"
                 self.current_mode = raw_mode
-                self.current_mode_name = self.mode_id_to_name.get(
+                self.current_mode_name = parse_flight_mode(
                     self.current_mode,
-                    f"UNKNOWN({self.current_mode})"
+                    mav_type=mav_type,
+                    profile=self.mode_profile,
                 )
 
                 if old_mode_name != "NONE":

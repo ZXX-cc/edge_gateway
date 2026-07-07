@@ -18,6 +18,7 @@ from src.utils.dji_error_codes import (
     normalize_error_code,
     normalize_reply_error_codes,
 )
+from src.utils.request_trace import get_request_trace_recorder
 
 logger = get_logger("mqtt")
 
@@ -47,6 +48,8 @@ class MQTTClient:
         self._running = False
         self._connect_count = 0
         self._last_osd_log_time = 0
+        self._trace = get_request_trace_recorder()
+        self._trace.start()
 
     def connect(self) -> bool:
         """连接到NanoMQ Broker"""
@@ -93,6 +96,7 @@ class MQTTClient:
             self.client.loop_stop()
             self.client.disconnect()
         self.connected = False
+        self._trace.record("mqtt_disconnected", direction="system", gateway=self.gateway_sn)
         logger.info("MQTT disconnected")
 
     def subscribe_downstream(self):
@@ -130,6 +134,32 @@ class MQTTClient:
             return False
 
     # ---- 便捷发布方法 ----
+
+    def _trace_publish(
+        self,
+        event: str,
+        topic: str,
+        payload: dict,
+        *,
+        direction: str = "out",
+        ok: Optional[bool] = None,
+        source_topic: str = "",
+        elapsed_ms: Optional[int] = None,
+    ):
+        extra = {}
+        if ok is not None:
+            extra["publish_ok"] = ok
+        if source_topic:
+            extra["source_topic"] = source_topic
+        self._trace.record(
+            event,
+            direction=direction,
+            topic=topic,
+            payload=payload,
+            result=self._reply_result(payload),
+            elapsed_ms=elapsed_ms,
+            extra=extra,
+        )
 
     def publish_osd(self, device_sn: str, data: dict):
         """发布OSD定频数据"""
@@ -170,25 +200,30 @@ class MQTTClient:
                 ("method", data.get('method')),
                 ("data", format_with_labels(data, max_length=3000)),
             ]))
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        if data.get('method') != 'heartbeat':
+            self._trace_publish("mqtt_publish_event", topic, data, ok=ok)
 
     def publish_service_reply(self, data: dict):
         """发布服务响应"""
         topic = TopicBuilder.services_reply(self.gateway_sn)
         data = self._normalize_reply_for_publish(TopicBuilder.services(self.gateway_sn), data)
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        self._trace_publish("mqtt_publish_services_reply", topic, data, ok=ok, source_topic=TopicBuilder.services(self.gateway_sn))
 
     def publish_property_reply(self, data: dict):
         """发布属性设置响应"""
         topic = TopicBuilder.property_set_reply(self.gateway_sn)
         data = self._normalize_reply_for_publish(TopicBuilder.property_set(self.gateway_sn), data)
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        self._trace_publish("mqtt_publish_property_reply", topic, data, ok=ok, source_topic=TopicBuilder.property_set(self.gateway_sn))
 
     def publish_drc_up(self, data: dict):
         """发布DRC上行数据"""
         topic = TopicBuilder.drc_up(self.gateway_sn)
         data = self._normalize_reply_for_publish(TopicBuilder.drc_down(self.gateway_sn), data)
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        self._trace_publish("mqtt_publish_drc_up", topic, data, ok=ok, source_topic=TopicBuilder.drc_down(self.gateway_sn))
 
     @staticmethod
     def _is_service_reply_method(method: str) -> bool:
@@ -269,6 +304,7 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
+<<<<<<< HEAD
         trace_command(
             "mqtt_reply_sent",
             source_topic=source_topic,
@@ -277,6 +313,14 @@ class MQTTClient:
             tid=data.get("tid"),
             result=self._reply_result(data),
             ok=ok,
+=======
+        self._trace_publish(
+            "mqtt_publish_reply",
+            reply_topic,
+            data,
+            ok=ok,
+            source_topic=source_topic,
+>>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
         )
         logger.info(self._format_log_block("MQTT REPLY SENT", [
             ("source_topic", source_topic),
@@ -300,6 +344,7 @@ class MQTTClient:
             reply_topic = TopicBuilder.services_reply(self.gateway_sn)
 
         ok = self.publish(reply_topic, data, qos=1)
+<<<<<<< HEAD
         trace_command(
             "mqtt_error_reply_sent",
             source_topic=source_topic,
@@ -309,6 +354,14 @@ class MQTTClient:
             result=self._reply_result(data),
             msg=data.get("msg"),
             ok=ok,
+=======
+        self._trace_publish(
+            "mqtt_publish_error_reply",
+            reply_topic,
+            data,
+            ok=ok,
+            source_topic=source_topic,
+>>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
         )
         logger.info(self._format_log_block("MQTT ERROR REPLY SENT", [
             ("source_topic", source_topic),
@@ -337,7 +390,8 @@ class MQTTClient:
             ("topic", topic),
             ("data", format_with_labels(data, max_length=3000)),
         ]))
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        self._trace_publish("mqtt_publish_status", topic, data, ok=ok)
 
     def publish_requests(self, data: dict):
         """发布设备请求 (thing/product/{sn}/requests)"""
@@ -347,7 +401,8 @@ class MQTTClient:
             ("method", data.get('method')),
             ("data", format_with_labels(data, max_length=3000)),
         ]))
-        self.publish(topic, data, qos=1)
+        ok = self.publish(topic, data, qos=1)
+        self._trace_publish("mqtt_publish_request", topic, data, ok=ok)
 
     # ---- 处理器注册 ----
 
@@ -403,6 +458,17 @@ class MQTTClient:
             self.connected = True
             self._connect_count += 1
             event = "connected" if self._connect_count == 1 else "reconnected"
+            self._trace.record(
+                "mqtt_connected",
+                direction="system",
+                gateway=self.gateway_sn,
+                extra={
+                    "host": self.config.get('host'),
+                    "port": self.config.get('port'),
+                    "connect_count": self._connect_count,
+                    "event": event,
+                },
+            )
             logger.info(
                 "MQTT %s to broker: host=%s, port=%s, client_id=edge_gateway_%s",
                 event,
@@ -417,6 +483,13 @@ class MQTTClient:
 
     def _on_disconnect(self, client, userdata, rc):
         self.connected = False
+        self._trace.record(
+            "mqtt_disconnected",
+            direction="system",
+            gateway=self.gateway_sn,
+            result=rc,
+            extra={"running": self._running},
+        )
         if rc != 0:
             logger.warning(
                 "MQTT unexpected disconnect: rc=%s, running=%s, reconnect=auto",
@@ -428,14 +501,38 @@ class MQTTClient:
 
     def _on_message(self, client, userdata, msg):
         """消息回调 - 路由到对应处理器"""
+        started = time.perf_counter()
+        payload_bytes = len(msg.payload or b'')
         try:
             payload = parse_message(msg.payload)
             if not payload:
+                self._trace.record(
+                    "mqtt_parse_failed",
+                    direction="in",
+                    topic=msg.topic,
+                    payload_bytes=payload_bytes,
+                    error="parse_message returned empty",
+                )
                 logger.warning(f"Failed to parse message on {msg.topic}")
                 return
 
             method = payload.get('method', '')
+            self._trace.record(
+                "mqtt_received",
+                direction="in",
+                topic=msg.topic,
+                payload=payload,
+                payload_bytes=payload_bytes,
+            )
             if not method:
+                self._trace.record(
+                    "mqtt_no_method",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    payload_bytes=payload_bytes,
+                    error="missing method",
+                )
                 logger.warning(f"No method in message on {msg.topic}")
                 return
 
@@ -468,40 +565,82 @@ class MQTTClient:
 
             # 特殊处理 sys/product/{sn}/status_reply
             if msg.topic.endswith('/status_reply'):
+                result = payload.get('data', {}).get('result', -1)
                 if self._status_reply_handler:
                     try:
                         self._status_reply_handler(method, payload)
                     except Exception as e:
+                        self._trace.record(
+                            "mqtt_status_reply_handler_error",
+                            direction="in",
+                            topic=msg.topic,
+                            payload=payload,
+                            result=result,
+                            elapsed_ms=int((time.perf_counter() - started) * 1000),
+                            error=str(e),
+                        )
                         logger.error(f"Status reply handler error for {method}: {e}", exc_info=True)
                 else:
-                    result = payload.get('data', {}).get('result', -1)
                     logger.info(self._format_log_block("MQTT STATUS REPLY", [
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
                     ]))
+                self._trace.record(
+                    "mqtt_status_reply_received",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
                 return
 
             # 特殊处理 thing/product/{sn}/requests_reply
             if msg.topic.endswith('/requests_reply'):
+                result = payload.get('data', {}).get('result', -1)
                 if self._requests_reply_handler:
                     try:
                         self._requests_reply_handler(method, payload)
                     except Exception as e:
+                        self._trace.record(
+                            "mqtt_requests_reply_handler_error",
+                            direction="in",
+                            topic=msg.topic,
+                            payload=payload,
+                            result=result,
+                            elapsed_ms=int((time.perf_counter() - started) * 1000),
+                            error=str(e),
+                        )
                         logger.error(f"Requests reply handler error for {method}: {e}", exc_info=True)
                 else:
-                    result = payload.get('data', {}).get('result', -1)
                     logger.info(self._format_log_block("MQTT REQUESTS REPLY", [
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
                     ]))
+                self._trace.record(
+                    "mqtt_requests_reply_received",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
                 return
 
             # requests 是设备主动发给云端的上行 topic。网关和云端模拟器共用本地
             # broker 时，客户端可能收到自己发布的 requests，不能把它再路由给
             # 下行业务 handler，否则会产生错误的 services_reply。
             if msg.topic.endswith('/requests'):
+                self._trace.record(
+                    "mqtt_observed_device_request",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    extra={"routing": "skipped_self_originated_request"},
+                )
                 logger.info(
                     "Device-originated request observed, skip downstream routing: "
                     "topic=%s, method=%s, tid=%s, payload=%s",
@@ -516,6 +655,14 @@ class MQTTClient:
             # 不能再次路由到业务handler，否则会造成重复执行。
             if msg.topic.endswith('/services_reply') or msg.topic.endswith('/events_reply'):
                 result = payload.get('data', {}).get('result', -1)
+                self._trace.record(
+                    "mqtt_upstream_reply_received",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
                 logger.info(self._format_log_block("MQTT UPSTREAM REPLY", [
                     ("topic", msg.topic),
                     ("method", method),
@@ -529,6 +676,14 @@ class MQTTClient:
                 try:
                     topic_error = self._validate_downstream_topic(msg.topic, method)
                     if topic_error:
+                        self._trace.record(
+                            "mqtt_invalid_topic",
+                            direction="in",
+                            topic=msg.topic,
+                            payload=payload,
+                            elapsed_ms=int((time.perf_counter() - started) * 1000),
+                            error=topic_error,
+                        )
                         logger.warning(f"Invalid topic for method={method}: {topic_error}")
                         if payload.get('need_reply') == 1:
                             error_reply = self._build_error_reply(
@@ -542,6 +697,7 @@ class MQTTClient:
                         return
 
                     result = handler(payload)
+<<<<<<< HEAD
                     if is_downstream_command:
                         trace_command(
                             "mqtt_handler_completed",
@@ -550,6 +706,22 @@ class MQTTClient:
                             tid=payload.get("tid"),
                             result=self._reply_result(result),
                         )
+=======
+                    elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    self._trace.record(
+                        "mqtt_handler_completed",
+                        direction="in",
+                        topic=msg.topic,
+                        payload=payload,
+                        result=self._reply_result(result),
+                        elapsed_ms=elapsed_ms,
+                        extra={
+                            "reply_method": result.get('method') if isinstance(result, dict) else "",
+                            "reply_result": self._reply_result(result),
+                            "will_reply": bool(payload.get('need_reply') == 1 and result),
+                        },
+                    )
+>>>>>>> f50f405f03bde2f2c6fcccf3f07bf3b30e2be589
                     logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
                         ("method", method),
                         ("tid", payload.get('tid')),
@@ -561,6 +733,14 @@ class MQTTClient:
                     if payload.get('need_reply') == 1 and result:
                         self._publish_reply_for_downstream_topic(msg.topic, result)
                 except Exception as e:
+                    self._trace.record(
+                        "mqtt_handler_exception",
+                        direction="in",
+                        topic=msg.topic,
+                        payload=payload,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        error=str(e),
+                    )
                     logger.error(f"Handler error for {method}: {e}", exc_info=True)
                     if payload.get('need_reply') == 1:
                         error_reply = self._build_error_reply(
@@ -572,6 +752,14 @@ class MQTTClient:
                         )
                         self._publish_reply_for_downstream_topic(msg.topic, error_reply)
             else:
+                self._trace.record(
+                    "mqtt_no_handler",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    error=f"No handler registered for method: {method}",
+                )
                 logger.warning(f"No handler registered for method: {method}")
                 if payload.get('need_reply') == 1:
                     error_reply = self._build_error_reply(
@@ -584,4 +772,12 @@ class MQTTClient:
                     self._publish_reply_for_downstream_topic(msg.topic, error_reply)
 
         except Exception as e:
+            self._trace.record(
+                "mqtt_processing_error",
+                direction="in",
+                topic=getattr(msg, "topic", ""),
+                payload_bytes=payload_bytes,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                error=str(e),
+            )
             logger.error(f"Message processing error: {e}", exc_info=True)

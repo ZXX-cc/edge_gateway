@@ -130,6 +130,15 @@ logging:
   daily_files: true # 每日独立日志文件
   monthly_dirs: true # 每月独立日志目录
 
+# --- 请求追踪配置 ---
+request_trace:
+  enabled: true # 记录 MQTT 请求/回包/handler 追踪，P0 验收需要
+  dir: "./logs/request_trace" # JSONL 输出目录；会自动按 YYYY-MM 创建月份目录
+  filename_prefix: "request_trace" # 每日文件名：request_trace_YYYY-MM-DD.jsonl
+  max_memory: 5000 # 内存 ring buffer 条数
+  max_queue: 10000 # 后台写入队列长度，避免 MQTT 热路径阻塞
+  payload_max_chars: 3000 # 单条 payload 最大保留字符数，超长会截断
+
 # --- RTK/NTRIP配置 ---
 rtk:
   enabled: false # 是否启用RTK差分定位

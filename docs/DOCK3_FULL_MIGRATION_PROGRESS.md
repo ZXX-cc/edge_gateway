@@ -19,7 +19,7 @@
 | Ubuntu 纯模拟部署与基础链路 | 80% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，剩 systemd/一键化和环境固化 |
 | Dock3 P0 协议链路 | 92% | property、services、requests、status、events、DRC 控制数据、CMD 控制命令、错误码边界已通过批量和专项验证，剩旧回包噪声清理和字段精校 |
 | 客户需求相关 method/字段迁移 | 53% | properties 官方可写/只读边界、device topology、DRC 官方字段、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
-| 非阻塞、日志、容错基础 | 45% | 日志落盘、字段中文名、部分 async warning 已修复，NoSQL/MongoDB 和完整 request trace 未实现 |
+| 非阻塞、日志、容错基础 | 55% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现，待 Ubuntu 复测；NoSQL/MongoDB 和远程日志仍待迁移 |
 | 模拟器和测试工具 | 81% | 云端模拟器、organization/status/topology/properties/DRC/CMD/Wayline/P0 批量测试工具可用，P0、DRC、CMD、Wayline 工具已支持旧回包统计并通过 Ubuntu 复测，媒体模拟器仍待补 |
 
 综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 60%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
@@ -147,8 +147,8 @@ mqtt_reply_sent
 | `user_experience_improvement` | 已通过 Ubuntu 专项复测 | 只接受 `0/1/2` |
 | 非官方 `rw` 历史字段 | 已通过 Ubuntu 专项复测 | `battery_store_mode`、`alarm_state`、`drc_state`、未知属性和非法值通过 `property/set` 返回 `state.result=1`；相关动作保留 services 控制 |
 | `drc_state` | 已验证 | enter 后为 `2`，exit 后为 `0` |
-| OSD 遥测 | 部分完成 | 经度、纬度、高度、电池、姿态、GPS 已上报，字段仍需逐项对照官方属性表 |
-| Dock 状态字段 | 待迁移 | `cover_state`、`putter_state`、`charging_state` 等仍是当前模拟枚举，未完成 Dock3 枚举精校 |
+| OSD 遥测 | 已通过 Ubuntu 专项复测 | `mqtt_dock3_osd_state_test.py` 已通过，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0`；经度、纬度、高度、电池、姿态、GPS 已具备基础上报结构，字段仍需逐项对照官方属性表 |
+| Dock 状态字段 | 部分完成 | `cover_state`、`putter_state`、`drone_in_dock`、`charging_state` 已纳入 OSD/state 验收；当前仍是模拟枚举，未完成 Dock3 枚举精校 |
 
 #### 3.1.1 Batch 1 字段对照结果
 

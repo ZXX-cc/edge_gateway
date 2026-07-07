@@ -72,6 +72,28 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(osd["obstacle_state"]["0"]["distance"], 3.5)
         self.assertEqual(telemetry["estimator_status"]["flags"], 831)
 
+    def test_heartbeat_uses_vehicle_specific_mode_profile(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="HEARTBEAT", type=2, base_mode=0x80, custom_mode=9, autopilot=3),
+            telemetry,
+        )
+        osd = build_osd_data(telemetry)
+
+        self.assertEqual(telemetry["flight_mode_profile"], "copter")
+        self.assertEqual(telemetry["flight_mode"], "LAND")
+        self.assertEqual(osd["mode_code"], 9)
+        self.assertEqual(osd["gear"], 1)
+
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="HEARTBEAT", type=1, base_mode=0, custom_mode=15, autopilot=3),
+            telemetry,
+        )
+
+        self.assertEqual(telemetry["flight_mode_profile"], "plane")
+        self.assertEqual(telemetry["flight_mode"], "GUIDED")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

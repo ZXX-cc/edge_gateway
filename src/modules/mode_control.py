@@ -9,6 +9,11 @@ import time
 
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from src.mavlink.flight_modes import (
+    flight_mode_profile,
+    mode_map_for_profile,
+    parse_flight_mode,
+)
 
 
 class ModeControl(BaseModule):
@@ -33,46 +38,23 @@ class ModeControl(BaseModule):
         self.current_mode_name = None
         self.last_command_ack = None
         self.vehicle_type = "QUADPLANE"
+        self.mode_profile = "plane"
 
         # ✅ 添加防抖/稳定性检测
         self._last_raw_mode = None  # 上一次读取的原始模式
         self._stable_count = 0      # 稳定计数器
         self._STABLE_THRESHOLD = 3  # 需要连续3次相同才认为稳定
 
-        # QuadPlane完整模式映射（固定翼+四旋翼）
-        self.mode_mapping = {
-            # === 固定翼模式 ===
-            "MANUAL": 0,
-            "CIRCLE": 1,
-            "STABILIZE": 2,
-            "TRAINING": 3,
-            "ACRO": 4,
-            "FBWA": 5,
-            "FBWB": 6,
-            "CRUISE": 7,
-            "AUTOTUNE": 8,
-            "AUTO": 10,
-            "RTL": 11,
-            "LOITER": 12,
-            "TAKEOFF": 13,
-            "AVOID_ADSB": 14,
-            "GUIDED": 15,
-            "INITIALISING": 16,
+        self._set_mode_profile("plane")
 
-            # === QuadPlane四旋翼模式 ===
-            "QSTABILIZE": 17,
-            "QHOVER": 18,
-            "QLOITER": 19,
-            "QLAND": 20,
-            "QRTL": 21,
-            "QAUTOTUNE": 22,
-            "QACRO": 23,
-            "THERMAL": 24,
-            "LOITER_ALT_QLAND": 25,
-        }
-
-        # 反向映射（模式ID → 模式名）
-        self.mode_id_to_name = {v: k for k, v in self.mode_mapping.items()}
+    def _set_mode_profile(self, profile: str):
+        if profile not in {"copter", "plane"}:
+            return
+        self.mode_profile = profile
+        mode_by_id = mode_map_for_profile(profile)
+        self.mode_id_to_name = dict(mode_by_id)
+        self.mode_mapping = {name: mode_id for mode_id, name in mode_by_id.items()}
+        self.vehicle_type = profile.upper()
 
     def on_start(self):
         super().on_start()
@@ -102,6 +84,10 @@ class ModeControl(BaseModule):
         4. 只有连续3次相同 且 与当前确认模式不同时，才真正更新
         """
         raw_mode = msg.custom_mode
+        mav_type = getattr(msg, "type", None)
+        profile = flight_mode_profile(mav_type)
+        if profile != "unknown" and profile != self.mode_profile:
+            self._set_mode_profile(profile)
 
         # ✅ 稳定性检测
         if raw_mode == self._last_raw_mode:
@@ -119,9 +105,10 @@ class ModeControl(BaseModule):
                 old_mode_name = self.current_mode_name or "NONE"
 
                 self.current_mode = raw_mode
-                self.current_mode_name = self.mode_id_to_name.get(
+                self.current_mode_name = parse_flight_mode(
                     self.current_mode,
-                    f"UNKNOWN({self.current_mode})"
+                    mav_type=mav_type,
+                    profile=self.mode_profile,
                 )
 
                 # ✅ 只在真正变化时打印（格式更简洁）
@@ -182,13 +169,15 @@ class ModeControl(BaseModule):
             "mode": mode
         }
 
-        # 如果是数字，直接作为模式ID
-        if mode.isdigit():
-            modenum = int(mode)
+        mode_text = str(mode).strip()
+
+        # 如果是数字，直接作为当前 profile 的 MAVLink custom_mode
+        if mode_text.isdigit():
+            modenum = int(mode_text)
             mode_name = self.mode_id_to_name.get(modenum, f"MODE_{modenum}")
         else:
             # 转换为大写并查找
-            mode_upper = mode.upper()
+            mode_upper = mode_text.upper()
             if mode_upper not in self.mode_mapping:
                 result["message"] = (
                     f"未知模式: {mode}\n"

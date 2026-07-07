@@ -8,12 +8,18 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+if "pymavlink" not in sys.modules:
+    pymavlink = ModuleType("pymavlink")
+    pymavlink.mavutil = SimpleNamespace()
+    sys.modules["pymavlink"] = pymavlink
+    sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
 from src.modules.drone_nest_module import DroneNestModule  # noqa: E402
 

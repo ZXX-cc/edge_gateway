@@ -17,6 +17,7 @@ from typing import Optional, Callable, Dict, Any
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder, TopicBuilder
+from src.utils.request_trace import get_request_trace_recorder
 
 logger = get_logger("cloud_conn")
 
@@ -58,6 +59,7 @@ class CloudConnectionManager:
         self._request_lock = threading.Lock()
         self._request_cleaner: Optional[threading.Thread] = None
         self._request_cleaner_running = False
+        self._trace = get_request_trace_recorder()
 
     def set_status_callback(self, callback: Callable):
         """设置连接状态变更回调"""
@@ -92,6 +94,18 @@ class CloudConnectionManager:
             }
 
         self.mqtt.publish_requests(msg)
+        self._trace.record(
+            "cloud_request_pending",
+            direction="out",
+            topic=TopicBuilder.requests(self.gateway_sn),
+            method=method,
+            tid=tid,
+            bid=msg.get('bid', ''),
+            gateway=self.gateway_sn,
+            need_reply=1,
+            payload=msg,
+            extra={"timeout_s": timeout},
+        )
         logger.info(f"Request sent: method={method}, tid={tid}")
         return tid
 
@@ -110,6 +124,19 @@ class CloudConnectionManager:
         if pending:
             elapsed = time.time() - pending['timestamp']
             result = msg.get('data', {}).get('result', -1)
+            self._trace.record(
+                "cloud_request_matched_reply",
+                direction="in",
+                topic=TopicBuilder.requests_reply(self.gateway_sn),
+                method=method,
+                tid=tid,
+                bid=msg.get('bid', ''),
+                gateway=self.gateway_sn,
+                payload=msg,
+                result=result,
+                elapsed_ms=int(elapsed * 1000),
+                extra={"expected_method": pending.get('method')},
+            )
             logger.info(f"Request reply: method={method}, tid={tid}, "
                        f"result={result}, elapsed={elapsed:.2f}s")
             if pending['callback']:
@@ -120,6 +147,18 @@ class CloudConnectionManager:
         else:
             # 可能是 unsolicited reply 或超时后已清理
             result = msg.get('data', {}).get('result', -1)
+            self._trace.record(
+                "cloud_request_unexpected_reply",
+                direction="in",
+                topic=TopicBuilder.requests_reply(self.gateway_sn),
+                method=method,
+                tid=tid,
+                bid=msg.get('bid', ''),
+                gateway=self.gateway_sn,
+                payload=msg,
+                result=result,
+                error="unexpected_or_late_requests_reply",
+            )
             logger.warning(f"Unexpected/late requests_reply: method={method}, "
                           f"tid={tid}, result={result}")
 
@@ -153,7 +192,18 @@ class CloudConnectionManager:
                         if now - info['timestamp'] > info['timeout']:
                             expired.append(tid)
                     for tid in expired:
-                        del self._pending_requests[tid]
+                        info = self._pending_requests.pop(tid)
+                        self._trace.record(
+                            "cloud_request_timeout",
+                            direction="internal",
+                            topic=TopicBuilder.requests(self.gateway_sn),
+                            method=info.get('method', ''),
+                            tid=tid,
+                            gateway=self.gateway_sn,
+                            elapsed_ms=int((now - info.get('timestamp', now)) * 1000),
+                            error="request timeout",
+                            extra={"timeout_s": info.get('timeout')},
+                        )
                 if expired:
                     logger.warning(f"Expired requests cleaned: {len(expired)}")
                 time.sleep(5)

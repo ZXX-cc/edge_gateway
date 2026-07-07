@@ -13,7 +13,7 @@
   <-> MQTT osd / state / events / reply / drc/up
 ```
 
-当前不接实体设备。所有联调结果以模拟环境、DJI Demo 页面、MQTT/MAVLink 数据流和验收脚本为准。
+当前不接实体设备。所有联调结果以模拟环境、MQTT/MAVLink 数据流、验收脚本、日志、trace 和数据库记录为准。DJI Demo/Web 页面只作为内部联调参考，不作为客户交付项。
 
 ## 1.1 当前执行口径
 
@@ -40,13 +40,13 @@
 |---|---|---|
 | 人员1 | Dock3 上云协议、MQTT topic/method/payload/reply、错误码、request trace、P0/P1 上云专项验收 | MAVLink 底层连接、SITL 参数、机巢自定义 MAVLink 字段 |
 | 人员2 | MAVLink/SITL、飞控模式、Telemetry/FlightControl/Wayline、DroneNestModule、机巢 v1.3 映射、非阻塞分发 | Dock3 官方字段最终解释、Demo Docker 部署 |
-| 人员3 | Ubuntu/Docker/MQTT/Demo/Web/模拟器启动、脚本化验收、证据归档、端口和环境固化 | Dock3 字段语义、飞控和机巢业务映射最终语义 |
+| 人员3 | Ubuntu/Docker/MQTT/模拟器启动、脚本化验收、证据归档、端口和环境固化 | Dock3 字段语义、飞控和机巢业务映射最终语义、客户未要求的界面交付 |
 
 ## 3. 人员1：上云 API 与网关
 
 ### 主要目标
 
-让 Dock3 云端模拟器、DJI Demo 和网关完成可验收的双向通信，保证 P0/P1 云端协议可用。
+让 Dock3 云端模拟器和网关完成可验收的双向通信，保证 P0/P1 云端协议可用。DJI Demo 可辅助联通排查，但不作为交付目标。
 
 ### 负责内容
 
@@ -76,7 +76,7 @@
 | 云端模拟器请求样例 | 每个核心 method 至少有一个可复现 MQTT payload |
 | reply 验收规则 | 成功、失败、未知方法、超时都有明确期望 |
 | request trace 方案 | 可复盘每次 API 调用的 request、dispatch、execute、reply、error |
-| P0/P1 验收证据 | P0/P1 每个云端功能都有脚本输出、日志或 Demo 证据 |
+| P0/P1 验收证据 | P0/P1 每个云端功能都有脚本输出、MQTT 样例、日志、trace 或 DB 证据 |
 
 ### 2026-07-06 当前进展
 
@@ -155,11 +155,9 @@
 - ArduPilot SITL 启停。
 - 上云 API 模拟器部署和请求样例维护。
 - MAVLink 机巢模拟器部署。
-- Web 调试台启动和说明。
 - smoke test 工具维护：
   - `tools/ubuntu_preflight.sh`
   - `tools/mqtt_smoke_test.py`
-  - `web/`
 - P1 缺失验收脚本的工程化补齐：
   - `tools/nest_v13_protocol_test.py`
   - `tools/mqtt_dock3_media_test.py`
@@ -174,11 +172,11 @@
 
 | 交付物 | 验收标准 |
 |---|---|
-| 部署命令 | 新 Ubuntu 环境可按文档启动 broker、网关、SITL、Web 调试台 |
+| 部署命令 | 新 Ubuntu 环境可按文档启动 broker、网关、SITL 和必要模拟器 |
 | 模拟器启动脚本或说明 | 人员1/2 无需猜端口和启动顺序 |
 | smoke test | 可验证 MQTT 下发、reply、osd、state、events |
 | 故障排查说明 | 端口占用、SITL 依赖、MQTT 不通、MAVLink 无心跳有处理步骤 |
-| 全链路证据包 | 按 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 保存脚本输出、日志、MQTT 样例和 Demo 截图 |
+| 全链路证据包 | 按 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 保存脚本输出、日志、MQTT 样例、trace 和 DB 记录 |
 
 ## 6. 协作接口
 
@@ -226,7 +224,7 @@
 
 | 周期 | 人员1 | 人员2 | 人员3 |
 |---|---|---|---|
-| Day 1-7 | P0 云端协议、properties、device、organization、错误码和 trace | P0 OSD、模式映射、基础飞控控制、机巢关键状态 | P0 脚本、Demo Docker、启动顺序和证据归档 |
+| Day 1-7 | P0 云端协议、properties、device、organization、错误码和 trace | P0 OSD、模式映射、基础飞控控制、机巢关键状态 | P0 脚本、模拟器启动顺序和证据归档 |
 | Day 8-15 | P1 Wayline/DRC/一键启航云端状态和事件 | 机巢 v1.3 状态机、SITL 航点执行、起降/返航联动 | 机巢专项和一键启航 E2E 脚本 |
 | Day 16-24 | Media/Live/HMS/Log/Firmware/Config Dock3 payload 和错误码 | 负载、媒体源、云台相机基础 adapter | P1 缺失脚本、mock 服务和回归入口 |
 | Day 25-30 | P0/P1 全链路回归、P2 风险归档 | 设备侧失败原因、超时恢复和非阻塞审计 | 全链路 runbook 执行、证据包和发布说明 |

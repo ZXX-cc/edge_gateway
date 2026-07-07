@@ -568,6 +568,8 @@ class DroneNestModule(BaseModule):
                 and not result["rejections"]
             )
             if is_empty_poll_response:
+                self.last_order_response = result
+                self.last_cloud_order_response = self._build_cloud_order_response(result)
                 return
 
             trace_command(

@@ -131,7 +131,7 @@ ArduPilot SITL / 机巢模拟器
 | `operation_record` | 命令、任务、机巢动作、固件升级等操作记录 |
 | `alarm` | HMS、飞控、机巢、网关告警 |
 | `media_file` | 媒体文件、上传状态、直播关联 |
-| `request_trace` | MQTT tid/bid、method、topic、payload、reply、耗时、错误 |
+| `request_trace` | MQTT tid/bid、method、topic、payload、reply、耗时、错误；当前先以非阻塞 JSONL 落盘，后续再迁移到统一数据层 |
 | `simulator_state` | 云端模拟器、SITL、机巢模拟器状态 |
 
 迁移原则：
