@@ -4,7 +4,7 @@
 
 # --- 网关身份 ---
 gateway:
-  sn: "EDGE-GW-001" # 网关序列号
+  sn: "EDGEGW001" # 网关序列号；DJI Demo topic 匹配要求纯字母数字
   name: "EdgeGateway-01" # 网关名称
   product_type: "edge-gateway" # 产品类型
 
@@ -16,6 +16,8 @@ nanomq:
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
   keepalive: 60
+  username: ""
+  password: ""
 
   # 控制信令Topic前缀
   topic_prefix: "thing/product"
