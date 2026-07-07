@@ -151,6 +151,18 @@ class ModeControl(BaseModule):
             self.log("未连接到MAVLink设备", "ERROR")
             return False
 
+    def _get_mav_sender(self):
+        """Return the pymavlink sender object from supported connection shapes."""
+        connection = self.dispatcher.connection if self.dispatcher and self.dispatcher.connection else None
+        if not connection:
+            return None
+        if hasattr(connection, "mav"):
+            return connection.mav
+        master = getattr(connection, "master", None)
+        if master and hasattr(master, "mav"):
+            return master.mav
+        return None
+
     # ========== 模式管理 ==========
 
     def set_mode(self, mode: str) -> dict:
@@ -263,7 +275,13 @@ class ModeControl(BaseModule):
 
         self.log(f"GUIDED模式飞往: ({lat:.6f}, {lon:.6f}, {alt}m)")
 
-        self.dispatcher.connection.mav.mission_item_int_send(
+        mav = self._get_mav_sender()
+        if not mav or not hasattr(mav, "mission_item_int_send"):
+            result["message"] = "MAVLink连接不可用，无法发送GUIDED目标点"
+            self.log(result["message"], "ERROR")
+            return result
+
+        mav.mission_item_int_send(
             self.target_system,
             self.target_component,
             0,
@@ -294,7 +312,13 @@ class ModeControl(BaseModule):
 
         ignore_mask = self._build_pt_ignoremask(["X", "YAWRATE"])
 
-        self.dispatcher.connection.mav.set_position_target_local_ned_send(
+        mav = self._get_mav_sender()
+        if not mav or not hasattr(mav, "set_position_target_local_ned_send"):
+            result["message"] = "MAVLink连接不可用，无法发送GUIDED位置控制"
+            self.log(result["message"], "ERROR")
+            return result
+
+        mav.set_position_target_local_ned_send(
             0,
             self.target_system,
             self.target_component,

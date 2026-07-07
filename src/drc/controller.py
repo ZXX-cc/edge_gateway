@@ -1213,8 +1213,6 @@ class DrcController:
                         guidance_warning = mode_result.get("message", "GUIDED mode switch failed")
                         can_send_guided_target = False
                         logger.warning("takeoff_to_point GUIDED mode failed: %s", guidance_warning)
-                    else:
-                        simulated = False
                 if can_send_guided_target:
                     goto_result = self._mode_control.guided_goto(target_latitude, target_longitude, target_height)
                     if not goto_result.get("success"):
