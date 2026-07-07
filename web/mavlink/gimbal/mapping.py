@@ -30,6 +30,11 @@ GIMBAL_COMMAND_MAP: Dict[str, Dict[str, Any]] = {
         "command_id": MAV_CMD_DO_MOUNT_CONTROL,
         "fallback": "viewlink.turn_to/viewlink.move",
     },
+    "gimbal_rotate": {
+        "mavlink_command": "MAV_CMD_DO_MOUNT_CONTROL",
+        "command_id": MAV_CMD_DO_MOUNT_CONTROL,
+        "fallback": "viewlink.turn_to/viewlink.move",
+    },
     "gimbal_reset": {
         "mavlink_command": "MAV_CMD_DO_MOUNT_CONTROL",
         "command_id": MAV_CMD_DO_MOUNT_CONTROL,
@@ -73,7 +78,7 @@ def build_gimbal_command(method: str, payload: Optional[Dict[str, Any]] = None) 
 
 
 def _gimbal_command_params(method: str, data: Dict[str, Any]) -> list[float]:
-    if method == "gimbalRotate":
+    if method in ("gimbalRotate", "gimbal_rotate"):
         pitch = _clamp(float(data.get("pitch", 0.0)), -90.0, 30.0)
         roll = float(data.get("roll", 0.0))
         yaw = float(data.get("yaw", 0.0))

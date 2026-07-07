@@ -235,7 +235,10 @@ class FlightControl(BaseModule):
         if not arm_result["success"]:
             raise Exception(f"解锁失败: {arm_result['message']}")
 
-        self.log("✅ 飞机已解锁，准备起飞")
+        self.log("✅ 飞机已解锁，开始执行起飞到航线流程")
+        takeoff_result = self.one_click_takeoff_auto()
+        if not takeoff_result.get("success"):
+            raise Exception(f"起飞流程失败: {takeoff_result.get('message')}")
 
     def confirm_manual_takeoff(self, allow: bool):
         """
@@ -313,6 +316,9 @@ class FlightControl(BaseModule):
         mode_result = self.set_mode("AUTO")
         if not mode_result["success"]:
             raise Exception(f"AUTO模式切换失败: {mode_result['message']}")
+
+        if self.nest_module:
+            self.nest_module.request_takeoff()
 
         # 启动等待机巢信号
         self.auto_takeoff_state = AutoTakeoffState.WAITING_NEST_READY

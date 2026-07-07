@@ -155,6 +155,12 @@ python web/mavlink/nest/simulator.py --port 14551
 
 建议地址是 `127.0.0.1:14551`，把飞控 SITL 的 `14550` 留给 ArduPilot。
 
+如果要按甲方流程验证 TCP + 机巢自定义 dialect，使用 TCP 模拟器：
+
+```bash
+python web/mavlink/nest/tcp_simulator.py --host 127.0.0.1 --port 14551 --log-status
+```
+
 ## 接入主网关
 
 默认配置不会启用独立机巢连接。需要主网关直接连接机巢模拟器时，打开：
@@ -191,6 +197,23 @@ nest_mavlink:
 python web/mavlink/nest/simulator.py --port 14551
 ```
 
+TCP 模式配置如下：
+
+```yaml
+nest_mavlink:
+  enabled: true
+  connection:
+    type: "tcp"
+    host: "127.0.0.1"
+    port: 14551
+```
+
+对应启动 TCP 机巢模拟器：
+
+```bash
+python web/mavlink/nest/tcp_simulator.py --host 127.0.0.1 --port 14551
+```
+
 ## 文件职责
 
 | 路径 | 作用 |
@@ -203,6 +226,7 @@ python web/mavlink/nest/simulator.py --port 14551
 | `gimbal/mapping.py` | 文档第八部分云台 MAVLink 命令映射 |
 | `viewlink/mapping.py` | 文档第九部分 ViewLink SDK 调用映射 |
 | `nest/simulator.py` | 机巢/PLC 模拟端，接收 12003，发送 12004/12005 |
+| `nest/tcp_simulator.py` | TCP 版机巢/PLC 模拟端，用于验证 TCP + 自定义 dialect 连接流程 |
 
 ## 边界
 

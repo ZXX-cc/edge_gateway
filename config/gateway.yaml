@@ -56,7 +56,7 @@ mavlink:
     # udp配置示例:
     type: "udp"
     host: "127.0.0.1"
-    port: 14551 # 与主飞控 MAVLink 14550 分离，避免端口/协议冲突
+    port: 14550
 
   # 系统ID
   system_id: 1

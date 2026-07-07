@@ -2,10 +2,10 @@
 MAVLink连接管理模块
 core/connection.py
 """
-import time
 import os
 import sys
-from typing import Optional
+import time
+from typing import Optional, Set
 from pymavlink import mavutil
 from threading import Lock
 from queue import Queue
@@ -17,6 +17,20 @@ class ConnectionStatus:
     CONNECTING = 1
     CONNECTED = 2
     ERROR = 3
+
+
+def _extract_msg_id(msg) -> Optional[int]:
+    """兼容 pymavlink/生成 dialect 消息对象的 ID 提取。"""
+    try:
+        if hasattr(msg, 'get_msgId'):
+            return msg.get_msgId()
+        if hasattr(msg, 'msgid'):
+            return msg.msgid
+        if hasattr(msg, 'id'):
+            return msg.id
+    except Exception:
+        return None
+    return None
 
 
 class MAVLinkConnection:
@@ -54,6 +68,7 @@ class MAVLinkConnection:
         self._running = False
         self._receiver_thread = None
         self._message_queue = Queue(maxsize=1000)
+        self._custom_valid_message_ids: Set[int] = set()
 
     def connect(self) -> bool:
         """建立连接"""
@@ -73,6 +88,7 @@ class MAVLinkConnection:
                 import socket
                 import threading
                 from src.generated_dialect import drone_nest
+                valid_message_ids = set(self._custom_valid_message_ids)
 
                 parts = self.connection_string.replace('udp:', '').split(':')
                 host = parts[0]
@@ -91,9 +107,10 @@ class MAVLinkConnection:
                         self._sock.sendto(data, self._target)
 
                 class CustomUDPMAVLinkWrapper:
-                    def __init__(self, mav_instance, sock_obj):
+                    def __init__(self, mav_instance, sock_obj, valid_ids):
                         self.mav = mav_instance
                         self._sock = sock_obj
+                        self._valid_ids = valid_ids
                         self.target_system = 0
                         self.target_component = 0
                         self._message_queue = []
@@ -113,7 +130,11 @@ class MAVLinkConnection:
                                     try:
                                         msg = self.mav.parse_char(bytes([byte]))
                                         if msg:
-                                            self._message_queue.append(msg)
+                                            msg_id = _extract_msg_id(msg)
+                                            if msg_id in self._valid_ids:
+                                                self._message_queue.append(msg)
+                                            else:
+                                                print(f"[Connection] 丢弃非法机巢消息ID: {msg_id}")
                                     except Exception as e:
                                         error_str = str(e).lower()
                                         if 'invalid' not in error_str and 'prefix' not in error_str:
@@ -149,7 +170,7 @@ class MAVLinkConnection:
                     srcSystem=self.source_system,
                     srcComponent=self.source_component
                 )
-                self.master = CustomUDPMAVLinkWrapper(mav_instance, sock)
+                self.master = CustomUDPMAVLinkWrapper(mav_instance, sock, valid_message_ids)
 
                 print(f"[Connection] ✅ UDP自定义dialect连接已建立: {host}:{port}")
                 self.status = ConnectionStatus.CONNECTED
@@ -160,6 +181,7 @@ class MAVLinkConnection:
             if self.use_custom_dialect and self.connection_string.startswith('tcp:'):
                 import socket
                 from src.generated_dialect import drone_nest
+                valid_message_ids = set(self._custom_valid_message_ids)
 
                 # 解析连接字符串
                 parts = self.connection_string.replace('tcp:', '').split(':')
@@ -178,11 +200,12 @@ class MAVLinkConnection:
                 # 在 connect() 方法中，找到 CustomMAVLinkWrapper 类定义，替换为：
 
                 class CustomMAVLinkWrapper:
-                    def __init__(self, mav_instance, file_obj, sock_obj):
+                    def __init__(self, mav_instance, file_obj, sock_obj, valid_ids):
                         self.mav = mav_instance
                         self.file = file_obj
                         self._sock = sock_obj
                         self._sock.settimeout(1.0)
+                        self._valid_ids = valid_ids
                         self.target_system = 0
                         self.target_component = 0
 
@@ -212,7 +235,11 @@ class MAVLinkConnection:
                                     try:
                                         msg = self.mav.parse_char(bytes([byte]))
                                         if msg:
-                                            self._message_queue.append(msg)
+                                            msg_id = _extract_msg_id(msg)
+                                            if msg_id in self._valid_ids:
+                                                self._message_queue.append(msg)
+                                            else:
+                                                print(f"[Connection] 丢弃非法机巢消息ID: {msg_id}")
                                     except Exception as e:
                                         error_str = str(e).lower()
                                         if 'invalid' not in error_str and 'prefix' not in error_str:
@@ -259,7 +286,7 @@ class MAVLinkConnection:
                     srcComponent=self.source_component
                 )
 
-                self.master = CustomMAVLinkWrapper(mav_instance, file, sock)
+                self.master = CustomMAVLinkWrapper(mav_instance, file, sock, valid_message_ids)
 
                 print(f"[Connection] ✅ 使用自定义dialect包装连接")
                 self.status = ConnectionStatus.CONNECTED
@@ -329,6 +356,7 @@ class MAVLinkConnection:
             # 预加载自定义dialect模块
             import drone_nest
             print(f"[Connection] ✅ 已预加载自定义dialect: drone_nest")
+            self._custom_valid_message_ids = set(getattr(drone_nest, 'mavlink_map', {}).keys())
 
             # 验证关键方法是否存在
             # 替换第226-236行
@@ -352,6 +380,7 @@ class MAVLinkConnection:
 
                 if all_ok:
                     print(f"[Connection] ✅ 自定义消息方法已验证")
+            print(f"[Connection] ✅ 合法自定义消息ID: {sorted(self._custom_valid_message_ids)}")
             print(f"[Connection] 📦 使用自定义dialect (MAVLink 2.0)")
             return True
 

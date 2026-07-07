@@ -192,7 +192,10 @@ class NestSimulator:
         elif takeoff_land_order == 0x02:
             self.env_data["boolstate2"] &= ~(1 << BIT_TAKEOFF_IN_PROGRESS)
             self.env_data["boolstate2"] |= 1 << BIT_TAKEOFF_ABORT_PROGRESS
-        elif takeoff_land_order == 0x04:
+        elif takeoff_land_order == NEST_COMMANDS["landing-start"][1]:
+            self.env_data["boolstate2"] |= 1 << BIT_LANDING_IN_PROGRESS
+            self.env_data["boolstate2"] &= ~(1 << BIT_LANDING_ABORT_PROGRESS)
+        elif takeoff_land_order == NEST_COMMANDS["landing-abort"][1]:
             self.env_data["boolstate2"] &= ~(1 << BIT_LANDING_IN_PROGRESS)
             self.env_data["boolstate2"] |= 1 << BIT_LANDING_ABORT_PROGRESS
 

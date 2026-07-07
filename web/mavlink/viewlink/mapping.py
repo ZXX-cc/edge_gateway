@@ -48,6 +48,7 @@ VIEWLINK_METHOD_MAP: Dict[str, Dict[str, Any]] = {
     "take_photo": {"sdk_method": "take_photo", "params": ()},
     "start_recording": {"sdk_method": "start_recording", "params": ()},
     "stop_recording": {"sdk_method": "stop_recording", "params": ()},
+    "is_recording": {"sdk_method": "is_recording", "params": ()},
     "set_record_mode": {"sdk_method": "set_record_mode", "params": ("mode",)},
 }
 

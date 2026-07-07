@@ -28,6 +28,7 @@ TELEMETRY_DEFAULTS: Dict[str, Any] = {
     "altitudeAGL": 0.0,
     "terrainAltitude": 0.0,
     "climbRate": 0.0,
+    "course": 0.0,
     "windSpeed": 0.0,
     "windDirection": 0.0,
     "voltage": 0.0,
@@ -35,6 +36,16 @@ TELEMETRY_DEFAULTS: Dict[str, Any] = {
     "batteryRemaining": 0,
     "satelliteNumber": 0,
     "gps_fixed": 0,
+    "gps_eph": 0,
+    "gps_epv": 0,
+    "gps_signal_level": 0,
+    "rtk_flag": 0,
+    "rtkNumber": 0,
+    "gimbal_pitch": 0.0,
+    "gimbal_roll": 0.0,
+    "gimbal_yaw": 0.0,
+    "obstacle_state": {},
+    "estimator_status": {},
     "armed": False,
     "flight_mode": "UNKNOWN",
     "mav_type": None,
@@ -197,6 +208,8 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         data["airspeed"] = getattr(msg, "airspeed")
         data["groundSpeed"] = getattr(msg, "groundspeed")
         data["climbRate"] = getattr(msg, "climb")
+        if hasattr(msg, "heading"):
+            data["course"] = getattr(msg, "heading")
         updated = True
     elif msg_name == "WIND":
         if hasattr(msg, "speed"):
@@ -227,6 +240,27 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             updated = True
         if hasattr(msg, "fix_type"):
             data["gps_fixed"] = 1 if getattr(msg, "fix_type") >= 3 else 0
+            updated = True
+        if hasattr(msg, "eph"):
+            data["gps_eph"] = getattr(msg, "eph")
+            data["gps_signal_level"] = gps_signal_level_from_eph(getattr(msg, "eph"), data.get("gps_fixed", 0))
+            updated = True
+        if hasattr(msg, "epv"):
+            data["gps_epv"] = getattr(msg, "epv")
+            updated = True
+    elif msg_name == "GPS2_RAW":
+        if hasattr(msg, "satellites_visible"):
+            data["rtkNumber"] = getattr(msg, "satellites_visible")
+            updated = True
+        if hasattr(msg, "fix_type"):
+            data["rtk_flag"] = 1 if getattr(msg, "fix_type") >= 5 else 0
+            updated = True
+    elif msg_name == "GPS_RTK":
+        if hasattr(msg, "baseline_coords_type"):
+            data["rtk_flag"] = 1 if getattr(msg, "baseline_coords_type") else 0
+            updated = True
+        if hasattr(msg, "satellites_visible"):
+            data["rtkNumber"] = getattr(msg, "satellites_visible")
             updated = True
     elif msg_name == "HEARTBEAT":
         base_mode = getattr(msg, "base_mode", 0)
@@ -272,6 +306,44 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         if battery_remaining != -1:
             data["batteryRemaining"] = battery_remaining
             updated = True
+    elif msg_name == "GIMBAL_DEVICE_ATTITUDE_STATUS":
+        if hasattr(msg, "q"):
+            pitch, roll, yaw = _quaternion_to_euler_degrees(getattr(msg, "q"))
+            data["gimbal_pitch"] = pitch
+            data["gimbal_roll"] = roll
+            data["gimbal_yaw"] = yaw
+            updated = True
+    elif msg_name == "DISTANCE_SENSOR":
+        obstacle = dict(data.get("obstacle_state") or {})
+        orientation = getattr(msg, "orientation", 0)
+        distance_cm = getattr(msg, "current_distance", 0)
+        obstacle[str(orientation)] = {
+            "distance": distance_cm / 100.0,
+            "min_distance": getattr(msg, "min_distance", 0) / 100.0,
+            "max_distance": getattr(msg, "max_distance", 0) / 100.0,
+        }
+        data["obstacle_state"] = obstacle
+        updated = True
+    elif msg_name == "OBSTACLE_DISTANCE":
+        distances = getattr(msg, "distances", [])
+        valid = [value / 100.0 for value in distances if value and value != 65535]
+        data["obstacle_state"] = {
+            "min_distance": min(valid) if valid else None,
+            "distances": valid,
+            "increment": getattr(msg, "increment", 0),
+            "angle_offset": getattr(msg, "angle_offset", 0.0),
+        }
+        updated = True
+    elif msg_name == "EKF_STATUS_REPORT":
+        data["estimator_status"] = {
+            "flags": getattr(msg, "flags", 0),
+            "velocity_variance": getattr(msg, "velocity_variance", 0.0),
+            "pos_horiz_variance": getattr(msg, "pos_horiz_variance", 0.0),
+            "pos_vert_variance": getattr(msg, "pos_vert_variance", 0.0),
+            "compass_variance": getattr(msg, "compass_variance", 0.0),
+            "terrain_alt_variance": getattr(msg, "terrain_alt_variance", 0.0),
+        }
+        updated = True
 
     if updated:
         _fill_altitude_agl(data)
@@ -293,6 +365,7 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         "altitude": telemetry.get("altitude", 0.0),
         "horizontal_speed": telemetry.get("groundSpeed", 0.0),
         "vertical_speed": telemetry.get("climbRate", 0.0),
+        "course": telemetry.get("course", 0.0),
         "attitude_pitch": telemetry.get("pitch", 0.0),
         "attitude_roll": telemetry.get("roll", 0.0),
         "attitude_head": telemetry.get("yaw", 0.0),
@@ -303,8 +376,16 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         "position_state": {
             "gps_number": telemetry.get("satelliteNumber", 0),
             "is_fixed": telemetry.get("gps_fixed", 0),
+            "quality": telemetry.get("gps_signal_level", 0),
+            "rtk_number": telemetry.get("rtkNumber", 0),
+            "rtk_flag": telemetry.get("rtk_flag", 0),
         },
         "wind_speed": telemetry.get("windSpeed", 0.0),
+        "wind_direction": telemetry.get("windDirection", 0.0),
+        "gimbal_pitch": telemetry.get("gimbal_pitch", 0.0),
+        "gimbal_roll": telemetry.get("gimbal_roll", 0.0),
+        "gimbal_yaw": telemetry.get("gimbal_yaw", 0.0),
+        "obstacle_state": telemetry.get("obstacle_state", {}),
         "mode_code": mode_to_dji_code(telemetry.get("flight_mode", "UNKNOWN")),
         "gear": 1 if telemetry.get("armed", False) else 0,
         "flight_time": telemetry.get("flight_time", 0),
@@ -340,7 +421,10 @@ def build_dock3_properties_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str
         "position_state": {
             "is_calibration": 1 if gps_fixed else 0,
             "is_fixed": gps_fixed_to_dock3_state(gps_fixed),
-            "quality": _gps_quality_from_satellites(telemetry.get("satelliteNumber", 0), gps_fixed),
+            "quality": telemetry.get("gps_signal_level") or _gps_quality_from_satellites(
+                telemetry.get("satelliteNumber", 0),
+                gps_fixed,
+            ),
             "gps_number": telemetry.get("satelliteNumber", 0),
             "rtk_number": telemetry.get("rtkNumber", 0),
         },
@@ -363,6 +447,44 @@ def _fill_altitude_agl(data: Dict[str, Any]) -> None:
     terrain = data.get("terrainAltitude", 0.0)
     if altitude > 0 and terrain > 0:
         data["altitudeAGL"] = altitude - terrain
+
+
+def gps_signal_level_from_eph(eph: int, gps_fixed: int) -> int:
+    """把 GPS eph(cm) 粗略映射为 1-5 档信号等级。"""
+    if not gps_fixed or not eph:
+        return 0
+    if eph <= 50:
+        return 5
+    if eph <= 100:
+        return 4
+    if eph <= 200:
+        return 3
+    if eph <= 500:
+        return 2
+    return 1
+
+
+def _quaternion_to_euler_degrees(q: Iterable[float]) -> tuple[float, float, float]:
+    values = list(q)
+    if len(values) < 4:
+        return 0.0, 0.0, 0.0
+
+    w, x, y, z = values[:4]
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2 * (w * y - z * x)
+    if abs(sinp) >= 1:
+        pitch = math.copysign(math.pi / 2, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return math.degrees(pitch), math.degrees(roll), math.degrees(yaw) % 360
 
 
 def _gps_quality_from_satellites(satellites: int, gps_fixed: int) -> int:

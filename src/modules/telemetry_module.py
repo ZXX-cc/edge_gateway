@@ -6,6 +6,7 @@ import time
 from typing import Optional, Dict, Any
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from web.mavlink.telemetry.mapping import apply_mavlink_message, new_telemetry_state
 
 class TelemetryModule(BaseModule):
     """
@@ -28,29 +29,8 @@ class TelemetryModule(BaseModule):
 
         self.mode = mode  # 'real' 或 'simulated'
 
-        # ✅ 遥测数据状态（增加经纬度字段）
-        self.telemetry_data = {
-            "latitude": 0.0,           # ✅ 新增：纬度
-            "longitude": 0.0,          # ✅ 新增：经度
-            "airspeed": 0.0,
-            "roll": 0.0,
-            "pitch": 0.0,
-            "yaw": 0.0,
-            "groundSpeed": 0.0,
-            "altitude": 0.0,
-            "altitudeRelative": 0.0,      # ✅ 新增：相对起飞点高度
-            "altitudeAGL": 0.0,           # ✅ 新增：对地高度（AGL）
-            "terrainAltitude": 0.0,       # ✅ 新增：地形海拔高度
-            "climbRate": 0.0,
-            "windSpeed": 0.0,
-            # ⭐ 新增：电压数据
-            "voltage": 0.0,  # 电池电压（V）
-            "current": 0.0,  # 电流（A）
-            "batteryRemaining": 0,  # 剩余电量（%）
-            "connection_status": "disconnected",
-            "data_mode": mode,
-            "timestamp": 0.0
-        }
+        self.telemetry_data = new_telemetry_state()
+        self.telemetry_data["data_mode"] = mode
 
         # 模拟数据生成器
         self.sim_time = 0.0
@@ -80,162 +60,17 @@ class TelemetryModule(BaseModule):
             return
 
         msg = message.msg
-        msg_type = message.msg_type
-        is_updated = False
+        if not hasattr(msg, "get_type") and not hasattr(msg, "msg_type") and not hasattr(msg, "_msg_type"):
+            try:
+                setattr(msg, "msg_type", message.msg_type)
+            except Exception:
+                return
 
-        # 解析姿态数据
-        if msg_type == "ATTITUDE":
-            self.telemetry_data["roll"] = math.degrees(msg.roll)
-            self.telemetry_data["pitch"] = math.degrees(msg.pitch)
-            self.telemetry_data["yaw"] = math.degrees(msg.yaw) % 360  # 转换为0-360度
-            is_updated = True
-
-        # 解析飞行数据
-        elif msg_type == "VFR_HUD":
-            self.telemetry_data["airspeed"] = msg.airspeed
-            self.telemetry_data["groundSpeed"] = msg.groundspeed
-            self.telemetry_data["climbRate"] = msg.climb
-            is_updated = True
-
-        # 解析风速数据
-        elif msg_type == "WIND":
-            self.telemetry_data["windSpeed"] = msg.speed
-            is_updated = True
-
-        # ✅ 新增：解析全球位置数据（增强版）
-        elif msg_type == "GLOBAL_POSITION_INT":
-            # 经纬度（单位：度 * 1e7）
-            if hasattr(msg, 'lat'):
-                self.telemetry_data["latitude"] = msg.lat / 1e7
-                is_updated = True
-
-            if hasattr(msg, 'lon'):
-                self.telemetry_data["longitude"] = msg.lon / 1e7
-                is_updated = True
-
-            # ✅ 海拔高度（单位：毫米）
-            if hasattr(msg, 'alt'):
-                self.telemetry_data["altitude"] = msg.alt / 1000.0
-                # print(f'altitude = {self.telemetry_data["altitude"]}')
-                is_updated = True
-
-            # ✅ 相对起飞点高度（单位：毫米）
-            if hasattr(msg, 'relative_alt'):
-                self.telemetry_data["altitudeRelative"] = msg.relative_alt / 1000.0
-                # print(f'altitudeRelative = {self.telemetry_data["altitudeRelative"]}')
-                is_updated = True
-
-            # ✅ 航向（单位：厘度）
-            if hasattr(msg, 'hdg'):
-                self.telemetry_data["yaw"] = msg.hdg / 100.0
-                is_updated = True
-
-        # ✅ 新增：解析GPS原始数据
-        elif msg_type == "GPS_RAW_INT":
-            if hasattr(msg, 'satellites_visible'):
-                self.telemetry_data["satelliteNumber"] = msg.satellites_visible
-                is_updated = True
-
-            if hasattr(msg, 'fix_type'):
-                self.telemetry_data["gps_fixed"] = 1 if msg.fix_type >= 3 else 0
-                is_updated = True
-
-        # ✅ 新增：解析心跳数据（飞行模式、上锁状态）
-        elif msg_type == "HEARTBEAT":
-            base_mode = msg.base_mode
-            custom_mode = msg.custom_mode
-
-            # 解析上锁状态
-            armed = bool(base_mode & 0x80) if base_mode else False
-            self.telemetry_data["armed"] = armed
-            is_updated = True
-
-            # 解析飞行模式
-            flight_mode = self._parse_flight_mode(custom_mode)
-            self.telemetry_data["flight_mode"] = flight_mode
-            is_updated = True
-
-        # ✅ 新增：解析地形报告数据
-        elif msg_type == "TERRAIN_REPORT":
-            # 地形海拔高度（单位：米）
-            if hasattr(msg, 'terrain_height'):
-                self.telemetry_data["terrainAltitude"] = msg.terrain_height
-                # print(f'terrainAltitude = {self.telemetry_data["terrainAltitude"]}')
-                is_updated = True
-
-            # 对地高度（单位：米）
-            if hasattr(msg, 'current_height'):
-                self.telemetry_data["altitudeAGL"] = msg.current_height
-                # print(f'altitudeAGL = {self.telemetry_data["altitudeAGL"]}')
-                is_updated = True
-
-        # ⭐ 新增：解析电池状态数据
-        elif msg_type == "SYS_STATUS":
-            # 电池电压（单位：毫伏 -> 伏特）
-            if hasattr(msg, 'voltage_battery') and msg.voltage_battery != 65535:
-                self.telemetry_data["voltage"] = round(msg.voltage_battery / 1000.0, 2)
-                is_updated = True
-
-            # 电流（单位：厘安培 -> 安培，-1表示不支持）
-            if hasattr(msg, 'current_battery') and msg.current_battery != -1:
-                self.telemetry_data["current"] = round(msg.current_battery / 100.0, 2)
-                is_updated = True
-
-            # 剩余电量（单位：%，-1表示不支持）
-            if hasattr(msg, 'battery_remaining') and msg.battery_remaining != -1:
-                self.telemetry_data["batteryRemaining"] = msg.battery_remaining
-                is_updated = True
-
-            # # ✅ 调试日志
-            # if is_updated:
-            #     print(f"[SYS_STATUS] 电压: {self.telemetry_data['voltage']:.2f}V, "
-            #           f"电流: {self.telemetry_data['current']:.2f}A, "
-            #           f"电量: {self.telemetry_data['batteryRemaining']}%")
-
-        # ⭐ 备选：解析更详细的电池信息（BATTERY_STATUS）
-        elif msg_type == "BATTERY_STATUS":
-            # ✅ 修复：正确计算总电压（所有有效电芯电压之和）
-            if hasattr(msg, 'voltages') and msg.voltages:
-                # 过滤无效电压（65535 表示未连接的电芯）
-                valid_voltages = [v for v in msg.voltages if v != 65535 and v > 0]
-
-                if valid_voltages:
-                    # 总电压 = 所有有效电芯电压之和（单位：mV -> V）
-                    total_voltage = sum(valid_voltages) / 1000.0
-                    self.telemetry_data["voltage"] = round(total_voltage, 2)
-                    is_updated = True
-
-                    # ✅ 调试日志（可选，验证数据）
-                    # print(f"[BATTERY_STATUS] 电芯电压: {valid_voltages} mV, 总电压: {total_voltage:.2f}V")
-
-            # 电流（单位：厘安培 -> 安培）
-            if hasattr(msg, 'current_battery') and msg.current_battery != -1:
-                self.telemetry_data["current"] = round(msg.current_battery / 100.0, 2)
-                is_updated = True
-
-            # 剩余电量（%）
-            if hasattr(msg, 'battery_remaining') and msg.battery_remaining != -1:
-                self.telemetry_data["batteryRemaining"] = msg.battery_remaining
-                is_updated = True
-
-            # # ✅ 综合调试日志
-            # if is_updated:
-            #     print(f"[BATTERY] 电压: {self.telemetry_data['voltage']:.2f}V, "
-            #           f"电流: {self.telemetry_data['current']:.2f}A, "
-            #           f"电量: {self.telemetry_data['batteryRemaining']}%")
-
-        # ✅ 如果没有地形数据，用海拔高度和地形高度计算对地高度
-        if is_updated and self.telemetry_data["altitudeAGL"] == 0.0:
-            altitude = self.telemetry_data["altitude"]
-            terrain = self.telemetry_data["terrainAltitude"]
-            if altitude > 0 and terrain > 0:
-                self.telemetry_data["altitudeAGL"] = altitude - terrain
+        previous_timestamp = self.telemetry_data.get("timestamp", 0.0)
+        apply_mavlink_message(msg, self.telemetry_data)
+        is_updated = self.telemetry_data.get("timestamp", 0.0) != previous_timestamp
 
         if is_updated:
-            self.telemetry_data["connection_status"] = "connected"
-            self.telemetry_data["data_mode"] = "real"
-            self.telemetry_data["timestamp"] = time.time()
-
             # 节流控制推送
             current_time = time.time()
             if current_time - self.last_push_time >= self.push_interval:

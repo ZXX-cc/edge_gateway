@@ -822,6 +822,7 @@ class EdgeGateway:
         # ---- 云台控制API (Gimbal Control) ----
         self.router.register_batch({
             'gimbalRotate': self.gimbal.handle_gimbal_rotate,
+            'gimbal_rotate': self.gimbal.handle_gimbal_rotate,
             'camera_look_at': self.gimbal.handle_camera_look_at,
             'set_gimbal_mode': self.gimbal.handle_set_gimbal_mode,
             'gimbal_reset': self.gimbal.handle_gimbal_reset,
@@ -847,6 +848,7 @@ class EdgeGateway:
             'viewlink_take_photo': self.gimbal.handle_viewlink_service,
             'viewlink_start_recording': self.gimbal.handle_viewlink_service,
             'viewlink_stop_recording': self.gimbal.handle_viewlink_service,
+            'viewlink_is_recording': self.gimbal.handle_viewlink_service,
             'viewlink_set_record_mode': self.gimbal.handle_viewlink_service,
         }, category='payload')
 

@@ -673,6 +673,10 @@ class DroneNestModule(BaseModule):
         """终止起飞"""
         self.send_gcs_command(GCSCommand.TAKEOFF_ABORT)
 
+    def request_landing(self):
+        """请求降落"""
+        self.send_gcs_command(GCSCommand.LANDING_START)
+
     def abort_landing(self):
         """终止降落"""
         self.send_gcs_command(GCSCommand.LANDING_ABORT)

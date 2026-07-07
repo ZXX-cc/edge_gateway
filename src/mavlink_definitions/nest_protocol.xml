@@ -6,7 +6,7 @@
         <message id="12003" name="DRONE_NEST_COMMAND">
             <description>Command sent to drone nest.</description>
             <field type="uint16_t" name="ordinary_order">Ordinary order (e.g. door control)</field>
-            <field type="uint8_t" name="takeoff_land_order">Auto takeoff and land order</field>
+            <field type="uint8_t" name="takeoff_land_order">Auto takeoff and land order: 0x01 takeoff start, 0x02 takeoff abort, 0x03 landing start, 0x04 landing abort</field>
         </message>
 
         <!-- 消息 ID 12004: 机巢状态反馈 -->

@@ -23,6 +23,7 @@ from src.device.nest_property_mapper import (  # noqa: E402
     map_nest_to_cloud_properties,
     map_rainfall,
 )
+from web.mavlink.nest.property_mapping import response_to_nest_state  # noqa: E402
 
 
 def build_nest_data(**overrides: Any) -> dict[str, Any]:
@@ -99,6 +100,7 @@ class NestPropertyMapperFlowTest(unittest.TestCase):
                 "working_current": 500.0,
                 "emergency_stop_state": 0,
                 "charging_state": 1,
+                "drone_charge_state": {"state": 1},
                 "cover_state": 1,
                 "putter_state": 0,
                 "supplement_light_state": 1,
@@ -165,7 +167,49 @@ class NestPropertyMapperFlowTest(unittest.TestCase):
             },
         )
 
-        self._step("测试步骤4：Dock 状态快照字段过滤")
+        self._step("测试步骤4：DRONE_NEST_RESPONSE 位域展开")
+        response_state = response_to_nest_state(
+            type(
+                "NestResponse",
+                (),
+                {
+                    "ac_temp": 250,
+                    "nest_temperature": 260,
+                    "env_temperature": 240,
+                    "wind_direction": 1800,
+                    "wind_speed": 30,
+                    "atmospheric_pressure": 1013,
+                    "rainfall": 30,
+                    "charge_volt": 2600,
+                    "charge_current": 50,
+                    "error_code": 0,
+                    "boolstate1": (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 6),
+                    "boolstate2": (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5),
+                    "clamp_state": 2,
+                    "gate_state": 1,
+                    "landing_light_state": 1,
+                },
+            )()
+        )
+        self._check_mapping(
+            "心跳、充电、起飞流程、终止流程、紧急降落、允许起飞状态",
+            response_state,
+            {
+                "nest_heartbeat": True,
+                "drone_heartbeat": True,
+                "plc_heartbeat": True,
+                "charging_state": True,
+                "ready_state": True,
+                "takeoff_in_progress": True,
+                "landing_in_progress": False,
+                "takeoff_abort_progress": True,
+                "landing_abort_progress": False,
+                "emergency_landing": True,
+                "takeoff_allowed": True,
+            },
+        )
+
+        self._step("测试步骤5：Dock 状态快照字段过滤")
         dock_updates = filter_dock_status_fields(
             {
                 "cover_state": 1,

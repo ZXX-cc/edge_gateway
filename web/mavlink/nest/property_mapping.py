@@ -13,9 +13,20 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from .protocol import (
+    BIT_ALLOW_TAKEOFF,
     BIT_CHARGING,
+    BIT_CALIBRATE,
     BIT_DRONE_HEARTBEAT,
+    BIT_EMERGENCY_LANDING,
     BIT_ESTOP,
+    BIT_INIT,
+    BIT_LANDING_ABORT_PROGRESS,
+    BIT_LANDING_IN_PROGRESS,
+    BIT_NEST_HEARTBEAT,
+    BIT_PLC_HEARTBEAT,
+    BIT_PLC_READY,
+    BIT_TAKEOFF_ABORT_PROGRESS,
+    BIT_TAKEOFF_IN_PROGRESS,
 )
 
 
@@ -38,9 +49,20 @@ def response_to_nest_state(msg: Any) -> Dict[str, Any]:
         "error_code": getattr(msg, "error_code", 0),
         "boolstate1": boolstate1,
         "boolstate2": boolstate2,
+        "nest_heartbeat": _bit(boolstate1, BIT_NEST_HEARTBEAT),
         "estop_state": _bit(boolstate1, BIT_ESTOP),
         "charging_state": _bit(boolstate1, BIT_CHARGING),
         "drone_heartbeat": _bit(boolstate1, BIT_DRONE_HEARTBEAT),
+        "plc_heartbeat": _bit(boolstate1, BIT_PLC_HEARTBEAT),
+        "calibrate_state": _bit(boolstate1, BIT_CALIBRATE),
+        "ready_state": _bit(boolstate1, BIT_PLC_READY),
+        "init_state": _bit(boolstate1, BIT_INIT),
+        "takeoff_in_progress": _bit(boolstate2, BIT_TAKEOFF_IN_PROGRESS),
+        "landing_in_progress": _bit(boolstate2, BIT_LANDING_IN_PROGRESS),
+        "takeoff_abort_progress": _bit(boolstate2, BIT_TAKEOFF_ABORT_PROGRESS),
+        "landing_abort_progress": _bit(boolstate2, BIT_LANDING_ABORT_PROGRESS),
+        "emergency_landing": _bit(boolstate2, BIT_EMERGENCY_LANDING),
+        "takeoff_allowed": _bit(boolstate2, BIT_ALLOW_TAKEOFF),
         "clamp_state": getattr(msg, "clamp_state", 0),
         "gate_state": getattr(msg, "gate_state", 0),
         "landing_light_state": getattr(msg, "landing_light_state", 0),
@@ -59,7 +81,9 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
     if "clamp_state" in nest_state:
         properties["putter_state"] = map_putter_state(nest_state["clamp_state"])
     if "charging_state" in nest_state:
-        properties["drone_charge_state"] = {"state": 1 if nest_state["charging_state"] else 0}
+        charge_state = 1 if nest_state["charging_state"] else 0
+        properties["charging_state"] = charge_state
+        properties["drone_charge_state"] = {"state": charge_state}
         if "batteryRemaining" in nest_state:
             properties["drone_charge_state"]["capacity_percent"] = nest_state["batteryRemaining"]
     if "rainfall" in nest_state:
@@ -68,6 +92,7 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
         properties["environment_temperature"] = nest_state["env_temperature"]
     if "nest_temperature" in nest_state:
         properties["temperature"] = nest_state["nest_temperature"]
+        properties["nest_temperature"] = nest_state["nest_temperature"]
     if "humidity" in nest_state:
         properties["humidity"] = nest_state["humidity"]
     if "wind_speed" in nest_state:
@@ -76,6 +101,8 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
         properties["working_voltage"] = int(nest_state["charge_volt"] * 1000)
     if "charge_current" in nest_state:
         properties["working_current"] = nest_state["charge_current"] * 1000
+    if "electric_supply_voltage" in nest_state:
+        properties["electric_supply_voltage"] = nest_state["electric_supply_voltage"]
     if "estop_state" in nest_state:
         properties["emergency_stop_state"] = 1 if nest_state["estop_state"] else 0
     if "landing_light_state" in nest_state:

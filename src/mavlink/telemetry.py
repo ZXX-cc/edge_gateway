@@ -193,6 +193,7 @@ class TelemetryProcessor:
         climb_rate = data.get('climbRate', 0.0)
         osd['horizontal_speed'] = ground_speed
         osd['vertical_speed'] = climb_rate
+        osd['course'] = data.get('course', 0.0)
 
         # 姿态
         osd['attitude_pitch'] = data.get('pitch', 0.0)
@@ -215,10 +216,20 @@ class TelemetryProcessor:
         osd['position_state'] = {
             'gps_number': data.get('satelliteNumber', 0),
             'is_fixed': data.get('gps_fixed', 0),
+            'quality': data.get('gps_signal_level', 0),
+            'rtk_number': data.get('rtkNumber', 0),
+            'rtk_flag': data.get('rtk_flag', 0),
         }
 
         # 风速
         osd['wind_speed'] = data.get('windSpeed', 0.0)
+        osd['wind_direction'] = data.get('windDirection', 0.0)
+
+        # 负载/安全感知
+        osd['gimbal_pitch'] = data.get('gimbal_pitch', 0.0)
+        osd['gimbal_roll'] = data.get('gimbal_roll', 0.0)
+        osd['gimbal_yaw'] = data.get('gimbal_yaw', 0.0)
+        osd['obstacle_state'] = data.get('obstacle_state', {})
 
         # 飞行模式和状态
         flight_mode = data.get('flight_mode', 'UNKNOWN')

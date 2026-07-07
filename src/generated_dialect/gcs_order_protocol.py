@@ -17,6 +17,7 @@ class GCSCommand(IntEnum):
     # 起飞/降落命令 (takeoff_land_order - uint8_t)
     TAKEOFF_START = 0x01  # 起飞命令
     TAKEOFF_ABORT = 0x02  # 起飞终止
+    LANDING_START = 0x03  # 降落命令
     LANDING_ABORT = 0x04  # 降落终止
 
     # 普通命令 (ordinary_order - uint16_t)
@@ -154,7 +155,12 @@ class GCSOrderCodec:
         takeoff_land_order = 0
 
         for cmd in commands:
-            if cmd in [GCSCommand.TAKEOFF_START, GCSCommand.TAKEOFF_ABORT, GCSCommand.LANDING_ABORT]:
+            if cmd in [
+                GCSCommand.TAKEOFF_START,
+                GCSCommand.TAKEOFF_ABORT,
+                GCSCommand.LANDING_START,
+                GCSCommand.LANDING_ABORT,
+            ]:
                 takeoff_land_order = cmd.value
             else:
                 ordinary_order = cmd.value
