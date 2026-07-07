@@ -52,6 +52,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_properties_test.py` | properties 专项 | 可写/只读属性、值域 |
 | `tools/mqtt_dock3_device_test.py` | device topology 专项 | `update_topo`、在线/离线拓扑 |
 | `tools/mqtt_dock3_drc_test.py` | DRC 专项 | enter/exit、杆量、错误值域 |
+| `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
@@ -182,9 +183,11 @@ source .venv/bin/activate
 
 python tools/mqtt_dock3_p0_batch_test.py --timeout 12
 python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
-python tools/mqtt_dock3_device_test.py --timeout 12
-python tools/mqtt_organization_test.py --action full --timeout 12
+python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale
+python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale
+python tools/mqtt_organization_test.py --config config/gateway.yaml --action full --organization-id org_sim_001 --sub-device-json '{"sn":"DRONESIM001","domain":"0","type":91,"sub_type":0,"index":"A","device_secret":"drone-secret","nonce":"drone-nonce","thing_version":"1.1.2","online":true,"paired":true}' --expect-organization-name 模拟组织 --expect-event device_binding --expect-event update_topo --expect-bound --publish-events --expect-status-reply --expect-topo-sub-device-count 1 --expect-topo-sub-device-sn DRONESIM001 --validate-topo-schema --verify-timeout 8 --timeout 20
 python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
+python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 ```
@@ -195,9 +198,11 @@ P0 通过标准：
 |---|---|
 | P0 批量 | 输出 `dock3 p0 batch test ok` |
 | Properties | 输出 `dock3 properties test ok` |
+| OSD/State | 输出 `dock3 osd/state test ok`，且 `invalid=0` |
 | Device | 输出 `dock3 device topology test ok` |
 | Organization | 输出 `organization request test ok` |
 | DRC | 输出 `dock3 drc test ok` |
+| DRC 批量 | 输出 `drc batch test ok`，且 `ignored_total=0` |
 | CMD | 输出 `dock3 cmd test ok` |
 | Wayline | 输出 `dock3 wayline test ok` |
 | 错误码 | 对外不出现内部 `-1/-2/-3` |
@@ -283,9 +288,11 @@ SN:
 P0:
 - p0_batch:
 - properties:
+- osd_state:
 - device:
 - organization:
 - drc:
+- drc_batch:
 - cmd:
 - wayline:
 
