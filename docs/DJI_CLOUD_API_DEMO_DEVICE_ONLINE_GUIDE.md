@@ -12,13 +12,15 @@
 - MySQL `manage_device` 中设备已绑定到 workspace。
 - 网关发布标准包装格式的 `thing/product/{sn}/osd`。
 - 网关同时发布机场 `EDGEGW001/osd` 和子设备 `DRONESIM001/osd`。
+- `EDGEGW001/osd` 必须是 Dock3 机场物模型结构，不能使用飞行器遥测结构。
+- `DRONESIM001/osd` 才是飞行器遥测结构。
 - 旧模拟器没有继续向同一个 MQTT broker 注入旧 SN 数据。
 
 已验证成功的设备：
 
 | 设备 | SN | Demo 显示 | 关键 Topic |
 |---|---|---|---|
-| 机场/网关 | `EDGEGW001` | DJI Dock2 | `thing/product/EDGEGW001/osd` |
+| 机场/网关 | `EDGEGW001` | DJI Dock2 | `thing/product/EDGEGW001/osd`，Dock3 机场属性 |
 | 飞行器 | `DRONESIM001` | M3D | `thing/product/DRONESIM001/osd` |
 
 ## 前置条件
@@ -180,7 +182,29 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t 'thing/product/EDGEGW001/osd' -v
 mosquitto_sub -h 127.0.0.1 -p 1883 -t 'thing/product/DRONESIM001/osd' -v
 ```
 
-两条都应该持续输出，并且 payload 应为标准包装格式：
+两条都应该持续输出，并且 payload 应为标准包装格式。
+
+`EDGEGW001/osd` 是 Dock3 机场属性结构，示例：
+
+```json
+{
+  "tid": "...",
+  "bid": "...",
+  "timestamp": 1783407689785,
+  "gateway": "EDGEGW001",
+  "data": {
+    "mode_code": {"value": 0},
+    "cover_state": {"value": 0},
+    "putter_state": {"value": 0},
+    "drone_in_dock": {"value": 1},
+    "network_state": {"value": {"type": 1, "quality": 5, "rate": 0.0}},
+    "drone_charge_state": {"value": {"capacity_percent": 100, "state": 0}},
+    "maintain_status": {"value": {"maintain_status_array": []}}
+  }
+}
+```
+
+`DRONESIM001/osd` 是飞行器遥测结构，示例：
 
 ```json
 {
@@ -190,7 +214,10 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t 'thing/product/DRONESIM001/osd' -v
   "gateway": "EDGEGW001",
   "data": {
     "latitude": 0.0,
-    "longitude": 0.0
+    "longitude": 0.0,
+    "height": 0.0,
+    "battery": {"capacity_percent": 0, "voltage": 0},
+    "position_state": {"gps_number": 0, "is_fixed": 0, "quality": 0}
   }
 }
 ```
@@ -229,7 +256,7 @@ http://192.168.2.188:8082
 - 机场状态为 `Idle` 或在线状态。
 - 飞行器不再是 `Disconnected`。
 
-如果页面仍未刷新，先刷新浏览器页面；如果仍失败，继续看后端日志和数据库绑定状态。
+如果页面仍未刷新，先刷新浏览器页面；如果仍失败，继续看后端日志和数据库绑定状态。若页面按钮提示机场状态不支持，优先检查 `EDGEGW001/osd` 是否为 Dock3 机场属性结构，而不是飞行器遥测结构。
 
 ## 常见问题
 

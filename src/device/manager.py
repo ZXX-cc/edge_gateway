@@ -658,6 +658,76 @@ class DeviceManager:
         import copy
         return copy.deepcopy(self._properties)
 
+    def build_dock3_dock_osd(self, wrap_value: bool = True) -> Dict[str, Any]:
+        """
+        构造 Dock3 机场 OSD。
+
+        DJI Demo 页面按机场物模型判断舱盖、充电、作业模式等状态，网关
+        SN 的 OSD 不能使用飞行器遥测结构。默认包装成 ``{"value": ...}``
+        以兼容 DJI Cloud API Demo 的 OSD 解析和页面状态机。
+        """
+        import copy
+
+        dock_osd_fields = (
+            # 基础位置/状态
+            "longitude",
+            "latitude",
+            "height",
+            "mode_code",
+            "flighttask_step_code",
+            "cover_state",
+            "putter_state",
+            "drone_in_dock",
+            "emergency_stop_state",
+            "sub_device",
+            # 网络/链路
+            "network_state",
+            "transmission_signal_quality",
+            "wireless_link",
+            "drc_state",
+            "drone_authority_info",
+            # 机场电源/电量
+            "electricity",
+            "remain_flight_time",
+            "drone_charge_state",
+            "backup_battery",
+            # 环境/电气
+            "wind_speed",
+            "environment_temperature",
+            "temperature",
+            "humidity",
+            "rainfall",
+            "electric_supply_voltage",
+            "working_voltage",
+            "working_current",
+            # 舱体/维护
+            "supplement_light_state",
+            "air_conditioner",
+            "battery_store_mode",
+            "alarm_state",
+            "silent_mode",
+            "maintain_status",
+            # 存储/固件/统计
+            "storage",
+            "media_file_detail",
+            "firmware_version",
+            "firmware_upgrade_status",
+            "compatible_status",
+            "wpmz_version",
+            "job_number",
+            "acc_time",
+            "activation_time",
+        )
+
+        osd = {
+            field: copy.deepcopy(self._properties[field])
+            for field in dock_osd_fields
+            if field in self._properties
+        }
+        if not wrap_value:
+            return osd
+        return {field: {"value": value} for field, value in osd.items()}
+
     def update_properties(self, updates: Dict[str, Any], notify: bool = True):
         """批量更新属性（内部遥测/机巢更新用）"""
         changed = {}
