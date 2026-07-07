@@ -38,7 +38,7 @@
 | Day 9 | P0/P1 | 补舱盖、充电、夹紧、急停 Dock3 回包 | 补 boolstate1/boolstate2 状态位解析 | 跑 CMD + 机巢联调日志 | 机巢状态映射 v1 | P0-11 到 P0-13 |
 | Day 10 | P0/P1 | 补拒绝条件错误码和 HMS 事件 | 实现 busy/fault/estop/R 轴/允许起飞条件 | 记录失败分支证据 | 拒绝条件用例 | G-P1-02 |
 | Day 11 | P0/P1 | 复跑 CMD 和机巢专项 | 修复机巢状态机遗留问题 | 归档机巢专项输出 | 机巢专项通过或缺口清单 | P0-12、P0-13、P1-02 |
-| Day 12 | P1 | 补 DRC 心跳、超时和状态事件字段 | 联调 DRC 到 MAVLink 模式/控制链路 | 准备 DRC 观察面板或订阅模板 | DRC 心跳/超时用例 | G-P1-03 |
+| Day 12 | P1 | DRC 基础批量已过，继续补心跳、超时和状态事件字段 | 联调 DRC 到 MAVLink 模式/控制链路 | 准备 DRC 观察面板或订阅模板 | DRC 心跳/超时用例 | G-P1-03 |
 | Day 13 | P1 | 补 `takeoff_to_point` 请求/回包/错误码 | 联调起飞到点和取消/失败状态 | 记录 SITL 轨迹和日志 | 指点飞行专项证据 | G-P1-04 |
 | Day 14 | P1 | 补 KMZ/WPML mock 下载、校验、解析 | 接 MAVLink mission 上传/执行进度 | 准备标准 mock KMZ 样例 | Wayline KMZ/WPML 用例 | G-P1-05、G-P1-06 |
 | Day 15 | P1 | 串联一键启航 MQTT 入口和状态事件 | 串联开盖、断充、释放、起飞、任务、返航 | 输出一键启航 E2E 日志 | `e2e_takeoff_flow_test.py` | G-P1-01 |
@@ -63,7 +63,7 @@
 | 顺序 | 目标日期 | 脚本 | 负责人 | 关闭缺口 | 必须覆盖 |
 |---:|---|---|---|---|---|
 | 1 | Day 8-11 | `tools/nest_v13_protocol_test.py` | 人员2 + 人员1 | G-P0-04、G-P0-05、G-P1-02 | 12003/12004/12005、成功、拒绝、超时、状态位 |
-| 2 | Day 12 | 扩展 `tools/mqtt_dock3_drc_test.py` | 人员1 + 人员2 | G-P1-03、G-P1-04 | 心跳、超时恢复、`takeoff_to_point` |
+| 2 | Day 12 | 扩展 `tools/mqtt_dock3_drc_test.py` / `tools/mqtt_drc_batch_test.py` | 人员1 + 人员2 | G-P1-03、G-P1-04 | 已通过基础批量；继续补心跳、超时恢复、`takeoff_to_point` |
 | 3 | Day 14 | 扩展 `tools/mqtt_dock3_wayline_test.py` | 人员1 + 人员2 | G-P1-05、G-P1-06 | KMZ/WPML、SITL 航点执行 |
 | 4 | Day 15 | `tools/e2e_takeoff_flow_test.py` | 人员1 + 人员2 + 人员3 | G-P1-01 | 起飞前检查到返航降落充电 |
 | 5 | Day 16-17 | `tools/mqtt_dock3_media_test.py` | 人员1 + 人员3 | G-P1-07 | 列表、删除、优先级、上传事件 |

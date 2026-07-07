@@ -5,7 +5,13 @@ The current project only targets a server-side simulation loop.  This module
 keeps Dock3 flighttask validation and reply/event payload shape separate from
 MissionManager's MAVLink execution details.
 """
+import os
+import re
+import zipfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
+from xml.etree import ElementTree
 
 
 STATUS_CANCELED = "canceled"
@@ -36,6 +42,8 @@ VALID_OUT_OF_CONTROL_ACTIONS = {0, 1, 2}
 VALID_EXIT_WAYLINE_WHEN_RC_LOST = {0, 1}
 VALID_RETURN_TYPES = {0, 1}
 VALID_BREAKPOINT_STATES = {0, 1}
+WAYLINE_FILE_EXTENSIONS = {".kmz", ".kml", ".wpml", ".xml"}
+MAX_WAYLINE_XML_BYTES = 2 * 1024 * 1024
 
 
 def _is_int(value: Any) -> bool:
@@ -59,6 +67,177 @@ def flight_id_from(data: Dict[str, Any]) -> str:
     """Return official ``flight_id`` or accepted legacy alias."""
     value = data.get("flight_id", data.get("flighttask_id", data.get("task_id", "")))
     return value if isinstance(value, str) else ""
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _local_wayline_path(file_info: Dict[str, Any]) -> str:
+    """Resolve a local path from Dock3 file metadata.
+
+    Real cloud deployments download ``file.url`` before parsing.  The server
+    demo and Ubuntu smoke tests use a local mock KMZ, so this helper accepts
+    ``file:///...`` URLs and direct local paths without adding network I/O.
+    """
+    for key in ("local_path", "path", "url"):
+        value = file_info.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme == "file":
+            return unquote(parsed.path)
+        if parsed.scheme in ("http", "https", "oss", "s3"):
+            continue
+        if parsed.scheme:
+            continue
+        return value
+    return ""
+
+
+def _empty_wayline_summary(file_info: Dict[str, Any]) -> Dict[str, Any]:
+    source = ""
+    if isinstance(file_info, dict):
+        source = str(file_info.get("url") or file_info.get("local_path") or file_info.get("path") or "")
+    return {
+        "source": source,
+        "format": "",
+        "available": False,
+        "parsed": False,
+        "waypoint_count": 0,
+        "files": [],
+        "warnings": [],
+    }
+
+
+def _extract_waypoints_from_xml(xml_text: str) -> List[dict]:
+    waypoints: List[dict] = []
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except ElementTree.ParseError:
+        return []
+
+    for elem in root.iter():
+        if _local_name(elem.tag) != "coordinates" or not elem.text:
+            continue
+        for token in re.split(r"\s+", elem.text.strip()):
+            if not token:
+                continue
+            parts = token.split(",")
+            if len(parts) < 2:
+                continue
+            try:
+                lon = float(parts[0])
+                lat = float(parts[1])
+                alt = float(parts[2]) if len(parts) >= 3 and parts[2] != "" else 50.0
+            except ValueError:
+                continue
+            if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+                continue
+            waypoints.append({
+                "seq": len(waypoints),
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "command": 16,
+                "frame": 3,
+                "param1": 0.0,
+                "param2": 0.0,
+                "param3": 0.0,
+                "param4": 0.0,
+                "autocontinue": 1,
+                "action_type": "waypoint",
+            })
+    return waypoints
+
+
+def _read_text_file(path: str) -> str:
+    with open(path, "rb") as fp:
+        data = fp.read(MAX_WAYLINE_XML_BYTES + 1)
+    if len(data) > MAX_WAYLINE_XML_BYTES:
+        raise ValueError("wayline xml file exceeds 2 MiB limit")
+    return data.decode("utf-8", errors="replace")
+
+
+def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
+    warnings: List[str] = []
+    waypoints: List[dict] = []
+    parsed_files: List[str] = []
+    with zipfile.ZipFile(path) as archive:
+        names = [
+            name for name in archive.namelist()
+            if Path(name).suffix.lower() in {".kml", ".wpml", ".xml"}
+            and not name.endswith("/")
+        ]
+        for name in names:
+            info = archive.getinfo(name)
+            if info.file_size > MAX_WAYLINE_XML_BYTES:
+                warnings.append(f"{name} exceeds 2 MiB limit")
+                continue
+            xml_text = archive.read(name).decode("utf-8", errors="replace")
+            parsed_files.append(name)
+            for waypoint in _extract_waypoints_from_xml(xml_text):
+                waypoint["seq"] = len(waypoints)
+                waypoints.append(waypoint)
+    summary = {"format": "kmz", "files": parsed_files}
+    if not parsed_files:
+        warnings.append("kmz contains no kml/wpml/xml files")
+    if not waypoints:
+        warnings.append("no waypoint coordinates found")
+    return summary, waypoints, warnings
+
+
+def parse_wayline_file(file_info: Any) -> Tuple[Dict[str, Any], List[dict]]:
+    """Parse local KMZ/WPML/KML metadata into a Dock3-friendly summary.
+
+    Returns ``(summary, waypoints)``.  Remote URLs are accepted as metadata but
+    intentionally not downloaded here; the caller can still keep operating in
+    simulation mode and attach the summary to replies/events.
+    """
+    if not isinstance(file_info, dict):
+        summary = _empty_wayline_summary({})
+        summary["warnings"].append("file must be object")
+        return summary, []
+
+    summary = _empty_wayline_summary(file_info)
+    path = _local_wayline_path(file_info)
+    if not path:
+        summary["format"] = "remote" if summary["source"] else ""
+        if summary["source"]:
+            summary["warnings"].append("remote wayline file not downloaded in local simulation")
+        return summary, []
+
+    path = os.path.abspath(os.path.expanduser(path))
+    summary["source"] = path
+    suffix = Path(path).suffix.lower()
+    summary["format"] = suffix.lstrip(".")
+    if suffix not in WAYLINE_FILE_EXTENSIONS and suffix != ".zip":
+        summary["warnings"].append(f"unsupported wayline file extension: {suffix or '<none>'}")
+        return summary, []
+    if not os.path.exists(path):
+        summary["warnings"].append("local wayline file not found")
+        return summary, []
+
+    summary["available"] = True
+    waypoints: List[dict] = []
+    try:
+        if suffix in {".kmz", ".zip"}:
+            parsed_summary, waypoints, warnings = _parse_kmz(path)
+            summary.update(parsed_summary)
+            summary["warnings"].extend(warnings)
+        else:
+            xml_text = _read_text_file(path)
+            summary["files"] = [os.path.basename(path)]
+            waypoints = _extract_waypoints_from_xml(xml_text)
+            if not waypoints:
+                summary["warnings"].append("no waypoint coordinates found")
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        summary["warnings"].append(str(exc))
+        return summary, []
+
+    summary["waypoint_count"] = len(waypoints)
+    summary["parsed"] = bool(waypoints)
+    return summary, waypoints
 
 
 def normalize_prepare_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[str]]:

@@ -23,6 +23,7 @@ from src.cloud_api.dock3_wayline import (
     STATUS_REJECTED,
     STATUS_SENT,
     normalize_prepare_payload,
+    parse_wayline_file,
     normalize_return_payload,
     normalize_undo_payload,
     output_data as wayline_output_data,
@@ -233,6 +234,7 @@ class MissionManager:
         self._task_type = 0  # 0=立即 1=定时 2=条件
         self._execute_time = 0
         self._task_file = {}  # {url, fingerprint}
+        self._task_file_summary = {}
         self._ready_conditions = {}
         self._executable_conditions = {}
         self._break_point = {}
@@ -519,7 +521,10 @@ class MissionManager:
             'media_count': 0,
             'track_id': '',
             'wayline_id': 0,
+            'waypoint_count': len(self._current_wayline),
         }
+        if self._task_file_summary:
+            ext['file'] = self._task_file_summary
         if self._break_point:
             ext['break_point'] = self._break_point
         return ext
@@ -1577,6 +1582,23 @@ class MissionManager:
         self._task_type = task_type
         self._execute_time = execute_time
         self._task_file = file_info
+        self._task_file_summary, parsed_waypoints = parse_wayline_file(file_info)
+        if parsed_waypoints:
+            self._current_wayline = parsed_waypoints
+            self._current_waypoint_idx = 0
+            self._breakpoint_waypoint_idx = 0
+            logger.info(
+                "Parsed wayline file: flight_id=%s, format=%s, waypoints=%s",
+                flight_id,
+                self._task_file_summary.get('format'),
+                len(parsed_waypoints),
+            )
+        elif self._task_file_summary.get('warnings'):
+            logger.info(
+                "Wayline file parse skipped: flight_id=%s, warnings=%s",
+                flight_id,
+                "; ".join(self._task_file_summary.get('warnings', [])),
+            )
         self._ready_conditions = ready_conditions
         self._executable_conditions = executable_conditions
         self._break_point = break_point
@@ -1616,8 +1638,10 @@ class MissionManager:
                 return MessageBuilder.build_reply(msg, result=-1, msg_str="航线上传到飞控失败")
             logger.info(f"Waypoint uploaded to FC: {len(self._current_wayline)} waypoints")
         elif self._waypoint_manager and file_info.get('url'):
-            # TODO: 从 file.url 下载KMZ航线文件并解析航点
-            logger.info(f"KMZ download pending: {file_info.get('url', '')[:60]}...")
+            logger.info(
+                "No local wayline coordinates available for waypoint upload: %s",
+                file_info.get('url', '')[:80],
+            )
 
         # 断点续飞设置
         if break_point:
@@ -1636,6 +1660,7 @@ class MissionManager:
 
         self._status = self.MISSION_IDLE
         self._emit_wayline_progress(STATUS_SENT, current_step=5, percent=0, flight_id=flight_id)
+        self.report_flighttask_ready([flight_id])
         return MessageBuilder.build_reply(
             msg,
             result=0,
@@ -1826,6 +1851,7 @@ class MissionManager:
                     'progress': progress,
                     'current_waypoint': self._current_waypoint_idx,
                     'total_waypoints': total,
+                    'file': self._task_file_summary,
                     'task_status': self._get_task_status_name()
                 }
             )
@@ -2044,8 +2070,9 @@ class MissionManager:
                 'output': {
                     'file': {
                         'url': self._task_file.get('url', ''),
-                        'fingerprint': self._task_file.get('fingerprint', '')
-                    }
+                        'fingerprint': self._task_file.get('fingerprint', ''),
+                    },
+                    'file_summary': self._task_file_summary,
                 }
             })
 

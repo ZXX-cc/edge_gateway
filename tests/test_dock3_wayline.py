@@ -3,6 +3,9 @@ import sys
 import time
 import types
 import unittest
+import tempfile
+import zipfile
+from pathlib import Path
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +54,7 @@ if "src.database.schemas" not in sys.modules:
     schemas.WaypointCreate = _Schema
     sys.modules["src.database.schemas"] = schemas
 
-from src.cloud_api.dock3_wayline import normalize_prepare_payload
+from src.cloud_api.dock3_wayline import normalize_prepare_payload, parse_wayline_file
 from src.mission.manager import MissionManager
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 
@@ -64,6 +67,25 @@ def base_msg(method, data):
         "method": method,
         "data": data,
     }
+
+
+def write_mock_kmz(path: Path):
+    kml = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <LineString>
+        <coordinates>
+          149.165237,-35.363262,50
+          149.165537,-35.363562,60
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
+"""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("wpmz/template.kml", kml)
 
 
 class FailingFlightControl:
@@ -84,6 +106,21 @@ class FailingFlightControl:
 
 
 class Dock3WaylineTest(unittest.TestCase):
+    def test_parse_local_kmz_extracts_waypoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kmz_path = Path(tmp) / "mission.kmz"
+            write_mock_kmz(kmz_path)
+
+            summary, waypoints = parse_wayline_file({"url": kmz_path.as_uri()})
+
+        self.assertTrue(summary["available"])
+        self.assertTrue(summary["parsed"])
+        self.assertEqual(summary["format"], "kmz")
+        self.assertEqual(summary["waypoint_count"], 2)
+        self.assertEqual(len(waypoints), 2)
+        self.assertAlmostEqual(waypoints[0]["latitude"], -35.363262)
+        self.assertAlmostEqual(waypoints[0]["longitude"], 149.165237)
+
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
             "flight_id": "flight-001",
@@ -126,19 +163,26 @@ class Dock3WaylineTest(unittest.TestCase):
         manager.stop_mission_monitor = lambda: None
         manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
 
-        prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
-            "flight_id": "flight-001",
-            "task_type": 0,
-            "execute_time": int(time.time() * 1000),
-            "file": {"url": "https://example.invalid/flight.kmz", "fingerprint": "fp"},
-            "simulate_mission": {
-                "is_enable": 1,
-                "latitude": -35.36,
-                "longitude": 149.16,
-            },
-        }))
+        with tempfile.TemporaryDirectory() as tmp:
+            kmz_path = Path(tmp) / "mission.kmz"
+            write_mock_kmz(kmz_path)
+            prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+                "flight_id": "flight-001",
+                "task_type": 0,
+                "execute_time": int(time.time() * 1000),
+                "file": {"url": kmz_path.as_uri(), "fingerprint": "fp"},
+                "simulate_mission": {
+                    "is_enable": 1,
+                    "latitude": -35.36,
+                    "longitude": 149.16,
+                },
+            }))
         self.assertEqual(prepare["data"]["result"], 0)
         self.assertEqual(prepare["data"]["output"]["status"], "sent")
+        file_summary = prepare["data"]["output"]["ext"]["file"]
+        self.assertTrue(file_summary["parsed"])
+        self.assertEqual(file_summary["waypoint_count"], 2)
+        self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
             "flight_id": "flight-001",

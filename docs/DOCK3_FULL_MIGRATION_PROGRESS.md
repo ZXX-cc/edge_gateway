@@ -8,21 +8,21 @@
 
 如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、organization 基础 requests 链路、device topology、DRC 大类专项、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环均已通过 Ubuntu 模拟验证；Wayline 首次复测暴露的 `flighttask_execute` 纯模拟任务误触发 MAVLink `AUTO` 模式切换问题已修复并复测通过；客户需求相关迁移未完成。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
+当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环均已通过 Ubuntu 模拟验证；人员1负责的云端 topic/reply 边界和专项验收脚本已收敛到共享 MQTT 客户端，当前重点转向客户需求相关字段精校、DRC 心跳/超时、机巢 v1.3 和 E2E 串联。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
-当前进度估算：**约 60%**。
+当前进度估算：**约 63%**。
 
 估算口径：
 
 | 范围 | 进度 | 说明 |
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 80% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，剩 systemd/一键化和环境固化 |
-| Dock3 P0 协议链路 | 92% | property、services、requests、status、events、DRC 控制数据、CMD 控制命令、错误码边界已通过批量和专项验证，剩旧回包噪声清理和字段精校 |
-| 客户需求相关 method/字段迁移 | 53% | properties 官方可写/只读边界、device topology、DRC 官方字段、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
+| Dock3 P0 协议链路 | 95% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令、错误码边界已通过批量和专项验证，剩旧回包噪声清理和字段精校 |
+| 客户需求相关 method/字段迁移 | 56% | properties 官方可写/只读边界、OSD/state、device topology、DRC 官方字段和批量链路、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环已通过专项验证；客户需求中的 live/media/HMS/log/config 等仍待迁移 |
 | 非阻塞、日志、容错基础 | 55% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现，待 Ubuntu 复测；NoSQL/MongoDB 和远程日志仍待迁移 |
-| 模拟器和测试工具 | 81% | 云端模拟器、organization/status/topology/properties/DRC/CMD/Wayline/P0 批量测试工具可用，P0、DRC、CMD、Wayline 工具已支持旧回包统计并通过 Ubuntu 复测，媒体模拟器仍待补 |
+| 模拟器和测试工具 | 86% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/P0 批量测试工具可用，人员1相关专项脚本已逐步迁移到共享 MQTT 客户端并支持旧回包统计，媒体模拟器仍待补 |
 
-综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 60%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 63%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
 
 ## 1. 当前验收基线
 
@@ -43,10 +43,13 @@
 | organization get/bind 测试工具 | 成功路径和异常分支均已通过 Ubuntu 复测 | `tools/mqtt_organization_test.py` 已通过项目 `DeviceManager + CloudConnectionManager` 发起 `airport_organization_get`、`airport_organization_bind`；云端模拟器已验证 get 失败、bind `err_infos`、延迟超时 |
 | `update_topo` status/status_reply | 已通过 Ubuntu 复测 | 绑定后发布 `sys/product/EDGE-GW-001/status`，`method=update_topo`，`tid=f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b`；收到 `status_reply result=0` |
 | `update_topo` 多子设备拓扑 | 已通过 Ubuntu 复测 | 注入 `DRONE-SIM-001` 后发布 `update_topo tid=f318713c-767a-43d9-a4b2-13ade3a969b2`，`sub_devices[0].sn=DRONE-SIM-001`，收到 `status_reply result=0` |
+| OSD/state 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale` 输出 `dock3 osd/state test ok`，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0`；飞行器 OSD 已出现 SITL 动态经纬度、电池和 GPS |
 | 错误码边界归一 | 通过本地测试 | `tests/test_dji_error_codes.py` 验证内部负数转 DJI 错误码 |
 | properties 可写边界 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)`；官方 `rw` 属性成功，只读/非法/未知属性返回 `state.result=1` |
-| device topology 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_device_test.py --timeout 12` 输出 `dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=3)`；验证 `update_topo status/status_reply`、在线/离线拓扑、无效拓扑拒绝 |
+| device topology 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale` 输出 `dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, status=2, ignored_total=0)`；验证 `update_topo status/status_reply`、在线/离线拓扑、无效拓扑拒绝 |
+| organization full 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` 输出 `organization request test ok`；验证 `airport_organization_get/bind`、`device_binding`、`update_topo status_reply result=0` 和内存绑定 |
 | DRC 专项字段校验 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_mismatched=0, ignored_legacy=4, ignored_late=1, ignored_total=5)`；验证 `drc_mode_enter` 官方 payload、`stick_control` 官方杆量、`drone_control` 官方废弃字段和值域错误 |
+| DRC 批量验收 | 已通过 Ubuntu 专项复测 | `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 输出 `drc batch test ok (accepted=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；覆盖 enter/exit、`drc_state`、杆量、飞行器/负载控制和速度控制 |
 | CMD/远程调试专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)`；验证调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝和任务进度事件 |
 | Wayline/航线管理 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` 输出 `dock3 wayline test ok (accepted=11, events=8, ignored_mismatched=0, ignored_legacy=11, ignored_late=0, ignored_total=11)`；覆盖 `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel`、参数错误和状态不支持错误分支；纯模拟任务不触发真实飞控 `AUTO/LOITER/返航/降落` 控制 |
 | P0 总批量验证入口 | 已通过 Ubuntu 复测 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 一次覆盖 `dock_status_query`、properties、DRC、错误 topic，输出 `dock3 p0 batch test ok`；`airport_bind_status` 官方链路单独走云端模拟器 |
@@ -230,6 +233,7 @@ python src/main.py -c config/gateway.yaml
 - 2026-07-06 Ubuntu 已验证：绑定部分失败分支 `tid=d2bdf5d1-402f-45d1-82eb-da316c82e09e` 收到 `requests_reply result=0`，`output.err_infos[0].err_code=327000`，测试工具输出 `organization request test ok`。
 - 2026-07-06 Ubuntu 已验证：云端回包超时分支 `tid=8e21e5fc-3e64-4a30-8268-4763cc7f751f` 按 `--expect-timeout --timeout 2` 返回预期超时，测试工具输出 `organization request test ok`。
 - 2026-07-06 Ubuntu 已验证：绑定后状态分支 `airport_organization_get tid=5bb01523-3be5-4d36-93fd-b713fadffd38`、`airport_organization_bind tid=9e38069d-5c64-4dfe-ba99-fe4808b90cf2`；测试工具捕获 `device_binding`、`update_topo`，内存绑定 `organization_id=org_sim_001`，SQLite `device_binding` 记录 `is_bound=true`、`workspace_id=org_sim_001`、`workspace_name=模拟组织`。
+- 2026-07-07 Ubuntu 已验证：`mqtt_organization_test.py --config config/gateway.yaml --action full --publish-events --expect-status-reply` 输出 `organization request test ok`；`airport_organization_get` 返回 `organization_name=模拟组织`，`airport_organization_bind` 返回 `output.err_infos=[]`，捕获 `device_binding`、`update_topo`，收到 `sys/product/EDGEGW001/status_reply result=0`，内存绑定 `organization_id=org_sim_001`。
 
 ### 3.3 device topology
 
@@ -255,10 +259,10 @@ python src/main.py -c config/gateway.yaml
 专项验收命令：
 
 ```bash
-python tools/mqtt_dock3_device_test.py --timeout 12
+python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale
 ```
 
-成功标志：`dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=3)`。该脚本会给运行中的网关发送测试触发用 `services:update_topo`，然后验证网关发布的官方 `sys/product/{sn}/status:update_topo`，并模拟云端发送 `status_reply`。其中 services 入口只作为本地测试触发器，最终 Dock3 官方方向仍以 `status/status_reply` 为准。
+成功标志：`dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, status=2, ignored_total=0)`。该脚本会给运行中的网关发送测试触发用 `services:update_topo`，然后验证网关发布的官方 `sys/product/{sn}/status:update_topo`，并模拟云端发送 `status_reply`。其中 services 入口只作为本地测试触发器，最终 Dock3 官方方向仍以 `status/status_reply` 为准。
 
 ### 3.4 drc
 
@@ -280,17 +284,19 @@ python tools/mqtt_dock3_device_test.py --timeout 12
 | `drc_mode_enter` 官方 payload | 已通过 Ubuntu 专项复测 | 支持 `mqtt_broker`、`osd_frequency`、`hsi_frequency` 字段校验；本地模拟仍允许 `{}` |
 | `stick_control` 官方杆量 | 已通过 Ubuntu 专项复测 | 支持 `roll/pitch/throttle/yaw/gimbal_pitch`，值域 `364..1684`，官方正常杆量按 Dock3 无回包机制验证；非法杆量返回 `325001` |
 | `drone_control` 官方废弃字段 | 已通过 Ubuntu 专项复测 | 支持 `seq/x/y/h/w`，校验 `x/y=-17..17`、`h=-4..5`、`w=-90..90`；正常字段返回 `0`，越界字段返回 `325001` |
+| DRC 批量闭环 | 已通过 Ubuntu 专项复测 | `mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 一次覆盖 enter/exit、`drc_state`、`stick_control`、`drone_control`、`payload_control`、`drc_speed_push`、`drc_gimbal_speed_push`，结果 `accepted=10, ignored_total=0` |
 | DRC 心跳 | 待迁移 | 需明确官方 `heart_beat` 与当前 `drc_heartbeat` 事件、`drc_state` 的关系和超时恢复 |
 
 专项验收命令：
 
 ```bash
 python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
+python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 ```
 
-成功标志：`dock3 drc test ok (...)`。该脚本会验证官方 `drc_mode_enter` payload、enter/exit 后 `drc_state` 同步、官方 `stick_control` 无回包、非法杆量返回 `325001`、官方废弃 `drone_control` 字段和值域错误、云台速度基础回包。
+成功标志：`dock3 drc test ok (...)` 和 `drc batch test ok (...)`。专项脚本验证官方 `drc_mode_enter` payload、enter/exit 后 `drc_state` 同步、官方 `stick_control` 无回包、非法杆量返回 `325001`、官方废弃 `drone_control` 字段和值域错误、云台速度基础回包；批量脚本验证 DRC 主链路在共享 MQTT 客户端下无错 topic、无旧格式干扰并可连续 enter/control/exit。
 
-### 3.4 device
+### 3.5 device
 
 官方要点：
 
@@ -307,7 +313,7 @@ python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
 | 多子设备拓扑测试 | 已通过 Ubuntu 复测 | `--sub-device-json` 注入 `DRONE-SIM-001`，`--expect-topo-sub-device-count` 与 SN 校验通过 |
 | Dock3 拓扑字段 | 待迁移 | 需要对齐 `domain`、设备 namespace、设备类型枚举、子设备结构、拓扑更新触发时机 |
 
-### 3.5 cmd / 远程调试
+### 3.6 cmd / 远程调试
 
 官方要点：
 
@@ -342,7 +348,7 @@ python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 
 成功标志：`dock3 cmd test ok (...)`。2026-07-06 已通过，实际输出 `accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55`。该脚本一次覆盖调试模式、补光灯、电池保养、空调、报警、电池模式、SDR、舱盖、充电、推杆、飞行器开关机、格式化、重启、重置和错误分支。`ignored_legacy=55` 表示 broker 环境中仍存在旧格式重复回包源，当前脚本已按 Dock3 格式继续等待正确回包；清理旧进程或 broker retained/旧规则后，可追加 `--fail-on-stale` 做严格验证。
 
-### 3.6 wayline
+### 3.7 wayline
 
 官方要点：
 
@@ -377,7 +383,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 2 | organization requests 模拟器 | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 基础成功路径、异常分支、绑定后事件和持久化已通过 Ubuntu 验证 | 下一步字段精校、真实云端差异和多设备场景 |
 | Batch 2.1 | organization get/bind 工具 | `tools/mqtt_organization_test.py` 已通过 Ubuntu 复测成功路径、组织查询失败、绑定 `err_infos`、请求超时 | 已完成 |
 | Batch 2.2 | organization 绑定后状态 | 已通过 Ubuntu 复测 `device_binding/update_topo`、内存状态、SQLite 持久化 | 已完成 |
-| Batch 3 | drc 控制数据 | `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` 已通过 P0 总批量验证；官方 payload 校验和 `tools/mqtt_dock3_drc_test.py` 已通过 Ubuntu 专项复测 | 已完成本轮专项；下一步精校 DRC 心跳、`takeoff_to_point` 和超时恢复 |
+| Batch 3 | drc 控制数据 | `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` 已通过 P0 总批量验证；官方 payload 校验、`tools/mqtt_dock3_drc_test.py` 和 `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 均已通过 Ubuntu 专项复测 | 已完成本轮专项；下一步精校 DRC 心跳、`takeoff_to_point` 和超时恢复 |
 | Batch 4 | P0 总批量验收 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 已通过 Ubuntu 复测；`airport_bind_status` services 兼容项默认跳过 | 下一步清理旧回包来源后用 `--fail-on-stale` 做严格环境验证 |
 | Batch 4.1 | device topology | `update_topo` 完整 topic/payload/status_reply；严格字段校验和专项脚本已通过 Ubuntu 复测 | 已完成本轮专项；后续继续精校官方设备类型枚举 |
 | Batch 4.2 | cmd/远程调试 | `debug_mode_*`、`cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_*`、`*_switch` 已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；后续清理旧回包源后用 `--fail-on-stale` 做严格环境验证 |
