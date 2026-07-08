@@ -78,8 +78,10 @@ logs/nest_simulator/command_trace.log
 查看命令链路：
 
 ```bash
-tail -f logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
-tail -f logs/nest_simulator/command_trace.log
+mkdir -p logs/gateway/command_trace/$(date +%Y-%m) logs/nest_simulator
+touch logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log logs/nest_simulator/command_trace.log
+tail -F logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
+tail -F logs/nest_simulator/command_trace.log
 ```
 
 典型事件顺序：

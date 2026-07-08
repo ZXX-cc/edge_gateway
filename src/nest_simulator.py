@@ -9,6 +9,7 @@ import socket
 import threading
 import struct
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +18,51 @@ sys.path.insert(0, str(GENERATED_DIALECT_DIR))
 import drone_nest
 
 
+_RESET = "\033[0m"
+_COLORS = {
+    "nest": "\033[35m",
+    "ok": "\033[32m",
+    "warn": "\033[33m",
+}
+_ORDINARY_COMMAND_LABELS = {
+    0x1101: "舱门打开",
+    0x1102: "舱门关闭",
+    0x1103: "舱门停止",
+    0x0F01: "开始充电",
+    0x0F02: "停止充电",
+    0x1401: "夹紧",
+    0x1402: "夹紧释放",
+    0x1403: "夹紧停止",
+    0x0A01: "急停触发",
+    0x0A02: "急停解除",
+    0x0A04: "初始化",
+    0x0A05: "故障恢复",
+    0x0A06: "大灯开",
+    0x0A07: "大灯关",
+    0x0B01: "飞机上电",
+    0x0B02: "飞机下电",
+}
+_TAKEOFF_LAND_COMMAND_LABELS = {
+    0x01: "起飞流程开始",
+    0x02: "起飞流程终止",
+    0x04: "降落流程终止",
+}
+
+
 class NestSimulator:
-    def __init__(self, host='0.0.0.0', port=14550, system_id=101, component_id=1):
+    def __init__(
+        self,
+        host='0.0.0.0',
+        port=14550,
+        system_id=101,
+        component_id=1,
+        command_log='logs/nest_simulator/command_trace.log',
+    ):
         self.host = host
         self.port = port
         self.system_id = system_id
         self.component_id = component_id
+        self.command_log = Path(command_log) if command_log else None
         self.sock = None
         self.client_addr = None
         self.running = False
@@ -60,6 +100,68 @@ class NestSimulator:
             tmp = (tmp ^ (tmp << 4)) & 0xFF
             crc = (crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)
         return crc & 0xFFFF
+
+    @staticmethod
+    def _color(text, color):
+        return f"{_COLORS[color]}{text}{_RESET}"
+
+    @staticmethod
+    def _ordinary_command_label(ordinary_order):
+        if not ordinary_order:
+            return "none"
+        return _ORDINARY_COMMAND_LABELS.get(ordinary_order, f"UNKNOWN 0x{ordinary_order:04X}")
+
+    @staticmethod
+    def _takeoff_land_command_label(takeoff_land_order):
+        if not takeoff_land_order:
+            return "none"
+        return _TAKEOFF_LAND_COMMAND_LABELS.get(takeoff_land_order, f"UNKNOWN 0x{takeoff_land_order:02X}")
+
+    def _command_label(self, ordinary_order, takeoff_land_order):
+        if takeoff_land_order:
+            return self._takeoff_land_command_label(takeoff_land_order)
+        return self._ordinary_command_label(ordinary_order)
+
+    @staticmethod
+    def _reply_status(ordinary_response, takeoff_land_response):
+        return "成功" if ordinary_response == 0 and takeoff_land_response == 0 else "失败/拒绝"
+
+    def _trace_command(self, event, **fields):
+        if not self.command_log:
+            return
+        try:
+            self.command_log.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
+            command = fields.get("command", "未识别命令")
+            if event == "simulator_command_received":
+                line = (
+                    f"{timestamp} {self._color('[机巢模拟器]', 'nest')} "
+                    f"收到命令：{command}，"
+                    f"ordinary={fields.get('ordinary', '-')}，"
+                    f"takeoff={fields.get('takeoff_land', '-')}，"
+                    f"来源={fields.get('src', '-')}"
+                )
+            elif event == "simulator_order_response_sent":
+                ordinary_response = fields.get("ordinary_response", "0x00000000")
+                takeoff_land_response = fields.get("takeoff_land_response", "0x00000000")
+                status = self._reply_status(
+                    int(str(ordinary_response), 16),
+                    int(str(takeoff_land_response), 16),
+                )
+                color = "ok" if status == "成功" else "warn"
+                line = (
+                    f"{timestamp} {self._color('[机巢模拟器]', color)} "
+                    f"发送回复：{command}，结果={status}，"
+                    f"ordinary_response={ordinary_response}，"
+                    f"takeoff_response={takeoff_land_response}，"
+                    f"目标={fields.get('target', '-')}"
+                )
+            else:
+                line = f"{timestamp} {self._color('[机巢模拟器]', 'nest')} {event}：{fields}"
+            with self.command_log.open("a", encoding="utf-8") as file:
+                file.write(line + "\n")
+        except Exception:
+            pass
 
     def _send_raw(self, data):
         if self.client_addr:
@@ -102,13 +204,27 @@ class NestSimulator:
         self._send_raw(msg.pack(self.mav))
         print("已发送 DRONE_NEST_RESPONSE")
 
-    def _send_order_response(self, ordinary_response=0, takeoff_land_response=0):
+    def _send_order_response(
+        self,
+        ordinary_response=0,
+        takeoff_land_response=0,
+        command="-",
+        triggered_by_command=False,
+    ):
         msg = drone_nest.MAVLink_drone_nest_order_response_message(
             ordinary_order_response=ordinary_response,
             takeoff_land_order_response=takeoff_land_response
         )
         self._send_raw(msg.pack(self.mav))
         print(f"已发送 DRONE_NEST_ORDER_RESPONSE: ordinary=0x{ordinary_response:08X}")
+        if triggered_by_command or ordinary_response or takeoff_land_response:
+            self._trace_command(
+                "simulator_order_response_sent",
+                command=command,
+                target=str(self.client_addr),
+                ordinary_response=f"0x{ordinary_response:08X}",
+                takeoff_land_response=f"0x{takeoff_land_response:08X}",
+            )
 
     def _update_state_from_command(self, ordinary_order, takeoff_land_order):
         if ordinary_order == 0x1101:
@@ -174,9 +290,19 @@ class NestSimulator:
         elif msg_type == 'DRONE_NEST_COMMAND':
             ordinary = getattr(msg, 'ordinary_order', 0)
             takeoff_land = getattr(msg, 'takeoff_land_order', 0)
+            has_command = bool(ordinary or takeoff_land)
+            command = self._command_label(ordinary, takeoff_land)
             print(f"收到机巢命令: ordinary=0x{ordinary:04X}, takeoff_land=0x{takeoff_land:02X}")
             self._update_state_from_command(ordinary, takeoff_land)
-            self._send_order_response(0, 0)
+            if has_command:
+                self._trace_command(
+                    "simulator_command_received",
+                    command=command,
+                    src=f"{msg.get_srcSystem()}/{msg.get_srcComponent()}",
+                    ordinary=f"0x{ordinary:04X}",
+                    takeoff_land=f"0x{takeoff_land:02X}",
+                )
+            self._send_order_response(0, 0, command=command, triggered_by_command=has_command)
 
     def _status_loop(self):
         """每2秒主动发送环境状态"""
@@ -236,9 +362,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="MAVLink drone nest simulator")
     parser.add_argument("--host", default="0.0.0.0", help="UDP bind host")
     parser.add_argument("--port", type=int, default=14550, help="UDP bind port")
+    parser.add_argument(
+        "--command-log",
+        default="logs/nest_simulator/command_trace.log",
+        help="只记录非心跳命令的机巢模拟器日志文件；设为空字符串可关闭",
+    )
     args = parser.parse_args()
 
-    sim = NestSimulator(host=args.host, port=args.port)
+    sim = NestSimulator(host=args.host, port=args.port, command_log=args.command_log)
     try:
         sim.start()
     except KeyboardInterrupt:

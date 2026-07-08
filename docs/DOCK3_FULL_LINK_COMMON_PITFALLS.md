@@ -213,14 +213,18 @@ SSL/TLS: 关闭
 
 ```bash
 cd ~/lxz/edge_gateway
-tail -f logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
+mkdir -p logs/gateway/command_trace/$(date +%Y-%m)
+touch logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
+tail -F logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
 ```
 
 机巢模拟器侧：
 
 ```bash
 cd ~/lxz/edge_gateway
-tail -f logs/nest_simulator/command_trace.log
+mkdir -p logs/nest_simulator
+touch logs/nest_simulator/command_trace.log
+tail -F logs/nest_simulator/command_trace.log
 ```
 
 判断链路通的典型顺序：
