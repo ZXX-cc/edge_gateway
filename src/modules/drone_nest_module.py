@@ -101,6 +101,9 @@ class DroneNestModule(BaseModule):
         # 最近一次机巢命令执行回复，已转换为上层 API 可直接使用的结构
         self.last_order_response: Dict[str, Any] = {}
         self.last_cloud_order_response: Dict[str, Any] = {}
+        self._last_sent_commands: List[str] = []
+        self._last_sent_ordinary_order = 0
+        self._last_sent_takeoff_land_order = 0
 
     # ========== 模块关联 ==========
 
@@ -574,6 +577,9 @@ class DroneNestModule(BaseModule):
 
             trace_command(
                 "nest_order_response_received",
+                commands=self._last_sent_commands,
+                ordinary_order=f"0x{self._last_sent_ordinary_order:04X}",
+                takeoff_land_order=f"0x{self._last_sent_takeoff_land_order:02X}",
                 ordinary_raw=ordinary_info.get("raw"),
                 ordinary_command_code=ordinary_info.get("command_code"),
                 ordinary_reply_status=ordinary_info.get("reply_status"),
@@ -628,10 +634,13 @@ class DroneNestModule(BaseModule):
             # ✅ 拆分成 DRONE_NEST_COMMAND 的两个字段
             ordinary_order = int((gcs_order >> 8) & 0xFFFF)  # uint16_t
             takeoff_land_order = int(gcs_order & 0xFF)  # uint8_t
+            self._last_sent_commands = [cmd.name for cmd in commands]
+            self._last_sent_ordinary_order = ordinary_order
+            self._last_sent_takeoff_land_order = takeoff_land_order
 
             trace_command(
                 "nest_command_encoded",
-                commands=[cmd.name for cmd in commands],
+                commands=self._last_sent_commands,
                 ordinary_order=f"0x{ordinary_order:04X}",
                 takeoff_land_order=f"0x{takeoff_land_order:02X}",
             )

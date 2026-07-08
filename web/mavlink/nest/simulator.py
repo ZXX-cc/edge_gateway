@@ -33,6 +33,14 @@ from protocol import (
 )
 
 
+_RESET = "\033[0m"
+_COLORS = {
+    "nest": "\033[35m",
+    "ok": "\033[32m",
+    "warn": "\033[33m",
+}
+
+
 class NestSimulator:
     def __init__(
         self,
@@ -41,7 +49,7 @@ class NestSimulator:
         system_id: int = 101,
         component_id: int = 1,
         log_status: bool = False,
-        command_log: str = "logs/nest_simulator_command_trace.log",
+        command_log: str = "logs/nest_simulator/command_trace.log",
     ):
         self.host = host
         self.port = port
@@ -86,33 +94,48 @@ class NestSimulator:
             print(f"{key:<18}: {value}")
         print("=" * (22 + len(title)))
 
+    @staticmethod
+    def _color(text, color):
+        return f"{_COLORS[color]}{text}{_RESET}"
+
+    @staticmethod
+    def _reply_status(ordinary_response, takeoff_land_response):
+        return "成功" if ordinary_response == 0 and takeoff_land_response == 0 else "失败/拒绝"
+
     def _trace_command(self, event, **fields):
         if not self.command_log:
             return
         try:
             self.command_log.parent.mkdir(parents=True, exist_ok=True)
-            labels = {
-                "simulator_command_received": "机巢收到命令",
-                "simulator_order_response_sent": "机巢发送回包",
-            }
-            label = labels.get(event, event)
-            preferred_keys = (
-                "command",
-                "src",
-                "target",
-                "ordinary",
-                "takeoff_land",
-                "ordinary_response",
-                "takeoff_land_response",
-            )
-            ordered_keys = [key for key in preferred_keys if key in fields]
-            ordered_keys.extend(key for key in fields if key not in ordered_keys)
-            detail = " ".join(f"{key}={fields[key]}" for key in ordered_keys)
-            with self.command_log.open("a", encoding="utf-8") as file:
-                file.write(
-                    f"{datetime.now().isoformat(timespec='milliseconds')} "
-                    f"[{label}] {detail}\n"
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
+            command = fields.get("command", "未识别命令")
+            if event == "simulator_command_received":
+                line = (
+                    f"{timestamp} {self._color('[机巢模拟器]', 'nest')} "
+                    f"收到命令：{command}，"
+                    f"ordinary={fields.get('ordinary', '-')}，"
+                    f"takeoff={fields.get('takeoff_land', '-')}，"
+                    f"来源={fields.get('src', '-')}"
                 )
+            elif event == "simulator_order_response_sent":
+                ordinary_response = fields.get("ordinary_response", "0x00000000")
+                takeoff_land_response = fields.get("takeoff_land_response", "0x00000000")
+                status = self._reply_status(
+                    int(str(ordinary_response), 16),
+                    int(str(takeoff_land_response), 16),
+                )
+                color = "ok" if status == "成功" else "warn"
+                line = (
+                    f"{timestamp} {self._color('[机巢模拟器]', color)} "
+                    f"发送回复：{command}，结果={status}，"
+                    f"ordinary_response={ordinary_response}，"
+                    f"takeoff_response={takeoff_land_response}，"
+                    f"目标={fields.get('target', '-')}"
+                )
+            else:
+                line = f"{timestamp} {self._color('[机巢模拟器]', 'nest')} {event}：{fields}"
+            with self.command_log.open("a", encoding="utf-8") as file:
+                file.write(line + "\n")
         except Exception:
             pass
 
@@ -353,8 +376,8 @@ def main():
     parser.add_argument("--log-status", action="store_true", help="打印周期状态帧")
     parser.add_argument(
         "--command-log",
-        default="logs/nest_simulator_command_trace.log",
-        help="只记录非心跳命令的 JSONL 日志文件；设为空字符串可关闭",
+        default="logs/nest_simulator/command_trace.log",
+        help="只记录非心跳命令的机巢模拟器日志文件；设为空字符串可关闭",
     )
     args = parser.parse_args()
 

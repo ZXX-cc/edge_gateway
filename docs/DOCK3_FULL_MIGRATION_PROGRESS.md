@@ -66,20 +66,20 @@
 网关侧日志文件：
 
 ```text
-logs/command_trace/YYYY-MM/command_trace_YYYY-MM-DD.log
+logs/gateway/command_trace/YYYY-MM/command_trace_YYYY-MM-DD.log
 ```
 
 机巢模拟器侧日志文件：
 
 ```text
-logs/nest_simulator_command_trace.log
+logs/nest_simulator/command_trace.log
 ```
 
 查看命令链路：
 
 ```bash
-tail -f logs/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
-tail -f logs/nest_simulator_command_trace.log
+tail -f logs/gateway/command_trace/$(date +%Y-%m)/command_trace_$(date +%F).log
+tail -f logs/nest_simulator/command_trace.log
 ```
 
 典型事件顺序：
