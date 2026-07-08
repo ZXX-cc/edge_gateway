@@ -163,6 +163,11 @@ class NestSimulator:
 
     def _handle_message(self, msg):
         msg_type = msg.get_type()
+        if msg_type.startswith('UNKNOWN_'):
+            if getattr(msg, 'id', None) == 0:
+                self._send_heartbeat()
+            return
+
         print(f"收到消息: {msg_type}")
         if msg_type == 'HEARTBEAT':
             self._send_heartbeat()
