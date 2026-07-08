@@ -48,6 +48,23 @@ _TAKEOFF_LAND_COMMAND_LABELS = {
     0x04: "降落流程终止",
 }
 
+BIT_ESTOP = 3
+BIT_CHARGING = 4
+BIT_READY = 6
+BIT_BUSY = 8
+BIT_FAULT = 9
+BIT_R_AXIS_ZERO = 10
+BIT_TAKEOFF_IN_PROGRESS = 0
+BIT_LANDING_IN_PROGRESS = 1
+BIT_TAKEOFF_ABORT_PROGRESS = 2
+BIT_LANDING_ABORT_PROGRESS = 3
+BIT_ALLOW_TAKEOFF = 5
+
+REJECT_COMMAND_CONFLICT = 1
+REJECT_PLC_TIMEOUT = 2
+REJECT_DRONE_TIMEOUT = 3
+REJECT_MULTIPLE_TAKEOFF = 4
+
 
 class NestSimulator:
     def __init__(
@@ -86,6 +103,67 @@ class NestSimulator:
             'gate_state': 2,
             'landing_light_state': 2
         }
+
+    @staticmethod
+    def _bit(mask, bit):
+        return bool(mask & (1 << bit))
+
+    @staticmethod
+    def _order_response_raw(reason_code, command_code, device_code=0x11):
+        if not reason_code:
+            return 0
+        return (
+            ((device_code & 0xFF) << 24)
+            | ((command_code & 0xFF) << 16)
+            | ((reason_code & 0xFF) << 8)
+            | 0x01
+        )
+
+    def _evaluate_command_response(self, ordinary_order, takeoff_land_order):
+        """Return v1.3-like execution replies for current simulated state.
+
+        The real controller owns the final policy.  The simulator keeps a small
+        deterministic subset so protocol tests can cover command conflicts and
+        safety rejections before hardware is available.
+        """
+        ordinary_reason = 0
+        takeoff_reason = 0
+        boolstate1 = self.env_data.get("boolstate1", 0)
+        boolstate2 = self.env_data.get("boolstate2", 0)
+
+        if ordinary_order and takeoff_land_order:
+            ordinary_reason = REJECT_COMMAND_CONFLICT
+            takeoff_reason = REJECT_COMMAND_CONFLICT
+
+        estop = self._bit(boolstate1, BIT_ESTOP)
+        fault = self._bit(boolstate1, BIT_FAULT) or bool(self.env_data.get("error_code", 0))
+        busy = self._bit(boolstate1, BIT_BUSY)
+        ready = self._bit(boolstate1, BIT_READY)
+        allow_takeoff = self._bit(boolstate2, BIT_ALLOW_TAKEOFF)
+        takeoff_busy = self._bit(boolstate2, BIT_TAKEOFF_IN_PROGRESS)
+        landing_busy = self._bit(boolstate2, BIT_LANDING_IN_PROGRESS)
+
+        if ordinary_order and not ordinary_reason:
+            if estop and ordinary_order not in (0x0A02, 0x0A05):
+                ordinary_reason = REJECT_PLC_TIMEOUT
+            elif fault and ordinary_order not in (0x0A01, 0x0A05):
+                ordinary_reason = REJECT_PLC_TIMEOUT
+            elif busy and ordinary_order not in (0x1103, 0x1403, 0x0A01):
+                ordinary_reason = REJECT_PLC_TIMEOUT
+
+        if takeoff_land_order and not takeoff_reason:
+            if takeoff_land_order not in _TAKEOFF_LAND_COMMAND_LABELS:
+                takeoff_reason = REJECT_MULTIPLE_TAKEOFF
+            elif estop or fault:
+                takeoff_reason = REJECT_PLC_TIMEOUT
+            elif takeoff_land_order == 0x01 and (busy or takeoff_busy or landing_busy or not ready or not allow_takeoff):
+                takeoff_reason = REJECT_DRONE_TIMEOUT
+            elif takeoff_land_order == 0x04 and not landing_busy:
+                takeoff_reason = REJECT_DRONE_TIMEOUT
+
+        ordinary_response = self._order_response_raw(ordinary_reason, ordinary_order & 0xFF)
+        takeoff_response = self._order_response_raw(takeoff_reason, takeoff_land_order & 0xFF)
+        return ordinary_response, takeoff_response
 
     @staticmethod
     def crc16(data, extra=0):
@@ -293,7 +371,15 @@ class NestSimulator:
             has_command = bool(ordinary or takeoff_land)
             command = self._command_label(ordinary, takeoff_land)
             print(f"收到机巢命令: ordinary=0x{ordinary:04X}, takeoff_land=0x{takeoff_land:02X}")
-            self._update_state_from_command(ordinary, takeoff_land)
+            ordinary_response, takeoff_response = self._evaluate_command_response(ordinary, takeoff_land)
+            if ordinary_response == 0 and takeoff_response == 0:
+                self._update_state_from_command(ordinary, takeoff_land)
+            else:
+                print(
+                    "模拟器：拒绝命令 "
+                    f"ordinary_response=0x{ordinary_response:08X}, "
+                    f"takeoff_response=0x{takeoff_response:08X}"
+                )
             if has_command:
                 self._trace_command(
                     "simulator_command_received",
@@ -302,7 +388,12 @@ class NestSimulator:
                     ordinary=f"0x{ordinary:04X}",
                     takeoff_land=f"0x{takeoff_land:02X}",
                 )
-            self._send_order_response(0, 0, command=command, triggered_by_command=has_command)
+            self._send_order_response(
+                ordinary_response,
+                takeoff_response,
+                command=command,
+                triggered_by_command=has_command,
+            )
 
     def _status_loop(self):
         """每2秒主动发送环境状态"""

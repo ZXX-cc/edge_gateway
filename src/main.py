@@ -241,12 +241,14 @@ class EdgeGateway:
 
             if conn_type == 'serial':
                 conn_str = mavlink_config['port']
-            elif conn_type == 'udp':
-                conn_str = f"udp:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+            elif conn_type in ('udp', 'udpin'):
+                conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+            elif conn_type == 'udpout':
+                conn_str = f"udpout:{mavlink_config['host']}:{mavlink_config['udp_port']}"
             elif conn_type == 'tcp':
                 conn_str = f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
             else:
-                conn_str = f"udp:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+                conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
 
             self.mavlink_conn = MAVLinkConnection(
                 connection_string=conn_str,

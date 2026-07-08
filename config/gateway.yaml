@@ -50,10 +50,10 @@ cloud:
 # --- MAVLink配置 ---
 mavlink:
   connection:
-    # type: "serial"               # serial/udp/tcp
+    # type: "serial"               # serial/udp/udpin/udpout/tcp
     # port: "/dev/ttyACM0"         # 串口设备
     # baudrate: 921600
-    # udp配置示例:
+    # udp/udpin 表示监听 MAVProxy --out 过来的 UDP 遥测:
     type: "udp"
     host: "127.0.0.1"
     port: 14550
