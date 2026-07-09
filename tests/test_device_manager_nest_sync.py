@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import sqlite3
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -14,21 +13,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-if "aiosqlite" not in sys.modules:
-    aiosqlite = ModuleType("aiosqlite")
-    aiosqlite.connect = lambda *args, **kwargs: None
-    for name in (
-        "DatabaseError",
-        "Error",
-        "IntegrityError",
-        "NotSupportedError",
-        "OperationalError",
-        "ProgrammingError",
-        "sqlite_version",
-        "sqlite_version_info",
-    ):
-        setattr(aiosqlite, name, getattr(sqlite3, name))
-    sys.modules["aiosqlite"] = aiosqlite
+if "src.database.connection" not in sys.modules:
+    connection = ModuleType("src.database.connection")
+
+    async def init_database_async():
+        return None
+
+    def get_async_session_local():
+        return None
+
+    connection.init_database_async = init_database_async
+    connection.get_async_session_local = get_async_session_local
+    sys.modules["src.database.connection"] = connection
+
+if "src.database.device_db" not in sys.modules:
+    device_db = ModuleType("src.database.device_db")
+    device_db.DeviceDB = type("DeviceDB", (), {})
+    sys.modules["src.database.device_db"] = device_db
+
+if "src.database.alarm_db" not in sys.modules:
+    alarm_db = ModuleType("src.database.alarm_db")
+    alarm_db.AlarmDB = type("AlarmDB", (), {})
+    sys.modules["src.database.alarm_db"] = alarm_db
 
 from src.device.manager import DeviceManager  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
