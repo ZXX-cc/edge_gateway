@@ -22,6 +22,7 @@ from mqtt_test_client import MqttRequestClient, output_status, result_code
 from mqtt_dock3_drc_test import (
     DEFAULT_DRONE_SN,
     _osd_topics,
+    has_cli_takeoff_target,
     is_fallback_target_allowed,
     resolve_takeoff_target,
     wait_for_drone_osd,
@@ -168,15 +169,37 @@ def phase_drc_sitl(args) -> int:
         return 2
     failures = 0
     try:
-        osd_topic, osd_payload = wait_for_drone_osd(client, _osd_topics(args.drone_sn), args.osd_wait)
+        osd_topic = None
         try:
-            target, target_source = resolve_takeoff_target(args, osd_payload)
+            if has_cli_takeoff_target(args):
+                target, target_source = resolve_takeoff_target(args)
+            else:
+                rc, property_reply = client.request(
+                    "property_get",
+                    {"properties": ["latitude", "longitude", "height"]},
+                    args.timeout,
+                    allowed_results={0},
+                )
+                if rc != 0:
+                    return rc
+                target, target_source = resolve_takeoff_target(
+                    args,
+                    property_reply,
+                    telemetry_source="property_get",
+                )
+                if target_source == "fallback":
+                    osd_topic, osd_payload = wait_for_drone_osd(client, _osd_topics(args.drone_sn), args.osd_wait)
+                    target, target_source = resolve_takeoff_target(
+                        args,
+                        osd_payload,
+                        telemetry_source="drone_osd",
+                    )
         except ValueError as exc:
             _print_step("DRC 目标点解析", False, {"reason": str(exc)})
             return 12
         if not is_fallback_target_allowed(args, target_source):
             _print_step("DRC 目标点解析", False, {
-                "reason": "未收到飞行器 OSD，不能自动生成电子围栏内目标点",
+                "reason": "未收到网关 property_get 或飞行器 OSD 位置，不能自动生成电子围栏内目标点",
                 "topics": _osd_topics(args.drone_sn),
                 "hint": "传入 --target-lat/--target-lon，或显式添加 --allow-fallback-target",
             })

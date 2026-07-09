@@ -15,6 +15,7 @@ from mqtt_dock3_drc_test import (  # noqa: E402
     FALLBACK_TARGET_LONGITUDE,
     _candidate_drone_sns,
     _osd_topics,
+    has_cli_takeoff_target,
     is_fallback_target_allowed,
     resolve_takeoff_target,
     wait_for_drone_osd,
@@ -52,11 +53,26 @@ class Dock3DrcToolTargetTest(unittest.TestCase):
         target, source = resolve_takeoff_target(
             args(target_lat=31.2, target_lon=121.5),
             {"data": {"latitude": 1, "longitude": 2}},
+            telemetry_source="property_get",
         )
 
+        self.assertTrue(has_cli_takeoff_target(args(target_lat=31.2, target_lon=121.5)))
         self.assertEqual(source, "cli")
         self.assertEqual(target["target_latitude"], 31.2)
         self.assertEqual(target["target_longitude"], 121.5)
+        self.assertFalse(has_cli_takeoff_target(args()))
+
+    def test_resolve_takeoff_target_uses_property_get_before_osd(self):
+        target, source = resolve_takeoff_target(
+            args(target_offset_meters=30.0),
+            {"data": {"latitude": 39.9042, "longitude": 116.3975, "result": 0}},
+            telemetry_source="property_get",
+        )
+
+        self.assertEqual(source, "property_get")
+        self.assertAlmostEqual(target["target_latitude"], 39.9042)
+        self.assertGreater(target["target_longitude"], 116.3975)
+        self.assertLess(target["target_longitude"] - 116.3975, 0.001)
 
     def test_resolve_takeoff_target_uses_osd_nearby_offset(self):
         target, source = resolve_takeoff_target(

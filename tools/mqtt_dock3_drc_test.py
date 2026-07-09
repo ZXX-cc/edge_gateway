@@ -100,25 +100,33 @@ def _offset_longitude(latitude: float, longitude: float, offset_meters: float) -
     return longitude + offset_meters / meters_per_degree_lon
 
 
-def resolve_takeoff_target(args, osd_payload: Any | None = None) -> tuple[dict[str, float], str]:
+def has_cli_takeoff_target(args) -> bool:
+    return args.target_lat is not None and args.target_lon is not None
+
+
+def resolve_takeoff_target(
+    args,
+    telemetry_payload: Any | None = None,
+    telemetry_source: str = "drone_osd",
+) -> tuple[dict[str, float], str]:
     if (args.target_lat is None) != (args.target_lon is None):
         raise ValueError("--target-lat and --target-lon must be provided together")
 
-    if args.target_lat is not None and args.target_lon is not None:
+    if has_cli_takeoff_target(args):
         return {
             "target_latitude": float(args.target_lat),
             "target_longitude": float(args.target_lon),
             "target_height": float(args.target_height),
         }, "cli"
 
-    latitude = _to_float(_field_value(osd_payload, "latitude"))
-    longitude = _to_float(_field_value(osd_payload, "longitude"))
+    latitude = _to_float(_field_value(telemetry_payload, "latitude"))
+    longitude = _to_float(_field_value(telemetry_payload, "longitude"))
     if latitude is not None and longitude is not None:
         return {
             "target_latitude": latitude,
             "target_longitude": _offset_longitude(latitude, longitude, float(args.target_offset_meters)),
             "target_height": float(args.target_height),
-        }, "drone_osd"
+        }, telemetry_source
 
     return {
         "target_latitude": FALLBACK_TARGET_LATITUDE,
@@ -158,7 +166,7 @@ def main():
     parser.add_argument(
         "--allow-fallback-target",
         action="store_true",
-        help="Allow the built-in fallback target when no drone OSD is received. Prefer --target-lat/--target-lon for strict tests.",
+        help="Allow the built-in fallback target when no property_get/drone OSD position is received. Prefer --target-lat/--target-lon for strict tests.",
     )
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
@@ -269,11 +277,34 @@ def main():
         if rc != 0:
             return rc
 
-        osd_topic, osd_payload = wait_for_drone_osd(client, osd_topics, args.osd_wait)
-        target, target_source = resolve_takeoff_target(args, osd_payload)
+        osd_topic = None
+        if has_cli_takeoff_target(args):
+            target, target_source = resolve_takeoff_target(args)
+        else:
+            rc, property_reply = client.request(
+                "property_get",
+                {"properties": ["latitude", "longitude", "height"]},
+                args.timeout,
+                channel="services",
+                allowed_results={0},
+            )
+            if rc != 0:
+                return rc
+            target, target_source = resolve_takeoff_target(
+                args,
+                property_reply,
+                telemetry_source="property_get",
+            )
+            if target_source == "fallback":
+                osd_topic, osd_payload = wait_for_drone_osd(client, osd_topics, args.osd_wait)
+                target, target_source = resolve_takeoff_target(
+                    args,
+                    osd_payload,
+                    telemetry_source="drone_osd",
+                )
         if not is_fallback_target_allowed(args, target_source):
             print(
-                "error: no drone OSD received before takeoff_to_point; "
+                "error: no gateway property_get or drone OSD position received before takeoff_to_point; "
                 f"topics={','.join(osd_topics)}. "
                 "Provide --target-lat/--target-lon or rerun with --allow-fallback-target.",
                 file=sys.stderr,
@@ -281,14 +312,15 @@ def main():
             return 11
         if target_source == "fallback":
             print(
-                "warning: no drone OSD received before takeoff_to_point; "
+                "warning: no gateway property_get or drone OSD position received before takeoff_to_point; "
                 f"fallback target is used, topics={','.join(osd_topics)}",
                 file=sys.stderr,
             )
         else:
+            topic_info = f", topic={osd_topic}" if osd_topic else ""
             print(
                 "takeoff_to_point target "
-                f"source={target_source}, topic={osd_topic}, "
+                f"source={target_source}{topic_info}, "
                 f"lat={target['target_latitude']:.7f}, lon={target['target_longitude']:.7f}, "
                 f"height={target['target_height']:.1f}"
             )
