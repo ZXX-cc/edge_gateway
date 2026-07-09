@@ -122,11 +122,30 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"][0]["sn"], "DRONE-A")
         self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 1)
 
-    def test_unbind_clears_sub_devices_and_reports_empty_topology(self):
-        sub_device = SubDevice("DRONE-A", device_type=60, index="A")
-        sub_device.online = True
-        sub_device.paired = True
-        self.manager.add_sub_device(sub_device)
+    def test_unbind_clears_sub_devices_bindings_and_reports_empty_topology(self):
+        for sn, index in (("DRONE-A", "A"), ("DRONE-B", "B")):
+            sub_device = SubDevice(sn, device_type=60, index=index)
+            sub_device.online = True
+            sub_device.paired = True
+            self.manager.add_sub_device(sub_device)
+            self.manager._set_device_binding_info(sn, {
+                "sn": sn,
+                "device_model_key": "0-60-0",
+                "device_callsign": sn,
+                "is_bound": True,
+                "organization_id": "org-001",
+                "organization_name": "模拟组织",
+                "bind_time": 1,
+            })
+        self.manager._set_device_binding_info(self.manager.gateway_sn, {
+            "sn": self.manager.gateway_sn,
+            "device_model_key": "3-119-0",
+            "device_callsign": self.manager.gateway_sn,
+            "is_bound": True,
+            "organization_id": "org-001",
+            "organization_name": "模拟组织",
+            "bind_time": 1,
+        })
 
         with patch.object(
             self.manager,
@@ -138,6 +157,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(self.manager.get_all_sub_devices(), [])
         self.assertEqual(self.manager.get_property("sub_device")["device_sn"], "")
+        self.assertFalse(self.manager._get_device_binding_info(self.manager.gateway_sn)["is_bound"])
+        self.assertFalse(self.manager._get_device_binding_info("DRONE-A")["is_bound"])
+        unbinding_events = [event for event in self.events if event.get("method") == "device_unbinding"]
+        self.assertEqual(
+            {event["data"]["device_sn"] for event in unbinding_events},
+            {self.manager.gateway_sn, "DRONE-A", "DRONE-B"},
+        )
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"], [])
 
     def test_organization_bind_reply_pairs_multiple_sub_devices_and_reports_topology(self):

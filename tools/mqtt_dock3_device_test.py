@@ -48,6 +48,7 @@ class DeviceTopologyClient(MqttRequestClient):
             sn,
             qos,
             quiet_stale=quiet_stale,
+            subscribe_events=True,
             client_id_prefix="edge_gateway_dock3_device",
             subscribe_status=True,
         )
@@ -112,6 +113,37 @@ def assert_status_payload(status_msg, expected_count, expected_sns=None):
                 print(f"missing expected sub-device sn={expected_sn}", file=sys.stderr)
                 return 7
     return 0
+
+
+def wait_for_unbinding_events(client, previous_count, expected_sns, timeout):
+    deadline = time.time() + timeout
+    expected_sns = list(expected_sns)
+    expected_count = len(expected_sns)
+    while time.time() < deadline:
+        events = client.events_by_method.get("device_unbinding", [])
+        if len(events) >= previous_count + expected_count:
+            new_events = events[previous_count:]
+            actual_sns = [event.get("data", {}).get("device_sn") for event in new_events]
+            missing_sns = sorted(set(expected_sns) - set(actual_sns))
+            if missing_sns:
+                print(f"missing device_unbinding SNs: {', '.join(missing_sns)}", file=sys.stderr)
+                print(json.dumps({"device_unbinding_events": new_events}, ensure_ascii=False, indent=2))
+                return 12
+            print(f"device_unbinding events ok: count={len(new_events)}, sns={','.join(actual_sns)}")
+            return 0
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        client.event_signal.wait(max(0.05, min(0.5, remaining)))
+        client.event_signal.clear()
+
+    actual_count = len(client.events_by_method.get("device_unbinding", [])) - previous_count
+    print(
+        f"timeout waiting for device_unbinding events: expected={expected_count}, actual={actual_count}",
+        file=sys.stderr,
+    )
+    return 13
 
 
 def build_extra_sub_device(raw):
@@ -206,6 +238,7 @@ def main():
     )
     parser.add_argument("--skip-offline-check", action="store_true")
     parser.add_argument("--skip-reconnect-check", action="store_true")
+    parser.add_argument("--skip-unbind-check", action="store_true")
     parser.add_argument("--skip-invalid-check", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
@@ -284,6 +317,27 @@ def main():
                 print("invalid update_topo unexpectedly produced a status update", file=sys.stderr)
                 return 8
 
+        if not args.skip_unbind_check:
+            before_status = client.status_count("update_topo")
+            before_unbinding = client.event_count("device_unbinding")
+            rc, _ = client.request("device_unbinding", {}, args.timeout, expected_result=0)
+            if rc != 0:
+                return rc
+            rc = wait_for_unbinding_events(
+                client,
+                before_unbinding,
+                [args.sn] + expected_sns,
+                args.timeout,
+            )
+            if rc != 0:
+                return rc
+            rc = assert_status_payload(
+                client.wait_for_new_status(before_status, args.timeout),
+                expected_count=0,
+            )
+            if rc != 0:
+                return rc
+
         if client.status_validation_errors:
             for error in client.status_validation_errors:
                 print(error, file=sys.stderr)
@@ -298,7 +352,9 @@ def main():
             "dock3 device topology test ok "
             f"(status_messages={client.status_count('update_topo')}, sub_device_count={len(expected_sub_devices)}, "
             f"sub_device_sns={','.join(expected_sns)}, reconnect={not args.skip_offline_check and not args.skip_reconnect_check}, "
+            f"unbind={not args.skip_unbind_check}, "
             f"accepted={client.stats['accepted']}, status={client.stats['status']}, "
+            f"events={client.stats['events']}, "
             f"ignored_mismatched={client.stats['ignored_mismatched']}, "
             f"ignored_legacy={client.stats['ignored_legacy']}, "
             f"ignored_late={client.stats['ignored_late']}, "

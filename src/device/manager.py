@@ -1310,10 +1310,11 @@ class DeviceManager:
 
     def unbind_device(self) -> bool:
         """设备解绑"""
+        unbind_time = int(time.time() * 1000)
+        known_sns = [self.gateway_sn] + list(self._sub_devices.keys())
         self._device_state = self.STATE_UNBOUND
         self._bound_workspace_id = ""
         self._bound_workspace_name = ""
-        self._sub_devices.clear()
 
         # 清除组织绑定信息
         self._org_data = {
@@ -1328,10 +1329,15 @@ class DeviceManager:
         self._save_organization_data()
 
         logger.info("Device unbound")
+        for sn in known_sns:
+            self._notify_event('device_unbinding', {
+                'device_sn': sn,
+                'bind_status': 'success',
+                'timestamp': unbind_time
+            })
+
+        self._sub_devices.clear()
         self._refresh_sub_device_property()
-        self._notify_event('device_unbinding', {
-            'timestamp': int(time.time() * 1000)
-        })
         self.report_update_topo()
 
         self._schedule_async(self._save_binding_to_db())

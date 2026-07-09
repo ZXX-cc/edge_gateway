@@ -50,7 +50,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_organization_test.py` | 组织管理专项 | `airport_bind_status/get/bind`、多子设备绑定 |
 | `tools/mqtt_dock3_p0_batch_test.py` | P0 基础批量 | property、services、DRC、错误 topic |
 | `tools/mqtt_dock3_properties_test.py` | properties 专项 | 可写/只读属性、值域 |
-| `tools/mqtt_dock3_device_test.py` | device topology 专项 | `update_topo`、多子设备、在线/离线/重连拓扑 |
+| `tools/mqtt_dock3_device_test.py` | device topology 专项 | `update_topo`、多子设备、在线/离线/重连拓扑、解绑空拓扑 |
 | `tools/mqtt_dock3_drc_test.py` | DRC 专项 | enter/exit、杆量、错误值域 |
 | `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
@@ -223,7 +223,7 @@ P0 通过标准：
 | P0 批量 | 输出 `dock3 p0 batch test ok` |
 | Properties | 输出 `dock3 properties test ok` |
 | OSD/State | 输出 `dock3 osd/state test ok`，且 `invalid=0` |
-| Device | 输出 `dock3 device topology test ok`；多子设备命令需显示 `sub_device_count=2`，并覆盖离线空拓扑和重连恢复 |
+| Device | 输出 `dock3 device topology test ok`；多子设备命令需显示 `sub_device_count=2`、`reconnect=True`、`unbind=True`、`device_unbinding events ok`，并覆盖离线空拓扑、重连恢复和解绑空拓扑 |
 | Organization | 输出 `organization request test ok`；多子设备命令需显示 `device_binding events ok: count=3`、`memory binding ok`、`sub-device paired ok`、`sub_devices=2` 和 `status_reply ok` |
 | DRC | 输出 `dock3 drc test ok` |
 | DRC 批量 | 输出 `drc batch test ok`，且 `ignored_total=0` |
