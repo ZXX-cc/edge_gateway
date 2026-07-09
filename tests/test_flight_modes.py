@@ -10,7 +10,9 @@ if PROJECT_ROOT not in sys.path:
 
 if "pymavlink" not in sys.modules:
     pymavlink = types.ModuleType("pymavlink")
-    pymavlink.mavutil = types.SimpleNamespace()
+    pymavlink.mavutil = types.SimpleNamespace(
+        mavlink=types.SimpleNamespace(MAV_CMD_DO_CHANGE_SPEED=178)
+    )
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 

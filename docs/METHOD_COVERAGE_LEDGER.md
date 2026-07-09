@@ -34,7 +34,7 @@
 | Router category | Method 数 | 30 天优先级 | 客户能力域 | 当前判定 |
 |---|---:|---|---|---|
 | device | 51 | P0/P1/P2 | 设备管理、属性、绑定、机巢控制、HMS、日志、配置、OTA、AirSense | P0/P1 混合，需拆分验收 |
-| mission | 42 | P0/P1 | 航线、飞控、返航、降落、一键启航、作业 | Wayline 基础已验证，KMZ/SITL/一键启航待补 |
+| mission | 42 | P0/P1 | 航线、飞控、返航、降落、一键启航、作业 | Wayline 基础已验证，一键启航本地闭环已补；KMZ/SITL/Ubuntu 实证待补 |
 | payload | 93 | P1/P2 | 相机、云台、ViewLink、红外、喊话器、探照灯、PSDK、第三方负载 | 大部分需 P1/P2 adapter 和专项脚本 |
 | media | 13 | P1/P2 | 媒体文件、上传、直播、镜头、质量 | P1 必补专项 |
 | drc | 24 | P0/P1/P2 | DRC 建链、杆量、指点飞行、负载控制、POI | 基础已验证，心跳/超时/指点飞行待补 |

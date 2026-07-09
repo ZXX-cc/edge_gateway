@@ -275,6 +275,7 @@ class MissionManager:
         self._camera_controller = None
         self._telemetry_module = None
         self._telemetry_reporter = None
+        self._last_takeoff_flow_steps: List[dict] = []
 
     def set_flight_control(self, flight_control):
         """注入飞行控制模块"""
@@ -574,6 +575,113 @@ class MissionManager:
             self.gateway_sn
         )
         self._event_callback(event)
+
+    def _record_takeoff_flow_step(self, steps: list, name: str, status: str = STATUS_OK,
+                                  result: int = 0, detail: dict = None):
+        step = {
+            'name': name,
+            'step': name,
+            'status': status,
+            'result': result,
+            'timestamp': int(time.time() * 1000),
+        }
+        if detail:
+            step.update(detail)
+        steps.append(step)
+        if self._event_callback:
+            self._event_callback(MessageBuilder.build_event(
+                'one_key_takeoff_progress',
+                {
+                    'result': result,
+                    'output': {
+                        'status': status,
+                        'step': name,
+                        'steps': list(steps),
+                        'flight_id': self._current_task_id or '',
+                    }
+                },
+                self.gateway_sn,
+            ))
+
+    def _send_takeoff_flow_nest_command(self, command_name: str) -> dict:
+        command_map = {
+            'charge_close': 'CHARGE_STOP',
+            'cover_open': 'DOOR_OPEN',
+            'putter_open': 'CLAMP_RELEASE',
+            'putter_close': 'CLAMP_TIGHTEN',
+            'cover_close': 'DOOR_CLOSE',
+            'charge_open': 'CHARGE_START',
+        }
+        gcs_name = command_map.get(command_name)
+        if not self._nest_module:
+            return {
+                'success': True,
+                'simulated': True,
+                'message': 'nest_module_not_available',
+                'command': command_name,
+            }
+        try:
+            from src.generated_dialect.gcs_order_protocol import GCSCommand
+            command = getattr(GCSCommand, gcs_name)
+            if not hasattr(self._nest_module, 'send_gcs_command'):
+                return {
+                    'success': False,
+                    'simulated': False,
+                    'message': 'nest_module_missing_send_gcs_command',
+                    'command': command_name,
+                }
+            self._nest_module.send_gcs_command(command)
+            return {
+                'success': True,
+                'simulated': False,
+                'message': 'sent',
+                'command': command_name,
+                'gcs_command': gcs_name,
+            }
+        except Exception as exc:
+            logger.warning("Takeoff flow nest command failed: %s -> %s", command_name, exc)
+            return {
+                'success': False,
+                'simulated': False,
+                'message': str(exc),
+                'command': command_name,
+                'gcs_command': gcs_name,
+            }
+
+    def _run_takeoff_flow_nest_step(self, steps: list, command_name: str) -> bool:
+        result = self._send_takeoff_flow_nest_command(command_name)
+        status = STATUS_OK if result.get('success') else STATUS_FAILED
+        self._record_takeoff_flow_step(steps, command_name, status=status, result=0 if result.get('success') else -1, detail=result)
+        return bool(result.get('success'))
+
+    def _run_takeoff_flow_flight_step(self, steps: list, name: str, action: str, *args) -> bool:
+        if not self._flight_control:
+            self._record_takeoff_flow_step(
+                steps,
+                name,
+                detail={'success': True, 'simulated': True, 'message': 'flight_control_not_available'},
+            )
+            return True
+        handler = getattr(self._flight_control, action, None)
+        if not handler:
+            self._record_takeoff_flow_step(
+                steps,
+                name,
+                status=STATUS_FAILED,
+                result=-1,
+                detail={'success': False, 'message': f'flight_control_missing_{action}'},
+            )
+            return False
+        result = handler(*args)
+        success = bool(result.get('success', result is True)) if isinstance(result, dict) else bool(result)
+        self._record_takeoff_flow_step(
+            steps,
+            name,
+            status=STATUS_OK if success else STATUS_FAILED,
+            result=0 if success else -1,
+            detail=result if isinstance(result, dict) else {'success': success},
+        )
+        return success
 
     @staticmethod
     def _as_float(value: Any, default: float = 0.0) -> float:
@@ -1321,6 +1429,135 @@ class MissionManager:
                 logger.warning(f"起飞指令失败: {result.get('message')}")
 
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_one_key_takeoff_flow(self, msg: dict) -> dict:
+        """
+        一键启航闭环编排。
+
+        模拟闭环顺序：
+        起飞前检查 -> 断充 -> 开盖 -> 释放夹紧 -> 机巢起飞允许/起飞指令
+        -> 飞控起飞 -> 航线执行 -> 返航 -> 降落 -> 夹紧 -> 关盖 -> 充电。
+
+        data:
+        - flight_id: 可选，默认使用当前 flighttask_prepare 的 flight_id
+        - takeoff_height: 可选，默认 30m
+        - auto_complete: 可选；仿真默认 true，真实链路默认 false
+        """
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        flight_id = data.get('flight_id') or self._current_task_id or f"takeoff-flow-{int(time.time() * 1000)}"
+        takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
+        if isinstance(data.get('simulate_mission'), dict):
+            self._simulate_mission = data['simulate_mission']
+        simulate_enabled = self._simulate_mission.get('is_enable') == 1
+        auto_complete_raw = data.get('auto_complete', simulate_enabled)
+        if isinstance(auto_complete_raw, str):
+            auto_complete = auto_complete_raw.strip().lower() not in ('0', 'false', 'no', 'off')
+        else:
+            auto_complete = bool(auto_complete_raw)
+
+        self._current_task_id = flight_id
+        steps: list = []
+        self._last_takeoff_flow_steps = steps
+        self._record_takeoff_flow_step(steps, 'precheck', detail={
+            'flight_id': flight_id,
+            'waypoint_count': len(self._current_wayline),
+            'simulate_mission': self._simulate_mission.get('is_enable') == 1,
+        })
+
+        for command_name in ('charge_close', 'cover_open', 'putter_open'):
+            if not self._run_takeoff_flow_nest_step(steps, command_name):
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=-1,
+                    data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                    msg_str=f'{command_name} failed',
+                )
+
+        if self._nest_module and hasattr(self._nest_module, 'request_takeoff'):
+            try:
+                self._nest_module.request_takeoff()
+                self._record_takeoff_flow_step(steps, 'nest_takeoff_request', detail={'success': True, 'simulated': False})
+            except Exception as exc:
+                self._record_takeoff_flow_step(
+                    steps,
+                    'nest_takeoff_request',
+                    status=STATUS_FAILED,
+                    result=-1,
+                    detail={'success': False, 'message': str(exc)},
+                )
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=-1,
+                    data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                    msg_str='nest_takeoff_request failed',
+                )
+        else:
+            self._record_takeoff_flow_step(steps, 'nest_takeoff_request', detail={'success': True, 'simulated': True})
+
+        if not self._run_takeoff_flow_flight_step(steps, 'flight_takeoff', 'takeoff', takeoff_height):
+            return MessageBuilder.build_reply(
+                msg,
+                result=-1,
+                data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                msg_str='flight_takeoff failed',
+            )
+
+        self._status = self.MISSION_RUNNING
+        self._wayline_mission_state = 6
+        self._current_step = 23
+        self._battery_safety_action = None
+        self._executed_waypoint_actions.clear()
+        self._record_takeoff_flow_step(steps, 'flighttask_execute', status=STATUS_IN_PROGRESS, detail={
+            'flight_id': flight_id,
+            'waypoint_count': len(self._current_wayline),
+        })
+        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent(), flight_id=flight_id)
+
+        if not auto_complete:
+            self._last_takeoff_flow_steps = list(steps)
+            return MessageBuilder.build_reply(
+                msg,
+                result=0,
+                data={'output': {'status': STATUS_IN_PROGRESS, 'steps': steps, 'flight_id': flight_id}},
+            )
+
+        self._status = self.MISSION_COMPLETED
+        self._wayline_mission_state = 9
+        self._current_step = 24
+        self._emit_wayline_progress(STATUS_OK, current_step=24, percent=100, flight_id=flight_id)
+
+        if not self._run_takeoff_flow_flight_step(steps, 'return_home', 'one_click_return'):
+            return MessageBuilder.build_reply(
+                msg,
+                result=-1,
+                data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                msg_str='return_home failed',
+            )
+        if not self._run_takeoff_flow_flight_step(steps, 'landing', 'land'):
+            return MessageBuilder.build_reply(
+                msg,
+                result=-1,
+                data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                msg_str='landing failed',
+            )
+
+        for command_name in ('putter_close', 'cover_close', 'charge_open'):
+            if not self._run_takeoff_flow_nest_step(steps, command_name):
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=-1,
+                    data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                    msg_str=f'{command_name} failed',
+                )
+
+        self._current_step = 33
+        self._last_takeoff_flow_steps = list(steps)
+        self._record_takeoff_flow_step(steps, 'completed', detail={'flight_id': flight_id})
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={'output': {'status': STATUS_OK, 'steps': steps, 'flight_id': flight_id}},
+        )
 
     def handle_one_key_return_home(self, msg: dict) -> dict:
         """处理一键返航"""

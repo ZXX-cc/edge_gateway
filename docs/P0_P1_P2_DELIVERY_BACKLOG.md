@@ -91,8 +91,8 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 
 | ID | 功能域 | 客户来源 | Dock3 落点 | 当前状态 | 30 天交付要求 | 证据 |
 |---|---|---|---|---|---|---|
-| P1-01 | 一键启航主流程 | `BUSINESS_FLOW.docx` 一键启航 | `wayline` + `cmd` + `events/state` | 待实现 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电串联 | `e2e_takeoff_flow_test.py` |
-| P1-02 | 机巢 v1.3 完整状态机 | 机巢协议 v1.3 | 设备侧 adapter -> Dock3 state/HMS/events | 部分可用 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞、HMS 告警和 operation 事件全部落地；一键启航 E2E 仍需补 | `nest_v13_protocol_test.py` |
+| P1-01 | 一键启航主流程 | `BUSINESS_FLOW.docx` 一键启航 | `wayline` + `cmd` + `events/state` | Needs Test | `one_key_takeoff_flow` 已串联起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电；仍需 Ubuntu MQTT 和真实 SITL/机巢证据 | `e2e_takeoff_flow_test.py`、`mqtt_one_key_takeoff_flow_test.py` |
+| P1-02 | 机巢 v1.3 完整状态机 | 机巢协议 v1.3 | 设备侧 adapter -> Dock3 state/HMS/events | 部分可用 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞、HMS 告警和 operation 事件全部落地；一键启航本地闭环已接入，Ubuntu 状态机证据仍需补 | `nest_v13_protocol_test.py`、`e2e_takeoff_flow_test.py` |
 | P1-03 | DRC 心跳和超时恢复 | DRC 业务流程 | `drc`、`drc_state`、events | 已可用 | 官方心跳、状态事件和超时退出基础闭环已进入专项与 E2E；真实链路抖动边界继续精校 | DRC 专项 |
 | P1-04 | `takeoff_to_point` 和指点飞行 | 指令飞行 | `drc` / remote control | 已可用 | Dock3 云端模拟下起飞到点、导航中、取消/停止状态可用；真实 SITL 航点语义归入 P1-06 | DRC + SITL |
 | P1-05 | KMZ/WPML 基础解析 | 航线管理 | `wayline` | 已可用 | mock KMZ 下载/校验/解析并转换到内部 mission 已通过 Wayline 与 E2E 复测 | Wayline 专项 |

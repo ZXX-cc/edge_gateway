@@ -764,6 +764,7 @@ class EdgeGateway:
             'flyto': self.mission.handle_flyto,
             'fly_to_point': self.mission.handle_fly_to_point,
             'take_off': self.mission.handle_takeoff,
+            'one_key_takeoff_flow': self.mission.handle_one_key_takeoff_flow,
             'one_key_return_home': self.mission.handle_one_key_return_home,
             'cancel_return_home': self.mission.handle_cancel_return_home,
             'set_flight_mode': self.mission.handle_set_flight_mode,

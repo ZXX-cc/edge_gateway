@@ -125,7 +125,7 @@
 | Wayline 航线 | 部分可用 | 62% | KMZ/WPML、媒体计数、真实 SITL 航点执行待补 | `wayline` |
 | MAVLink 飞控联动 | 部分可用 | 55% | 解锁/起飞/航线/返航/模式映射和非阻塞超时待补 | MAVLink + Dock3 events/state |
 | 机巢 v1.3 协议 | 部分可用 | 63% | 离线专项已覆盖命令字、拒绝原因、状态位、云端字段和 HMS 映射；Ubuntu 网关 + 机巢模拟器实跑、状态机闭环和 boolstate2 精细映射待补 | `cmd`、`properties`、`state`、`hms` |
-| 一键启航业务流 | 开发中 | 45% | 起飞前检查、舱盖/夹紧/充电/备飞/飞控串联待补 | `wayline` + `cmd` + `events` |
+| 一键启航业务流 | Needs Test | 58% | `one_key_takeoff_flow` 已完成本地闭环和单测，仍缺 Ubuntu MQTT 实跑、真实 SITL 任务进度和机巢状态机证据 | `wayline` + `cmd` + `events` |
 | 媒体管理 | 已可用 | 55% | 文件列表、删除、上传优先级和上传事件已通过专项；真实 OSS/断点续传待补 | `media` |
 | 直播 | 已可用 | 45% | mock 推流启动/停止、质量、镜头、状态事件已通过专项；真实 RTMP/WebRTC/GB28181 adapter 待补 | `live` |
 | HMS 告警 | 已可用 | 60% | HMS 告警查询/清除和事件已通过 Ubuntu 专项；机巢故障/急停/错误码/心跳丢失到 HMS 的本地映射已补齐，文案 key 和真实故障源待精校 | `hms` |

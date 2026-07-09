@@ -70,7 +70,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 已通过 `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
 | Ubuntu 复测 `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/上传模拟、取消、失败码 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
-| `tools/e2e_takeoff_flow_test.py` | 一键启航：起飞前检查、机巢动作、起飞、任务、返航、降落、充电 | P1 |
+| `tools/e2e_takeoff_flow_test.py` | 一键启航：起飞前检查、机巢动作、起飞、任务、返航、降落、充电；`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
 | 扩展 `tools/e2e_full_chain_test.py` | 继续接入 HMS/log/firmware/config 等剩余 P1 域 | P1 |
 
 ## 3. 启动前检查
@@ -240,7 +240,7 @@ python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale
 python tools/mqtt_dock3_firmware_config_test.py --timeout 20
-python tools/e2e_takeoff_flow_test.py --timeout 60
+python tools/e2e_takeoff_flow_test.py --simulate --timeout 60 --quiet-stale
 python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
 ```
 
