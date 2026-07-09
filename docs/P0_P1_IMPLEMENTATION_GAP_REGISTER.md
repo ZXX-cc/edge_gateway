@@ -35,7 +35,7 @@
 | 1 | 高 | 机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | G-P0-04、G-P0-05、G-P1-02、G-P1-15 | 已补机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接和离线专项 checks=5；下一步补 Ubuntu 网关 + 机巢模拟器实跑证据、状态机拒绝原因 |
 | 2 | 高 | 航线任务真实上传、KMZ/WPML、MAVLink Mission、真实进度、FlyTo/takeoff_to_point 进度 | G-P0-03、G-P1-04、G-P1-05、G-P1-06 | 把 mock Wayline 推进到真实 SITL 航点执行和距离/高度进度计算 |
 | 3 | 高 | DRC 速度/航向/高度控制优化 | G-P1-03、G-P1-04 | 保留已通过云端模拟证据，补真实 MAVLink type_mask、坐标系、航向和高度控制专项 |
-| 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚和飞机 OTA 透传 | G-P1-12、G-P1-13 | 虽是旧 P1 编号，但按客户高优先级前置，先补 firmware/config 专项 |
+| 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚和飞机 OTA 透传 | G-P1-12、G-P1-13 | 已补 firmware/config 本地模拟闭环和专项脚本；下一步做 Ubuntu MQTT 复测，再接真实 OTA adapter 边界 |
 | 5 | 高 | OSD 字段补全，含无线链路、维护状态、电池/GPS/云台字段 | G-P0-01 | 在已通过 OSD/state 专项基础上补字段矩阵和真实值校验 |
 | 6 | 高 | 直播真实推流、文件列表真实获取、媒体真实扫描 | G-P1-07、G-P1-08 | mock 通过不等于客户高优先级完成，补真实 adapter 或明确可验收 mock 边界 |
 | 7 | 高 | 相机变焦真实控制、对焦真实控制 | G-P1-09 | 接 MAVLink/SDK adapter 或返回明确硬件不可用错误码，不再只更新内存状态 |
@@ -70,8 +70,8 @@
 | G-P1-09 | P1-09 相机/云台基础控制 | 拍照、录像、变焦、云台角度/速度需要和 Dock3 payload/DRC 语义统一；历史 `web/mavlink/viewlink/` 只作 adapter 参考，不作为 Web 交付 | `src/payload/camera.py`, `src/payload/gimbal.py`, `src/modules/gimbal_control.py` | Payload 专项或并入 media/live | Day 16-20 | In Progress |
 | G-P1-10 | P1-10 HMS 告警 | Dock3 HMS 查询/清除的 `output.status`、告警结构规范化、模拟注入告警和 `hms` 事件已通过 Ubuntu 专项；机巢 `fault/estop/emergency_landing/error_code/heartbeat lost` 到 HMS 的本地映射已补齐，真实 HMS 文案 key 和硬件故障源仍需实跑精校 | `src/cloud_api/dock3_hms_log.py`, `src/database/alarm_db.py`, `src/device/nest_hms_mapper.py`, `src/device/manager.py` | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` + 机巢故障位实跑证据 | Day 21-24 | Closed |
 | G-P1-11 | P1-11 远程日志 | 本地日志扫描、`device_log_list_get/device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝已通过 Ubuntu 专项；测试输出 `dock3 hms/log test ok (accepted=8, events=5, ignored_total=7)` | `src/cloud_api/dock3_hms_log.py`, `src/modules/log_manager.py`, `src/utils/logger.py` | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` | Day 21-24 | Closed |
-| G-P1-12 | P1-12 固件升级模拟 | 升级任务、进度、失败码和后台任务模型未完成 Dock3 验收 | `src/device/manager.py`, `src/database/operation_db.py` | 新增 `tools/mqtt_dock3_firmware_config_test.py` | Day 21-24 | Open |
-| G-P1-13 | P1-13 配置更新 | 配置下发、持久化、回滚和状态事件未完成 Dock3 验收 | `src/device/manager.py`, `src/cloud_api/connection_manager.py`, `src/database/device_state_db.py` | `tools/mqtt_dock3_firmware_config_test.py` | Day 21-24 | Open |
+| G-P1-12 | P1-12 固件升级模拟 | 已补 `ota_create/ota_cancel/firmware_upgrade` 的模拟任务、进度事件、结果事件、失败码和后台任务模型；缺 Ubuntu MQTT 专项证据和真实 OTA adapter | `src/device/manager.py`, `tools/mqtt_dock3_firmware_config_test.py`, `tests/test_device_manager_firmware_config.py` | `tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale` | Day 21-24 | Needs Test |
+| G-P1-13 | P1-13 配置更新 | 已补配置下发、查询、持久化、版本号、回滚和状态事件；缺 Ubuntu MQTT 专项证据和真实云端字段精校 | `src/device/manager.py`, `tools/mqtt_dock3_firmware_config_test.py`, `tests/test_device_manager_firmware_config.py` | `tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale` | Day 21-24 | Needs Test |
 | G-P1-14 | P1-14 多设备/解绑/离线 | 当前单子设备拓扑、组织绑定、绑定后 `device_binding/update_topo` 和 `status_reply` 已通过；仍需多子设备、解绑、离线、重连回归 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py` | 扩展 `tools/mqtt_dock3_device_test.py` 和 `tools/mqtt_organization_test.py` | Day 21-24 | In Progress |
 | G-P1-15 | P1-15 CMD 进阶失败码 | CMD 基础已通过，但真实耗时、失败码、安全拒绝和任务进度需更贴近 Dock3 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 扩展 `tools/mqtt_dock3_cmd_test.py` | Day 21-24 | Needs Test |
 | G-P1-16 | P1-16 网关短周期数据保留和操作记录 | 操作记录、短周期遥测保留、近期告警保留和清理策略有基础，但缺 P1 验收证据；全量历史归档、统计报表和长期数据仓库属于平台侧 | `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
@@ -88,7 +88,7 @@
 | 5 | `tools/mqtt_dock3_media_test.py` | G-P1-07 已通过 Ubuntu 专项 |
 | 6 | `tools/mqtt_dock3_live_test.py` | G-P1-08 已通过 Ubuntu 专项 |
 | 7 | `tools/mqtt_dock3_hms_log_test.py` | G-P1-10、G-P1-11 已通过 Ubuntu 专项 |
-| 8 | `tools/mqtt_dock3_firmware_config_test.py` | G-P1-12、G-P1-13 |
+| 8 | `tools/mqtt_dock3_firmware_config_test.py` | 已新增，待 Ubuntu MQTT 复测后关闭 G-P1-12、G-P1-13 |
 | 9 | 扩展 device/organization/cmd 测试 | G-P1-14、G-P1-15 |
 | 10 | `tools/e2e_full_chain_test.py` | G-P0-08、G-P1-17 已完成当前 Ubuntu 通过域；media/live 已通过专项，后续接入 HMS/log/config |
 

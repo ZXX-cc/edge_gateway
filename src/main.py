@@ -698,7 +698,11 @@ class EdgeGateway:
         self.router.register_batch({
             'ota_create': self.device.handle_ota_create,
             'ota_cancel': self.device.handle_ota_cancel,
+            'firmware_upgrade': self.device.handle_ota_create,
+            'firmware_upgrade_cancel': self.device.handle_ota_cancel,
             'config_update': self.device.handle_config_update,
+            'config_get': self.device.handle_config_get,
+            'config_rollback': self.device.handle_config_rollback,
             'property_set': self.device.handle_property_set,
             'property_get': self.device.handle_property_get,
             'device_binding': self.device.handle_device_binding,

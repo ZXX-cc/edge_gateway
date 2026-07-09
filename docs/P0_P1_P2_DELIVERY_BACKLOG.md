@@ -102,12 +102,12 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-09 | 相机/云台基础控制 | P 类负载、云台 | payload/camera/gimbal、DRC payload | 部分可用 | 拍照、录像、变焦、云台角度、云台速度基础命令可用 | Payload 专项 |
 | P1-10 | HMS 告警 | HMS 管理 | Dock3 `hms` | 已可用 | 告警 key、设备、级别、查询/清除和事件结构已通过 Ubuntu 专项；机巢故障/急停/错误码/心跳丢失到 HMS 的本地映射已补齐，真实 HMS 文案 key 和硬件故障源后续精校 | `mqtt_dock3_hms_log_test.py` |
 | P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 已可用 | 日志列表、上传模拟、进度事件和非法参数失败码已补齐；Ubuntu 专项已验证 `device_log_list_get` 返回日志列表和本次测试日志 | `mqtt_dock3_hms_log_test.py` |
-| P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 待实现 | 任务创建、进度、失败码、后台任务模型可用 | `mqtt_dock3_firmware_config_test.py` |
-| P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 待实现 | 配置下发、持久化、回滚、状态事件可用 | `mqtt_dock3_firmware_config_test.py` |
+| P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 部分可用 | 任务创建、进度、失败码、后台任务模型已本地实现；待 Ubuntu MQTT 专项复测和真实 OTA adapter 边界 | `mqtt_dock3_firmware_config_test.py` |
+| P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 部分可用 | 配置下发、查询、持久化、回滚、状态事件已本地实现；待 Ubuntu MQTT 专项复测和字段精校 | `mqtt_dock3_firmware_config_test.py` |
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 网关短周期数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、短周期遥测保留、近期告警保留和清理策略可用；全量历史统计和长期数据仓库归平台侧 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live/HMS/log 已通过专项，firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live/HMS/log 已通过专项，firmware/config 已新增专项待复测后接入 | `e2e_full_chain_test.py` |
 
 ## 5. P2 允许带问题但必须有边界
 
@@ -153,6 +153,6 @@ P2 可以在 30 天末保留问题，但不能空白、不能影响 P0/P1、不�
 | `python tools/mqtt_dock3_hms_log_test.py --timeout 20` | P1 HMS/log |
 | `python tools/mqtt_dock3_firmware_config_test.py --timeout 20` | P1 firmware/config |
 | `python tools/e2e_takeoff_flow_test.py --timeout 60` | P1 一键启航 |
-| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；media/live/HMS/log 已由专项脚本覆盖，firmware/config 后续接入 |
+| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；media/live/HMS/log 已由专项脚本覆盖，firmware/config 复测后接入 |
 
 执行顺序和证据保存要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。
