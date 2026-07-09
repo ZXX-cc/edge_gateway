@@ -117,7 +117,7 @@ scripts/start_support_stack.sh
 BROKER_MODE=check scripts/start_support_stack.sh
 ```
 
-如果 `1883` 没有监听，按脚本输出的 `systemctl status` 和 `journalctl -u mosquitto` 片段修复 Mosquitto；必要时用 `sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v` 定位配置错误。
+如果 `1883` 没有监听，按脚本输出的 `systemctl status`、`journalctl -u mosquitto`、配置文件行号和前台 `mosquitto -c ... -v` 结果修复 Mosquitto。当前常见问题是 `/etc/mosquitto/conf.d/local.conf` 内配置项写错或端口监听重复。
 
 ### 4.2 MQTT 观察终端
 
