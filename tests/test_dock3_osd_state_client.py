@@ -176,6 +176,45 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.invalid_samples, [])
         self.assertEqual(self.client.observed_count(self.client.state_topic), 1)
 
+    def test_legacy_partial_value_wrapped_dock_osd_is_ignored(self):
+        payload = envelope(
+            "EDGEGW001",
+            {
+                "cover_state": {"value": 0},
+                "putter_state": {"value": 0},
+                "charging_state": {"value": 0},
+                "drone_in_dock": {"value": 1},
+                "wind_speed": {"value": 28.6},
+            },
+        )
+
+        self.client._on_message(None, None, mqtt_message(self.client.dock_osd_topic, payload))
+
+        self.assertEqual(self.client.counts(), (0, 0, 0))
+        self.assertEqual(self.client.invalid_samples, [])
+        self.assertEqual(self.client.observed_count(self.client.dock_osd_topic), 1)
+
+    def test_legacy_partial_value_wrapped_drone_osd_is_ignored(self):
+        payload = envelope(
+            "EDGEGW001",
+            {
+                "latitude": {"value": 39.9042},
+                "longitude": {"value": 116.3974},
+                "height": {"value": 50.0},
+                "horizontal_speed": {"value": 0.0},
+                "vertical_speed": {"value": 0.0},
+                "attitude_head": {"value": 0.0},
+                "mode_code": {"value": 0},
+                "gear": {"value": 1},
+            },
+        )
+
+        self.client._on_message(None, None, mqtt_message(self.client.drone_osd_topic, payload))
+
+        self.assertEqual(self.client.counts(), (0, 0, 0))
+        self.assertEqual(self.client.invalid_samples, [])
+        self.assertEqual(self.client.observed_count(self.client.drone_osd_topic), 1)
+
     def test_property_set_uses_shared_request_and_checks_property_result(self):
         original_publish = self.client.client.publish
 

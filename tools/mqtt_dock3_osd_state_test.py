@@ -193,6 +193,32 @@ def is_ignorable_legacy_state(payload: Dict[str, Any], errors: List[str]) -> boo
     return any(error.startswith("ignored state without property.") for error in errors)
 
 
+def is_value_wrapped_object(node: Any) -> bool:
+    return isinstance(node, dict) and "value" in node
+
+
+def has_legacy_value_wrapped_fields(payload: Dict[str, Any]) -> bool:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    return any(is_value_wrapped_object(value) for value in data.values())
+
+
+def is_ignorable_legacy_osd(payload: Dict[str, Any], errors: List[str]) -> bool:
+    """
+    Ignore partial OSD samples published by old local helpers/gateway builds.
+
+    Current gateway Dock3 OSD may wrap values as ``{"value": ...}``, but it
+    still carries the full Dock3 required field set.  Older helpers published
+    partial value-wrapped OSD snapshots on the same topics; when a shared broker
+    still has those publishers running, they should be treated as stale noise
+    rather than failing this strict current-format check.
+    """
+    if not has_legacy_value_wrapped_fields(payload):
+        return False
+    return any(error.startswith("missing data.") for error in errors)
+
+
 def build_update_topo_payload(args) -> Dict[str, Any]:
     return {
         "domain": args.gateway_domain,
@@ -275,7 +301,9 @@ class Dock3OsdStateClient(MqttRequestClient):
 
             if topic == self.dock_osd_topic:
                 errors = validate_dock_osd(payload, self.sn)
-                if errors:
+                if errors and is_ignorable_legacy_osd(payload, errors):
+                    pass
+                elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_dock_osd.append(payload)
@@ -283,7 +311,9 @@ class Dock3OsdStateClient(MqttRequestClient):
 
             elif topic == self.drone_osd_topic:
                 errors = validate_drone_osd(payload, self.sn)
-                if errors:
+                if errors and is_ignorable_legacy_osd(payload, errors):
+                    pass
+                elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_drone_osd.append(payload)
