@@ -31,6 +31,10 @@ MQTT_HOST = os.environ.get("MQTT_HOST", "192.168.2.188")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 GATEWAY_SN = os.environ.get("GATEWAY_SN", "EDGEGW001")
 DRONE_SN = os.environ.get("DRONE_SN", "DRONESIM001")
+REAL_HD_WAYPOINTS_PATH = os.environ.get(
+    "REAL_HD_WAYPOINTS_PATH",
+    "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.original.waypoints",
+)
 
 CHANNELS = {
     "services": ("thing/product/{sn}/services", "thing/product/{sn}/services_reply"),
@@ -488,6 +492,11 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"latitude": 39.9045, "longitude": 116.3974, "altitude": 55.0},
         ],
     }
+    real_hd_wayline_file = {
+        "path": REAL_HD_WAYPOINTS_PATH,
+        "fingerprint": "hd-original-qgc-wpl",
+        "name": "HD.original.waypoints",
+    }
     return {
         "startup_check": [
             {"label": "读取核心属性", "method": "property_get", "data": {"properties": ["mode_code", "drc_state", "cover_state", "putter_state", "charging_state", "drone_in_dock"]}},
@@ -518,6 +527,11 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"label": "恢复", "method": "flighttask_resume", "data": {}},
             {"label": "返航", "method": "flighttask_return", "data": {"flight_id": "demo-flight-001", "return_type": 0}},
             {"label": "取消任务", "method": "flighttask_undo", "data": {"flight_ids": ["demo-flight-001"]}},
+        ],
+        "real_hd_wayline": [
+            {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": real_hd_wayline_file, "simulate_mission": {"is_enable": 0, "latitude": 44.0474824, "longitude": 125.3614503}}},
+            {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
+            {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},
         ],
         "takeoff_flow_demo": [
             {"label": "断开充电", "method": "charge_close", "data": {}},
@@ -616,6 +630,7 @@ def api_workflows():
         "dock_cmd": "机巢/CMD 动作",
         "drc_link": "DRC 链路",
         "wayline_demo": "Wayline 模拟任务",
+        "real_hd_wayline": "真实 HD 航线",
         "takeoff_flow_demo": "一键启航演示",
     }
     return jsonify({"workflows": [{"id": key, "name": name, "steps": workflow_steps()[key]} for key, name in meta.items()]})

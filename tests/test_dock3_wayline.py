@@ -264,6 +264,29 @@ class Dock3WaylineTest(unittest.TestCase):
             ["photo", "gimbal", "speed"],
         )
 
+    def test_parse_qgc_wpl_waypoints_preserves_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wpl_path = Path(tmp) / "HD.waypoints"
+            wpl_path.write_text(
+                "\n".join([
+                    "QGC WPL 110",
+                    "0\t1\t0\t16\t0\t0\t0\t0\t44.0474824\t125.3614503\t190.100000\t1",
+                    "1\t0\t3\t84\t0\t0\t0\t0\t44.04750440\t125.36144360\t96.000000\t1",
+                    "2\t0\t3\t18\t1\t1\t200\t1\t44.04087010\t125.33994320\t126.000000\t1",
+                    "3\t0\t0\t177\t2\t5\t0\t0\t0\t0\t0\t1",
+                ]),
+                encoding="utf-8",
+            )
+
+            summary, waypoints = parse_wayline_file({"path": str(wpl_path)})
+
+        self.assertTrue(summary["parsed"])
+        self.assertEqual(summary["format"], "waypoints")
+        self.assertEqual(len(waypoints), 4)
+        self.assertEqual([wp["command"] for wp in waypoints], [16, 84, 18, 177])
+        self.assertEqual(waypoints[1]["frame"], 3)
+        self.assertAlmostEqual(waypoints[1]["latitude"], 44.04750440)
+
     def test_mission_manager_executes_waypoint_actions_once(self):
         manager = MissionManager()
         camera = RecordingCamera()

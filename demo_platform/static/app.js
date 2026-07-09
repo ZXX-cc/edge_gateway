@@ -160,6 +160,7 @@ const actionGroups = {
     action("关闭补光灯", "关闭机场补光灯。", "supplement_light_close", {}),
   ],
   mission: [
+    action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
     action("准备模拟航线", "准备一条 demo wayline，默认不依赖真实 KMZ。", "flighttask_prepare", demoMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
@@ -223,6 +224,24 @@ function demoMissionData() {
       is_enable: 1,
       latitude: 39.9042,
       longitude: 116.397,
+    },
+  };
+}
+
+function realHdMissionData() {
+  return {
+    flight_id: "demo-flight-001",
+    execute_time: Date.now(),
+    task_type: 0,
+    file: {
+      path: "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.original.waypoints",
+      fingerprint: "hd-original-qgc-wpl",
+      name: "HD.original.waypoints",
+    },
+    simulate_mission: {
+      is_enable: 0,
+      latitude: 44.0474824,
+      longitude: 125.3614503,
     },
   };
 }

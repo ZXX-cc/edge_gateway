@@ -42,7 +42,7 @@ VALID_OUT_OF_CONTROL_ACTIONS = {0, 1, 2}
 VALID_EXIT_WAYLINE_WHEN_RC_LOST = {0, 1}
 VALID_RETURN_TYPES = {0, 1}
 VALID_BREAKPOINT_STATES = {0, 1}
-WAYLINE_FILE_EXTENSIONS = {".kmz", ".kml", ".wpml", ".xml"}
+WAYLINE_FILE_EXTENSIONS = {".kmz", ".kml", ".wpml", ".xml", ".waypoints"}
 MAX_WAYLINE_XML_BYTES = 2 * 1024 * 1024
 
 
@@ -255,6 +255,37 @@ def _read_text_file(path: str) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _parse_qgc_wpl(text: str) -> List[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or not lines[0].startswith("QGC WPL"):
+        return []
+
+    waypoints: List[dict] = []
+    for line in lines[1:]:
+        parts = re.split(r"\s+", line)
+        if len(parts) < 12:
+            continue
+        try:
+            waypoints.append({
+                "seq": int(parts[0]),
+                "current": int(parts[1]),
+                "frame": int(parts[2]),
+                "command": int(parts[3]),
+                "param1": _to_float(parts[4], 0.0),
+                "param2": _to_float(parts[5], 0.0),
+                "param3": _to_float(parts[6], 0.0),
+                "param4": _to_float(parts[7], 0.0),
+                "latitude": _to_float(parts[8], 0.0),
+                "longitude": _to_float(parts[9], 0.0),
+                "altitude": _to_float(parts[10], 0.0),
+                "autocontinue": int(parts[11]),
+                "action_type": "qgc_wpl",
+            })
+        except (TypeError, ValueError):
+            continue
+    return waypoints
+
+
 def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
     warnings: List[str] = []
     waypoints: List[dict] = []
@@ -321,6 +352,12 @@ def parse_wayline_file(file_info: Any) -> Tuple[Dict[str, Any], List[dict]]:
             parsed_summary, waypoints, warnings = _parse_kmz(path)
             summary.update(parsed_summary)
             summary["warnings"].extend(warnings)
+        elif suffix == ".waypoints":
+            text = _read_text_file(path)
+            summary["files"] = [os.path.basename(path)]
+            waypoints = _parse_qgc_wpl(text)
+            if not waypoints:
+                summary["warnings"].append("no qgc waypoint rows found")
         else:
             xml_text = _read_text_file(path)
             summary["files"] = [os.path.basename(path)]
