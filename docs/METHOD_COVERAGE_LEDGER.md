@@ -1,6 +1,6 @@
 # MQTT Method 覆盖台账
 
-更新时间：2026-07-07
+更新时间：2026-07-09
 
 本文档把 `src/main.py` 中实际注册的 MQTT method 归入客户需求、Dock3 迁移优先级和 30 天验收范围。它用于补足章节级需求矩阵之后的 method 级覆盖口径。当前策略是客户需求优先：客户需求涉及的 method 必须优先可用，客户暂未提及/当前业务未使用的 Dock3 能力可以延期迁移。
 
@@ -55,7 +55,7 @@
 | P0/P1 DRC | `drc_mode_enter`, `drc_mode_exit`, `stick_control`, `drone_control`, `payload_control`, `drc_gimbal_speed_push`, `drc_speed_push`, `drc_heading_push`, `drc_altitude_push`, `drc_flyto_point_push`, `fly_to_point_stop`, `fly_to_point_update` | P0-09、P1-03、P1-04 | DRC 专项、超时恢复、SITL |
 | P1 媒体和直播 | `file_list_get`, `file_delete`, `adjust_upload_priority`, `storage_config_get`, `live_start`, `live_stop`, `set_livestream_lens`, `set_livestream_quality`, `highest_priority_upload_flighttask_media`, `upload_flighttask_media_prioritize`, `live_lens_change`, `live_set_quality` | P1-07、P1-08 | media/live 专项 |
 | P1 相机/云台 | `camera_photo_take`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_point_focus_action`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set`, `gimbal_rotate`, `camera_look_at`, `set_gimbal_mode`, `gimbal_reset` | P1-09 | payload 专项或 media/live 联合专项 |
-| P1 运维 | `hms_get`, `hms_clear`, `device_log_list_get`, `device_log_upload`, `fileupload_list`, `fileupload_start`, `fileupload_update`, `ota_create`, `ota_cancel`, `config_update`, `config` | P1-10 到 P1-13、P1-16 | HMS/log、firmware/config 专项 |
+| P1 运维 | `hms_get`, `hms_clear`, `device_log_list_get`, `device_log_upload`, `fileupload_list`, `fileupload_start`, `fileupload_update`, `ota_create`, `ota_cancel`, `config_update`, `config` | P1-10 到 P1-13、P1-16 | HMS/log 已通过专项；firmware/config 专项待补 |
 | P2 高级负载 | ViewLink 全组、IR 全组、speaker/searchlight/radar/gas/parachute/PSDK widgets | P2-01、P2-02、P2-06、P2-07 | adapter/mock、限制说明、错误码 |
 | P2 飞安和区域 | `unlock_license_switch`, `unlock_license_update`, `unlock_license_list`, `flight_areas_update`, `flight_areas_get`, `airsense_warning`, `alternate_land_point_set`, `rtk_ref_points_set`, `rtk_ref_points_query` | P2-03 到 P2-05、P2-08 | P2 风险登记、mock 回包、限制说明 |
 
