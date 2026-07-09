@@ -56,6 +56,43 @@ print_mosquitto_config_files() {
   fi
 }
 
+mosquitto_config_files() {
+  [[ -f "${MOSQUITTO_CONFIG}" ]] && printf '%s\n' "${MOSQUITTO_CONFIG}"
+
+  local include_dir="/etc/mosquitto/conf.d"
+  if [[ -d "${include_dir}" ]]; then
+    find "${include_dir}" -maxdepth 1 -type f -name '*.conf' | sort
+  fi
+}
+
+print_listener_diagnostics() {
+  local config_files=()
+  while IFS= read -r conf_file; do
+    [[ -n "${conf_file}" ]] && config_files+=("${conf_file}")
+  done < <(mosquitto_config_files)
+
+  if [[ "${#config_files[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  echo "[INFO] mosquitto listener declarations:"
+  sudo awk '
+    /^[[:space:]]*listener[[:space:]]+[0-9]+/ {
+      port = $2
+      printf("%s:%d listener %s\n", FILENAME, FNR, port)
+      count[port]++
+      locations[port] = locations[port] sprintf("%s:%d ", FILENAME, FNR)
+    }
+    END {
+      for (port in count) {
+        if (count[port] > 1) {
+          printf("[WARN] duplicate listener port %s in %s\n", port, locations[port]) > "/dev/stderr"
+        }
+      }
+    }
+  ' "${config_files[@]}" || true
+}
+
 run_mosquitto_foreground_check() {
   if ! command -v mosquitto >/dev/null 2>&1; then
     echo "[WARN] mosquitto command not found; cannot run foreground config check" >&2
@@ -89,6 +126,7 @@ if [[ "${BROKER_MODE}" == "systemd" ]]; then
     print_systemd_diagnostics
     print_port_listener
     print_mosquitto_config_files
+    print_listener_diagnostics
     run_mosquitto_foreground_check
     if port_listener_found; then
       echo "[WARN] continuing because a broker-like TCP listener is already present on ${BROKER_PORT}" >&2
