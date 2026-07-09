@@ -45,6 +45,8 @@ class MessageDispatcher:
         # 性能统计
         self._message_count = 0
         self._start_time = 0
+        self._heartbeat_timeout_count = 0
+        self._heartbeat_timeout_log_interval = 10
 
         # ⭐⭐⭐ 新增：根据连接类型设置心跳检查策略 ⭐⭐⭐
         self._check_heartbeat = not connection.use_custom_dialect
@@ -346,8 +348,8 @@ class MessageDispatcher:
             try:
                 # ⭐⭐⭐ 修改：只对需要心跳检查的连接进行检查 ⭐⭐⭐
                 if self._check_heartbeat:
-                    if self.connection.check_heartbeat_timeout():
-                        print("[Dispatcher] 警告: 心跳超时!")
+                    if self._should_log_heartbeat_timeout(self.connection.check_heartbeat_timeout()):
+                        print(f"[Dispatcher] 警告: 心跳超时! (连续第 {self._heartbeat_timeout_count} 次)")
 
                 # 调用所有模块的idle_task
                 modules_copy = self._modules.copy()
@@ -364,6 +366,15 @@ class MessageDispatcher:
             except Exception as e:
                 if self._running:
                     print(f"[Dispatcher] 空闲循环错误: {e}")
+
+    def _should_log_heartbeat_timeout(self, timed_out: bool) -> bool:
+        """连续心跳超时时按固定间隔降频打印，恢复后重置计数。"""
+        if not timed_out:
+            self._heartbeat_timeout_count = 0
+            return False
+
+        self._heartbeat_timeout_count += 1
+        return self._heartbeat_timeout_count % self._heartbeat_timeout_log_interval == 0
 
     def get_message(self, msg_type: str, sysid: Optional[int] = None) -> Optional[MAVLinkMessage]:
         """
