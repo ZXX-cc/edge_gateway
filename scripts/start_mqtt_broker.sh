@@ -6,6 +6,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 BROKER_MODE="${BROKER_MODE:-systemd}"
 BROKER_SERVICE="${BROKER_SERVICE:-mosquitto}"
 BROKER_PORT="${BROKER_PORT:-$(mqtt_port)}"
+MOSQUITTO_CONFIG="${MOSQUITTO_CONFIG:-/etc/mosquitto/mosquitto.conf}"
+MOSQUITTO_CONFIG_CHECK_TIMEOUT="${MOSQUITTO_CONFIG_CHECK_TIMEOUT:-8s}"
 
 port_listener_found() {
   if ! command -v ss >/dev/null 2>&1; then
@@ -32,22 +34,113 @@ print_systemd_diagnostics() {
   fi
 }
 
+print_mosquitto_config_files() {
+  if [[ ! -f "${MOSQUITTO_CONFIG}" ]]; then
+    echo "[WARN] mosquitto config not found: ${MOSQUITTO_CONFIG}" >&2
+    return
+  fi
+
+  echo "[INFO] ${MOSQUITTO_CONFIG}:"
+  sudo nl -ba "${MOSQUITTO_CONFIG}" || true
+
+  local include_dir="/etc/mosquitto/conf.d"
+  if [[ -d "${include_dir}" ]]; then
+    echo "[INFO] ${include_dir}/*.conf:"
+    while IFS= read -r conf_file; do
+      [[ -n "${conf_file}" ]] || continue
+      echo "[INFO] ${conf_file}:"
+      sudo nl -ba "${conf_file}" || true
+    done < <(find "${include_dir}" -maxdepth 1 -type f -name '*.conf' | sort)
+  else
+    echo "[WARN] mosquitto include dir not found: ${include_dir}" >&2
+  fi
+}
+
+mosquitto_config_files() {
+  [[ -f "${MOSQUITTO_CONFIG}" ]] && printf '%s\n' "${MOSQUITTO_CONFIG}"
+
+  local include_dir="/etc/mosquitto/conf.d"
+  if [[ -d "${include_dir}" ]]; then
+    find "${include_dir}" -maxdepth 1 -type f -name '*.conf' | sort
+  fi
+}
+
+print_listener_diagnostics() {
+  local config_files=()
+  while IFS= read -r conf_file; do
+    [[ -n "${conf_file}" ]] && config_files+=("${conf_file}")
+  done < <(mosquitto_config_files)
+
+  if [[ "${#config_files[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  echo "[INFO] mosquitto listener declarations:"
+  sudo awk '
+    /^[[:space:]]*listener[[:space:]]+[0-9]+/ {
+      port = $2
+      printf("%s:%d listener %s\n", FILENAME, FNR, port)
+      count[port]++
+      locations[port] = locations[port] sprintf("%s:%d ", FILENAME, FNR)
+    }
+    END {
+      for (port in count) {
+        if (count[port] > 1) {
+          printf("[WARN] duplicate listener port %s in %s\n", port, locations[port]) > "/dev/stderr"
+          printf("[失败原因] Mosquitto 配置重复声明 listener 端口 %s，位置: %s\n", port, locations[port]) > "/dev/stderr"
+        }
+      }
+    }
+  ' "${config_files[@]}" || true
+}
+
+run_mosquitto_foreground_check() {
+  if ! command -v mosquitto >/dev/null 2>&1; then
+    echo "[WARN] mosquitto command not found; cannot run foreground config check" >&2
+    return
+  fi
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "[WARN] timeout command not found; skip foreground config check" >&2
+    return
+  fi
+
+  echo "[INFO] foreground config check: sudo timeout ${MOSQUITTO_CONFIG_CHECK_TIMEOUT} mosquitto -c ${MOSQUITTO_CONFIG} -v"
+  set +e
+  sudo timeout "${MOSQUITTO_CONFIG_CHECK_TIMEOUT}" mosquitto -c "${MOSQUITTO_CONFIG}" -v
+  local rc=$?
+  set -e
+  if [[ "${rc}" -eq 124 ]]; then
+    echo "[INFO] foreground config check timed out; config parsed far enough to start and block"
+  else
+    echo "[INFO] foreground config check exit code: ${rc}"
+  fi
+}
+
 echo "[INFO] MQTT broker mode: ${BROKER_MODE}"
 echo "[INFO] expected broker port: ${BROKER_PORT}"
+echo "[信息] MQTT Broker 模式: ${BROKER_MODE}"
+echo "[信息] 期望监听端口: ${BROKER_PORT}"
 
 if [[ "${BROKER_MODE}" == "systemd" ]]; then
   require_command systemctl
   echo "[INFO] restarting ${BROKER_SERVICE}..."
+  echo "[信息] 正在重启 ${BROKER_SERVICE}..."
   if ! sudo systemctl restart "${BROKER_SERVICE}"; then
     echo "[WARN] ${BROKER_SERVICE} restart failed" >&2
+    echo "[失败] ${BROKER_SERVICE} 重启失败，下面打印 systemd、端口和配置诊断。" >&2
     print_systemd_diagnostics
     print_port_listener
+    print_mosquitto_config_files
+    print_listener_diagnostics
+    run_mosquitto_foreground_check
     if port_listener_found; then
       echo "[WARN] continuing because a broker-like TCP listener is already present on ${BROKER_PORT}" >&2
       echo "[WARN] if this is intentional, run with BROKER_MODE=check to avoid restarting systemd" >&2
+      echo "[警告] ${BROKER_PORT} 已有 MQTT 类监听，继续执行；如果这是预期行为，下次用 BROKER_MODE=check。" >&2
     else
       echo "[ERROR] no broker is listening on ${BROKER_PORT}" >&2
       echo "[ERROR] common checks: sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v, sudo journalctl -xeu ${BROKER_SERVICE}" >&2
+      echo "[失败原因] ${BROKER_PORT} 没有任何 broker 监听；请先修复上方 Mosquitto 配置错误。" >&2
       exit 1
     fi
   else
@@ -55,6 +148,7 @@ if [[ "${BROKER_MODE}" == "systemd" ]]; then
   fi
 elif [[ "${BROKER_MODE}" == "check" ]]; then
   echo "[INFO] check-only mode; not starting or restarting broker"
+  echo "[信息] 仅检查模式：不启动也不重启 broker。"
 else
   echo "[ERROR] unsupported BROKER_MODE=${BROKER_MODE}; use systemd or check" >&2
   exit 2
@@ -63,7 +157,9 @@ fi
 print_port_listener
 if ! port_listener_found; then
   echo "[ERROR] no TCP listener found on port ${BROKER_PORT}" >&2
+  echo "[失败原因] 未发现 ${BROKER_PORT} TCP 监听。" >&2
   exit 1
 fi
 
 echo "[OK] MQTT broker is ready on port ${BROKER_PORT}"
+echo "[成功] MQTT Broker 已就绪，端口 ${BROKER_PORT}"

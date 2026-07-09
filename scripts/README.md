@@ -44,6 +44,8 @@ scripts/start_support_stack.sh
 - MQTT 观察端
 - 机巢模拟器
 
+脚本结束时会打印中文汇总，逐项说明“已启动 / 失败 / 跳过”、失败退出码、日志路径和依赖关系。
+
 如果某个组件不想启动，用环境变量关闭：
 
 ```bash
@@ -87,8 +89,15 @@ BROKER_MODE=check BROKER_PORT=1883 scripts/start_mqtt_broker.sh
 BROKER_MODE=check scripts/start_support_stack.sh
 ```
 
-如果 systemd 重启 Mosquitto 失败，先看脚本输出的 `journalctl` 片段和端口监听。常见情况：
+如果 systemd 重启 Mosquitto 失败，先看脚本输出的 `journalctl` 片段、端口监听、配置文件行号、重复 `listener` 提示和前台配置校验。常见情况：
 
 - `1883` 已经被 Docker/EMQX/另一个 Mosquitto 占用：用 `BROKER_MODE=check scripts/start_support_stack.sh`。
 - `/etc/mosquitto/*.conf` 配置错误：用 `sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v` 定位具体行。
+- `mosquitto.conf` 和 `conf.d/local.conf` 同时声明 `listener 1883` 或 `listener 8084`：只保留一处 listener。
 - 没有任何 `1883` 监听：先修复 Mosquitto，再启动网关和专项脚本。
+
+可覆盖配置文件和前台校验超时时间：
+
+```bash
+MOSQUITTO_CONFIG=/etc/mosquitto/mosquitto.conf MOSQUITTO_CONFIG_CHECK_TIMEOUT=8s scripts/start_mqtt_broker.sh
+```
