@@ -22,6 +22,7 @@
         <button class="nav-item" data-view="drc">DRC 飞控</button>
         <button class="nav-item" data-view="media">直播媒体</button>
         <button class="nav-item" data-view="ops">运维日志</button>
+        <button class="nav-item" data-view="retest">复测清单</button>
         <button class="nav-item" data-view="raw">原始报文</button>
       </nav>
       <div class="side-status">
@@ -151,6 +152,22 @@
             <span id="streamHint">实时</span>
           </div>
           <div id="timeline" class="timeline"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-retest">
+        <div class="module-head">
+          <h2>复测清单 / 真实数据</h2>
+          <p>把仍需复测、真实 SITL、真实机巢和真实数据的点逐项标记；记录会保存到后端日志。</p>
+        </div>
+        <div class="retest-summary" id="retestSummary"></div>
+        <div class="retest-grid" id="retestList"></div>
+        <section class="panel timeline-panel">
+          <div class="section-title">
+            <h2>复测记录</h2>
+            <span id="retestLogPath">--</span>
+          </div>
+          <div id="retestLogList" class="retest-log-list"></div>
         </section>
       </section>
 

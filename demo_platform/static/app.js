@@ -4,6 +4,7 @@ let snapshot = null;
 let workflows = [];
 let activeView = "dashboard";
 let lastCommandResult = null;
+let retestLogs = [];
 
 const viewMeta = {
   dashboard: ["设备总览", "查看机场、飞行器、链路和最近业务状态。"],
@@ -12,8 +13,138 @@ const viewMeta = {
   drc: ["DRC 飞控", "进入控制、心跳、速度推送、退出控制。"],
   media: ["直播媒体", "直播能力、开始/停止直播、切换镜头、画质、媒体文件查询。"],
   ops: ["运维日志", "设备拓扑、状态、HMS、日志和配置类联调入口。"],
+  retest: ["复测清单", "记录需要复测、需要真实 SITL/机巢/数据的点。"],
   raw: ["原始报文", "排障时查看完整 MQTT payload。"],
 };
+
+const retestItems = [
+  {
+    id: "one-key-mqtt",
+    category: "一键启航",
+    title: "一键启航 MQTT 实跑",
+    status: "needs_data",
+    command: "python tools/mqtt_one_key_takeoff_flow_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --simulate --timeout 60 --quiet-stale",
+    expect: "one_key_takeoff_flow 返回 ok，出现 one_key_takeoff_progress 和 flighttask_progress。",
+    evidence: "保存终端输出、services_reply、events 和对应 tid。",
+  },
+  {
+    id: "sitl-wayline",
+    category: "SITL",
+    title: "真实 SITL 航点执行",
+    status: "needs_data",
+    command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
+    expect: "真实 MAVLink Mission 上传后进入 AUTO/航线执行，progress 随航点或距离变化。",
+    evidence: "SITL 日志、MQTT flighttask_progress、OSD 经纬度/高度变化。",
+  },
+  {
+    id: "nest-v13-live",
+    category: "机巢",
+    title: "机巢 v1.3 离线协议专项",
+    status: "needs_data",
+    command: "python tools/nest_v13_protocol_test.py --verbose",
+    expect: "12003/12004/12005、命令字、状态位和基础拒绝条件离线解析正确。",
+    evidence: "脚本输出 nest v1.3 protocol test ok；这是协议基础，不等于网关实跑。",
+  },
+  {
+    id: "nest-gateway-live",
+    category: "机巢",
+    title: "机巢 v1.3 网关联动",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 dock_operation 或 HMS 事件。",
+    evidence: "网关日志、机巢模拟器日志、HMS 事件、dock_operation 事件。",
+  },
+  {
+    id: "flight-mode-sitl",
+    category: "飞控",
+    title: "SITL 飞行模式真实复测",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase flight-modes --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "GUIDED/RTL/LAND 下发成功，且测试期间能收到飞行器 OSD 作为真实 SITL 在线证据。",
+    evidence: "services_reply result、OSD mode_code/gear、FlightControl 日志。",
+  },
+  {
+    id: "basic-flight-sitl",
+    category: "飞控",
+    title: "SITL 基础飞控动作",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase basic-flight --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "GUIDED、take_off、go_home、landing 均有回包，并且飞行器 OSD 可留证。",
+    evidence: "services_reply result、OSD 经纬度/高度/模式、FlightControl 日志。",
+  },
+  {
+    id: "drc-mavlink-sitl",
+    category: "DRC",
+    title: "DRC 到 MAVLink 语义复测",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase drc-sitl --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "DRC enter/heartbeat/速度/云台/takeoff_to_point/stop 都可用，并产生指点飞行进度事件。",
+    evidence: "drc/up、services_reply、takeoff_to_point_progress 或 fly_to_point_progress、SITL OSD。",
+  },
+  {
+    id: "non-blocking",
+    category: "稳定性",
+    title: "非阻塞主链路压测",
+    status: "needs_data",
+    command: "python tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 12 --quiet-stale",
+    expect: "MQTT 回调、MAVLink 接收、任务状态机不被 DB、文件、上传、日志、固件任务卡住。",
+    evidence: "压测输出、request trace 耗时、无 heartbeat/OSD 长时间断流。",
+  },
+  {
+    id: "non-blocking-person2",
+    category: "稳定性",
+    title: "MAVLink/状态机非阻塞探针",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase non-blocking --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001 --loop-count 8",
+    expect: "连续 property_get 延迟不超过阈值，期间飞行器 OSD 不断流。",
+    evidence: "每轮 elapsed_ms、OSD 观察、request trace 耗时。",
+  },
+  {
+    id: "payload-camera-gimbal",
+    category: "负载",
+    title: "相机/云台基础控制",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase payload --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "相机能力、拍照、录像、云台状态、云台转动 method 有回包；无真实负载时记录 adapter/mock 边界。",
+    evidence: "payload/camera/gimbal reply、云台角度状态、媒体文件或 mock adapter 日志。",
+  },
+  {
+    id: "multi-device-offline",
+    category: "设备",
+    title: "多设备/解绑/离线/重连",
+    status: "needs_data",
+    command: "python tools/mqtt_dock3_device_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
+    expect: "多子设备拓扑、解绑、离线、重连不破坏 update_topo 和 binding 状态。",
+    evidence: "status_reply、update_topo、organization requests_reply、设备状态日志。",
+  },
+  {
+    id: "cmd-advanced",
+    category: "CMD",
+    title: "远程调试进阶失败码",
+    status: "needs_data",
+    command: "python tools/mqtt_dock3_cmd_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
+    expect: "真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3。",
+    evidence: "cmd reply、progress event、operation record、拒绝原因。",
+  },
+  {
+    id: "retention-records",
+    category: "运维",
+    title: "操作记录和短周期数据保留",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase retention --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "HMS/log/任务进度入口可查，操作或日志事件可留证；DB 深度保留需要再查数据库。",
+    evidence: "数据库记录、request trace、HMS/log 事件、清理前后计数。",
+  },
+  {
+    id: "real-adapters",
+    category: "真实 Adapter",
+    title: "真实 OTA/OSS/直播推流 Adapter",
+    status: "needs_data",
+    command: "firmware/media/live 真实外部服务联调",
+    expect: "真实 OTA 下载校验、OSS 上传、RTMP/WebRTC/GB28181 推流不只停留在 mock。",
+    evidence: "外部服务 URL、上传/推流状态、失败重试和取消日志。",
+  },
+];
 
 const actionGroups = {
   dock: [
@@ -275,6 +406,219 @@ function renderLastResult() {
   `;
 }
 
+function latestLogFor(itemId) {
+  return retestLogs.find((log) => log.item_id === itemId || log.id === itemId);
+}
+
+function renderRetestList() {
+  const list = $("retestList");
+  if (!list) return;
+  list.innerHTML = retestItems.map((item) => retestCardHtml(item)).join("");
+  document.querySelectorAll("[data-retest-status]").forEach((button) => {
+    button.addEventListener("click", () => saveRetestStatus(
+      button.dataset.retestItem,
+      button.dataset.retestStatus,
+    ));
+  });
+  document.querySelectorAll("[data-retest-run]").forEach((button) => {
+    button.addEventListener("click", () => runRetestItem(button.dataset.retestRun));
+  });
+  renderRetestSummary();
+  renderRetestLogs();
+}
+
+function retestCardHtml(item) {
+  const latest = latestLogFor(item.id);
+  const status = latest?.status || item.status;
+  const note = latest?.note || "";
+  return `
+    <article class="retest-card ${escapeHtml(status)}">
+      <div class="retest-head">
+        <span class="retest-category">${escapeHtml(item.category)}</span>
+        <span class="retest-status">${escapeHtml(statusLabel(status))}</span>
+      </div>
+      <h3>${escapeHtml(item.title)}</h3>
+      <p>${escapeHtml(item.expect)}</p>
+      <div class="retest-meta">
+        <strong>命令/入口</strong>
+        <code>${escapeHtml(item.command)}</code>
+      </div>
+      <div class="retest-meta">
+        <strong>需要留证</strong>
+        <span>${escapeHtml(item.evidence)}</span>
+      </div>
+      <textarea id="note-${escapeHtml(item.id)}" placeholder="测试备注：现象、tid、失败原因、日志位置">${escapeHtml(note)}</textarea>
+      <button class="retest-run" data-retest-run="${escapeHtml(item.id)}">运行测试</button>
+      <div class="retest-actions">
+        <button data-retest-item="${escapeHtml(item.id)}" data-retest-status="pass">通过</button>
+        <button data-retest-item="${escapeHtml(item.id)}" data-retest-status="fail">失败</button>
+        <button data-retest-item="${escapeHtml(item.id)}" data-retest-status="needs_data">需真实数据</button>
+      </div>
+    </article>
+  `;
+}
+
+function statusLabel(status) {
+  return {
+    pass: "通过",
+    fail: "失败",
+    needs_data: "需真实数据",
+    blocked: "阻塞",
+  }[status] || status || "未记录";
+}
+
+function selectorValue(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function renderRetestSummary() {
+  const box = $("retestSummary");
+  if (!box) return;
+  const latestByItem = new Map();
+  for (const log of retestLogs) {
+    const id = log.item_id || log.id;
+    if (id && !latestByItem.has(id)) latestByItem.set(id, log.status);
+  }
+  const counts = {pass: 0, fail: 0, needs_data: 0, unrecorded: 0};
+  retestItems.forEach((item) => {
+    const status = latestByItem.get(item.id) || item.status || "unrecorded";
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  box.innerHTML = `
+    <div class="summary-tile"><span>通过</span><strong>${counts.pass || 0}</strong></div>
+    <div class="summary-tile"><span>失败</span><strong>${counts.fail || 0}</strong></div>
+    <div class="summary-tile"><span>需真实数据</span><strong>${counts.needs_data || 0}</strong></div>
+    <div class="summary-tile"><span>未记录</span><strong>${counts.unrecorded || 0}</strong></div>
+  `;
+}
+
+function renderRetestLogs() {
+  const list = $("retestLogList");
+  if (!list) return;
+  setText("retestLogPath", snapshot?.retest_log_path || "demo_platform/test_logs/retest_log.jsonl");
+  list.innerHTML = retestLogs.slice(0, 80).map((log) => `
+    <div class="retest-log-item ${escapeHtml(log.status || "")}">
+      <div class="message-head">
+        <strong>${escapeHtml(log.category || log.source || "-")} · ${escapeHtml(log.title || "-")}</strong>
+        <span>${escapeHtml(shortTime(log.timestamp))}</span>
+      </div>
+      <div>${escapeHtml(statusLabel(log.status))}${log.method ? ` · ${escapeHtml(log.method)}` : ""}</div>
+      ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
+      ${log.evidence && Object.keys(log.evidence).length ? `<details><summary>证据</summary><pre>${escapeHtml(fmtJson(log.evidence))}</pre></details>` : ""}
+    </div>
+  `).join("");
+}
+
+async function loadRetestLogs() {
+  try {
+    const res = await fetch("/api/retest-log");
+    const data = await res.json();
+    retestLogs = data.logs || [];
+    if (!snapshot) snapshot = {};
+    snapshot.retest_log_path = data.path;
+    renderRetestList();
+  } catch (err) {
+    retestLogs = [{
+      timestamp: Date.now(),
+      source: "page",
+      category: "复测日志",
+      title: "加载失败",
+      status: "fail",
+      note: err.message,
+    }];
+    renderRetestList();
+  }
+}
+
+async function saveRetestStatus(itemId, status) {
+  const item = retestItems.find((candidate) => candidate.id === itemId);
+  if (!item) return;
+  const note = $(`note-${item.id}`)?.value || "";
+  const body = {
+    id: item.id,
+    item_id: item.id,
+    source: "manual",
+    category: item.category,
+    title: item.title,
+    status,
+    note,
+    method: item.command,
+    evidence: {
+      expect: item.expect,
+      required_evidence: item.evidence,
+      latest_command: lastCommandResult,
+    },
+  };
+  const res = await fetch("/api/retest-log", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    retestLogs = [data.log, ...retestLogs.filter((log) => log.id !== data.log.id)];
+    renderRetestList();
+  }
+}
+
+async function runRetestItem(itemId) {
+  const item = retestItems.find((candidate) => candidate.id === itemId);
+  if (!item) return;
+  const escapedItemId = selectorValue(itemId);
+  const buttons = [...document.querySelectorAll(`[data-retest-run="${escapedItemId}"], [data-retest-item="${escapedItemId}"]`)];
+  buttons.forEach((button) => button.disabled = true);
+  const runButton = document.querySelector(`[data-retest-run="${escapedItemId}"]`);
+  const originalText = runButton?.textContent || "运行测试";
+  if (runButton) runButton.textContent = "运行中...";
+  try {
+    const res = await fetch(`/api/retest/${encodeURIComponent(itemId)}/run`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+    });
+    const data = await res.json();
+    if (data.ok) {
+      retestLogs = [data.log, ...retestLogs.filter((log) => log.id !== data.log.id)];
+      lastCommandResult = {title: item.title, method: item.command, result: data.log};
+    } else {
+      const failedLog = {
+        id: item.id,
+        item_id: item.id,
+        timestamp: Date.now(),
+        source: "retest_button",
+        category: item.category,
+        title: item.title,
+        status: "fail",
+        note: data.error || "run failed",
+        method: item.command,
+      };
+      retestLogs = [failedLog, ...retestLogs.filter((log) => log.id !== failedLog.id)];
+      lastCommandResult = {title: item.title, method: item.command, result: failedLog};
+    }
+    renderLastResult();
+    renderRetestList();
+  } catch (err) {
+    const failedLog = {
+      id: item.id,
+      item_id: item.id,
+      timestamp: Date.now(),
+      source: "retest_button",
+      category: item.category,
+      title: item.title,
+      status: "fail",
+      note: err.message,
+      method: item.command,
+    };
+    retestLogs = [failedLog, ...retestLogs.filter((log) => log.id !== failedLog.id)];
+    lastCommandResult = {title: item.title, method: item.command, result: failedLog};
+    renderLastResult();
+    renderRetestList();
+  } finally {
+    buttons.forEach((button) => button.disabled = false);
+    if (runButton) runButton.textContent = originalText;
+  }
+}
+
 function renderMessages(messages) {
   const filter = $("rawFilter")?.value || "all";
   const list = $("messageList");
@@ -424,6 +768,9 @@ function connectStream() {
     } else if (data.event === "request") {
       lastCommandResult = {title: data.payload.method, method: data.payload.method, result: data.payload};
       renderLastResult();
+    } else if (data.event === "retest_log") {
+      retestLogs = [data.payload, ...retestLogs.filter((log) => log.id !== data.payload.id)];
+      renderRetestList();
     }
   };
   source.onerror = () => setText("streamHint", "重连中");
@@ -474,4 +821,5 @@ $("rawFilter").addEventListener("change", () => renderMessages(snapshot?.message
 renderActionCards();
 loadStatus();
 loadWorkflows();
+loadRetestLogs();
 connectStream();
