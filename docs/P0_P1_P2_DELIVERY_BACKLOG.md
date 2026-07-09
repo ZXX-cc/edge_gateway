@@ -104,7 +104,7 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 已可用 | 日志列表、上传模拟、进度事件和非法参数失败码已补齐；Ubuntu 专项已验证 `device_log_list_get` 返回日志列表和本次测试日志 | `mqtt_dock3_hms_log_test.py` |
 | P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 已可用 | 任务创建、进度、取消、结果事件、失败码、后台任务模型已通过 Ubuntu 专项；真实 OTA adapter 后续优化 | `mqtt_dock3_firmware_config_test.py` |
 | P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 已可用 | 配置下发、查询、持久化、回滚、状态事件已通过 Ubuntu 专项；真实云端字段精校后续优化 | `mqtt_dock3_firmware_config_test.py` |
-| P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态；当前 device 侧已补本地缓存语义和多子设备专项参数，服务器 MQTT 多设备证据待补 | Device/Organization 专项 |
+| P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态；当前 device 侧已通过服务器 MQTT 多设备专项和 E2E device 单段，organization 多设备绑定差异继续精校 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 网关短周期数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、短周期遥测保留、近期告警保留和清理策略可用；全量历史统计和长期数据仓库归平台侧 | DB/日志专项 |
 | P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 已可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；E2E 已接入 takeoff-flow、media/live/HMS/log/firmware/config，服务器 11 段全量复测已通过 | `e2e_full_chain_test.py` |

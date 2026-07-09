@@ -258,13 +258,15 @@ P1 通过标准：
 | HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
 | 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复通过 |
-| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器已输出 `dock3 e2e full-chain test ok (steps=11, elapsed=16.2s)` |
+| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)` |
 
 多设备拓扑可通过 E2E device 阶段单独验证：
 
 ```bash
 python tools/e2e_full_chain_test.py --only device --timeout 12 --quiet-stale --device-extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B","device_secret":"drone-secret-2","nonce":"drone-nonce-2","thing_version":"1.1.2"}'
 ```
+
+服务器已验证该命令输出 `dock3 e2e full-chain test ok (steps=1, elapsed=1.4s)`。
 
 ## 6.1 严格旧消息验收
 
