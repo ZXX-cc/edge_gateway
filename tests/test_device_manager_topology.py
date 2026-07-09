@@ -140,6 +140,104 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(self.manager.get_property("sub_device")["device_sn"], "")
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"], [])
 
+    def test_organization_bind_reply_pairs_multiple_sub_devices_and_reports_topology(self):
+        for sn, index in (("DRONE-A", "A"), ("DRONE-B", "B")):
+            sub_device = SubDevice(sn, device_type=60, index=index)
+            sub_device.online = True
+            self.manager.add_sub_device(sub_device)
+        self.manager._org_data["pending_organization"] = {"organization_name": "模拟组织"}
+
+        bind_devices = [
+            {
+                "sn": self.manager.gateway_sn,
+                "device_binding_code": "bind-code",
+                "organization_id": "org-001",
+                "device_callsign": "gateway",
+                "device_model_key": "dock3-sim",
+            },
+            {
+                "sn": "DRONE-A",
+                "device_binding_code": "bind-code",
+                "organization_id": "org-001",
+                "device_callsign": "DRONE-A",
+                "device_model_key": "0-60-0",
+            },
+            {
+                "sn": "DRONE-B",
+                "device_binding_code": "bind-code",
+                "organization_id": "org-001",
+                "device_callsign": "DRONE-B",
+                "device_model_key": "0-60-0",
+            },
+        ]
+
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            self.manager._handle_airport_organization_bind_reply(
+                {"data": {"result": 0, "output": {"err_infos": []}}},
+                bind_devices,
+            )
+
+        for sn in (self.manager.gateway_sn, "DRONE-A", "DRONE-B"):
+            binding = self.manager._get_device_binding_info(sn)
+            self.assertTrue(binding["is_bound"])
+            self.assertEqual(binding["organization_id"], "org-001")
+            self.assertEqual(binding["organization_name"], "模拟组织")
+        self.assertTrue(self.manager.get_sub_device("DRONE-A").paired)
+        self.assertTrue(self.manager.get_sub_device("DRONE-B").paired)
+
+        binding_events = [event for event in self.events if event.get("method") == "device_binding"]
+        self.assertEqual(
+            {event["data"]["device_sn"] for event in binding_events},
+            {self.manager.gateway_sn, "DRONE-A", "DRONE-B"},
+        )
+        self.assertEqual(
+            {device["sn"] for device in self.update_topo_events()[-1]["data"]["sub_devices"]},
+            {"DRONE-A", "DRONE-B"},
+        )
+        self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 1)
+
+    def test_bind_status_reply_updates_sub_device_pairing_and_topology_state(self):
+        sub_device = SubDevice("DRONE-A", device_type=60, index="A")
+        sub_device.online = True
+        sub_device.paired = True
+        self.manager.add_sub_device(sub_device)
+        before_topo_count = len(self.update_topo_events())
+
+        reply = {
+            "data": {
+                "result": 0,
+                "output": {
+                    "bind_status": [
+                        {
+                            "sn": "DRONE-A",
+                            "is_device_bind_organization": False,
+                            "organization_id": "",
+                            "organization_name": "",
+                            "device_callsign": "DRONE-A",
+                        }
+                    ]
+                },
+            }
+        }
+
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            self.manager._handle_airport_bind_status_reply(reply)
+
+        self.assertFalse(self.manager.get_sub_device("DRONE-A").paired)
+        binding = self.manager._get_device_binding_info("DRONE-A")
+        self.assertFalse(binding["is_bound"])
+        self.assertEqual(binding["bind_time"], 0)
+        self.assertGreater(len(self.update_topo_events()), before_topo_count)
+        self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

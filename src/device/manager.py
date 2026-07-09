@@ -2966,6 +2966,7 @@ class DeviceManager:
             logger.warning(f"Bind status query failed: result={result}")
             return
 
+        topology_changed = False
         for item in bind_status:
             sn = item.get('sn', '')
             is_bound = item.get('is_device_bind_organization', False)
@@ -3002,6 +3003,12 @@ class DeviceManager:
                             'timestamp': int(time.time() * 1000)
                         })
 
+            elif sn in self._sub_devices:
+                sub_device = self._sub_devices[sn]
+                if sub_device.paired != bool(is_bound):
+                    sub_device.paired = bool(is_bound)
+                    topology_changed = True
+
             # 更新设备绑定缓存（不管是不是网关自身都更新）
             existing = self._get_device_binding_info(sn)
             existing.update({
@@ -3015,6 +3022,9 @@ class DeviceManager:
             self._set_device_binding_info(sn, existing)
 
         logger.info(f"Bind status reply processed: {len(bind_status)} devices")
+        if topology_changed:
+            self._refresh_sub_device_property()
+            self.report_update_topo()
 
         self._schedule_async(self._save_binding_to_db())
 
@@ -3147,6 +3157,8 @@ class DeviceManager:
             if sn in failed_sns:
                 # 该设备绑定失败，记录错误信息
                 err_code = next((e.get('err_code', -1) for e in err_infos if e.get('sn') == sn), -1)
+                if sn in self._sub_devices:
+                    self._sub_devices[sn].paired = False
                 self._set_device_binding_info(sn, {
                     'sn': sn,
                     'device_model_key': dev.get('device_model_key', ''),
@@ -3198,8 +3210,15 @@ class DeviceManager:
             # 子设备绑定联动
             elif sn in self._sub_devices:
                 self._sub_devices[sn].paired = True
+                self._notify_event('device_binding', {
+                    'device_sn': sn,
+                    'organization_id': org_id,
+                    'bind_status': 'success',
+                    'timestamp': bind_time
+                })
 
         logger.info(f"Bind to organization result: {success_count}/{len(original_devices)} devices bound successfully")
+        self._refresh_sub_device_property()
         self.report_update_topo()
 
         self._schedule_async(self._save_binding_to_db())

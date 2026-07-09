@@ -134,6 +134,12 @@ def parse_args():
     parser.add_argument("--expect-timeout", action="store_true")
     parser.add_argument("--expect-event", action="append", default=[], help="Require an emitted event method. Repeat for multiple events.")
     parser.add_argument("--expect-bound", action="store_true", help="Verify gateway in-memory binding state after bind.")
+    parser.add_argument(
+        "--expect-bound-sn",
+        action="append",
+        default=[],
+        help="Verify a specific SN is bound in DeviceManager memory. Repeat for gateway and sub-devices.",
+    )
     parser.add_argument("--verify-db", action="store_true", help="Verify device_binding row in SQLite after bind.")
     parser.add_argument(
         "--publish-events",
@@ -151,6 +157,17 @@ def parse_args():
             "Value is JSON with sn/domain/type/sub_type/index/device_secret/nonce/thing_version. "
             "Repeat for multiple sub-devices."
         ),
+    )
+    parser.add_argument(
+        "--bind-sub-devices",
+        action="store_true",
+        help="Include installed sub-devices in airport_organization_bind bind_devices.",
+    )
+    parser.add_argument(
+        "--expect-sub-device-paired-sn",
+        action="append",
+        default=[],
+        help="Require an installed sub-device SN to be paired after binding. Repeat for multiple SNs.",
     )
     parser.add_argument(
         "--expect-topo-sub-device-count",
@@ -276,6 +293,28 @@ def install_sub_devices(device, definitions):
         )
 
 
+def build_bind_devices(device, gateway_sn, args):
+    bind_devices = [{
+        "sn": gateway_sn,
+        "device_binding_code": args.binding_code,
+        "organization_id": args.organization_id,
+        "device_callsign": args.device_callsign or gateway_sn,
+        "device_model_key": args.device_model_key,
+    }]
+    if not args.bind_sub_devices:
+        return bind_devices
+
+    for sub_device in device.get_all_sub_devices():
+        bind_devices.append({
+            "sn": sub_device.sn,
+            "device_binding_code": args.binding_code,
+            "organization_id": args.organization_id,
+            "device_callsign": sub_device.sn,
+            "device_model_key": f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
+        })
+    return bind_devices
+
+
 def verify_topo_payload(recorded_events, expected_count=None, expected_sns=None, validate_schema=False):
     topo_events = [event for event in recorded_events if event.get("method") == "update_topo"]
     if not topo_events:
@@ -347,6 +386,27 @@ def verify_memory_binding(device, gateway_sn, organization_id):
         return f"organization cache expected={organization_id}, actual={org.get('organization_id')}"
 
     print(f"memory binding ok: sn={gateway_sn}, organization_id={organization_id}")
+    return ""
+
+
+def verify_memory_binding_for_sn(device, sn, organization_id):
+    binding = device._get_device_binding_info(sn)
+    if not binding.get("is_bound"):
+        return f"{sn} binding cache is not bound"
+    if binding.get("organization_id") != organization_id:
+        return f"{sn} organization_id expected={organization_id}, actual={binding.get('organization_id')}"
+    print(f"memory binding ok: sn={sn}, organization_id={organization_id}")
+    return ""
+
+
+def verify_sub_device_paired(device, sns):
+    for sn in sns:
+        sub_device = device.get_sub_device(sn)
+        if not sub_device:
+            return f"sub-device not found: {sn}"
+        if not sub_device.paired:
+            return f"sub-device is not paired: {sn}"
+        print(f"sub-device paired ok: sn={sn}")
     return ""
 
 
@@ -489,8 +549,6 @@ def main():
         stop_background_loop(async_loop, async_thread)
         return 12
 
-    callsign = args.device_callsign or gateway_sn
-
     def validate_get(msg):
         if not args.expect_organization_name:
             return ""
@@ -523,13 +581,7 @@ def main():
                 return rc
 
         if args.action in {"bind", "full"}:
-            bind_devices = [{
-                "sn": gateway_sn,
-                "device_binding_code": args.binding_code,
-                "organization_id": args.organization_id,
-                "device_callsign": callsign,
-                "device_model_key": args.device_model_key,
-            }]
+            bind_devices = build_bind_devices(device, gateway_sn, args)
             rc = wait_for_reply(
                 "airport_organization_bind",
                 args.timeout,
@@ -575,6 +627,18 @@ def main():
             if error:
                 print(f"memory binding verification failed: {error}", file=sys.stderr)
                 return 6
+
+        for sn in args.expect_bound_sn:
+            error = verify_memory_binding_for_sn(device, sn, args.organization_id)
+            if error:
+                print(f"memory binding verification failed: {error}", file=sys.stderr)
+                return 6
+
+        if args.expect_sub_device_paired_sn:
+            error = verify_sub_device_paired(device, args.expect_sub_device_paired_sn)
+            if error:
+                print(f"sub-device paired verification failed: {error}", file=sys.stderr)
+                return 13
 
         if args.verify_db:
             rc = verify_db_binding(async_loop, gateway_sn, args.organization_id, args.verify_timeout)

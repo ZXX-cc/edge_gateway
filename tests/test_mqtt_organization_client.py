@@ -71,6 +71,22 @@ class FakeMqttModule:
     Client = FakeMqttClient
 
 
+class FakeSubDevice:
+    def __init__(self, sn, domain="0", device_type=60, sub_type=0):
+        self.sn = sn
+        self.domain = domain
+        self.type = device_type
+        self.sub_type = sub_type
+
+
+class FakeDevice:
+    def __init__(self, sub_devices=None):
+        self._sub_devices = sub_devices or []
+
+    def get_all_sub_devices(self):
+        return self._sub_devices
+
+
 def mqtt_message(topic, payload):
     return types.SimpleNamespace(topic=topic, payload=json.dumps(payload).encode("utf-8"))
 
@@ -145,6 +161,58 @@ class OrganizationRequestClientTest(unittest.TestCase):
         self.client.disconnect()
 
         self.assertFalse(self.client.connected)
+
+    def test_build_bind_devices_defaults_to_gateway_only(self):
+        args = types.SimpleNamespace(
+            binding_code="bind-code",
+            organization_id="org-001",
+            device_callsign="",
+            device_model_key="dock3-sim",
+            bind_sub_devices=False,
+        )
+
+        bind_devices = org_tool.build_bind_devices(
+            FakeDevice([FakeSubDevice("DRONE-A")]),
+            "EDGEGW001",
+            args,
+        )
+
+        self.assertEqual(
+            bind_devices,
+            [
+                {
+                    "sn": "EDGEGW001",
+                    "device_binding_code": "bind-code",
+                    "organization_id": "org-001",
+                    "device_callsign": "EDGEGW001",
+                    "device_model_key": "dock3-sim",
+                }
+            ],
+        )
+
+    def test_build_bind_devices_includes_installed_sub_devices_when_requested(self):
+        args = types.SimpleNamespace(
+            binding_code="bind-code",
+            organization_id="org-001",
+            device_callsign="dock-name",
+            device_model_key="dock3-sim",
+            bind_sub_devices=True,
+        )
+
+        bind_devices = org_tool.build_bind_devices(
+            FakeDevice([
+                FakeSubDevice("DRONE-A", device_type=60),
+                FakeSubDevice("PAYLOAD-A", domain="2", device_type=123, sub_type=4),
+            ]),
+            "EDGEGW001",
+            args,
+        )
+
+        self.assertEqual([device["sn"] for device in bind_devices], ["EDGEGW001", "DRONE-A", "PAYLOAD-A"])
+        self.assertEqual(bind_devices[0]["device_callsign"], "dock-name")
+        self.assertEqual(bind_devices[1]["device_model_key"], "0-60-0")
+        self.assertEqual(bind_devices[2]["device_model_key"], "2-123-4")
+        self.assertTrue(all(device["organization_id"] == "org-001" for device in bind_devices))
 
 
 if __name__ == "__main__":

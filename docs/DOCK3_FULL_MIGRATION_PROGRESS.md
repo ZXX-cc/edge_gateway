@@ -12,7 +12,7 @@
 
 如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项、firmware/config 专项均已通过 Ubuntu 模拟验证；`tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)`。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接已补齐，`flighttask_execute` 已安全触发机巢 `request_takeoff`，`tools/nest_v13_protocol_test.py --verbose` 已扩展到 `checks=5`。人员1负责的云端 topic/reply 边界、专项验收脚本、一键启航离线闭环、P0/P1 核心 E2E 和 device 多设备拓扑已收敛到共享测试入口；当前 `--fail-on-stale` 已覆盖 OSD/state 旧样本统计。下一步转向严格环境服务器复测、机巢 v1.3 Ubuntu 实跑、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
+当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项、firmware/config 专项均已通过 Ubuntu 模拟验证；`tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)`。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接已补齐，`flighttask_execute` 已安全触发机巢 `request_takeoff`，`tools/nest_v13_protocol_test.py --verbose` 已扩展到 `checks=5`。人员1负责的云端 topic/reply 边界、专项验收脚本、一键启航离线闭环、P0/P1 核心 E2E、device 多设备拓扑和 organization 多子设备绑定本地一致性已收敛到共享测试入口；当前 `--fail-on-stale` 已覆盖 OSD/state 旧样本统计。下一步转向 organization 多设备服务器 MQTT 复测、严格环境服务器复测、机巢 v1.3 Ubuntu 实跑、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
 当前进度估算：**约 78%**。
 
@@ -22,9 +22,9 @@
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 93% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，服务器已通过 11 段 P0/P1 E2E；当前默认 E2E 已接入一键启航离线闭环；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 Mosquitto 重复 listener 后外围组件启动成功 |
 | Dock3 P0 协议链路 | 97% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令、错误码边界已通过批量、专项和 E2E 编排验证，剩旧回包噪声清理和字段精校 |
-| 客户需求相关 method/字段迁移 | 76% | properties 官方可写/只读边界、OSD/state、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization 基础链路、CMD/远程调试大类、Wayline P1 基础闭环、一键启航离线闭环、Media 基础链路、Live 基础链路、HMS/log 基础链路、firmware/config 基础闭环已通过专项和 11 段 E2E 验证 |
+| 客户需求相关 method/字段迁移 | 77% | properties 官方可写/只读边界、OSD/state、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization 基础链路、organization 多子设备绑定本地一致性、CMD/远程调试大类、Wayline P1 基础闭环、一键启航离线闭环、Media 基础链路、Live 基础链路、HMS/log 基础链路、firmware/config 基础闭环已通过专项或本地单测验证；11 段 E2E 已通过服务器验证 |
 | 非阻塞、日志、容错基础 | 64% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已通过 Ubuntu 专项复测；NoSQL/MongoDB 仍待迁移 |
-| 模拟器和测试工具 | 99% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/Firmware-config/P0 批量测试工具可用，`e2e_full_chain_test.py` 已扩展到 11 段 P0/P1 域并接入 `takeoff-flow`；11 段全量 E2E 已通过服务器复测，OSD/state 已支持严格 stale 统计 |
+| 模拟器和测试工具 | 99% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/Firmware-config/P0 批量测试工具可用，`mqtt_organization_test.py` 已支持 `--bind-sub-devices` 多 SN 绑定和 paired 校验，`e2e_full_chain_test.py` 已扩展到 11 段 P0/P1 域并接入 `takeoff-flow`；11 段全量 E2E 已通过服务器复测，OSD/state 已支持严格 stale 统计 |
 
 综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 78%。该百分比不是验收承诺，后续每完成一个客户需求相关网关分组再调整。
 
@@ -60,7 +60,7 @@
 | 错误码边界归一 | 通过本地测试 | `tests/test_dji_error_codes.py` 验证内部负数转 DJI 错误码 |
 | properties 可写边界 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)`；官方 `rw` 属性成功，只读/非法/未知属性返回 `state.result=1` |
 | device topology 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale --extra-sub-device-json ...` 输出 `dock3 device topology test ok (status_messages=3, sub_device_count=2, sub_device_sns=DRONE-SIM-001,DRONE-SIM-002, reconnect=True, accepted=4, status=3, ignored_total=4)`；验证 `update_topo status/status_reply`、多设备在线、离线空拓扑、重连恢复、无效拓扑拒绝 |
-| organization full 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` 输出 `organization request test ok`；验证 `airport_organization_get/bind`、`device_binding`、`update_topo status_reply result=0` 和内存绑定 |
+| organization full 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` 输出 `organization request test ok`；验证 `airport_organization_get/bind`、`device_binding`、`update_topo status_reply result=0` 和内存绑定；多子设备绑定参数和本地状态联动已补，服务器 MQTT 复测待执行 |
 | DRC 专项字段校验 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_mismatched=0, ignored_legacy=4, ignored_late=1, ignored_total=5)`；验证 `drc_mode_enter` 官方 payload、`stick_control` 官方杆量、`drone_control` 官方废弃字段和值域错误 |
 | DRC 批量验收 | 已通过 Ubuntu 专项复测 | `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 输出 `drc batch test ok (accepted=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；覆盖 enter/exit、`drc_state`、杆量、飞行器/负载控制和速度控制 |
 | CMD/远程调试专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)`；验证调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝和任务进度事件 |
@@ -134,7 +134,7 @@ tail -F logs/nest_simulator/command_trace.log
 |---:|---|---|---|---|---|
 | 1 | 设备属性 properties | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html | 部分完成，官方 `rw` 属性和值域边界已通过 Ubuntu 专项复测 | `src/device/manager.py`, `src/cloud_api/dock3_properties.py`, `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `tools/mqtt_dock3_properties_test.py` | 继续补客户需求涉及的 `osd/state` 字段、枚举、单位和值域精校 |
 | 2 | 设备管理 device | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/device.html | 部分完成，`update_topo` 官方字段校验和专项脚本已通过 Ubuntu 复测；多子设备、离线、重连和解绑的状态语义已补，服务器多设备 MQTT 专项和 E2E device 单段已通过 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py` | 继续精校 `domain/type/sub_type` 官方枚举和真实多设备云端差异 |
-| 3 | 组织管理 organization | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/organization.html | 部分完成，基础成功路径、异常分支、绑定后事件和持久化均已通过 Ubuntu 验证 | `src/cloud_api/connection_manager.py`, `src/device/manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_organization_test.py` | 字段精校，补真实云端/多设备差异 |
+| 3 | 组织管理 organization | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/organization.html | 部分完成，基础成功路径、异常分支、绑定后事件和持久化均已通过 Ubuntu 验证；多子设备绑定本地状态联动已补 | `src/cloud_api/connection_manager.py`, `src/device/manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_organization_test.py` | 服务器复测 `--bind-sub-devices`，继续字段精校和真实云端差异 |
 | 4 | 直播 live | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | 后续接真实 RTMP/WebRTC/GB28181 adapter |
 | 5 | 媒体 media | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/media.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_media.py`, `src/media/manager.py`, `tools/mqtt_dock3_media_test.py` | 后续精校 OSS 凭证、断点续传和上传完成事件 |
 | 6 | 航线 wayline | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html | P1 基础闭环和 mock KMZ 解析已通过 Ubuntu 专项复测；基础 flighttask services/reply 和进度事件已收敛；纯模拟任务不强制真实飞控 `AUTO/LOITER/返航/降落` 控制 | `src/mission/manager.py`, `src/cloud_api/dock3_wayline.py`, `src/modules/waypoint_manager.py`, `tools/mqtt_dock3_wayline_test.py`, `tests/test_dock3_wayline.py` | 后续继续远端 KMZ 下载、媒体计数、真实 SITL 航点执行、返航事件字段精校 |
@@ -222,6 +222,7 @@ python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
 | `airport_bind_status` 最终 Dock3 验收 | 已通过 Ubuntu 复测 | 启动自动查询收到 `requests_reply`，`tid` 匹配，未超时，绑定状态处理完成 |
 | `airport_organization_get` | 已通过 Ubuntu 复测 | `tools/mqtt_organization_test.py --action full` 已发起 `requests`，收到 `requests_reply result=0` 和 `organization_name=模拟组织` |
 | `airport_organization_bind` | 已通过 Ubuntu 复测 | `tools/mqtt_organization_test.py --action full` 已发起 `requests`，收到 `requests_reply result=0` 和 `output.err_infos=[]` |
+| organization 多设备绑定 | 本地已补，待 Ubuntu MQTT 复测 | `airport_organization_bind` 可同时包含网关和已安装子设备；成功子设备会更新绑定缓存、`paired` 状态、`device_binding` 事件和 `update_topo`；`mqtt_organization_test.py` 已支持 `--bind-sub-devices`、`--expect-bound-sn`、`--expect-sub-device-paired-sn` |
 | organization 失败分支 | 已通过 Ubuntu 复测 | 组织查询失败、绑定 `err_infos`、云端回包超时三类场景均已通过 |
 | 绑定后事件 | 已通过 Ubuntu 复测 | `tools/mqtt_organization_test.py` 已捕获 `device_binding` 和 `update_topo` 事件 |
 | 绑定后持久化 | 已通过 Ubuntu 复测 | `tools/mqtt_organization_test.py --verify-db` 已验证 SQLite `device_binding` 表中 `organization_id=org_sim_001`、`is_bound=true` |
@@ -253,6 +254,7 @@ python src/main.py -c config/gateway.yaml
 - 2026-07-06 Ubuntu 已验证：云端回包超时分支 `tid=8e21e5fc-3e64-4a30-8268-4763cc7f751f` 按 `--expect-timeout --timeout 2` 返回预期超时，测试工具输出 `organization request test ok`。
 - 2026-07-06 Ubuntu 已验证：绑定后状态分支 `airport_organization_get tid=5bb01523-3be5-4d36-93fd-b713fadffd38`、`airport_organization_bind tid=9e38069d-5c64-4dfe-ba99-fe4808b90cf2`；测试工具捕获 `device_binding`、`update_topo`，内存绑定 `organization_id=org_sim_001`，SQLite `device_binding` 记录 `is_bound=true`、`workspace_id=org_sim_001`、`workspace_name=模拟组织`。
 - 2026-07-07 Ubuntu 已验证：`mqtt_organization_test.py --config config/gateway.yaml --action full --publish-events --expect-status-reply` 输出 `organization request test ok`；`airport_organization_get` 返回 `organization_name=模拟组织`，`airport_organization_bind` 返回 `output.err_infos=[]`，捕获 `device_binding`、`update_topo`，收到 `sys/product/EDGEGW001/status_reply result=0`，内存绑定 `organization_id=org_sim_001`。
+- 2026-07-09 本地已补：organization 多子设备绑定逻辑和测试工具参数，单元测试覆盖网关 + 多子设备绑定缓存、子设备 `paired`、`device_binding` 事件和 `update_topo`；服务器 MQTT 复测命令见 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。
 
 ### 3.3 device topology
 
@@ -418,6 +420,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 2 | organization requests 模拟器 | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 基础成功路径、异常分支、绑定后事件和持久化已通过 Ubuntu 验证 | 下一步字段精校、真实云端差异和多设备场景 |
 | Batch 2.1 | organization get/bind 工具 | `tools/mqtt_organization_test.py` 已通过 Ubuntu 复测成功路径、组织查询失败、绑定 `err_infos`、请求超时 | 已完成 |
 | Batch 2.2 | organization 绑定后状态 | 已通过 Ubuntu 复测 `device_binding/update_topo`、内存状态、SQLite 持久化 | 已完成 |
+| Batch 2.3 | organization 多子设备绑定 | `DeviceManager` 已支持子设备绑定缓存、`paired` 状态、`device_binding` 事件和 `update_topo` 联动；`tools/mqtt_organization_test.py` 已支持 `--bind-sub-devices` 和多 SN 校验 | 本地单测已完成；待 Ubuntu MQTT 复测 |
 | Batch 3 | drc 控制数据 | `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` 已通过 P0 总批量验证；官方 payload 校验、`tools/mqtt_dock3_drc_test.py` 和 `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 均已通过 Ubuntu 专项复测 | 已完成本轮专项；下一步精校 DRC 心跳、`takeoff_to_point` 和超时恢复 |
 | Batch 4 | P0 总批量验收 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 已通过 Ubuntu 复测；`airport_bind_status` services 兼容项默认跳过 | 下一步清理旧回包来源后用 `--fail-on-stale` 做严格环境验证 |
 | Batch 4.1 | device topology | `update_topo` 完整 topic/payload/status_reply；严格字段校验和专项脚本已通过 Ubuntu 复测 | 已完成本轮专项；后续继续精校官方设备类型枚举 |
