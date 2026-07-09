@@ -87,6 +87,7 @@ print_listener_diagnostics() {
       for (port in count) {
         if (count[port] > 1) {
           printf("[WARN] duplicate listener port %s in %s\n", port, locations[port]) > "/dev/stderr"
+          printf("[失败原因] Mosquitto 配置重复声明 listener 端口 %s，位置: %s\n", port, locations[port]) > "/dev/stderr"
         }
       }
     }
@@ -117,12 +118,16 @@ run_mosquitto_foreground_check() {
 
 echo "[INFO] MQTT broker mode: ${BROKER_MODE}"
 echo "[INFO] expected broker port: ${BROKER_PORT}"
+echo "[信息] MQTT Broker 模式: ${BROKER_MODE}"
+echo "[信息] 期望监听端口: ${BROKER_PORT}"
 
 if [[ "${BROKER_MODE}" == "systemd" ]]; then
   require_command systemctl
   echo "[INFO] restarting ${BROKER_SERVICE}..."
+  echo "[信息] 正在重启 ${BROKER_SERVICE}..."
   if ! sudo systemctl restart "${BROKER_SERVICE}"; then
     echo "[WARN] ${BROKER_SERVICE} restart failed" >&2
+    echo "[失败] ${BROKER_SERVICE} 重启失败，下面打印 systemd、端口和配置诊断。" >&2
     print_systemd_diagnostics
     print_port_listener
     print_mosquitto_config_files
@@ -131,9 +136,11 @@ if [[ "${BROKER_MODE}" == "systemd" ]]; then
     if port_listener_found; then
       echo "[WARN] continuing because a broker-like TCP listener is already present on ${BROKER_PORT}" >&2
       echo "[WARN] if this is intentional, run with BROKER_MODE=check to avoid restarting systemd" >&2
+      echo "[警告] ${BROKER_PORT} 已有 MQTT 类监听，继续执行；如果这是预期行为，下次用 BROKER_MODE=check。" >&2
     else
       echo "[ERROR] no broker is listening on ${BROKER_PORT}" >&2
       echo "[ERROR] common checks: sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v, sudo journalctl -xeu ${BROKER_SERVICE}" >&2
+      echo "[失败原因] ${BROKER_PORT} 没有任何 broker 监听；请先修复上方 Mosquitto 配置错误。" >&2
       exit 1
     fi
   else
@@ -141,6 +148,7 @@ if [[ "${BROKER_MODE}" == "systemd" ]]; then
   fi
 elif [[ "${BROKER_MODE}" == "check" ]]; then
   echo "[INFO] check-only mode; not starting or restarting broker"
+  echo "[信息] 仅检查模式：不启动也不重启 broker。"
 else
   echo "[ERROR] unsupported BROKER_MODE=${BROKER_MODE}; use systemd or check" >&2
   exit 2
@@ -149,7 +157,9 @@ fi
 print_port_listener
 if ! port_listener_found; then
   echo "[ERROR] no TCP listener found on port ${BROKER_PORT}" >&2
+  echo "[失败原因] 未发现 ${BROKER_PORT} TCP 监听。" >&2
   exit 1
 fi
 
 echo "[OK] MQTT broker is ready on port ${BROKER_PORT}"
+echo "[成功] MQTT Broker 已就绪，端口 ${BROKER_PORT}"
