@@ -183,5 +183,5 @@
 |---|---|---|
 | Dock3 官方字段逐项编号 | 当前文档已做业务域映射，但还未把客户需求涉及的 Dock3 字段逐项列成字段级矩阵 | 在 P0-06、P0-13、P1-07 到 P1-13 开发时同步补字段级用例；客户未用字段可 Deferred |
 | P2 高级能力 | 真实 PSDK/ESDK、AirSense、GB28181/WebRTC、远程解禁依赖真实设备或外部平台 | 30 天内至少保留 adapter、mock、错误码、日志和限制说明 |
-| 全链路 E2E | 当前 `e2e_full_chain_test.py` 已覆盖 properties、device、OSD/state、CMD、DRC、Wayline、media、live、HMS/log、firmware/config；一键启航尚未接入同一入口 | 按 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` 优先补 `e2e_takeoff_flow_test.py` 并做 10 段 E2E 全量复测 |
+| 全链路 E2E | 当前 `e2e_full_chain_test.py` 已覆盖 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config；服务器 11 段全量复测已通过 | 后续按 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` 补严格 `--fail-on-stale` 环境和真实 SITL/机巢联动证据 |
 | 旧 Dock/Dock1/Dock2 表述 | 客户文档中存在旧表达，容易误导实现 | 所有实现和验收都以 Dock3 Cloud API 为最终标准 |

@@ -107,7 +107,7 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 网关短周期数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、短周期遥测保留、近期告警保留和清理策略可用；全量历史统计和长期数据仓库归平台侧 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；E2E 已接入 media/live/HMS/log/firmware/config，待服务器 10 段全量复测 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 已可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；E2E 已接入 takeoff-flow、media/live/HMS/log/firmware/config，服务器 11 段全量复测已通过 | `e2e_full_chain_test.py` |
 
 ## 5. P2 允许带问题但必须有边界
 
@@ -152,7 +152,7 @@ P2 可以在 30 天末保留问题，但不能空白、不能影响 P0/P1、不�
 | `python tools/mqtt_dock3_live_test.py --timeout 12` | P1 live |
 | `python tools/mqtt_dock3_hms_log_test.py --timeout 20` | P1 HMS/log |
 | `python tools/mqtt_dock3_firmware_config_test.py --timeout 20` | P1 firmware/config |
-| `python tools/e2e_takeoff_flow_test.py --timeout 60` | P1 一键启航 |
-| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；已接入 media/live/HMS/log/firmware/config，待 10 段全量复测留证 |
+| `python tools/e2e_takeoff_flow_test.py --timeout 12` | P1 一键启航 |
+| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；已接入 takeoff-flow、media/live/HMS/log/firmware/config，服务器 11 段全量复测已留证 |
 
 执行顺序和证据保存要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。
