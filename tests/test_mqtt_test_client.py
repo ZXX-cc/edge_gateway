@@ -232,6 +232,17 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_wrong_topic"], 1)
+        self.assertEqual(
+            self.client.stale_sample_summary()[-1],
+            {
+                "category": "wrong_topic",
+                "topic": "thing/product/EDGEGW001/property/set_reply",
+                "method": "dock_status_query",
+                "tid": self.tid,
+                "result": 0,
+                "expected_topic": self.reply_topic,
+            },
+        )
 
     def test_wrong_method_is_ignored_even_when_tid_matches(self):
         payload = {"tid": self.tid, "method": "property_get", "data": {"result": 0}}
@@ -240,6 +251,17 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_mismatched"], 1)
+        self.assertEqual(
+            self.client.stale_sample_summary()[-1],
+            {
+                "category": "mismatched",
+                "topic": self.reply_topic,
+                "method": "property_get",
+                "tid": self.tid,
+                "result": 0,
+                "expected_method": "dock_status_query",
+            },
+        )
 
     def test_legacy_negative_reply_is_ignored(self):
         payload = {"tid": self.tid, "method": "dock_status_query", "data": {"result": -2}}
@@ -248,6 +270,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_legacy"], 1)
+        self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "legacy")
+        self.assertEqual(self.client.stale_sample_summary()[-1]["result"], -2)
 
     def test_completed_tid_reply_is_counted_as_duplicate(self):
         self.client.pending.clear()
@@ -264,6 +288,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["ignored_late"], 1)
         self.assertEqual(self.client.stats["ignored_duplicate"], 1)
         self.assertEqual(self.client.stats["ignored_unknown"], 0)
+        self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "duplicate")
+        self.assertEqual(self.client.stale_sample_summary()[-1]["tid"], self.tid)
 
     def test_unknown_tid_reply_is_counted_as_unknown_late(self):
         self.client.pending.clear()
@@ -279,6 +305,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["ignored_late"], 1)
         self.assertEqual(self.client.stats["ignored_duplicate"], 0)
         self.assertEqual(self.client.stats["ignored_unknown"], 1)
+        self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "unknown")
+        self.assertEqual(self.client.stale_sample_summary()[-1]["tid"], "unknown-tid")
 
     def test_second_reply_while_pending_is_counted_as_duplicate(self):
         self.client.pending[self.tid]["event"].set()
@@ -294,6 +322,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["ignored_late"], 1)
         self.assertEqual(self.client.stats["ignored_duplicate"], 1)
         self.assertEqual(self.client.stats["ignored_unknown"], 0)
+        self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "duplicate_pending")
 
     def test_expected_status_ignores_legacy_reply_without_output_status(self):
         self.client.pending[self.tid]["expected_status"] = "ok"
@@ -315,11 +344,37 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client._on_message(None, None, mqtt_message(self.reply_topic, legacy))
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_legacy"], 1)
+        self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "legacy_no_status")
 
         self.client._on_message(None, None, mqtt_message(self.reply_topic, current))
         waiter = self.client.pending[self.tid]
         self.assertTrue(waiter["event"].is_set())
         self.assertEqual(waiter["payload"], current)
+
+    def test_stale_sample_summary_is_bounded_and_limited(self):
+        self.client.pending.clear()
+
+        for index in range(15):
+            self.client._on_message(
+                None,
+                None,
+                mqtt_message(
+                    self.reply_topic,
+                    {
+                        "tid": f"unknown-{index}",
+                        "method": "dock_status_query",
+                        "gateway": "EDGEGW001",
+                        "data": {"result": 0},
+                    },
+                ),
+            )
+
+        self.assertEqual(len(self.client.stale_samples), 12)
+        self.assertEqual(self.client.stale_samples[0]["tid"], "unknown-3")
+        self.assertEqual(
+            [item["tid"] for item in self.client.stale_sample_summary(limit=3)],
+            ["unknown-12", "unknown-13", "unknown-14"],
+        )
 
     def test_event_topic_is_recorded_and_waitable(self):
         event_client = MqttRequestClient(

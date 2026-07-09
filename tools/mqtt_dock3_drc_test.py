@@ -2,6 +2,7 @@
 """Category smoke test for DJI Dock3 DRC protocol."""
 
 import argparse
+import json
 import math
 import sys
 import time
@@ -452,6 +453,7 @@ def main():
 
         stale_total = client.stale_total()
         if args.fail_on_stale and stale_total:
+            stale_samples = client.stale_sample_summary()
             print(
                 "stale/duplicate replies observed "
                 f"(ignored_mismatched={client.stats['ignored_mismatched']}, "
@@ -462,6 +464,9 @@ def main():
                 f"ignored_wrong_topic={client.stats['ignored_wrong_topic']})",
                 file=sys.stderr,
             )
+            if stale_samples:
+                print("stale_samples:", file=sys.stderr)
+                print(json.dumps(stale_samples, ensure_ascii=False, indent=2), file=sys.stderr)
             return 10
 
         print(
@@ -476,6 +481,10 @@ def main():
             f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
             f"ignored_total={stale_total})"
         )
+        stale_samples = client.stale_sample_summary()
+        if stale_samples:
+            print("stale_samples:")
+            print(json.dumps(stale_samples, ensure_ascii=False, indent=2))
         return 0
     finally:
         client.disconnect()
