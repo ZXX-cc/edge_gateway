@@ -31,8 +31,8 @@
 | G-P0-01 | P0-06 OSD 基础遥测 | OSD/state 专项已通过 Ubuntu 复测，且飞行器 OSD 已出现 SITL 动态经纬度、电池、GPS；剩余是客户需求相关 Dock3 字段单位、枚举和值域逐项精校，客户未用字段可 Deferred | `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `src/device/manager.py` | 字段矩阵精校 + 真实 SITL 动态 OSD 验证 | Day 4-7 | In Progress |
 | G-P0-02 | P0-07 飞行模式映射 | 已新增共享 ArduPilot 模式映射表，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择；`set_flight_mode` 已兼容 `mode/mode_code/flight_mode` 且失败回非 0，仍需 Ubuntu SITL 复测 | `src/mavlink/flight_modes.py`, `src/modules/mode_control.py`, `src/modules/flight_control.py`, `src/modules/telemetry_module.py`, `src/mission/manager.py` | SITL 模式切换专项；E2E 中检查 `mode_code` | Day 4-7 | Needs Test |
 | G-P0-03 | P0-08 基础飞控控制 | 起飞、FlyTo、返航、降落、解锁、任务控制目前部分停留在模拟回包或未完整 SITL 行为验证 | `src/modules/flight_control.py`, `src/drc/controller.py`, `src/mission/manager.py` | DRC/Wayline/SITL 联合专项 | Day 8-15 | In Progress |
-| G-P0-04 | P0-12 机巢 v1.3 基础通信 | 自定义消息已存在，但缺 12003/12004/12005 协议级专项脚本和拒绝条件验证 | `src/modules/drone_nest_module.py`, `src/nest_simulator.py`, `src/generated_dialect/drone_nest.py` | 新增 `tools/nest_v13_protocol_test.py` | Day 8-11 | Open |
-| G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞到 Dock3 state/properties/HMS 的映射仍不完整 | `src/device/nest_property_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py` | `nest_v13_protocol_test.py` + `mqtt_dock3_cmd_test.py` | Day 8-11 | In Progress |
+| G-P0-04 | P0-12 机巢 v1.3 基础通信 | 已新增离线专项覆盖 12003/12004/12005、命令字、状态位和拒绝条件；仍需 Ubuntu 网关 + 机巢模拟器实跑留证 | `src/modules/drone_nest_module.py`, `src/nest_simulator.py`, `src/generated_dialect/drone_nest.py`, `tools/nest_v13_protocol_test.py` | `tools/nest_v13_protocol_test.py` + 网关/模拟器联调日志 | Day 8-11 | Needs Test |
+| G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞已有专项覆盖；HMS/operation record 和真实 Dock3 枚举精校仍需补齐 | `src/device/nest_property_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py`, `tools/nest_v13_protocol_test.py` | `nest_v13_protocol_test.py` + `mqtt_dock3_cmd_test.py` + HMS/operation evidence | Day 8-11 | In Progress |
 | G-P0-06 | P0-15 Request Trace | Ubuntu properties 专项后 trace 断言已通过，能按 method 汇总 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply`，并统计 Dock3 property/set 逐属性 `result=0/1` | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 后续全链路 E2E 保存 trace 证据 | Day 4-10 | Closed |
 | G-P0-07 | P0-16 非阻塞主链路 | DB、文件、媒体、日志、固件等路径需要系统性审计，缺自动化卡顿/超时验证 | `src/database/*`, `src/media/manager.py`, `src/modules/log_manager.py`, `src/device/manager.py` | E2E 压测和超时注入 | Day 8-15 | Open |
 | G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline 6 段，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `ignored_total=0`；media 和 live 均已通过 Ubuntu 专项，HMS/log 专项脚本已补齐待复测 | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_shared.py` | 后续把 HMS/log/config 接入同一入口 | Day 25-27 | Closed |
@@ -42,7 +42,7 @@
 | ID | Backlog | 当前缺口 | 主要代码入口 | 必补验收 | 目标窗口 | 状态 |
 |---|---|---|---|---|---|---|
 | G-P1-01 | P1-01 一键启航主流程 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电还没有可重复 E2E | `src/mission/manager.py`, `src/cloud_api/dock3_wayline.py`, `src/cloud_api/dock3_cmd.py`, `src/modules/drone_nest_module.py` | 新增 `tools/e2e_takeoff_flow_test.py` | Day 12-15 | Open |
-| G-P1-02 | P1-02 机巢 v1.3 完整状态机 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞未全部进入状态机和错误码 | `src/modules/drone_nest_module.py`, `src/device/nest_property_mapper.py`, `src/device/manager.py` | `tools/nest_v13_protocol_test.py` | Day 8-11 | Open |
+| G-P1-02 | P1-02 机巢 v1.3 完整状态机 | 离线专项已覆盖 busy/fault/estop/R 轴/允许起飞和拒绝原因基础口径；仍缺和一键启航、HMS、operation record 的端到端状态机证据 | `src/modules/drone_nest_module.py`, `src/device/nest_property_mapper.py`, `src/device/manager.py`, `tools/nest_v13_protocol_test.py` | `tools/nest_v13_protocol_test.py` + `tools/e2e_takeoff_flow_test.py` | Day 8-11 | In Progress |
 | G-P1-03 | P1-03 DRC 心跳和超时恢复 | DRC 官方心跳、状态事件、超时退出基础闭环已进入专项脚本；最新 E2E DRC 阶段输出 `dock3 drc test ok (accepted=14, events=7, ignored_total=0)` | `src/drc/controller.py`, `src/cloud_api/dock3_drc.py`, `src/device/manager.py` | 保留真实 MAVLink/链路抖动边界到 SITL 专项 | Day 12-15 | Closed |
 | G-P1-04 | P1-04 指点飞行/起飞到点 | `takeoff_to_point`、指点飞行更新/停止和导航事件在 Dock3 云端模拟链路已通过，E2E DRC 阶段纳入回归；真实 SITL 语义继续归入 G-P1-06 | `src/drc/controller.py`, `src/modules/flight_control.py`, `src/mission/manager.py` | SITL 指点飞行语义复测 | Day 12-15 | Closed |
 | G-P1-05 | P1-05 KMZ/WPML 基础解析 | Wayline 已支持 mock KMZ 下载/校验/解析并转换到内部任务准备链路；最新 E2E Wayline 阶段输出 `dock3 wayline test ok (accepted=11, events=9, ignored_total=0)` | `src/mission/manager.py`, `src/modules/waypoint_manager.py`, `src/database/mission_db.py` | 真实 SITL 航点执行继续归入 G-P1-06 | Day 12-15 | Closed |
@@ -63,7 +63,7 @@
 
 | 顺序 | 脚本 | 关闭缺口 |
 |---:|---|---|
-| 1 | `tools/nest_v13_protocol_test.py` | G-P0-04、G-P0-05、G-P1-02 |
+| 1 | `tools/nest_v13_protocol_test.py` | 已新增离线专项，覆盖 G-P0-04、G-P0-05、G-P1-02 的协议基础；后续补网关/模拟器联调证据 |
 | 2 | 扩展 `tools/mqtt_dock3_drc_test.py` / `tools/mqtt_drc_batch_test.py` | G-P1-03、G-P1-04 已完成当前 Dock3 云端模拟闭环；后续补 G-P1-06 真实 SITL 语义 |
 | 3 | 扩展 `tools/mqtt_dock3_wayline_test.py` | G-P1-05 已完成 mock KMZ 基础解析；G-P1-06 真实 SITL 航点执行待补 |
 | 4 | `tools/e2e_takeoff_flow_test.py` | G-P1-01 |

@@ -1700,18 +1700,20 @@ class MissionManager:
         self._wayline_mission_state = 6  # 航线执行
         self._current_step = 23  # 航线执行中
 
-        # 启动航点监控线程
-        self.start_mission_monitor()
-
         # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
+        simulate_enabled = self._simulate_mission.get('is_enable') == 1
+        if not simulate_enabled:
+            # 启动航点监控线程
+            self.start_mission_monitor()
+
+        if self._flight_control and not simulate_enabled:
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"启动航线任务失败: {result.get('message')}")
                 self._status = self.MISSION_FAILED
                 return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
-        elif self._simulate_mission.get('is_enable') == 1:
-            logger.info("Flighttask execute in simulation mode, skip AUTO mode switch")
+        elif simulate_enabled:
+            logger.info("Flighttask execute in simulation mode, skip AUTO mode switch and mission monitor")
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(

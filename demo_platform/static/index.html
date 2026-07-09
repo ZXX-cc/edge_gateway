@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Edge Gateway Demo Platform</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">EG</div>
+        <div>
+          <strong>Edge Gateway</strong>
+          <span>Demo Platform</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="dashboard">设备总览</button>
+        <button class="nav-item" data-view="dock">机场控制</button>
+        <button class="nav-item" data-view="mission">飞行任务</button>
+        <button class="nav-item" data-view="drc">DRC 飞控</button>
+        <button class="nav-item" data-view="media">直播媒体</button>
+        <button class="nav-item" data-view="ops">运维日志</button>
+        <button class="nav-item" data-view="raw">原始报文</button>
+      </nav>
+      <div class="side-status">
+        <span>MQTT</span>
+        <strong id="mqttStatus">未连接</strong>
+        <small id="mqttAddress">--</small>
+      </div>
+    </aside>
+
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">设备总览</h1>
+          <p id="viewSubtitle">查看机场、飞行器、链路和最近业务状态。</p>
+        </div>
+        <div class="top-actions">
+          <button id="refreshBtn">刷新</button>
+          <button id="openManualBtn">单条 Method</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-dashboard">
+        <div class="hero-grid">
+          <article class="device-card dock-card">
+            <div class="card-head">
+              <span class="eyebrow">Dock</span>
+              <span class="state-dot" id="dockOnlineDot"></span>
+            </div>
+            <h2 id="gatewaySn">--</h2>
+            <p id="dockStateLine">等待 OSD</p>
+            <div class="device-visual">
+              <div class="dock-visual">
+                <span></span>
+                <i></i>
+              </div>
+            </div>
+            <div class="kv-grid">
+              <div><span>舱盖</span><strong id="coverState">--</strong></div>
+              <div><span>推杆</span><strong id="putterState">--</strong></div>
+              <div><span>充电</span><strong id="chargingState">--</strong></div>
+              <div><span>风速</span><strong id="dockWind">--</strong></div>
+            </div>
+          </article>
+
+          <article class="device-card drone-card">
+            <div class="card-head">
+              <span class="eyebrow">Aircraft</span>
+              <span class="state-dot" id="droneOnlineDot"></span>
+            </div>
+            <h2 id="droneSn">--</h2>
+            <p id="droneStateLine">等待 OSD</p>
+            <div class="device-visual">
+              <div class="drone-visual">
+                <b></b><b></b><b></b><b></b>
+                <span></span>
+              </div>
+            </div>
+            <div class="kv-grid">
+              <div><span>电量</span><strong id="battery">--</strong></div>
+              <div><span>高度</span><strong id="height">--</strong></div>
+              <div><span>模式</span><strong id="modeCode">--</strong></div>
+              <div><span>RTK/GPS</span><strong id="gpsQuality">--</strong></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="section-title">
+              <h2>业务入口</h2>
+              <span>常用链路</span>
+            </div>
+            <div class="quick-grid" id="quickActions"></div>
+          </section>
+          <section class="panel">
+            <div class="section-title">
+              <h2>最近结果</h2>
+              <span id="lastResultStatus">--</span>
+            </div>
+            <div id="lastResult" class="result-summary">还没有下发命令。</div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-dock">
+        <div class="module-head">
+          <h2>机场控制</h2>
+          <p>远程调试、舱盖、推杆、充电、补光灯和基础属性查询。</p>
+        </div>
+        <div class="action-grid" data-actions="dock"></div>
+      </section>
+
+      <section class="view" id="view-mission">
+        <div class="module-head">
+          <h2>飞行任务 / 航线</h2>
+          <p>模拟 Dock Demo 的航线准备、执行、暂停、恢复、返航和终止入口。</p>
+        </div>
+        <div class="workflow-strip" id="workflowList"></div>
+        <div class="action-grid" data-actions="mission"></div>
+      </section>
+
+      <section class="view" id="view-drc">
+        <div class="module-head">
+          <h2>DRC 飞控</h2>
+          <p>进入控制、心跳、速度推送、退出控制。</p>
+        </div>
+        <div class="action-grid" data-actions="drc"></div>
+      </section>
+
+      <section class="view" id="view-media">
+        <div class="module-head">
+          <h2>直播媒体</h2>
+          <p>直播能力、开始/停止直播、切换镜头、画质、媒体文件查询。</p>
+        </div>
+        <div class="action-grid" data-actions="media"></div>
+      </section>
+
+      <section class="view" id="view-ops">
+        <div class="module-head">
+          <h2>运维日志</h2>
+          <p>设备拓扑、状态、HMS、日志和配置类联调入口。</p>
+        </div>
+        <div class="action-grid" data-actions="ops"></div>
+        <section class="panel timeline-panel">
+          <div class="section-title">
+            <h2>事件时间线</h2>
+            <span id="streamHint">实时</span>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-raw">
+        <div class="module-head">
+          <h2>原始报文</h2>
+          <p>排障时再看完整 MQTT payload，默认只展示最近 60 条。</p>
+        </div>
+        <div class="raw-toolbar">
+          <select id="rawFilter">
+            <option value="all">全部</option>
+            <option value="osd">OSD</option>
+            <option value="reply">回包</option>
+            <option value="event">事件</option>
+            <option value="status">状态</option>
+          </select>
+          <span id="messageCount">0 条消息</span>
+        </div>
+        <div id="messageList" class="message-list"></div>
+      </section>
+    </main>
+
+    <aside class="drawer" id="manualDrawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="closeManualBackdrop"></div>
+      <div class="drawer-panel">
+        <div class="section-title">
+          <h2>单条 Method</h2>
+          <button id="closeManualBtn">关闭</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Channel
+            <select id="channel">
+              <option value="services">services</option>
+              <option value="property">property/set</option>
+              <option value="drc">drc/down</option>
+            </select>
+          </label>
+          <label>
+            Method
+            <input id="method" value="property_get" />
+          </label>
+        </div>
+        <label class="payload-label">
+          Data JSON
+          <textarea id="payload" spellcheck="false">{"properties":["mode_code","drc_state","cover_state","putter_state","charging_state"]}</textarea>
+        </label>
+        <button id="sendBtn" class="primary">发送</button>
+        <pre id="commandResult" class="result-box">{}</pre>
+      </div>
+    </aside>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
