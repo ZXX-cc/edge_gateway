@@ -672,6 +672,14 @@ class MQTTClient:
                 try:
                     topic_error = self._validate_downstream_topic(msg.topic, method)
                     if topic_error:
+                        if is_downstream_command:
+                            trace_command(
+                                "mqtt_invalid_topic",
+                                topic=msg.topic,
+                                method=method,
+                                tid=payload.get("tid"),
+                                reason=topic_error,
+                            )
                         self._trace.record(
                             "mqtt_invalid_topic",
                             direction="in",
@@ -745,6 +753,14 @@ class MQTTClient:
                         )
                         self._publish_reply_for_downstream_topic(msg.topic, error_reply)
             else:
+                if is_downstream_command:
+                    trace_command(
+                        "mqtt_no_handler",
+                        topic=msg.topic,
+                        method=method,
+                        tid=payload.get("tid"),
+                        error=f"No handler registered for method: {method}",
+                    )
                 self._trace.record(
                     "mqtt_no_handler",
                     direction="in",

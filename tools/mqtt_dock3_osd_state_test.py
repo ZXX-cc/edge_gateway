@@ -178,6 +178,21 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
     return errors
 
 
+def is_ignorable_legacy_state(payload: Dict[str, Any], errors: List[str]) -> bool:
+    """
+    Ignore known legacy state broadcasts left by old gateway processes.
+
+    New Dock3 state samples must have ``bid`` and ``data.property``.  Older
+    local tools published raw state changes such as ``{"reason":
+    "property_changed", "data": {"cover_state": 0}}``.  Those can still be
+    seen on a shared broker during E2E and should not fail the strict Dock3
+    sample once a valid state has arrived.
+    """
+    if payload.get("reason") != "property_changed":
+        return False
+    return any(error.startswith("ignored state without property.") for error in errors)
+
+
 def build_update_topo_payload(args) -> Dict[str, Any]:
     return {
         "domain": args.gateway_domain,
@@ -276,7 +291,10 @@ class Dock3OsdStateClient(MqttRequestClient):
 
             elif topic == self.state_topic:
                 errors = validate_state(payload, self.sn, self.expected_state_property)
-                if errors and all(error.startswith("ignored state ") for error in errors):
+                if errors and (
+                    all(error.startswith("ignored state ") for error in errors)
+                    or is_ignorable_legacy_state(payload, errors)
+                ):
                     pass
                 elif errors:
                     self._record_invalid(topic, errors, payload)

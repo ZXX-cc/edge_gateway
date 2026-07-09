@@ -429,6 +429,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 9 | HMS/log 基础 | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` 已通过 Ubuntu 复测，输出 `dock3 hms/log test ok (accepted=8, events=5, ignored_total=7)`；覆盖 HMS 查询/清除、日志列表、上传模拟、取消、进度事件和非法参数拒绝 | 已完成本轮专项；后续精校真实 HMS 文案 key、日志压缩和真实上传 adapter |
 | Batch 10 | 机巢状态/HMS/dock_operation 桥接 | 新增 `src/device/nest_hms_mapper.py`，`DeviceManager.update_from_nest()` 已同步机巢状态到 Dock3 state、HMS 和 `dock_operation`；`tools/nest_v13_protocol_test.py --verbose` 扩展到 `checks=5` | 本地通过 `tests.test_device_manager_nest_sync`、机巢属性/模块单测和 v1.3 离线专项；待 Ubuntu 网关 + 机巢模拟器实跑留证 |
 | Batch 11 | firmware/config 基础闭环 | `DeviceManager` 已补 `ota_create/ota_cancel/firmware_upgrade`、`config_update/config_get/config_rollback/config`，新增 `tools/mqtt_dock3_firmware_config_test.py` 和 `tests/test_device_manager_firmware_config.py`；Ubuntu 输出 `dock3 firmware/config test ok (accepted=8, events=10, ignored_total=7)` | 已完成专项；当前已接入 `e2e_full_chain_test.py`，待 10 段全量 E2E 复测 |
+| Batch 12 | 命令链日志和 E2E 残留兼容 | `src/utils/command_trace.py` 已补 Dock3 method 中文动作映射，`MQTTClient` 对 topic 不匹配和未注册 handler 写入 command_trace；`mqtt_dock3_osd_state_test.py` 已忽略旧版 `reason=property_changed` state 残留 | 本地通过 `tests.test_command_trace`、`tests.test_dock3_osd_state_client`、`tests.test_e2e_full_chain`、`tests.test_mqtt_test_client`；待服务器重跑 10 段 E2E |
 
 ## 5. 更新规则
 

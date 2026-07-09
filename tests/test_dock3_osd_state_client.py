@@ -161,6 +161,21 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(len(self.client.invalid_samples), 1)
         self.assertIn("payload must be object", self.client.invalid_samples[0])
 
+    def test_legacy_property_changed_state_is_ignored(self):
+        payload = {
+            "tid": "old-tid",
+            "timestamp": 1783420000000,
+            "gateway": "EDGEGW001",
+            "reason": "property_changed",
+            "data": {"cover_state": 0, "drone_in_dock": 1},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))
+
+        self.assertEqual(self.client.counts(), (0, 0, 0))
+        self.assertEqual(self.client.invalid_samples, [])
+        self.assertEqual(self.client.observed_count(self.client.state_topic), 1)
+
     def test_property_set_uses_shared_request_and_checks_property_result(self):
         original_publish = self.client.client.publish
 
