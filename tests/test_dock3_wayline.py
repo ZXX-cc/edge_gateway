@@ -17,6 +17,7 @@ if PROJECT_ROOT not in sys.path:
 if "pymavlink" not in sys.modules:
     pymavlink = types.ModuleType("pymavlink")
     pymavlink.mavutil = types.SimpleNamespace()
+    pymavlink.mavutil.mavlink = types.SimpleNamespace(MAV_CMD_DO_CHANGE_SPEED=178)
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
@@ -88,6 +89,39 @@ def write_mock_kmz(path: Path):
         archive.writestr("wpmz/template.kml", kml)
 
 
+def write_mock_wpml_actions(path: Path):
+    wpml = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
+  <Document>
+    <Placemark>
+      <Point><coordinates>149.165237,-35.363262,50</coordinates></Point>
+      <wpml:waypointSpeed>8</wpml:waypointSpeed>
+      <wpml:hoverTime>4</wpml:hoverTime>
+      <wpml:actionGroup>
+        <wpml:action>
+          <wpml:actionActuatorFunc>takePhoto</wpml:actionActuatorFunc>
+        </wpml:action>
+        <wpml:action>
+          <wpml:actionActuatorFunc>gimbalRotate</wpml:actionActuatorFunc>
+          <wpml:actionActuatorFuncParam>
+            <wpml:gimbalPitchRotateAngle>-35</wpml:gimbalPitchRotateAngle>
+            <wpml:gimbalYawRotateAngle>90</wpml:gimbalYawRotateAngle>
+          </wpml:actionActuatorFuncParam>
+        </wpml:action>
+        <wpml:action>
+          <wpml:actionActuatorFunc>changeSpeed</wpml:actionActuatorFunc>
+          <wpml:actionActuatorFuncParam>
+            <wpml:speed>6</wpml:speed>
+          </wpml:actionActuatorFuncParam>
+        </wpml:action>
+      </wpml:actionGroup>
+    </Placemark>
+  </Document>
+</kml>
+"""
+    path.write_text(wpml, encoding="utf-8")
+
+
 class FailingFlightControl:
     def __init__(self):
         self.calls = []
@@ -122,6 +156,33 @@ class RecordingWaypointManager:
         return False
 
 
+class RecordingCamera:
+    def __init__(self):
+        self.photos = 0
+
+    def handle_camera_photo_take(self, msg):
+        self.photos += 1
+        return {"data": {"result": 0}}
+
+
+class RecordingGimbal:
+    def __init__(self):
+        self.turns = []
+
+    def turn_to(self, yaw, pitch):
+        self.turns.append((yaw, pitch))
+        return {"success": True}
+
+
+class RecordingActionFlightControl:
+    def __init__(self):
+        self.commands = []
+
+    def _send_command_long(self, command, **kwargs):
+        self.commands.append((command, kwargs))
+        return True
+
+
 class Dock3WaylineTest(unittest.TestCase):
     def test_parse_local_kmz_extracts_waypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,6 +198,75 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(len(waypoints), 2)
         self.assertAlmostEqual(waypoints[0]["latitude"], -35.363262)
         self.assertAlmostEqual(waypoints[0]["longitude"], 149.165237)
+
+    def test_parse_wpml_extracts_waypoint_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wpml_path = Path(tmp) / "template.wpml"
+            write_mock_wpml_actions(wpml_path)
+
+            summary, waypoints = parse_wayline_file({"path": str(wpml_path)})
+
+        self.assertTrue(summary["parsed"])
+        self.assertEqual(len(waypoints), 1)
+        self.assertEqual(waypoints[0]["speed"], 8.0)
+        self.assertEqual(waypoints[0]["hover_time"], 4.0)
+        self.assertTrue(waypoints[0]["photo"])
+        self.assertEqual(
+            [action["action_type"] for action in waypoints[0]["actions"]],
+            ["photo", "gimbal", "speed"],
+        )
+
+    def test_mission_manager_executes_waypoint_actions_once(self):
+        manager = MissionManager()
+        camera = RecordingCamera()
+        gimbal = RecordingGimbal()
+        flight_control = RecordingActionFlightControl()
+        manager.set_camera_controller(camera)
+        manager.set_gimbal_control(gimbal)
+        manager.set_flight_control(flight_control)
+        manager._current_wayline = [{
+            "seq": 0,
+            "actions": [
+                {"action_type": "photo"},
+                {"action_type": "gimbal", "pitch": "-35", "yaw": "90"},
+                {"action_type": "speed", "param": "6"},
+            ],
+        }]
+
+        manager._execute_waypoint_actions(0)
+        manager._execute_waypoint_actions(0)
+
+        self.assertEqual(camera.photos, 1)
+        self.assertEqual(gimbal.turns, [(90.0, -35.0)])
+        self.assertEqual(len(flight_control.commands), 1)
+        self.assertEqual(flight_control.commands[0][1]["param2"], 6.0)
+
+    def test_breakpoint_file_saved_loaded_and_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            breakpoint_path = Path(tmp) / "breakpoint.json"
+            manager = MissionManager()
+            manager._breakpoint_file_path = lambda: str(breakpoint_path)
+            manager._current_task_id = "flight-001"
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+            manager._current_waypoint_idx = 1
+            manager._status = manager.MISSION_RUNNING
+            manager.stop_mission_monitor = lambda: None
+
+            pause = manager.handle_pause_wayline(base_msg("flighttask_pause", {}))
+            self.assertEqual(pause["data"]["result"], 0)
+            self.assertTrue(breakpoint_path.exists())
+
+            manager._breakpoint_waypoint_idx = 0
+            manager.start_mission_monitor = lambda: None
+            resume = manager.handle_resume_wayline(base_msg("flighttask_resume", {}))
+            self.assertEqual(resume["data"]["result"], 0)
+            self.assertEqual(manager._breakpoint_waypoint_idx, 1)
+
+            undo = manager.handle_flighttask_undo(base_msg("flighttask_undo", {
+                "flight_ids": ["flight-001"],
+            }))
+            self.assertEqual(undo["data"]["result"], 0)
+            self.assertFalse(breakpoint_path.exists())
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({

@@ -2,11 +2,14 @@
 飞行任务管理模块
 处理航线任务、指令飞行、任务状态监控
 """
+import json
 import math
+import os
+import shutil
 import time
 import threading
 import asyncio
-from typing import List, Dict, Optional, Callable
+from typing import Any, List, Dict, Optional, Callable, Tuple
 from uuid import UUID
 from pymavlink import mavutil
 from src.utils.logger import get_logger
@@ -259,6 +262,8 @@ class MissionManager:
         # 航点监控线程
         self._mission_monitor_thread: Optional[threading.Thread] = None
         self._monitor_running = False
+        self._battery_safety_action: Optional[str] = None
+        self._executed_waypoint_actions = set()
 
         # 数据库相关
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -570,6 +575,344 @@ class MissionManager:
         )
         self._event_callback(event)
 
+    @staticmethod
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_nest_snapshot(self) -> Dict[str, Any]:
+        if not self._nest_module:
+            return {}
+        try:
+            if hasattr(self._nest_module, "get_environment_data"):
+                return self._nest_module.get_environment_data() or {}
+            return getattr(self._nest_module, "environment_data", {}) or {}
+        except Exception as exc:
+            logger.warning("Get nest snapshot failed: %s", exc)
+            return {}
+
+    def _get_telemetry_snapshot(self) -> Dict[str, Any]:
+        if not self._telemetry_module:
+            return {}
+        try:
+            if hasattr(self._telemetry_module, "get_telemetry_data"):
+                return self._telemetry_module.get_telemetry_data() or {}
+            if hasattr(self._telemetry_module, "get_current_data"):
+                return self._telemetry_module.get_current_data() or {}
+            if hasattr(self._telemetry_module, "get_last_telemetry"):
+                return self._telemetry_module.get_last_telemetry() or {}
+        except Exception as exc:
+            logger.warning("Get telemetry snapshot failed: %s", exc)
+        return {}
+
+    def _available_storage_mb(self) -> Optional[int]:
+        for path in (
+            Config.get('media.storage_path', ''),
+            Config.get('data.path', ''),
+            os.getcwd(),
+        ):
+            if not path:
+                continue
+            try:
+                usage = shutil.disk_usage(os.path.abspath(os.path.expanduser(path)))
+                return usage.free // (1024 * 1024)
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+        return None
+
+    def _breakpoint_file_path(self) -> str:
+        return str(Config.get('mission.breakpoint_path', '/tmp/breakpoint.json'))
+
+    def _save_breakpoint_file(self, reason: str = ""):
+        if not self._current_task_id:
+            return
+        data = {
+            "task_id": self._current_task_id,
+            "last_waypoint_idx": self._breakpoint_waypoint_idx,
+            "total_waypoints": len(self._current_wayline),
+            "break_point": self._break_point or {},
+            "reason": reason,
+            "updated_at": int(time.time() * 1000),
+        }
+        path = self._breakpoint_file_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fp:
+                json.dump(data, fp, ensure_ascii=False, indent=2)
+            logger.info("Breakpoint saved: %s", data)
+        except Exception as exc:
+            logger.warning("Save breakpoint failed: %s", exc)
+
+    def _load_breakpoint_file(self) -> Optional[Dict[str, Any]]:
+        path = self._breakpoint_file_path()
+        try:
+            if not os.path.exists(path):
+                return None
+            with open(path, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
+            if not isinstance(data, dict):
+                return None
+            idx = int(data.get("last_waypoint_idx", 0))
+            self._breakpoint_waypoint_idx = max(0, idx)
+            self._break_point = data.get("break_point") if isinstance(data.get("break_point"), dict) else {}
+            if data.get("task_id") and not self._current_task_id:
+                self._current_task_id = str(data.get("task_id"))
+            logger.info("Breakpoint loaded: %s", data)
+            return data
+        except Exception as exc:
+            logger.warning("Load breakpoint failed: %s", exc)
+            return None
+
+    def _clear_breakpoint_file(self):
+        path = self._breakpoint_file_path()
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                logger.info("Breakpoint cleared: %s", path)
+        except Exception as exc:
+            logger.warning("Clear breakpoint failed: %s", exc)
+
+    def _run_prepare_self_check(self, simulate_enabled: bool) -> Tuple[bool, List[str], Dict[str, Any]]:
+        """Run the P0 preflight gates used before reporting flighttask_ready."""
+        reasons: List[str] = []
+        details: Dict[str, Any] = {}
+
+        nest = self._get_nest_snapshot()
+        telemetry = self._get_telemetry_snapshot()
+        if nest:
+            details['nest'] = {
+                key: nest.get(key) for key in (
+                    'nest_heartbeat', 'plc_heartbeat', 'drone_heartbeat',
+                    'estop_state', 'fault_state', 'system_busy',
+                    'emergency_landing', 'takeoff_allowed', 'gate_state',
+                    'wind_speed', 'rainfall', 'error_code',
+                ) if key in nest
+            }
+            last_update = self._as_float(nest.get('last_update'), 0.0)
+            data_timeout = self._as_float(Config.get('nest.data_timeout', 10), 10.0)
+            if last_update and time.time() - last_update > data_timeout:
+                reasons.append("机巢状态数据超时")
+
+            if nest.get('nest_heartbeat') is False:
+                reasons.append("机巢心跳异常")
+            if nest.get('plc_heartbeat') is False:
+                reasons.append("PLC心跳异常")
+            if nest.get('estop_state'):
+                reasons.append("机巢急停已触发")
+            if nest.get('fault_state') or self._as_float(nest.get('error_code'), 0.0) > 0:
+                reasons.append(f"机巢故障状态: error_code={nest.get('error_code', 0)}")
+            if nest.get('system_busy'):
+                reasons.append("机巢系统忙")
+            if nest.get('emergency_landing'):
+                reasons.append("机巢处于迫降流程")
+            if nest.get('gate_state') == 3:
+                reasons.append("舱盖状态异常")
+
+            max_wind = self._as_float(Config.get('mission.precheck.max_wind_speed', 10.0), 10.0)
+            wind_speed = self._as_float(nest.get('wind_speed'), 0.0)
+            rainfall = self._as_float(nest.get('rainfall'), 0.0)
+            if wind_speed > max_wind:
+                reasons.append(f"风速过大: {wind_speed:.1f}m/s > {max_wind:.1f}m/s")
+            if rainfall > 0:
+                reasons.append(f"降雨量不适合飞行: {rainfall:g}")
+
+        if telemetry:
+            details['telemetry'] = {
+                key: telemetry.get(key) for key in (
+                    'connection_status', 'batteryRemaining', 'satelliteNumber',
+                    'gps_signal_level', 'gps_fixed', 'armed', 'flight_mode',
+                ) if key in telemetry
+            }
+            connection_status = telemetry.get('connection_status')
+            if connection_status and connection_status != 'connected' and not simulate_enabled:
+                reasons.append(f"飞控遥测未连接: {connection_status}")
+
+            required_battery = self._ready_conditions.get('battery_capacity')
+            if required_battery is not None:
+                battery = self._as_float(telemetry.get('batteryRemaining'), -1.0)
+                if battery >= 0 and battery < float(required_battery):
+                    reasons.append(f"电量不足: {battery:.0f}% < {required_battery}%")
+
+        storage_required = self._executable_conditions.get('storage_capacity')
+        if storage_required:
+            available_mb = self._available_storage_mb()
+            details['available_storage_mb'] = available_mb
+            if available_mb is not None and available_mb < int(storage_required):
+                reasons.append(f"剩余存储不足: {available_mb}MB < {storage_required}MB")
+
+        if self._task_file_summary.get('warnings'):
+            details['wayline_warnings'] = self._task_file_summary.get('warnings', [])
+
+        return not reasons, reasons, details
+
+    def _fail_prepare_self_check(self, msg: dict, flight_id: str, reasons: List[str],
+                                 details: Dict[str, Any]) -> dict:
+        reason_text = "; ".join(reasons) or "飞前自检失败"
+        self._status = self.MISSION_FAILED
+        self._wayline_mission_state = 1
+        self._current_step = 5
+        self._break_point = {
+            **(self._break_point or {}),
+            'break_reason': 2,
+            'reason': reason_text,
+            'details': details,
+        }
+        logger.warning("Flighttask prepare self-check failed: %s", reason_text)
+        self.report_setup_exception(flight_id, flight_type=1, timeout_time=6)
+        self._emit_wayline_progress(STATUS_FAILED, current_step=5, percent=0, flight_id=flight_id)
+        return MessageBuilder.build_reply(
+            msg,
+            result=-1,
+            data=self._wayline_reply_data(
+                STATUS_FAILED,
+                current_step=5,
+                percent=0,
+                flight_id=flight_id,
+                extra={'errors': reasons, 'self_check': details},
+            ),
+            msg_str=reason_text,
+        )
+
+    def _handle_battery_safety(self) -> bool:
+        """Return True when the active mission monitor should stop."""
+        if self._status != self.MISSION_RUNNING:
+            return False
+
+        telemetry = self._get_telemetry_snapshot()
+        if not telemetry:
+            return False
+
+        battery = self._as_float(telemetry.get('batteryRemaining'), -1.0)
+        if battery < 0:
+            return False
+
+        rtl_threshold = self._as_float(
+            Config.get('device.limits.return_home_power', Config.get('mission.safety.return_home_power', 30)),
+            30.0,
+        )
+        land_threshold = self._as_float(
+            Config.get('mission.safety.critical_battery_power', Config.get('device.limits.critical_battery_power', 15)),
+            15.0,
+        )
+
+        if battery <= land_threshold and self._battery_safety_action != 'land':
+            reason = f"严重低电量自动降落: {battery:.0f}% <= {land_threshold:.0f}%"
+            logger.warning(reason)
+            self._battery_safety_action = 'land'
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 7
+            self._current_step = 28
+            self._break_point = {
+                **(self._break_point or {}),
+                'index': self._current_waypoint_idx,
+                'break_reason': 773,
+                'reason': reason,
+            }
+            self._breakpoint_waypoint_idx = self._current_waypoint_idx
+            self._save_breakpoint_file(reason)
+            if self._flight_control:
+                result = self._flight_control.land()
+                if not result.get("success"):
+                    logger.warning("Critical battery land failed: %s", result.get("message"))
+            self._report_mission_progress(status='failed')
+            return True
+
+        if battery <= rtl_threshold and self._battery_safety_action is None:
+            reason = f"低电量自动返航: {battery:.0f}% <= {rtl_threshold:.0f}%"
+            logger.warning(reason)
+            self._battery_safety_action = 'rtl'
+            self._status = self.MISSION_PAUSED
+            self._wayline_mission_state = 7
+            self._current_step = 24
+            self._break_point = {
+                **(self._break_point or {}),
+                'index': self._current_waypoint_idx,
+                'break_reason': 773,
+                'reason': reason,
+            }
+            self._breakpoint_waypoint_idx = self._current_waypoint_idx
+            self._save_breakpoint_file(reason)
+            if self._flight_control:
+                result = self._flight_control.one_click_return()
+                if not result.get("success"):
+                    logger.warning("Low battery return failed: %s", result.get("message"))
+            self._report_mission_progress(status='paused')
+            self.report_return_home_info(
+                planned_path_points=[],
+                last_point_type=0,
+                flight_id=self._current_task_id,
+            )
+            return True
+
+        return False
+
+    def _waypoint_at(self, index: int) -> Optional[dict]:
+        if 0 <= index < len(self._current_wayline):
+            return self._current_wayline[index]
+        return None
+
+    def _send_change_speed(self, speed: float) -> bool:
+        if not self._flight_control or not hasattr(self._flight_control, "_send_command_long"):
+            return False
+        command = getattr(mavutil.mavlink, "MAV_CMD_DO_CHANGE_SPEED", 178)
+        return bool(self._flight_control._send_command_long(
+            command,
+            param1=0,
+            param2=speed,
+            param3=-1,
+            param4=0,
+        ))
+
+    def _execute_waypoint_actions(self, waypoint_index: int):
+        if waypoint_index in self._executed_waypoint_actions:
+            return
+        waypoint = self._waypoint_at(waypoint_index)
+        if not waypoint:
+            return
+
+        self._executed_waypoint_actions.add(waypoint_index)
+        actions = list(waypoint.get('actions') or [])
+        if waypoint.get('photo') and not any(str(action.get('action_type')).lower() == 'photo' for action in actions):
+            actions.append({'action_type': 'photo'})
+        if waypoint.get('hover_time') and not any(str(action.get('action_type')).lower() == 'hover' for action in actions):
+            actions.append({'action_type': 'hover', 'param': waypoint.get('hover_time')})
+
+        for action in actions:
+            action_type = str(action.get('action_type', action.get('func', ''))).lower()
+            try:
+                if action_type in {'photo', 'takephoto', 'take_photo', '1'}:
+                    if self._camera_controller and hasattr(self._camera_controller, 'handle_camera_photo_take'):
+                        self._camera_controller.handle_camera_photo_take({'data': {'camera_index': 0}})
+                        logger.info("Waypoint %s photo action executed", waypoint_index)
+                    elif self._gimbal_control and hasattr(self._gimbal_control, 'take_photo'):
+                        self._gimbal_control.take_photo()
+                        logger.info("Waypoint %s gimbal photo action executed", waypoint_index)
+                    else:
+                        logger.warning("Waypoint %s photo action skipped: no camera controller", waypoint_index)
+                elif action_type in {'gimbal', 'gimbalrotate', 'gimbal_rotate'}:
+                    pitch = self._as_float(action.get('pitch'), self._as_float(action.get('param'), 0.0))
+                    yaw = self._as_float(action.get('yaw'), 0.0)
+                    if self._gimbal_control and hasattr(self._gimbal_control, 'turn_to'):
+                        self._gimbal_control.turn_to(yaw, pitch)
+                        logger.info("Waypoint %s gimbal action executed: yaw=%s pitch=%s", waypoint_index, yaw, pitch)
+                    else:
+                        logger.warning("Waypoint %s gimbal action skipped: no gimbal controller", waypoint_index)
+                elif action_type in {'speed', 'changespeed', 'change_speed'}:
+                    speed = self._as_float(action.get('param'), 0.0)
+                    if speed > 0 and self._send_change_speed(speed):
+                        logger.info("Waypoint %s speed action executed: %.1fm/s", waypoint_index, speed)
+                    else:
+                        logger.warning("Waypoint %s speed action skipped/failed: %s", waypoint_index, speed)
+                elif action_type in {'hover', 'wait', 'delay'}:
+                    hover_time = self._as_float(action.get('param'), 0.0)
+                    logger.info("Waypoint %s hover action observed: %.1fs", waypoint_index, hover_time)
+                else:
+                    logger.info("Waypoint %s unsupported action observed: %s", waypoint_index, action)
+            except Exception as exc:
+                logger.warning("Waypoint %s action failed: %s", waypoint_index, exc)
+
     # ---- 参数校验工具 ----
 
     @staticmethod
@@ -741,6 +1084,8 @@ class MissionManager:
         self._current_step = 23  # 航线执行中
 
         logger.info(f"Task started: {self._current_task_id}, wayline_state=6(航线执行)")
+        self._battery_safety_action = None
+        self._executed_waypoint_actions.clear()
 
         # 启动航点监控线程
         self.start_mission_monitor()
@@ -841,6 +1186,14 @@ class MissionManager:
 
         # 记录断点
         self._breakpoint_waypoint_idx = self._current_waypoint_idx
+        self._break_point = {
+            **(self._break_point or {}),
+            'index': self._breakpoint_waypoint_idx,
+            'total_waypoints': len(self._current_wayline),
+            'break_reason': 0,
+            'reason': '用户暂停航线',
+        }
+        self._save_breakpoint_file("用户暂停航线")
 
         # 更新数据库状态
         if self._current_task_id:
@@ -876,6 +1229,14 @@ class MissionManager:
                 result=DEVICE_STATE_UNSUPPORTED,
                 data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
                 msg_str="Mission not paused"
+            )
+
+        saved_breakpoint = self._load_breakpoint_file()
+        if saved_breakpoint and saved_breakpoint.get("task_id"):
+            logger.info(
+                "Resume using persisted breakpoint: task=%s waypoint=%s",
+                saved_breakpoint.get("task_id"),
+                self._breakpoint_waypoint_idx,
             )
 
         self._status = self.MISSION_RUNNING
@@ -1426,10 +1787,15 @@ class MissionManager:
         master = self._get_mavlink_master()
         while self._monitor_running:
             try:
+                if self._handle_battery_safety():
+                    self._monitor_running = False
+                    break
+
                 if master:
                     msg = master.recv_match(type='MISSION_CURRENT', blocking=False, timeout=1.0)
                     if msg:
                         new_idx = msg.seq
+                        self._execute_waypoint_actions(new_idx)
                         if new_idx != self._current_waypoint_idx:
                             self._current_waypoint_idx = new_idx
                             logger.info(f"Waypoint changed: {new_idx}/{len(self._current_wayline)}")
@@ -1439,6 +1805,16 @@ class MissionManager:
 
                             # 记录断点（用于断点续飞）
                             self._breakpoint_waypoint_idx = new_idx
+                            self._break_point = {
+                                **(self._break_point or {}),
+                                'index': new_idx,
+                                'total_waypoints': len(self._current_wayline),
+                                'progress': (
+                                    new_idx / len(self._current_wayline)
+                                    if self._current_wayline else 0
+                                ),
+                            }
+                            self._save_breakpoint_file("航点进度更新")
 
                             # 检测任务完成
                             if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
@@ -1446,6 +1822,7 @@ class MissionManager:
                                 self._wayline_mission_state = 9  # 航线停止
                                 self._current_step = 33  # 通知任务结果
                                 self._report_mission_progress(status='completed')
+                                self._clear_breakpoint_file()
 
                                 # 更新数据库状态
                                 if self._current_task_id:
@@ -1636,8 +2013,22 @@ class MissionManager:
             if not upload_ok:
                 self._status = self.MISSION_FAILED
                 self._wayline_mission_state = 1  # 不支持该航点
+                self._current_step = 5
                 logger.error("Waypoint upload to FC failed")
-                return MessageBuilder.build_reply(msg, result=-1, msg_str="航线上传到飞控失败")
+                self.report_setup_exception(flight_id, flight_type=1, timeout_time=6)
+                self._emit_wayline_progress(STATUS_FAILED, current_step=5, percent=0, flight_id=flight_id)
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=-1,
+                    data=self._wayline_reply_data(
+                        STATUS_FAILED,
+                        current_step=5,
+                        percent=0,
+                        flight_id=flight_id,
+                        extra={'errors': ['航线上传到飞控失败']},
+                    ),
+                    msg_str="航线上传到飞控失败",
+                )
             logger.info(f"Waypoint uploaded to FC: {len(self._current_wayline)} waypoints")
         elif self._waypoint_manager and file_info.get('url'):
             logger.info(
@@ -1665,6 +2056,15 @@ class MissionManager:
         if simulate_enabled:
             logger.info(f"Simulate mission enabled: lat={simulate_mission.get('latitude')}, "
                        f"lon={simulate_mission.get('longitude')}")
+
+        self_check_ok, self_check_reasons, self_check_details = self._run_prepare_self_check(simulate_enabled)
+        if not self_check_ok:
+            return self._fail_prepare_self_check(
+                msg,
+                flight_id,
+                self_check_reasons,
+                self_check_details,
+            )
 
         self._status = self.MISSION_IDLE
         self._emit_wayline_progress(STATUS_SENT, current_step=5, percent=0, flight_id=flight_id)
@@ -1699,6 +2099,8 @@ class MissionManager:
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 6  # 航线执行
         self._current_step = 23  # 航线执行中
+        self._battery_safety_action = None
+        self._executed_waypoint_actions.clear()
 
         # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
         simulate_enabled = self._simulate_mission.get('is_enable') == 1
@@ -1743,6 +2145,7 @@ class MissionManager:
             self._status = self.MISSION_CANCELED
             self._wayline_mission_state = 9  # 航线停止
             self.stop_mission_monitor()
+            self._clear_breakpoint_file()
             logger.info(f"Current task {self._current_task_id} canceled, wayline_state=9(航线停止)")
 
             # 执行返航

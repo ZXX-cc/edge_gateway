@@ -404,6 +404,8 @@ class EdgeGateway:
                 dock_updates = filter_dock_status_fields(build_dock3_properties_from_nest(nest_data))
                 if dock_updates:
                     self.dock.update_dock_status(dock_updates)
+            if self.flight_control and hasattr(self.flight_control, "handle_nest_environment_from_callback"):
+                self.flight_control.handle_nest_environment_from_callback(nest_data)
 
         if nest_env_cb not in self.nest_module.env_callbacks:
             self.nest_module.env_callbacks.append(nest_env_cb)

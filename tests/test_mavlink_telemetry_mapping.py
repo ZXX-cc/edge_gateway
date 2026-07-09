@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -93,6 +94,76 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
 
         self.assertEqual(telemetry["flight_mode_profile"], "plane")
         self.assertEqual(telemetry["flight_mode"], "GUIDED")
+
+    def test_gps_quality_falls_back_to_satellite_count(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="GPS_RAW_INT", fix_type=3, satellites_visible=17),
+            telemetry,
+        )
+
+        self.assertEqual(telemetry["gps_fixed"], 1)
+        self.assertEqual(telemetry["gps_signal_level"], 4)
+        self.assertEqual(build_osd_data(telemetry)["position_state"]["quality"], 4)
+
+    def test_battery_status_uses_extended_voltage_cells_and_clamps_capacity(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(
+                msg_type="BATTERY_STATUS",
+                voltages=[4200, 4200, 65535, 0],
+                voltages_ext=[4100, 4100],
+                current_battery=1234,
+                battery_remaining=120,
+            ),
+            telemetry,
+        )
+
+        self.assertEqual(telemetry["voltage"], 16.6)
+        self.assertEqual(telemetry["current"], 12.34)
+        self.assertEqual(telemetry["batteryRemaining"], 100)
+        self.assertEqual(build_osd_data(telemetry)["battery"]["voltage"], 16600)
+
+    def test_mount_status_maps_legacy_gimbal_angles(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(
+                msg_type="MOUNT_STATUS",
+                pointing_a=-1200,
+                pointing_b=300,
+                pointing_c=9050,
+            ),
+            telemetry,
+        )
+
+        osd = build_osd_data(telemetry)
+        self.assertEqual(osd["gimbal_pitch"], -12.0)
+        self.assertEqual(osd["gimbal_roll"], 3.0)
+        self.assertEqual(osd["gimbal_yaw"], 90.5)
+
+    def test_flight_time_accumulates_while_armed(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="HEARTBEAT", type=2, base_mode=0x80, custom_mode=4, autopilot=3),
+            telemetry,
+        )
+        telemetry["_flight_start_time"] = time.time() - 3
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="HEARTBEAT", type=2, base_mode=0x80, custom_mode=4, autopilot=3),
+            telemetry,
+        )
+
+        self.assertGreaterEqual(telemetry["flight_time"], 2)
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="HEARTBEAT", type=2, base_mode=0, custom_mode=4, autopilot=3),
+            telemetry,
+        )
+        self.assertIsNone(telemetry["_flight_start_time"])
+        self.assertGreaterEqual(build_osd_data(telemetry)["flight_time"], 2)
 
 
 if __name__ == "__main__":

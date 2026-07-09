@@ -73,6 +73,72 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
+def _child_text(elem: ElementTree.Element, names: set[str]) -> str:
+    for child in elem.iter():
+        if _local_name(child.tag) in names and child.text:
+            return child.text.strip()
+    return ""
+
+
+def _parse_coordinate_token(token: str) -> Optional[Tuple[float, float, float]]:
+    parts = token.split(",")
+    if len(parts) < 2:
+        return None
+    try:
+        lon = float(parts[0])
+        lat = float(parts[1])
+        alt = float(parts[2]) if len(parts) >= 3 and parts[2] != "" else 50.0
+    except ValueError:
+        return None
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        return None
+    return lat, lon, alt
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _action_from_func(func: str, action_elem: ElementTree.Element) -> Optional[dict]:
+    action = func.strip()
+    action_lower = action.lower()
+    if not action:
+        return None
+
+    if action_lower in {"takephoto", "take_photo", "photo"}:
+        return {"action_type": "photo", "func": action}
+    if action_lower in {"hover", "wait", "delay"}:
+        hover_time = _child_text(action_elem, {"hoverTime", "duration", "delayTime", "waitTime"})
+        return {"action_type": "hover", "func": action, "param": hover_time or 0}
+    if action_lower in {"gimbalrotate", "gimbal_rotate", "gimbal"}:
+        return {
+            "action_type": "gimbal",
+            "func": action,
+            "pitch": _child_text(action_elem, {"gimbalPitchRotateAngle", "pitch", "pitchAngle"}),
+            "roll": _child_text(action_elem, {"gimbalRollRotateAngle", "roll", "rollAngle"}),
+            "yaw": _child_text(action_elem, {"gimbalYawRotateAngle", "yaw", "yawAngle"}),
+        }
+    if action_lower in {"changespeed", "change_speed", "speed"}:
+        speed = _child_text(action_elem, {"speed", "waypointSpeed", "flightSpeed"})
+        return {"action_type": "speed", "func": action, "param": speed or 0}
+    return {"action_type": action_lower, "func": action}
+
+
+def _extract_actions(elem: ElementTree.Element) -> List[dict]:
+    actions: List[dict] = []
+    for action_elem in elem.iter():
+        if _local_name(action_elem.tag) != "action":
+            continue
+        func = _child_text(action_elem, {"actionActuatorFunc", "action_type", "actionType"})
+        action = _action_from_func(func, action_elem)
+        if action:
+            actions.append(action)
+    return actions
+
+
 def _local_wayline_path(file_info: Dict[str, Any]) -> str:
     """Resolve a local path from Dock3 file metadata.
 
@@ -117,23 +183,53 @@ def _extract_waypoints_from_xml(xml_text: str) -> List[dict]:
     except ElementTree.ParseError:
         return []
 
+    placemarks = [elem for elem in root.iter() if _local_name(elem.tag) == "Placemark"]
+    for placemark in placemarks:
+        coord_text = _child_text(placemark, {"coordinates"})
+        if not coord_text:
+            continue
+        speed = _child_text(placemark, {"waypointSpeed", "speed", "useGlobalSpeed"})
+        hover_time = _child_text(placemark, {"hoverTime", "duration"})
+        actions = _extract_actions(placemark)
+        for token in re.split(r"\s+", coord_text.strip()):
+            if not token:
+                continue
+            parsed = _parse_coordinate_token(token)
+            if not parsed:
+                continue
+            lat, lon, alt = parsed
+            waypoints.append({
+                "seq": len(waypoints),
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "speed": _to_float(speed, 5.0),
+                "command": 16,
+                "frame": 3,
+                "param1": _to_float(hover_time, 0.0),
+                "param2": 0.0,
+                "param3": 0.0,
+                "param4": 0.0,
+                "autocontinue": 1,
+                "action_type": "waypoint",
+                "actions": actions,
+                "hover_time": _to_float(hover_time, 0.0),
+                "photo": any(action.get("action_type") == "photo" for action in actions),
+            })
+
+    if waypoints:
+        return waypoints
+
     for elem in root.iter():
         if _local_name(elem.tag) != "coordinates" or not elem.text:
             continue
         for token in re.split(r"\s+", elem.text.strip()):
             if not token:
                 continue
-            parts = token.split(",")
-            if len(parts) < 2:
+            parsed = _parse_coordinate_token(token)
+            if not parsed:
                 continue
-            try:
-                lon = float(parts[0])
-                lat = float(parts[1])
-                alt = float(parts[2]) if len(parts) >= 3 and parts[2] != "" else 50.0
-            except ValueError:
-                continue
-            if not -90 <= lat <= 90 or not -180 <= lon <= 180:
-                continue
+            lat, lon, alt = parsed
             waypoints.append({
                 "seq": len(waypoints),
                 "latitude": lat,

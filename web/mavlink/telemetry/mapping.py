@@ -61,6 +61,8 @@ TELEMETRY_DEFAULTS: Dict[str, Any] = {
     "data_mode": "real",
     "timestamp": 0.0,
     "flight_time": 0,
+    "_flight_start_time": None,
+    "_total_flight_time": 0,
 }
 
 
@@ -139,6 +141,12 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             data["gps_eph"] = getattr(msg, "eph")
             data["gps_signal_level"] = gps_signal_level_from_eph(getattr(msg, "eph"), data.get("gps_fixed", 0))
             updated = True
+        elif "satelliteNumber" in data:
+            data["gps_signal_level"] = _gps_quality_from_satellites(
+                data.get("satelliteNumber", 0),
+                data.get("gps_fixed", 0),
+            )
+            updated = True
         if hasattr(msg, "epv"):
             data["gps_epv"] = getattr(msg, "epv")
             updated = True
@@ -165,6 +173,7 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         data["mav_type"] = mav_type
         data["autopilot"] = getattr(msg, "autopilot", None)
         data["flight_mode_profile"] = flight_mode_profile(mav_type)
+        _update_flight_time(data, data["armed"])
         updated = True
     elif msg_name == "TERRAIN_REPORT":
         if hasattr(msg, "terrain_height"):
@@ -184,11 +193,12 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             data["current"] = round(current_battery / 100.0, 2)
             updated = True
         if battery_remaining != -1:
-            data["batteryRemaining"] = battery_remaining
+            data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
             updated = True
     elif msg_name == "BATTERY_STATUS":
         voltages = getattr(msg, "voltages", None)
-        valid_voltages = _valid_cell_voltages(voltages)
+        voltages_ext = getattr(msg, "voltages_ext", None)
+        valid_voltages = _valid_cell_voltages(voltages) + _valid_cell_voltages(voltages_ext)
         if valid_voltages:
             data["voltage"] = round(sum(valid_voltages) / 1000.0, 2)
             updated = True
@@ -198,7 +208,7 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             data["current"] = round(current_battery / 100.0, 2)
             updated = True
         if battery_remaining != -1:
-            data["batteryRemaining"] = battery_remaining
+            data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
             updated = True
     elif msg_name == "GIMBAL_DEVICE_ATTITUDE_STATUS":
         if hasattr(msg, "q"):
@@ -206,6 +216,16 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             data["gimbal_pitch"] = pitch
             data["gimbal_roll"] = roll
             data["gimbal_yaw"] = yaw
+            updated = True
+    elif msg_name == "MOUNT_STATUS":
+        if hasattr(msg, "pointing_a"):
+            data["gimbal_pitch"] = getattr(msg, "pointing_a") / 100.0
+            updated = True
+        if hasattr(msg, "pointing_b"):
+            data["gimbal_roll"] = getattr(msg, "pointing_b") / 100.0
+            updated = True
+        if hasattr(msg, "pointing_c"):
+            data["gimbal_yaw"] = getattr(msg, "pointing_c") / 100.0
             updated = True
     elif msg_name == "DISTANCE_SENSOR":
         obstacle = dict(data.get("obstacle_state") or {})
@@ -332,6 +352,25 @@ def _valid_cell_voltages(voltages: Optional[Iterable[int]]) -> list[int]:
     if not voltages:
         return []
     return [value for value in voltages if value and value != 65535]
+
+
+def _update_flight_time(data: Dict[str, Any], armed: bool) -> None:
+    now = time.time()
+    start_time = data.get("_flight_start_time")
+    total_time = int(data.get("_total_flight_time") or 0)
+
+    if armed and start_time is None:
+        data["_flight_start_time"] = now
+        data["flight_time"] = total_time
+    elif armed and start_time is not None:
+        data["flight_time"] = total_time + int(now - float(start_time))
+    elif not armed and start_time is not None:
+        total_time += int(now - float(start_time))
+        data["_total_flight_time"] = total_time
+        data["_flight_start_time"] = None
+        data["flight_time"] = total_time
+    else:
+        data["flight_time"] = total_time
 
 
 def _fill_altitude_agl(data: Dict[str, Any]) -> None:
