@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, output_status, result_code
+from mqtt_dock3_drc_test import DEFAULT_DRONE_SN, _osd_topics, resolve_takeoff_target, wait_for_drone_osd
 from tool_config import add_config_argument, resolve_mqtt_settings
 
 
@@ -50,7 +51,7 @@ def _reply_summary(reply: dict[str, Any] | None) -> dict[str, Any]:
 def _connect(args, *, events: bool = False, observe_drone_osd: bool = False) -> MqttRequestClient | None:
     topics = []
     if observe_drone_osd:
-        topics.append(f"thing/product/{args.drone_sn}/osd")
+        topics.extend(_osd_topics(args.drone_sn))
     client = MqttRequestClient(
         args.host,
         args.port,
@@ -161,13 +162,27 @@ def phase_drc_sitl(args) -> int:
         return 2
     failures = 0
     try:
+        osd_topic, osd_payload = wait_for_drone_osd(client, _osd_topics(args.drone_sn), args.osd_wait)
+        try:
+            target, target_source = resolve_takeoff_target(args, osd_payload)
+        except ValueError as exc:
+            _print_step("DRC 目标点解析", False, {"reason": str(exc)})
+            return 12
+        _print_step("DRC 目标点解析", True, {
+            "source": target_source,
+            "topic": osd_topic,
+            "target_latitude": target["target_latitude"],
+            "target_longitude": target["target_longitude"],
+            "target_height": target["target_height"],
+        })
+
         requests = [
             ("退出旧 DRC", "drc_mode_exit", {}, "services", {0, 319999}, None),
             ("进入 DRC", "drc_mode_enter", {"mqtt_broker": {"address": f"{args.host}:{args.port}", "client_id": f"drc-{args.sn}"}, "osd_frequency": 10, "hsi_frequency": 1}, "services", {0}, None),
             ("DRC 心跳", "heart_beat", {"seq": 1, "timestamp": int(time.time() * 1000)}, "drc", {0}, None),
             ("速度控制", "drone_control", {"seq": 2, "x": 0.2, "y": 0.0, "h": 0.0, "w": 0.0}, "drc", {0}, None),
             ("云台速度控制", "drc_gimbal_speed_push", {"pitch_speed": 0.0, "yaw_speed": 0.0, "roll_speed": 0.0}, "drc", {0}, None),
-            ("起飞到点", "takeoff_to_point", {"flight_id": "person2-takeoff-point", "target_latitude": args.target_lat, "target_longitude": args.target_lon, "target_height": args.target_height, "security_takeoff_height": 20, "rth_altitude": 60, "max_speed": 8}, "services", {0}, "ok"),
+            ("起飞到点", "takeoff_to_point", {"flight_id": "person2-takeoff-point", **target, "security_takeoff_height": 20, "rth_altitude": 60, "max_speed": 8}, "services", {0}, "ok"),
             ("停止指点飞行", "fly_to_point_stop", {}, "services", {0}, "ok"),
             ("退出 DRC", "drc_mode_exit", {}, "services", {0}, None),
         ]
@@ -332,7 +347,7 @@ def main() -> int:
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
-    parser.add_argument("--drone-sn", default="DRONESIM001")
+    parser.add_argument("--drone-sn", default=DEFAULT_DRONE_SN)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--quiet-stale", action="store_true")
@@ -341,11 +356,14 @@ def main() -> int:
     parser.add_argument("--loop-count", type=int, default=5)
     parser.add_argument("--max-latency", type=float, default=2.0)
     parser.add_argument("--takeoff-height", type=float, default=10.0)
-    parser.add_argument("--target-lat", type=float, default=-35.3632622)
-    parser.add_argument("--target-lon", type=float, default=149.1652375)
+    parser.add_argument("--target-lat", type=float, default=None)
+    parser.add_argument("--target-lon", type=float, default=None)
     parser.add_argument("--target-height", type=float, default=50.0)
+    parser.add_argument("--target-offset-meters", type=float, default=30.0)
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    if (args.target_lat is None) != (args.target_lon is None):
+        parser.error("--target-lat and --target-lon must be provided together")
 
     print(
         "person2 gap test start "

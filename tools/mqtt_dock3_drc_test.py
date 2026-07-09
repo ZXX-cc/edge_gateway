@@ -2,9 +2,11 @@
 """Category smoke test for DJI Dock3 DRC protocol."""
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
+from typing import Any, Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -12,6 +14,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from mqtt_test_client import MqttRequestClient
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
+
+DEFAULT_DRONE_SN = "DRONESIM001"
+FALLBACK_TARGET_LATITUDE = -35.3632622
+FALLBACK_TARGET_LONGITUDE = 149.1652375
 
 
 def official_enter_payload(args):
@@ -27,6 +33,98 @@ def official_enter_payload(args):
         "osd_frequency": args.osd_frequency,
         "hsi_frequency": args.hsi_frequency,
     }
+
+
+def _field_value(payload: Any, key: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    value = data.get(key) if isinstance(data, dict) else None
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _candidate_drone_sns(primary: str) -> list[str]:
+    candidates = [primary, DEFAULT_DRONE_SN, "DRONE-SIM-001"]
+    result: list[str] = []
+    for sn in candidates:
+        if sn and sn not in result:
+            result.append(sn)
+    return result
+
+
+def _osd_topics(drone_sn: str) -> list[str]:
+    return [f"thing/product/{sn}/osd" for sn in _candidate_drone_sns(drone_sn)]
+
+
+def _latest_observed(client: MqttRequestClient, topics: Iterable[str]) -> tuple[str | None, Any | None]:
+    for topic in topics:
+        messages = client.observed_by_topic.get(topic, [])
+        if messages:
+            return topic, messages[-1]
+    return None, None
+
+
+def wait_for_drone_osd(client: MqttRequestClient, topics: Iterable[str], timeout: float) -> tuple[str | None, Any | None]:
+    topics = list(topics)
+    topic, payload = _latest_observed(client, topics)
+    if payload is not None:
+        return topic, payload
+
+    counts = {topic: client.observed_count(topic) for topic in topics}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for topic in topics:
+            messages = client.observed_by_topic.get(topic, [])
+            if len(messages) > counts[topic]:
+                return topic, messages[-1]
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        client.observed_signal.wait(max(0.05, min(0.5, remaining)))
+        client.observed_signal.clear()
+    return None, None
+
+
+def _offset_longitude(latitude: float, longitude: float, offset_meters: float) -> float:
+    meters_per_degree_lon = 111320.0 * max(0.1, abs(math.cos(math.radians(latitude))))
+    return longitude + offset_meters / meters_per_degree_lon
+
+
+def resolve_takeoff_target(args, osd_payload: Any | None = None) -> tuple[dict[str, float], str]:
+    if (args.target_lat is None) != (args.target_lon is None):
+        raise ValueError("--target-lat and --target-lon must be provided together")
+
+    if args.target_lat is not None and args.target_lon is not None:
+        return {
+            "target_latitude": float(args.target_lat),
+            "target_longitude": float(args.target_lon),
+            "target_height": float(args.target_height),
+        }, "cli"
+
+    latitude = _to_float(_field_value(osd_payload, "latitude"))
+    longitude = _to_float(_field_value(osd_payload, "longitude"))
+    if latitude is not None and longitude is not None:
+        return {
+            "target_latitude": latitude,
+            "target_longitude": _offset_longitude(latitude, longitude, float(args.target_offset_meters)),
+            "target_height": float(args.target_height),
+        }, "drone_osd"
+
+    return {
+        "target_latitude": FALLBACK_TARGET_LATITUDE,
+        "target_longitude": FALLBACK_TARGET_LONGITUDE,
+        "target_height": float(args.target_height),
+    }, "fallback"
 
 
 def main():
@@ -47,8 +145,18 @@ def main():
     parser.add_argument("--osd-frequency", type=int, default=10)
     parser.add_argument("--hsi-frequency", type=int, default=1)
     parser.add_argument("--no-reply-window", type=float, default=1.0)
+    parser.add_argument("--drone-sn", default=DEFAULT_DRONE_SN)
+    parser.add_argument("--osd-wait", type=float, default=4.0)
+    parser.add_argument("--target-lat", type=float, default=None)
+    parser.add_argument("--target-lon", type=float, default=None)
+    parser.add_argument("--target-height", type=float, default=50.0)
+    parser.add_argument("--target-offset-meters", type=float, default=30.0)
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    if (args.target_lat is None) != (args.target_lon is None):
+        parser.error("--target-lat and --target-lon must be provided together")
+
+    osd_topics = _osd_topics(args.drone_sn)
 
     client = MqttRequestClient(
         args.host,
@@ -58,6 +166,7 @@ def main():
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_dock3_drc",
         subscribe_events=True,
+        observe_topics=osd_topics,
     )
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)
@@ -151,14 +260,28 @@ def main():
         if rc != 0:
             return rc
 
+        osd_topic, osd_payload = wait_for_drone_osd(client, osd_topics, args.osd_wait)
+        target, target_source = resolve_takeoff_target(args, osd_payload)
+        if target_source == "fallback":
+            print(
+                "warning: no drone OSD received before takeoff_to_point; "
+                f"fallback target is used, topics={','.join(osd_topics)}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "takeoff_to_point target "
+                f"source={target_source}, topic={osd_topic}, "
+                f"lat={target['target_latitude']:.7f}, lon={target['target_longitude']:.7f}, "
+                f"height={target['target_height']:.1f}"
+            )
+
         takeoff_events_before = client.event_count("takeoff_to_point_progress")
         rc, _ = client.request(
             "takeoff_to_point",
             {
                 "flight_id": "drc-test-flight",
-                "target_latitude": -35.3632622,
-                "target_longitude": 149.1652375,
-                "target_height": 50,
+                **target,
                 "security_takeoff_height": 30,
                 "rth_altitude": 80,
                 "rc_lost_action": 0,
@@ -192,9 +315,9 @@ def main():
                 "fly_to_id": "drc-flyto-001",
                 "max_speed": 8,
                 "points": [{
-                    "latitude": -35.3632622,
-                    "longitude": 149.1652375,
-                    "height": 45,
+                    "latitude": target["target_latitude"],
+                    "longitude": target["target_longitude"],
+                    "height": max(5.0, target["target_height"] - 5.0),
                 }],
             },
             args.timeout,
