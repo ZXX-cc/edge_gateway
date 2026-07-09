@@ -702,7 +702,7 @@ dock3 cmd test ok (accepted=..., events=..., ignored_total=...)
 2026-07-09 Ubuntu 已验证成功，实际输出：
 
 ```text
-dock3 cmd test ok (accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60)
+dock3 cmd test ok (accepted=60, events=18, ignored_mismatched=0, ignored_legacy=14, ignored_late=46, ignored_wrong_topic=0, ignored_total=60)
 --- cmd exit=0 elapsed=5.0s ---
 dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)
 ```
