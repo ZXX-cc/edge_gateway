@@ -9,8 +9,9 @@ from .models import OperationRecord
 class OperationDB:
     @staticmethod
     async def create_operation_async(session: AsyncSession, device_sn: str, command: str,
-                                      params: dict = None, operator: str = "") -> str:
-        operation_id = str(uuid.uuid4())
+                                      params: dict = None, operator: str = "",
+                                      operation_id: str = None) -> str:
+        operation_id = operation_id or str(uuid.uuid4())
         record = OperationRecord(
             device_sn=device_sn,
             operation_id=operation_id,
@@ -27,8 +28,9 @@ class OperationDB:
 
     @staticmethod
     def create_operation_sync(session: Session, device_sn: str, command: str,
-                               params: dict = None, operator: str = "") -> str:
-        operation_id = str(uuid.uuid4())
+                               params: dict = None, operator: str = "",
+                               operation_id: str = None) -> str:
+        operation_id = operation_id or str(uuid.uuid4())
         record = OperationRecord(
             device_sn=device_sn,
             operation_id=operation_id,

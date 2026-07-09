@@ -12,7 +12,12 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.utils.field_labels import format_with_labels
-from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_TIMEOUT,
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_COMMUNICATION_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
 from src.cloud_api.dock3_drc import (
     normalize_fly_to_point_update,
     normalize_drone_control,
@@ -127,6 +132,18 @@ class DrcController:
                 return dispatcher.connection
         return None
 
+    def _get_mav_sender(self):
+        """获取可发送 MAVLink 消息的 sender 对象。"""
+        conn = self._get_mavlink_connection()
+        if not conn:
+            return None, None
+        master = getattr(conn, "master", None)
+        if master and hasattr(master, "mav"):
+            return master.mav, master
+        if hasattr(conn, "mav"):
+            return conn.mav, conn
+        return None, conn
+
     def _send_mavlink_message(self, msg) -> bool:
         """发送MAVLink消息"""
         conn = self._get_mavlink_connection()
@@ -135,6 +152,127 @@ class DrcController:
             return True
         logger.warning("MAVLink not connected, cannot send DRC command")
         return False
+
+    def _send_body_velocity(self, vx: float, vy: float, vz: float, yaw_rate: float = 0.0) -> tuple:
+        """
+        发送机体系速度控制。
+
+        Returns:
+            (sent, simulated, error)
+        """
+        mav, master = self._get_mav_sender()
+        if not mav or not hasattr(mav, "set_position_target_local_ned_send"):
+            logger.warning("MAVLink sender not available, DRC velocity command simulated")
+            return False, True, "MAVLink sender not available"
+
+        try:
+            mav.set_position_target_local_ned_send(
+                0,
+                getattr(master, "target_system", 1),
+                getattr(master, "target_component", 1),
+                mavutil.mavlink.MAV_FRAME_BODY_NED,
+                0b0000111111000111,
+                0, 0, 0,
+                vx, vy, vz,
+                0, 0, 0,
+                0, yaw_rate,
+            )
+            return True, False, ""
+        except Exception as exc:
+            logger.error("DRC velocity send failed: %s", exc, exc_info=True)
+            return False, False, str(exc)
+
+    def _send_zero_velocity(self) -> tuple:
+        """发送零速度，作为退出 DRC 或急停前的刹车/悬停动作。"""
+        return self._send_body_velocity(0.0, 0.0, 0.0, 0.0)
+
+    def _set_safe_mode(self) -> tuple:
+        """切到安全悬停模式，优先 LOITER，失败后尝试 QLOITER。"""
+        if not self._mode_control or not hasattr(self._mode_control, "set_mode"):
+            return False, True, "mode_control not available"
+
+        last_message = ""
+        for mode in ("LOITER", "QLOITER"):
+            try:
+                result = self._mode_control.set_mode(mode)
+            except Exception as exc:
+                last_message = str(exc)
+                logger.warning("DRC safe mode %s failed: %s", mode, exc)
+                continue
+            if result.get("success"):
+                return True, False, mode
+            last_message = result.get("message", f"{mode} failed")
+        return False, False, last_message
+
+    def _set_emergency_land_mode(self) -> tuple:
+        """进入紧急降落模式，优先复用 FlightControl.land。"""
+        if self._flight_control and hasattr(self._flight_control, "land"):
+            try:
+                result = self._flight_control.land()
+                if result.get("success"):
+                    return True, False, result.get("message", "land")
+                return False, False, result.get("message", "land failed")
+            except Exception as exc:
+                logger.warning("DRC emergency land failed: %s", exc)
+                return False, False, str(exc)
+
+        if self._mode_control and hasattr(self._mode_control, "set_mode"):
+            last_message = ""
+            for mode in ("QLAND", "LAND"):
+                try:
+                    result = self._mode_control.set_mode(mode)
+                except Exception as exc:
+                    last_message = str(exc)
+                    continue
+                if result.get("success"):
+                    return True, False, mode
+                last_message = result.get("message", f"{mode} failed")
+            return False, False, last_message
+
+        return False, True, "mode control not available"
+
+    @staticmethod
+    def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Haversine distance in meters."""
+        radius = 6371000.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        d_phi = math.radians(lat2 - lat1)
+        d_lam = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_phi / 2) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2) ** 2
+        )
+        return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    def _check_target_boundary(self, latitude: float, longitude: float, altitude: float) -> tuple:
+        """检查指点飞行目标的高度和电子围栏半径。"""
+        valid, reason = self._check_altitude_boundary(altitude)
+        if not valid:
+            return False, reason
+
+        if not Config.get('device.safety.geofence_enabled', True):
+            return True, ""
+
+        if not self._telemetry_module or not hasattr(self._telemetry_module, "get_telemetry_data"):
+            return True, ""
+
+        try:
+            telemetry = self._telemetry_module.get_telemetry_data()
+        except Exception as exc:
+            logger.warning("DRC target boundary telemetry unavailable: %s", exc)
+            return True, ""
+
+        current_lat = telemetry.get("latitude")
+        current_lon = telemetry.get("longitude")
+        if not current_lat or not current_lon:
+            return True, ""
+
+        radius = Config.get('device.limits.max_distance', self._geofence_radius)
+        distance = self._distance_meters(float(current_lat), float(current_lon), latitude, longitude)
+        if distance > radius:
+            return False, f"目标点距离 {distance:.1f}m 超过电子围栏半径 {radius}m"
+        return True, ""
 
     # ---- DRC 事件上报 ----
 
@@ -343,6 +481,19 @@ class DrcController:
     def _auto_exit_drc(self, reason: str):
         """自动退出DRC模式"""
         logger.warning(f"DRC auto exit: {reason}")
+
+        brake_sent, brake_simulated, brake_error = self._send_zero_velocity()
+        mode_ok, mode_simulated, mode_message = self._set_safe_mode()
+        logger.info(
+            "DRC auto exit safety action: brake_sent=%s, brake_simulated=%s, brake_error=%s, "
+            "mode_ok=%s, mode_simulated=%s, mode_message=%s",
+            brake_sent,
+            brake_simulated,
+            brake_error,
+            mode_ok,
+            mode_simulated,
+            mode_message,
+        )
 
         # 停止心跳监控
         self._heartbeat_running = False
@@ -619,25 +770,28 @@ class DrcController:
         }
 
         # 4. 通过MAVLink发送速度指令 (SET_POSITION_TARGET_LOCAL_NED)
-        conn = self._get_mavlink_connection()
-        if conn and hasattr(conn, 'master') and conn.master:
-            try:
-                conn.master.mav.set_position_target_local_ned_send(
-                    0,  # time_boot_ms
-                    conn.master.target_system,
-                    conn.master.target_component,
-                    mavutil.mavlink.MAV_FRAME_BODY_NED,
-                    0b0000111111000111,  # 仅使用vx,vy,vz,yaw_rate
-                    0, 0, 0,  # x,y,z (忽略)
-                    vx, vy, vz,  # 速度
-                    0, 0, 0,  # 加速度 (忽略)
-                    0, yaw_rate  # yaw, yaw_rate
-                )
-                logger.debug(f"DRC speed sent: vx={vx}, vy={vy}, vz={vz}, yaw_rate={yaw_rate}")
-            except Exception as e:
-                logger.error(f"DRC speed send failed: {e}")
+        sent, simulated, error = self._send_body_velocity(vx, vy, vz, yaw_rate)
+        if error and not simulated:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DOCK_COMMUNICATION_ERROR,
+                msg_str=f"DRC speed send failed: {error}",
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        logger.debug(
+            "DRC speed handled: vx=%s, vy=%s, vz=%s, yaw_rate=%s, sent=%s, simulated=%s",
+            vx,
+            vy,
+            vz,
+            yaw_rate,
+            sent,
+            simulated,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": "ok", "simulated": simulated}},
+        )
 
     def handle_drc_heading_push(self, msg: dict) -> dict:
         """
@@ -734,6 +888,11 @@ class DrcController:
         if not self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC not enabled")
 
+        valid, reason = self._check_target_boundary(lat, lon, alt)
+        if not valid:
+            logger.warning("DRC flyto boundary rejected: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
         logger.info(f"DRC flyto: lat={lat}, lon={lon}, alt={alt}, speed={speed}")
 
         # 通过ModeControl发送GUIDED位置目标
@@ -783,25 +942,19 @@ class DrcController:
             yaw_rate,
         )
 
-        # 发送速度指令
-        conn = self._get_mavlink_connection()
-        if conn and hasattr(conn, 'master') and conn.master:
-            try:
-                conn.master.mav.set_position_target_local_ned_send(
-                    0,
-                    conn.master.target_system,
-                    conn.master.target_component,
-                    mavutil.mavlink.MAV_FRAME_BODY_NED,
-                    0b0000111111000111,  # 仅使用vx,vy,vz,yaw_rate
-                    0, 0, 0,
-                    vx, vy, vz,
-                    0, 0, 0,
-                    0, yaw_rate
-                )
-            except Exception as e:
-                logger.error(f"Drone control send failed: {e}")
+        sent, simulated, error = self._send_body_velocity(vx, vy, vz, yaw_rate)
+        if error and not simulated:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DOCK_COMMUNICATION_ERROR,
+                msg_str=f"Drone control send failed: {error}",
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": "ok", "simulated": simulated}},
+        )
 
     def handle_stick_control(self, msg: dict) -> dict:
         """
@@ -989,6 +1142,15 @@ class DrcController:
         points = target["points"]
         fly_to_id = target["fly_to_id"]
         first_point = points[0]
+        valid, reason = self._check_target_boundary(
+            first_point["latitude"],
+            first_point["longitude"],
+            first_point["height"],
+        )
+        if not valid:
+            logger.warning("fly_to_point_update boundary rejected: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
         self._active_fly_to_point = {
             "fly_to_id": fly_to_id,
             "max_speed": max_speed,
@@ -1230,8 +1392,46 @@ class DrcController:
         Request: { }
         """
         logger.info("Drone emergency stop!")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        brake_sent, brake_simulated, brake_error = self._send_zero_velocity()
+        land_ok, land_simulated, land_message = self._set_emergency_land_mode()
+        if brake_error and not brake_simulated:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DOCK_COMMUNICATION_ERROR,
+                msg_str=f"Emergency brake failed: {brake_error}",
+                data={
+                    "output": {
+                        "status": "failed",
+                        "brake_sent": brake_sent,
+                        "simulated": False,
+                    }
+                },
+            )
+
+        status = "ok" if land_ok or land_simulated else "failed"
+        result_code = 0 if land_ok or land_simulated else DOCK_COMMUNICATION_ERROR
+        if self._drc_enabled:
+            self._heartbeat_running = False
+            self._drc_enabled = False
+            self._session_id = ""
+            self._active_fly_to_point = None
+            self._active_takeoff_to_point = None
+            self.report_drc_status_notify(drc_state=0, result=0)
+            self._write_audit_log("emergency_stop", land_message)
+        return MessageBuilder.build_reply(
+            msg,
+            result=result_code,
+            msg_str="" if result_code == 0 else land_message,
+            data={
+                "output": {
+                    "status": status,
+                    "brake_sent": brake_sent,
+                    "land_ok": land_ok,
+                    "simulated": brake_simulated or land_simulated,
+                    "message": land_message,
+                }
+            },
+        )
 
     def handle_takeoff_to_point(self, msg: dict) -> dict:
         """
@@ -1263,6 +1463,11 @@ class DrcController:
         target_height = target["target_height"]
         flight_id = target["flight_id"]
         max_speed = target["max_speed"]
+        valid, reason = self._check_target_boundary(target_latitude, target_longitude, target_height)
+        if not valid:
+            logger.warning("takeoff_to_point boundary rejected: %s", reason)
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
         track_id = f"track-{flight_id}"
         self._last_flyto_cmd = {
             **target,

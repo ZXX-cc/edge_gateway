@@ -19,6 +19,7 @@ from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.database.connection import get_async_session_local
 from src.database.operation_db import OperationDB
+from src.generated_dialect.gcs_order_protocol import GCSCommand
 
 logger = get_logger("dock")
 
@@ -262,11 +263,9 @@ class DockManager:
                     self._nest_module.stop_charging()
                 elif action == 'putter_push':
                     # 推杆推出近似为夹紧释放 (CLAMP_RELEASE)
-                    from generated_dialect.gcs_order_protocol import GCSCommand
                     self._nest_module.send_gcs_command(GCSCommand.CLAMP_RELEASE)
                 elif action == 'putter_pull':
                     # 推杆收回近似为夹紧 (CLAMP_TIGHTEN)
-                    from generated_dialect.gcs_order_protocol import GCSCommand
                     self._nest_module.send_gcs_command(GCSCommand.CLAMP_TIGHTEN)
 
                 # 标记操作完成
@@ -362,7 +361,6 @@ class DockManager:
         # 执行机场急停逻辑
         if self._nest_module:
             try:
-                from generated_dialect.gcs_order_protocol import GCSCommand
                 self._nest_module.send_gcs_command(GCSCommand.ESTOP_ACTIVATE)
             except Exception as e:
                 logger.error(f"Emergency stop failed: {e}")
@@ -383,7 +381,6 @@ class DockManager:
         # 执行复位操作
         if self._nest_module:
             try:
-                from generated_dialect.gcs_order_protocol import GCSCommand
                 self._nest_module.send_gcs_command(GCSCommand.FAULT_RECOVERY)
             except Exception as e:
                 logger.error(f"Dock reset failed: {e}")
@@ -550,7 +547,11 @@ class DockManager:
             async with session_factory() as session:
                 async with session.begin():
                     await OperationDB.create_operation_async(
-                        session, self.gateway_sn, command, params
+                        session,
+                        self.gateway_sn,
+                        command,
+                        params,
+                        operation_id=operation_id,
                     )
         except Exception as e:
             logger.error(f"Failed to save operation record: {e}")
