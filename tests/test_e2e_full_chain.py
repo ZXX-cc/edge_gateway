@@ -26,6 +26,7 @@ class E2EFullChainTest(unittest.TestCase):
             "quiet_stale": True,
             "fail_on_stale": False,
             "osd_allow_invalid": False,
+            "device_extra_sub_device_json": [],
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -74,6 +75,19 @@ class E2EFullChainTest(unittest.TestCase):
         timeout_index = command.index("--timeout")
         self.assertEqual(command[timeout_index + 1], "20.0")
         self.assertIn("mqtt_dock3_firmware_config_test.py", command[1])
+
+    def test_build_command_passes_extra_sub_devices_only_to_device_step(self):
+        extra = '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B"}'
+        device_step = next(step for step in STEPS if step.key == "device")
+        command = build_command(device_step, self.args(device_extra_sub_device_json=[extra]))
+
+        self.assertIn("mqtt_dock3_device_test.py", command[1])
+        self.assertIn("--extra-sub-device-json", command)
+        self.assertIn(extra, command)
+
+        wayline_step = next(step for step in STEPS if step.key == "wayline")
+        wayline_command = build_command(wayline_step, self.args(device_extra_sub_device_json=[extra]))
+        self.assertNotIn("--extra-sub-device-json", wayline_command)
 
     def test_takeoff_flow_step_is_p1_and_omits_stale_flag(self):
         step = next(step for step in STEPS if step.key == "takeoff-flow")

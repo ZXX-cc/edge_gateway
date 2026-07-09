@@ -59,7 +59,7 @@
 | OSD/state 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale` 输出 `dock3 osd/state test ok`，结果 `dock_osd=1, drone_osd=1, state=1, invalid=0`；飞行器 OSD 已出现 SITL 动态经纬度、电池和 GPS |
 | 错误码边界归一 | 通过本地测试 | `tests/test_dji_error_codes.py` 验证内部负数转 DJI 错误码 |
 | properties 可写边界 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)`；官方 `rw` 属性成功，只读/非法/未知属性返回 `state.result=1` |
-| device topology 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale` 输出 `dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, status=2, ignored_total=0)`；验证 `update_topo status/status_reply`、在线/离线拓扑、无效拓扑拒绝 |
+| device topology 专项 | 已通过 Ubuntu 专项复测；多设备本地入口已补 | `tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale` 输出 `dock3 device topology test ok (...)`；验证 `update_topo status/status_reply`、在线/离线拓扑、无效拓扑拒绝。本地新增多子设备、离线缓存保留、重连恢复和解绑空拓扑测试，当前脚本输出包含 `sub_device_count`、`sub_device_sns`、`reconnect`，并支持 `--extra-sub-device-json` |
 | organization full 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` 输出 `organization request test ok`；验证 `airport_organization_get/bind`、`device_binding`、`update_topo status_reply result=0` 和内存绑定 |
 | DRC 专项字段校验 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_mismatched=0, ignored_legacy=4, ignored_late=1, ignored_total=5)`；验证 `drc_mode_enter` 官方 payload、`stick_control` 官方杆量、`drone_control` 官方废弃字段和值域错误 |
 | DRC 批量验收 | 已通过 Ubuntu 专项复测 | `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 输出 `drc batch test ok (accepted=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；覆盖 enter/exit、`drc_state`、杆量、飞行器/负载控制和速度控制 |
@@ -133,7 +133,7 @@ tail -F logs/nest_simulator/command_trace.log
 | 顺序 | Dock3 分组 | 官方文档 | 当前状态 | 当前代码入口 | 下一步 |
 |---:|---|---|---|---|---|
 | 1 | 设备属性 properties | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html | 部分完成，官方 `rw` 属性和值域边界已通过 Ubuntu 专项复测 | `src/device/manager.py`, `src/cloud_api/dock3_properties.py`, `src/mavlink/telemetry.py`, `src/cloud_api/telemetry_reporter.py`, `tools/mqtt_dock3_properties_test.py` | 继续补客户需求涉及的 `osd/state` 字段、枚举、单位和值域精校 |
-| 2 | 设备管理 device | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/device.html | 部分完成，`update_topo` 官方字段校验和专项脚本已通过 Ubuntu 复测 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py` | 继续精校 `domain/type/sub_type` 官方枚举和多设备真实拓扑语义 |
+| 2 | 设备管理 device | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/device.html | 部分完成，`update_topo` 官方字段校验和专项脚本已通过 Ubuntu 复测；多子设备、离线、重连和解绑的本地状态语义已补 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py` | 继续精校 `domain/type/sub_type` 官方枚举和真实多设备云端差异 |
 | 3 | 组织管理 organization | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/organization.html | 部分完成，基础成功路径、异常分支、绑定后事件和持久化均已通过 Ubuntu 验证 | `src/cloud_api/connection_manager.py`, `src/device/manager.py`, `tools/mqtt_cloud_simulator.py`, `tools/mqtt_organization_test.py` | 字段精校，补真实云端/多设备差异 |
 | 4 | 直播 live | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_live.py`, `src/media/manager.py`, `tools/mqtt_dock3_live_test.py` | 后续接真实 RTMP/WebRTC/GB28181 adapter |
 | 5 | 媒体 media | https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/media.html | 已通过 Ubuntu 专项复测 | `src/cloud_api/dock3_media.py`, `src/media/manager.py`, `tools/mqtt_dock3_media_test.py` | 后续精校 OSS 凭证、断点续传和上传完成事件 |
@@ -281,7 +281,7 @@ python src/main.py -c config/gateway.yaml
 python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale
 ```
 
-成功标志：`dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, status=2, ignored_total=0)`。该脚本会给运行中的网关发送测试触发用 `services:update_topo`，然后验证网关发布的官方 `sys/product/{sn}/status:update_topo`，并模拟云端发送 `status_reply`。其中 services 入口只作为本地测试触发器，最终 Dock3 官方方向仍以 `status/status_reply` 为准。
+成功标志：`dock3 device topology test ok (...)`，当前输出会包含 `sub_device_count`、`sub_device_sns`、`reconnect`、`accepted`、`status` 和 `ignored_total`。该脚本会给运行中的网关发送测试触发用 `services:update_topo`，然后验证网关发布的官方 `sys/product/{sn}/status:update_topo`，并模拟云端发送 `status_reply`。其中 services 入口只作为本地测试触发器，最终 Dock3 官方方向仍以 `status/status_reply` 为准。当前脚本已支持 `--extra-sub-device-json`，可验证多子设备上线、离线空拓扑和重连恢复；`DeviceManager` 本地单测已覆盖空拓扑不丢缓存、paired 状态保留和解绑空拓扑。
 
 ### 3.4 drc
 
@@ -435,6 +435,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 15 | 一键启航离线闭环 | 新增 `tools/e2e_takeoff_flow_test.py`，覆盖 mock KMZ 解析、`flighttask_prepare -> flighttask_execute -> complete_simulated_mission`、`flighttask_ready/flighttask_progress` 事件和机巢 `request_takeoff` 调用；`e2e_full_chain_test.py` 默认扩展为 11 段 | 本地和服务器均已通过 `tools/e2e_takeoff_flow_test.py --timeout 12`，服务器 11 段 E2E 已覆盖 `takeoff-flow` |
 | Batch 16 | 11 段 E2E 服务器验收 | 人员2在服务器执行 `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale`，properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS-log、firmware-config 全部 `exit=0` | P0/P1 核心 MQTT + 一键启航离线闭环基线已成立；最终输出 `dock3 e2e full-chain test ok (steps=11, elapsed=16.2s)` |
 | Batch 17 | 严格旧消息门禁 | `tools/mqtt_dock3_osd_state_test.py` 新增 `--fail-on-stale`，会把旧 value-wrapper OSD、旧 `reason=property_changed` state 和无关 state 计入 stale；`e2e_full_chain_test.py --fail-on-stale` 已会把严格参数传入 OSD/state 阶段 | 本地通过 `tests.test_dock3_osd_state_client`、`tests.test_e2e_full_chain`、`tests.test_mqtt_test_client` 和 dry-run；待服务器清理旧进程后执行全链路严格复测 |
+| Batch 18 | device 多子设备/离线/重连 | `DeviceManager` 空拓扑改为标记已知子设备离线而不是清空缓存，重连保留 paired 状态，解绑时清空子设备并上报空拓扑；`tools/mqtt_dock3_device_test.py` 新增 `--extra-sub-device-json`，默认覆盖上线、离线、重连和非法拓扑；`e2e_full_chain_test.py` 新增 `--device-extra-sub-device-json` 透传到 device 阶段 | 本地通过 `tests.test_dock3_device_topology`、`tests.test_device_manager_topology`、`tests.test_e2e_full_chain`、`tests.test_mqtt_organization_client`、`tests.test_device_manager_cmd_compat`、`tests.test_device_manager_firmware_config` 和 E2E device dry-run |
 
 ## 5. 更新规则
 

@@ -6,6 +6,9 @@ import unittest
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
 
 from src.cloud_api.dock3_device import (
     GATEWAY_DOMAIN,
@@ -16,6 +19,7 @@ from src.cloud_api.dock3_device import (
     build_update_topo_payload,
     validate_update_topo_payload,
 )
+from mqtt_dock3_device_test import build_extra_sub_device
 
 
 class Dock3DeviceTopologyTest(unittest.TestCase):
@@ -68,6 +72,16 @@ class Dock3DeviceTopologyTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("sn must not be empty" in error for error in errors))
         self.assertTrue(any("type must be int" in error for error in errors))
+
+    def test_extra_sub_device_json_normalizes_to_schema(self):
+        device = build_extra_sub_device(
+            '{"sn":"DRONE-SIM-002","domain":"0","type":"60","sub_type":"0","index":"B"}'
+        )
+
+        self.assertEqual(device["sn"], "DRONE-SIM-002")
+        self.assertEqual(device["type"], 60)
+        self.assertEqual(device["sub_type"], 0)
+        self.assertEqual(device["index"], "B")
 
 
 if __name__ == "__main__":

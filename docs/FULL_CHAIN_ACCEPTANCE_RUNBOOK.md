@@ -50,7 +50,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_organization_test.py` | 组织管理专项 | `airport_bind_status/get/bind` |
 | `tools/mqtt_dock3_p0_batch_test.py` | P0 基础批量 | property、services、DRC、错误 topic |
 | `tools/mqtt_dock3_properties_test.py` | properties 专项 | 可写/只读属性、值域 |
-| `tools/mqtt_dock3_device_test.py` | device topology 专项 | `update_topo`、在线/离线拓扑 |
+| `tools/mqtt_dock3_device_test.py` | device topology 专项 | `update_topo`、多子设备、在线/离线/重连拓扑 |
 | `tools/mqtt_dock3_drc_test.py` | DRC 专项 | enter/exit、杆量、错误值域 |
 | `tools/mqtt_drc_batch_test.py` | DRC 批量闭环 | enter/exit、`drc_state`、杆量、飞行器/负载控制、速度控制 |
 | `tools/mqtt_dock3_cmd_test.py` | CMD 专项 | 舱盖、充电、推杆、灯、设备动作 |
@@ -206,6 +206,7 @@ python tools/mqtt_dock3_p0_batch_test.py --timeout 12
 python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale
 python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale
+python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale --extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B","device_secret":"drone-secret-2","nonce":"drone-nonce-2","thing_version":"1.1.2"}'
 python tools/mqtt_organization_test.py --config config/gateway.yaml --action full --organization-id org_sim_001 --sub-device-json '{"sn":"DRONESIM001","domain":"0","type":91,"sub_type":0,"index":"A","device_secret":"drone-secret","nonce":"drone-nonce","thing_version":"1.1.2","online":true,"paired":true}' --expect-organization-name 模拟组织 --expect-event device_binding --expect-event update_topo --expect-bound --publish-events --expect-status-reply --expect-topo-sub-device-count 1 --expect-topo-sub-device-sn DRONESIM001 --validate-topo-schema --verify-timeout 8 --timeout 20
 python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale
 python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
@@ -221,7 +222,7 @@ P0 通过标准：
 | P0 批量 | 输出 `dock3 p0 batch test ok` |
 | Properties | 输出 `dock3 properties test ok` |
 | OSD/State | 输出 `dock3 osd/state test ok`，且 `invalid=0` |
-| Device | 输出 `dock3 device topology test ok` |
+| Device | 输出 `dock3 device topology test ok`；多子设备命令需显示 `sub_device_count=2`，并覆盖离线空拓扑和重连恢复 |
 | Organization | 输出 `organization request test ok` |
 | DRC | 输出 `dock3 drc test ok` |
 | DRC 批量 | 输出 `drc batch test ok`，且 `ignored_total=0` |
@@ -258,6 +259,12 @@ P1 通过标准：
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
 | 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复通过 |
 | 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器已输出 `dock3 e2e full-chain test ok (steps=11, elapsed=16.2s)` |
+
+多设备拓扑可通过 E2E device 阶段单独验证：
+
+```bash
+python tools/e2e_full_chain_test.py --only device --timeout 12 --quiet-stale --device-extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B","device_secret":"drone-secret-2","nonce":"drone-nonce-2","thing_version":"1.1.2"}'
+```
 
 ## 6.1 严格旧消息验收
 

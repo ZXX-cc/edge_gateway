@@ -616,7 +616,7 @@ python tools/mqtt_dock3_device_test.py --timeout 12
 成功标志：
 
 ```text
-dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=...)
+dock3 device topology test ok (status_messages=3, sub_device_count=1, sub_device_sns=DRONE-SIM-001, reconnect=True, accepted=4, ...)
 ```
 
 该脚本会：
@@ -626,6 +626,13 @@ dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, a
 3. 模拟云端发布 `sys/product/{sn}/status_reply`。
 4. 验证在线拓扑 `sub_devices[0].sn=DRONE-SIM-001`。
 5. 验证离线拓扑 `sub_devices=[]`。
+6. 验证重连后在线拓扑恢复。
+
+多子设备拓扑可追加：
+
+```bash
+python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale --extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B"}'
+```
 6. 验证缺少官方必填字段的无效拓扑返回 `325001`，且不产生 status 上报。
 
 说明：`services:update_topo` 只作为本地测试触发器使用，Dock3 官方最终方向仍是 `status/status_reply`。

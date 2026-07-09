@@ -60,7 +60,7 @@
 | 日志与可观测性 | 已通过 | 90% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 复测；命令链 `command_trace` 已补 Dock3 properties/device/CMD/DRC/Wayline/media/live/HMS/log/firmware/config 中文动作映射，未知 method 会明确打印“未注册业务处理器”；11 段 E2E 已能输出分段耗时和最终汇总 | 压缩策略、真实 OSS 上传和 E2E 证据自动归档未完整实现 | 接入全链路证据归档 | 人员1/人员3 |
 | 非阻塞与容错基础 | 部分完成 | 45% | 已修复若干 coroutine 未 await warning，停止流程可正常 await | MongoDB/NoSQL 目标未实现，数据库写入和文件 IO 仍需全面后台化审计 | 建异步数据访问层和操作队列 | 人员1/人员2 |
 | Properties / OSD / State | 已通过 | 80% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；11 段 E2E 的 OSD/state 阶段已在服务器通过，输出 `dock_osd=1, drone_osd=1, state=1, invalid=0`；脚本已忽略旧版 `reason=property_changed` state 和旧 helper 的部分 value-wrapper OSD 残留，当前有效样本仍按 Dock3 必填字段严格校验 | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
-| Device 设备管理/拓扑 | 已通过 | 73% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；最新输出 `status_messages=2, accepted=3, ignored_total=0` | `domain/type/sub_type` 官方产品枚举、多真实子设备语义未精校 | 精校设备类型枚举和多设备拓扑 | 人员1/人员3 |
+| Device 设备管理/拓扑 | 已通过 | 78% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；本地已补多子设备、离线空拓扑不丢缓存、重连恢复和解绑空拓扑单测；`mqtt_dock3_device_test.py` 支持 `--extra-sub-device-json`，E2E device 阶段支持 `--device-extra-sub-device-json` | `domain/type/sub_type` 官方产品枚举、真实多子设备云端差异未精校 | 在服务器执行多子设备 MQTT 专项并精校设备类型枚举 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 75% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；最新全链路输出 `organization request test ok` | 真实云端差异、多设备绑定、解绑流程仍需补 | 补真实云端联调和解绑/多设备场景 | 人员1 |
 | DRC 指令飞行 | 已通过 | 78% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；最新 E2E DRC 阶段输出 `accepted=14, events=7, ignored_total=0` | 真实 MAVLink 模式语义、链路抖动和超时边界仍需精校 | 补 SITL 指点飞行和飞控模式联动 | 人员1/人员2 |
 | CMD 远程调试 | 已通过 | 72% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、进度事件已通过专项复测 | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
@@ -89,7 +89,7 @@
 | P0 总批量 | `python tools/mqtt_dock3_p0_batch_test.py --timeout 12` | `dock3 p0 batch test ok` |
 | Properties | `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` | `dock3 properties test ok` |
 | OSD / State | `python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale` | `dock3 osd/state test ok` |
-| Device topology | `python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale` | `dock3 device topology test ok` |
+| Device topology | `python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale`；多设备加 `--extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B"}'` | `dock3 device topology test ok` |
 | Organization | `python tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` | `organization request test ok` |
 | DRC 专项 | `python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` | `dock3 drc test ok` |
 | DRC 批量 | `python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` | `drc batch test ok` |

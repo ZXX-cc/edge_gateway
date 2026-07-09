@@ -85,7 +85,7 @@ class DeviceTopologyClient(MqttRequestClient):
         return self.wait_status("update_topo", previous_count, timeout)
 
 
-def assert_status_payload(status_msg, expected_count, expected_sn=None):
+def assert_status_payload(status_msg, expected_count, expected_sns=None):
     if not status_msg:
         print("timeout waiting for update_topo status", file=sys.stderr)
         return 4
@@ -105,12 +105,52 @@ def assert_status_payload(status_msg, expected_count, expected_sn=None):
         )
         return 6
 
-    if expected_sn:
+    if expected_sns:
         sns = {device.get("sn") for device in sub_devices}
-        if expected_sn not in sns:
-            print(f"missing expected sub-device sn={expected_sn}", file=sys.stderr)
-            return 7
+        for expected_sn in expected_sns:
+            if expected_sn not in sns:
+                print(f"missing expected sub-device sn={expected_sn}", file=sys.stderr)
+                return 7
     return 0
+
+
+def build_extra_sub_device(raw):
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid --extra-sub-device-json: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("--extra-sub-device-json must be a JSON object")
+    if not data.get("sn"):
+        raise ValueError("--extra-sub-device-json requires sn")
+    return build_sub_device_payload(
+        data.get("sn"),
+        domain=data.get("domain", "0"),
+        device_type=data.get("type", data.get("device_type", 60)),
+        sub_type=data.get("sub_type", 0),
+        index=data.get("index", "A"),
+        device_secret=data.get("device_secret", "drone-secret"),
+        nonce=data.get("nonce", "drone-nonce"),
+        thing_version=data.get("thing_version", THING_VERSION),
+    )
+
+
+def online_sub_devices(args):
+    sub_devices = [
+        build_sub_device_payload(
+            args.sub_device_sn,
+            domain=args.sub_device_domain,
+            device_type=args.sub_device_type,
+            sub_type=args.sub_device_sub_type,
+            index=args.sub_device_index,
+            device_secret=args.sub_device_secret,
+            nonce=args.sub_device_nonce,
+            thing_version=args.sub_device_thing_version,
+        )
+    ]
+    for raw in args.extra_sub_device_json:
+        sub_devices.append(build_extra_sub_device(raw))
+    return sub_devices
 
 
 def online_payload(args):
@@ -121,18 +161,7 @@ def online_payload(args):
         device_secret=args.gateway_secret,
         nonce=args.gateway_nonce,
         thing_version=THING_VERSION,
-        sub_devices=[
-            build_sub_device_payload(
-                args.sub_device_sn,
-                domain=args.sub_device_domain,
-                device_type=args.sub_device_type,
-                sub_type=args.sub_device_sub_type,
-                index=args.sub_device_index,
-                device_secret=args.sub_device_secret,
-                nonce=args.sub_device_nonce,
-                thing_version=args.sub_device_thing_version,
-            )
-        ],
+        sub_devices=online_sub_devices(args),
     )
 
 
@@ -166,7 +195,17 @@ def main():
     parser.add_argument("--sub-device-secret", default="drone-secret")
     parser.add_argument("--sub-device-nonce", default="drone-nonce")
     parser.add_argument("--sub-device-thing-version", default=THING_VERSION)
+    parser.add_argument(
+        "--extra-sub-device-json",
+        action="append",
+        default=[],
+        help=(
+            "Additional sub-device JSON object. Repeat to validate multi-device topology, "
+            "for example '{\"sn\":\"DRONE-SIM-002\",\"domain\":\"0\",\"type\":60,\"sub_type\":0,\"index\":\"B\"}'."
+        ),
+    )
     parser.add_argument("--skip-offline-check", action="store_true")
+    parser.add_argument("--skip-reconnect-check", action="store_true")
     parser.add_argument("--skip-invalid-check", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
@@ -185,14 +224,21 @@ def main():
         return 2
 
     try:
+        try:
+            expected_sub_devices = online_sub_devices(args)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 11
+        expected_sns = [device["sn"] for device in expected_sub_devices]
+
         before = client.status_count("update_topo")
         rc, _ = client.request("update_topo", online_payload(args), args.timeout, expected_result=0)
         if rc != 0:
             return rc
         rc = assert_status_payload(
             client.wait_for_new_status(before, args.timeout),
-            expected_count=1,
-            expected_sn=args.sub_device_sn,
+            expected_count=len(expected_sub_devices),
+            expected_sns=expected_sns,
         )
         if rc != 0:
             return rc
@@ -208,6 +254,19 @@ def main():
             )
             if rc != 0:
                 return rc
+
+            if not args.skip_reconnect_check:
+                before = client.status_count("update_topo")
+                rc, _ = client.request("update_topo", online_payload(args), args.timeout, expected_result=0)
+                if rc != 0:
+                    return rc
+                rc = assert_status_payload(
+                    client.wait_for_new_status(before, args.timeout),
+                    expected_count=len(expected_sub_devices),
+                    expected_sns=expected_sns,
+                )
+                if rc != 0:
+                    return rc
 
         if not args.skip_invalid_check:
             before = client.status_count("update_topo")
@@ -237,7 +296,8 @@ def main():
 
         print(
             "dock3 device topology test ok "
-            f"(status_messages={client.status_count('update_topo')}, sub_device_sn={args.sub_device_sn}, "
+            f"(status_messages={client.status_count('update_topo')}, sub_device_count={len(expected_sub_devices)}, "
+            f"sub_device_sns={','.join(expected_sns)}, reconnect={not args.skip_offline_check and not args.skip_reconnect_check}, "
             f"accepted={client.stats['accepted']}, status={client.stats['status']}, "
             f"ignored_mismatched={client.stats['ignored_mismatched']}, "
             f"ignored_legacy={client.stats['ignored_legacy']}, "

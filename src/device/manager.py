@@ -124,7 +124,7 @@ class SubDevice:
     def from_dict(cls, data: dict) -> "SubDevice":
         """从字典反序列化"""
         normalized = normalize_sub_device(data or {})
-        return cls(
+        device = cls(
             sn=normalized.get("sn", ""),
             domain=normalized.get("domain", "0"),
             device_type=normalized.get("type", 0),
@@ -134,6 +134,14 @@ class SubDevice:
             nonce=normalized.get("nonce", ""),
             thing_version=normalized.get("thing_version", THING_VERSION),
         )
+        if isinstance(data, dict):
+            device.online = bool(data.get("online", False))
+            device.paired = bool(data.get("paired", False))
+            try:
+                device.last_heartbeat = float(data.get("last_heartbeat", 0) or 0)
+            except (TypeError, ValueError):
+                device.last_heartbeat = 0
+        return device
 
 
 class DeviceManager:
@@ -1151,7 +1159,32 @@ class DeviceManager:
             'device_online_status': 1 if online else 0,
             'device_paired': 1 if paired else 0
         }
-        self._notify_state({'sub_device': self._properties['sub_device']})
+        self._notify_state({'property': {'sub_device': self._properties['sub_device']}})
+
+    def _refresh_sub_device_property(self, notify: bool = True):
+        """
+        Refresh Dock3 state property for the most relevant child device.
+
+        update_topo reports all online sub-devices through sys/status. The Dock3
+        state property is a compact single-device snapshot, so prefer an online
+        device and fall back to the first known offline device to preserve
+        reconnect context.
+        """
+        selected = next((dev for dev in self._sub_devices.values() if dev.online), None)
+        if not selected:
+            selected = next(iter(self._sub_devices.values()), None)
+
+        state = {
+            'device_sn': selected.sn if selected else '',
+            'product_type': str(selected.type) if selected else '',
+            'device_online_status': 1 if selected and selected.online else 0,
+            'device_paired': 1 if selected and selected.paired else 0,
+        }
+        if self._properties.get('sub_device') == state:
+            return
+        self._properties['sub_device'] = state
+        if notify:
+            self._notify_state({'property': {'sub_device': state}})
 
     def add_sub_device(self, sub_device: SubDevice) -> bool:
         """添加子设备"""
@@ -1171,11 +1204,7 @@ class DeviceManager:
         if sn in self._sub_devices:
             del self._sub_devices[sn]
             logger.info(f"Sub device removed: {sn}")
-            self._properties['sub_device'] = {
-                'device_sn': '', 'product_type': '',
-                'device_online_status': 0, 'device_paired': 0
-            }
-            self._notify_state({'sub_device': self._properties['sub_device']})
+            self._refresh_sub_device_property()
             return True
         return False
 
@@ -1299,9 +1328,11 @@ class DeviceManager:
         self._save_organization_data()
 
         logger.info("Device unbound")
+        self._refresh_sub_device_property()
         self._notify_event('device_unbinding', {
             'timestamp': int(time.time() * 1000)
         })
+        self.report_update_topo()
 
         self._schedule_async(self._save_binding_to_db())
 
@@ -1322,11 +1353,15 @@ class DeviceManager:
         """设备离线"""
         if self._device_state == self.STATE_ONLINE:
             self._device_state = self.STATE_OFFLINE
+            for dev in self._sub_devices.values():
+                dev.online = False
+            self._refresh_sub_device_property()
             logger.info("Device offline")
             self._notify_event('device_offline', {
                 'online_status': 0,
                 'timestamp': int(time.time() * 1000)
             })
+            self.report_update_topo()
 
     def get_device_state(self) -> dict:
         """获取设备生命周期状态"""
@@ -3223,23 +3258,30 @@ class DeviceManager:
         self._gateway_nonce = normalized.get('nonce', self._gateway_nonce)
         self._gateway_thing_version = normalized.get('thing_version', self._gateway_thing_version)
 
-        self._sub_devices.clear()
-        for dev_data in normalized.get('sub_devices', []):
+        incoming_sub_devices = normalized.get('sub_devices', [])
+        seen_sns = set()
+        for dev_data in incoming_sub_devices:
             sub_dev = SubDevice.from_dict(dev_data)
             sub_dev.online = True
+            sub_dev.last_heartbeat = time.time()
+            existing = self._sub_devices.get(sub_dev.sn)
+            if existing:
+                sub_dev.paired = existing.paired
+            binding = self._get_device_binding_info(sub_dev.sn)
+            if binding.get('is_bound'):
+                sub_dev.paired = True
             self._sub_devices[sub_dev.sn] = sub_dev
+            seen_sns.add(sub_dev.sn)
+
+        for sn, sub_dev in self._sub_devices.items():
+            if sn not in seen_sns:
+                sub_dev.online = False
 
         logger.info(f"Topo updated from cloud: domain={self._gateway_domain}, "
-                   f"sub_devices={len(self._sub_devices)}")
+                   f"online_sub_devices={len(incoming_sub_devices)}, "
+                   f"known_sub_devices={len(self._sub_devices)}")
 
-        self.update_properties({
-            'sub_device': {
-                'device_sn': list(self._sub_devices.keys())[0] if self._sub_devices else '',
-                'product_type': str(self._gateway_type),
-                'device_online_status': 1 if self._sub_devices else 0,
-                'device_paired': 1 if self._sub_devices else 0
-            }
-        })
+        self._refresh_sub_device_property()
 
         self.report_update_topo()
         return MessageBuilder.build_reply(msg, result=0)

@@ -107,6 +107,9 @@ def build_command(step: Step, args) -> List[str]:
         command.append("--quiet-stale")
     if args.fail_on_stale and step.supports_fail_on_stale:
         command.append("--fail-on-stale")
+    if step.key == "device":
+        for sub_device_json in args.device_extra_sub_device_json:
+            command.extend(["--extra-sub-device-json", sub_device_json])
     if step.key == "osd-state":
         command.extend(["--reply-timeout", str(args.reply_timeout)])
         if args.osd_allow_invalid:
@@ -151,6 +154,12 @@ def main() -> int:
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     parser.add_argument("--osd-allow-invalid", action="store_true")
+    parser.add_argument(
+        "--device-extra-sub-device-json",
+        action="append",
+        default=[],
+        help="Additional sub-device JSON passed only to the device topology step. Repeat for multi-device checks.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--python", default=sys.executable)
     args = parser.parse_args()
