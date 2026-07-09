@@ -105,6 +105,20 @@ sudo systemctl status mosquitto --no-pager
 ss -tlnp | grep ':1883'
 ```
 
+如果只需要启动外围组件，优先使用项目脚本：
+
+```bash
+scripts/start_support_stack.sh
+```
+
+如果 `mosquitto.service` 重启失败，但 `1883` 已由 Docker/EMQX/其他 broker 监听，不要反复重启宿主机服务，改用检查模式：
+
+```bash
+BROKER_MODE=check scripts/start_support_stack.sh
+```
+
+如果 `1883` 没有监听，按脚本输出的 `systemctl status` 和 `journalctl -u mosquitto` 片段修复 Mosquitto；必要时用 `sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v` 定位配置错误。
+
 ### 4.2 MQTT 观察终端
 
 根据当前 SN 选择 topic。DJI Demo 兼容模式当前使用 `EDGEGW001`；旧本地模拟可能使用 `EDGE-GW-001`。

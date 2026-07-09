@@ -9,7 +9,7 @@
 ```bash
 cd ~/lxz/edge_gateway
 
-# MQTT Broker，默认 restart systemd mosquitto
+# MQTT Broker，默认 restart systemd mosquitto；失败时会打印 systemd/journal/端口诊断
 scripts/start_mqtt_broker.sh
 
 # 云端 requests/status 模拟器，默认持续运行
@@ -84,4 +84,11 @@ WEB_PORT=8091 scripts/start_web_console.sh
 
 ```bash
 BROKER_MODE=check BROKER_PORT=1883 scripts/start_mqtt_broker.sh
+BROKER_MODE=check scripts/start_support_stack.sh
 ```
+
+如果 systemd 重启 Mosquitto 失败，先看脚本输出的 `journalctl` 片段和端口监听。常见情况：
+
+- `1883` 已经被 Docker/EMQX/另一个 Mosquitto 占用：用 `BROKER_MODE=check scripts/start_support_stack.sh`。
+- `/etc/mosquitto/*.conf` 配置错误：用 `sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v` 定位具体行。
+- 没有任何 `1883` 监听：先修复 Mosquitto，再启动网关和专项脚本。
