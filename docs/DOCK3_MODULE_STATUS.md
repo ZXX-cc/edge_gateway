@@ -19,14 +19,14 @@
 | 待迁移 | 当前仍是旧实现、占位或未开始按 Dock3 官方文档改造 |
 | 暂缓 | 当前纯模拟阶段不阻塞主链路，后续接真实设备或 SDK 时再做 |
 
-当前整体进度估算：**约 76%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 网关模拟链路”，不代表真实 DJI Dock 3 设备全量接入完成，也不代表平台侧完成度。
+当前整体进度估算：**约 77%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 网关模拟链路”，不代表真实 DJI Dock 3 设备全量接入完成，也不代表平台侧完成度。
 
 ## 客户三文档后的当前状态
 
 | 状态 | 当前结论 |
 |---|---|
-| 已做到 | MQTT topic/reply 边界、设备上线/心跳、组织绑定、`update_topo` 设备拓扑、properties、OSD/state、错误码、request trace、CMD 基础控制、DRC 基础链路和心跳、Wayline mock KMZ 基础闭环、Media 基础、Live mock、HMS/log、firmware/config 专项、P0/P1 核心 E2E |
-| 部分做到 | 飞控真实 SITL 行为、机巢 v1.3 状态机、一键启航、真实航点执行、多设备/解绑/离线、相机/云台真实控制、数据保留和操作记录 |
+| 已做到 | MQTT topic/reply 边界、设备上线/心跳、组织绑定、`update_topo` 设备拓扑、properties、OSD/state、错误码、request trace、CMD 基础控制、DRC 基础链路和心跳、Wayline mock KMZ 基础闭环、一键启航离线闭环、Media 基础、Live mock、HMS/log、firmware/config 专项、P0/P1 核心 E2E |
+| 部分做到 | 飞控真实 SITL 行为、机巢 v1.3 状态机、一键启航真实机巢联动、真实航点执行、多设备/解绑/离线、相机/云台真实控制、数据保留和操作记录 |
 | 未做到/待迁移 | 真实 OTA、真实 OSS 上传、真实直播推流、真实 PSDK/ESDK、MongoDB/NoSQL 目标架构、生产 TLS/鉴权 |
 | 不属于本网关项目 | 航线库编辑、前端页面、用户权限、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库、告警通知推送 |
 
@@ -54,7 +54,7 @@
 
 | 模块/大类 | 当前状态 | 完成度估算 | 已完成内容 | 未完成/风险 | 下一步 | 主要负责人 |
 |---|---|---:|---|---|---|---|
-| Ubuntu 纯模拟部署与基础链路 | 部分完成 | 90% | Mosquitto、Edge Gateway、ArduPilot SITL、MAVLink、OSD、基础 MQTT reply 已跑通；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 10 段 P0/P1 全链路，结果 `dock3 e2e full-chain test ok (steps=10, elapsed=13.6s)`；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 `/etc/mosquitto/mosquitto.conf` 与 `conf.d/local.conf` 重复 listener 后，MQTT Broker、云端模拟器、MQTT 观察端、机巢模拟器启动成功 | 服务化部署、严格旧回包清理未完成 | 固化服务化部署并补严格环境复测 | 人员3 |
+| Ubuntu 纯模拟部署与基础链路 | 部分完成 | 91% | Mosquitto、Edge Gateway、ArduPilot SITL、MAVLink、OSD、基础 MQTT reply 已跑通；服务器已通过 10 段 P0/P1 全链路，结果 `dock3 e2e full-chain test ok (steps=10, elapsed=13.6s)`；当前默认 E2E 已扩展为 11 段并接入 `takeoff-flow`，本地 dry-run 通过；`scripts/start_support_stack.sh` 已能中文汇总启动结果 | 服务化部署、严格旧回包清理、11 段服务器复测未完成 | 固化服务化部署并补 11 段服务器复测 | 人员3 |
 | MQTT topic/reply 边界 | 已通过 | 90% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证；人员1验收脚本已统一收敛到共享 MQTT 客户端，按 `tid + method + topic + Dock3格式` 过滤旧回包 | broker 中仍可能观察到旧进程产生的重复回包，需要清理环境后做严格验证 | 清理旧回包源，使用 `--fail-on-stale` 严格验收 | 人员1 |
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
 | 日志与可观测性 | 已通过 | 90% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 复测；命令链 `command_trace` 已补 Dock3 properties/device/CMD/DRC/Wayline/media/live/HMS/log/firmware/config 中文动作映射，未知 method 会明确打印“未注册业务处理器”；10 段 E2E 已能输出分段耗时和最终汇总 | 压缩策略、真实 OSS 上传和 E2E 证据自动归档未完整实现 | 接入全链路证据归档 | 人员1/人员3 |
@@ -64,11 +64,11 @@
 | Organization 组织管理 | 已通过 | 75% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；最新全链路输出 `organization request test ok` | 真实云端差异、多设备绑定、解绑流程仍需补 | 补真实云端联调和解绑/多设备场景 | 人员1 |
 | DRC 指令飞行 | 已通过 | 78% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；最新 E2E DRC 阶段输出 `accepted=14, events=7, ignored_total=0` | 真实 MAVLink 模式语义、链路抖动和超时边界仍需精校 | 补 SITL 指点飞行和飞控模式联动 | 人员1/人员2 |
 | CMD 远程调试 | 已通过 | 72% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、进度事件已通过专项复测 | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
-| Wayline 航线管理 | 已通过 | 70% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；mock KMZ 下载、校验、解析和内部任务转换已进入 `flighttask_prepare`；最新 E2E Wayline 阶段输出 `accepted=11, events=9, ignored_total=0` | 媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补媒体计数和真实 SITL 航点执行 | 人员1/人员2 |
-| P0/P1 E2E 回归 | 已通过 | 88% | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、media、live、HMS/log、firmware/config 10 段，全部 `exit=0`，总耗时 13.6s；OSD/state 阶段输出 `invalid=0` | 严格 `--fail-on-stale` 环境、真实硬件/真实推流/真实 OTA 和一键启航尚未纳入同一 E2E 入口 | 建立严格环境回归，并把一键启航接入 E2E | 人员1 |
+| Wayline 航线管理 | 已通过 | 72% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；mock KMZ 下载、校验、解析和内部任务转换已进入 `flighttask_prepare`；`flighttask_execute` 已触发机巢 `request_takeoff` 安全调用，新增离线一键启航工具验证 prepare -> execute -> complete | 媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补媒体计数、真实 SITL 航点执行和服务器 11 段复测 | 人员1/人员2 |
+| P0/P1 E2E 回归 | 已通过 | 89% | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 10 段；当前默认 E2E 已扩展为 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；`tools/e2e_takeoff_flow_test.py --timeout 12` 本地通过 | 严格 `--fail-on-stale` 环境、真实硬件/真实推流/真实 OTA 和 11 段服务器复测未完成 | 服务器执行 11 段 E2E，并建立严格环境回归 | 人员1 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
 | MAVLink 飞控联动 | 部分完成 | 60% | 网关能连接 SITL，Telemetry、FlightControl、ModeControl、WaypointManager、RTK 基础运行；已新增共享 ArduPilot flight mode 映射，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择，`set_flight_mode` 支持 `mode/mode_code/flight_mode` 并在底层失败时返回非 0 | 解锁/起飞/航线执行、非阻塞超时恢复仍需完善；模式切换需 Ubuntu SITL 复测 | 跑 set_flight_mode + SITL 模式切换专项 | 人员2 |
-| MAVLink 机巢模拟器 | 部分完成 | 58% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调；`tools/nest_v13_protocol_test.py --verbose` 已扩展到 5 项检查，覆盖消息 ID、命令表、拒绝原因、状态位、云端字段和机巢 HMS 告警映射 | Ubuntu 网关 + 机巢模拟器实跑、一键启航联动、真实耗时和错误恢复仍需完善 | 补网关/模拟器联调日志和一键启航状态机 | 人员2/人员3 |
+| MAVLink 机巢模拟器 | 部分完成 | 60% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调；`tools/nest_v13_protocol_test.py --verbose` 已扩展到 5 项检查；MissionManager 机巢动作改为安全调用，`flighttask_execute` 会触发 `request_takeoff`，缺失 landing-start 类方法不会导致流程线程报错 | Ubuntu 网关 + 机巢模拟器实跑、真实耗时和错误恢复仍需完善 | 补网关/模拟器联调日志和一键启航状态机 | 人员2/人员3 |
 | Media 媒体管理 | 已通过 | 55% | `file_list_get/file_delete/adjust_upload_priority/highest_priority_upload_flighttask_media` 支持本地目录扫描、删除、优先级状态和上传事件；Ubuntu 输出 `dock3 media test ok (accepted=6, events=2, ignored_total=0)` | 真实云端 OSS 凭证、断点续传和上传完成事件仍需精校 | 后续接入完整 E2E 复测和真实上传适配 | 人员1 |
 | Live 直播功能 | 已通过 | 45% | `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop` 已通过 Ubuntu 专项；输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)`；支持 `mock://` 纯模拟、状态回包和 `live_status_notify` 事件 | 真实 RTMP/WebRTC/GB28181 推流适配未完成 | 后续接真实推流 adapter 和高级协议能力 | 人员1/人员3 |
 | HMS 管理 | 已通过 | 60% | `hms_get/hms_clear` 的 Dock3 `output.status`、告警结构规范化、模拟告警注入和 `hms` 事件已通过 Ubuntu 专项；`DeviceManager.update_from_nest()` 已把机巢 `fault/estop/emergency_landing/error_code/heartbeat lost` 同步为 Dock3 HMS，并发 `dock_operation` 证据事件 | 真实 HMS 文案 key、硬件故障源和 Ubuntu 机巢实跑证据仍需精校 | 接机巢故障位实跑证据和告警文案精校 | 人员1 |
@@ -95,6 +95,7 @@
 | DRC 批量 | `python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` | `drc batch test ok` |
 | CMD | `python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` | `dock3 cmd test ok` |
 | Wayline | `python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` | `dock3 wayline test ok` |
+| 一键启航离线闭环 | `python tools/e2e_takeoff_flow_test.py --timeout 12` | `dock3 takeoff flow test ok` |
 | 当前核心 E2E | `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | `dock3 e2e full-chain test ok` |
 | Media | `python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` | `dock3 media test ok` |
 | Live | `python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` | `dock3 live test ok` |

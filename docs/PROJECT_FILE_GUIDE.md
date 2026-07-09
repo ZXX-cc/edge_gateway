@@ -177,6 +177,8 @@ src/core/connection.py
 | `tools/mqtt_dock3_drc_test.py` | Dock3 DRC 专项验收，覆盖建链、杆量、官方字段和值域错误 |
 | `tools/mqtt_dock3_cmd_test.py` | Dock3 CMD/远程调试专项验收，覆盖舱盖、充电、推杆、灯和设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Dock3 Wayline 专项验收，覆盖任务准备、执行、进度、暂停、恢复和返航 |
+| `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环，覆盖 mock KMZ、`flighttask_prepare/execute`、机巢 `request_takeoff` 和模拟任务完成 |
+| `tools/e2e_full_chain_test.py` | P0/P1 全链路回归，默认串联 MQTT 专项和一键启航离线闭环 |
 | `tools/mqtt_drc_batch_test.py` | Dock3 DRC 控制数据批量验收工具，覆盖 `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` |
 | `tools/mqtt_cloud_simulator.py` | 上云 API 模拟器，支持 `requests_reply` 和 `status_reply` 模拟 |
 | `tools/mqtt_organization_test.py` | Dock3 organization 查询、绑定、事件、拓扑和持久化验收工具 |
@@ -186,7 +188,7 @@ src/core/connection.py
 
 人员3优先维护这些文件和部署文档，保证所有模拟组件可重复启动。
 
-30 天内还需要补齐以下 P1 验收工具。当前它们是交付缺口，不应在验收中记为已通过：
+以下 P1 验收工具已补齐基础入口；若未经过服务器或真实硬件验证，不应直接记为生产可用：
 
 | 计划路径 | 必须覆盖 |
 |---|---|

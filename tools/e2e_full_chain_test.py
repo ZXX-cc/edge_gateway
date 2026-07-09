@@ -39,6 +39,13 @@ STEPS: tuple[Step, ...] = (
     Step("cmd", "P1 command jobs", "p1", "mqtt_dock3_cmd_test.py"),
     Step("drc", "P1 DRC", "p1", "mqtt_dock3_drc_test.py"),
     Step("wayline", "P1 Wayline", "p1", "mqtt_dock3_wayline_test.py"),
+    Step(
+        "takeoff-flow",
+        "P1 one-key launch flow",
+        "p1",
+        "e2e_takeoff_flow_test.py",
+        supports_fail_on_stale=False,
+    ),
     Step("media", "P1 Media", "p1", "mqtt_dock3_media_test.py"),
     Step("live", "P1 Live", "p1", "mqtt_dock3_live_test.py"),
     Step(

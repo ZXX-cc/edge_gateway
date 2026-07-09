@@ -607,6 +607,31 @@ class MissionManager:
             logger.warning("Get telemetry snapshot failed: %s", exc)
         return {}
 
+    def _call_nest_action(self, action_name: str, context: str = "") -> bool:
+        """Best-effort nest command bridge used by mission state transitions."""
+        if not self._nest_module:
+            return False
+        action = getattr(self._nest_module, action_name, None)
+        if not callable(action):
+            logger.info(
+                "Nest action skipped: action=%s, context=%s, reason=not_supported",
+                action_name,
+                context,
+            )
+            return False
+        try:
+            action()
+            logger.info("Nest action sent: action=%s, context=%s", action_name, context)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Nest action failed: action=%s, context=%s, error=%s",
+                action_name,
+                context,
+                exc,
+            )
+            return False
+
     def _available_storage_mb(self) -> Optional[int]:
         for path in (
             Config.get('media.storage_path', ''),
@@ -1098,8 +1123,7 @@ class MissionManager:
         ).start()
 
         # 机巢联动：如果有机巢模块，请求起飞
-        if self._nest_module:
-            self._nest_module.request_takeoff()
+        self._call_nest_action("request_takeoff", "execute_task")
 
         # 通过飞行控制模块启动航线任务
         if self._flight_control and self._simulate_mission.get('is_enable') != 1:
@@ -1152,9 +1176,8 @@ class MissionManager:
             self._event_callback(event)
 
         # 机巢联动：如果有机巢模块，终止起飞或降落
-        if self._nest_module:
-            self._nest_module.abort_takeoff()
-            self._nest_module.abort_landing()
+        self._call_nest_action("abort_takeoff", "cancel_task")
+        self._call_nest_action("abort_landing", "cancel_task")
 
         # 发送返航指令
         if self._flight_control and self._simulate_mission.get('is_enable') != 1:
@@ -1832,9 +1855,8 @@ class MissionManager:
                                         daemon=True
                                     ).start()
 
-                                # 机巢联动：如果有机巢模块，请求降落
-                                if self._nest_module:
-                                    self._nest_module.request_landing()
+                                # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
+                                self._call_nest_action("request_landing", "mission_completed")
 
                                 self.stop_mission_monitor()
                                 logger.info("Mission completed!, wayline_state=9(航线停止)")
@@ -1910,6 +1932,26 @@ class MissionManager:
                 self.gateway_sn
             )
             self._event_callback(event)
+
+    def complete_simulated_mission(self) -> bool:
+        """Complete a prepared simulation mission for offline one-key launch E2E."""
+        if self._simulate_mission.get('is_enable') != 1:
+            logger.warning("Simulated mission completion rejected: simulate_mission disabled")
+            return False
+        if self._status != self.MISSION_RUNNING:
+            logger.warning("Simulated mission completion rejected: status=%s", self._status)
+            return False
+
+        if self._current_wayline:
+            self._current_waypoint_idx = len(self._current_wayline) - 1
+        self._status = self.MISSION_COMPLETED
+        self._wayline_mission_state = 9
+        self._current_step = 33
+        self._report_mission_progress(status='completed')
+        self._clear_breakpoint_file()
+        self._call_nest_action("request_landing", "simulated_mission_completed")
+        logger.info("Simulated mission completed: flight_id=%s", self._current_task_id)
+        return True
 
     # ---- 大疆标准FlightTask接口 ----
 
@@ -2102,6 +2144,8 @@ class MissionManager:
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
 
+        self._call_nest_action("request_takeoff", "flighttask_execute")
+
         # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
         simulate_enabled = self._simulate_mission.get('is_enable') == 1
         if not simulate_enabled:
@@ -2147,6 +2191,8 @@ class MissionManager:
             self.stop_mission_monitor()
             self._clear_breakpoint_file()
             logger.info(f"Current task {self._current_task_id} canceled, wayline_state=9(航线停止)")
+            self._call_nest_action("abort_takeoff", "flighttask_undo")
+            self._call_nest_action("abort_landing", "flighttask_undo")
 
             # 执行返航
             if self._flight_control and self._simulate_mission.get('is_enable') != 1:

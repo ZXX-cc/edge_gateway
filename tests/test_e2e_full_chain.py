@@ -75,6 +75,14 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertEqual(command[timeout_index + 1], "20.0")
         self.assertIn("mqtt_dock3_firmware_config_test.py", command[1])
 
+    def test_takeoff_flow_step_is_p1_and_omits_stale_flag(self):
+        step = next(step for step in STEPS if step.key == "takeoff-flow")
+        command = build_command(step, self.args(fail_on_stale=True))
+
+        self.assertEqual(step.phase, "p1")
+        self.assertIn("e2e_takeoff_flow_test.py", command[1])
+        self.assertNotIn("--fail-on-stale", command)
+
 
 if __name__ == "__main__":
     unittest.main()

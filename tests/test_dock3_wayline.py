@@ -183,6 +183,54 @@ class RecordingActionFlightControl:
         return True
 
 
+class RecordingNest:
+    def __init__(self):
+        self.calls = []
+        self.environment_data = {
+            "nest_heartbeat": True,
+            "plc_heartbeat": True,
+            "drone_heartbeat": True,
+            "estop_state": False,
+            "fault_state": False,
+            "system_busy": False,
+            "emergency_landing": False,
+            "takeoff_allowed": True,
+            "gate_state": 1,
+            "wind_speed": 1.0,
+            "rainfall": 0.0,
+            "error_code": 0,
+            "last_update": time.time(),
+        }
+
+    def get_environment_data(self):
+        return self.environment_data
+
+    def request_takeoff(self):
+        self.calls.append("request_takeoff")
+
+    def abort_takeoff(self):
+        self.calls.append("abort_takeoff")
+
+    def abort_landing(self):
+        self.calls.append("abort_landing")
+
+
+class RecordingTelemetry:
+    def __init__(self):
+        self.data = {
+            "connection_status": "connected",
+            "batteryRemaining": 88,
+            "satelliteNumber": 16,
+            "gps_signal_level": 5,
+            "gps_fixed": True,
+            "armed": False,
+            "flight_mode": "GUIDED",
+        }
+
+    def get_telemetry_data(self):
+        return self.data
+
+
 class Dock3WaylineTest(unittest.TestCase):
     def test_parse_local_kmz_extracts_waypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,6 +299,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._current_waypoint_idx = 1
             manager._status = manager.MISSION_RUNNING
             manager.stop_mission_monitor = lambda: None
+            manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
 
             pause = manager.handle_pause_wayline(base_msg("flighttask_pause", {}))
             self.assertEqual(pause["data"]["result"], 0)
@@ -374,6 +423,53 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(undo["data"]["output"]["status"], "canceled")
         self.assertEqual(flight_control.calls, [])
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+    def test_simulated_takeoff_flow_requests_nest_and_completes(self):
+        events = []
+        manager = MissionManager()
+        nest = RecordingNest()
+        manager.set_event_callback(events.append)
+        manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager._breakpoint_file_path = lambda: str(Path(tmp) / "breakpoint.json")
+            kmz_path = Path(tmp) / "mission.kmz"
+            write_mock_kmz(kmz_path)
+            prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+                "flight_id": "takeoff-flow-001",
+                "task_type": 0,
+                "execute_time": int(time.time() * 1000),
+                "file": {"url": kmz_path.as_uri(), "fingerprint": "fp"},
+                "simulate_mission": {
+                    "is_enable": 1,
+                    "latitude": -35.36,
+                    "longitude": 149.16,
+                },
+            }))
+            self.assertEqual(prepare["data"]["result"], 0)
+
+            execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
+                "flight_id": "takeoff-flow-001",
+            }))
+            self.assertEqual(execute["data"]["result"], 0)
+            self.assertEqual(nest.calls, ["request_takeoff"])
+
+            completed = manager.complete_simulated_mission()
+            self.assertTrue(completed)
+            self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+            self.assertEqual(manager._current_step, 33)
+            self.assertEqual(nest.calls, ["request_takeoff"])
+
+        statuses = [
+            event.get("data", {}).get("output", {}).get("status")
+            for event in events
+            if event.get("method") == "flighttask_progress"
+        ]
+        self.assertIn("sent", statuses)
+        self.assertIn("in_progress", statuses)
+        self.assertIn("ok", statuses)
 
     def test_invalid_wayline_requests_return_dji_error_codes(self):
         manager = MissionManager()
