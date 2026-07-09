@@ -19,7 +19,17 @@
 | 待迁移 | 当前仍是旧实现、占位或未开始按 Dock3 官方文档改造 |
 | 暂缓 | 当前纯模拟阶段不阻塞主链路，后续接真实设备或 SDK 时再做 |
 
-当前整体进度估算：**约 79%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 网关模拟链路”，不代表真实 DJI Dock 3 设备全量接入完成，也不代表平台侧完成度。
+当前整体进度估算：**约 81%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 网关模拟链路”，不代表真实 DJI Dock 3 设备全量接入完成，也不代表平台侧完成度。
+
+## 2026-07-09 晚间进度快照
+
+| 项目 | 当前结论 |
+|---|---|
+| DRC 真实指点飞行 | 已通过服务器复测。`property_get` 返回网关遥测 `latitude=43.8888422`、`longitude=125.3079695`、`height=28.938`，脚本生成电子围栏内目标点后，`takeoff_to_point` 和 `fly_to_point_update` 均返回 `result=0`、`output.status=ok`、`simulated=false`。 |
+| DRC 覆盖范围 | 已覆盖 `drc_mode_enter/exit`、`drc_state`、官方心跳、无回包杆量、非法杆量、`drone_control` 成功/非法值、云台速度、`takeoff_to_point`、`fly_to_point_update/stop`、非法目标点拒绝。 |
+| 旧回包诊断 | 共享 MQTT 测试客户端已输出 `stale_samples`，可以在 `--quiet-stale` 下定位旧回包/重复回包的 `category/topic/method/tid/result`。最新 DRC 复测中看到的旧回包主要来自重复的 `services_reply result=-2`，不影响当前正确 Dock3 回包。 |
+| 单测基线 | `python -m unittest tests.test_mqtt_test_client tests.test_mqtt_dock3_drc_tool tests.test_dock3_drc tests.test_e2e_full_chain` 通过，`Ran 58 tests`。 |
+| 仍未完成 | P0/P1 强门禁仍卡在真实 SITL 航点执行、Ubuntu 机巢 v1.3 实跑、非阻塞主链路审计、相机/云台真实 adapter、数据保留专项和严格 `--fail-on-stale` 环境清理。 |
 
 ## 客户三文档后的当前状态
 
@@ -55,14 +65,14 @@
 | 模块/大类 | 当前状态 | 完成度估算 | 已完成内容 | 未完成/风险 | 下一步 | 主要负责人 |
 |---|---|---:|---|---|---|---|
 | Ubuntu 纯模拟部署与基础链路 | 部分完成 | 93% | Mosquitto、Edge Gateway、ArduPilot SITL、MAVLink、OSD、基础 MQTT reply 已跑通；服务器已通过 11 段 P0/P1 全链路，最新结果 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)`；当前默认 E2E 已接入 `takeoff-flow`；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果 | 服务化部署、严格旧回包清理、真实 SITL 航点执行未完成 | 固化服务化部署并补严格 `--fail-on-stale` 环境 | 人员3 |
-| MQTT topic/reply 边界 | 已通过 | 91% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证；人员1验收脚本已统一收敛到共享 MQTT 客户端，按 `tid + method + topic + Dock3格式` 过滤旧回包；OSD/state 已支持把旧 OSD/state 样本计入 `--fail-on-stale` | broker 中仍可能观察到旧进程产生的重复回包，需要清理环境后做严格验证 | 清理旧回包源，执行全链路 `--fail-on-stale` 严格验收 | 人员1 |
+| MQTT topic/reply 边界 | 已通过 | 92% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证；人员1验收脚本已统一收敛到共享 MQTT 客户端，按 `tid + method + topic + Dock3格式` 过滤旧回包；OSD/state 已支持把旧 OSD/state 样本计入 `--fail-on-stale`；DRC 专项已输出 `stale_samples` 便于定位旧回包来源 | broker 中仍可能观察到旧进程产生的重复回包，需要清理环境后做严格验证 | 清理旧回包源，执行全链路 `--fail-on-stale` 严格验收 | 人员1 |
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
 | 日志与可观测性 | 已通过 | 90% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 复测；命令链 `command_trace` 已补 Dock3 properties/device/CMD/DRC/Wayline/media/live/HMS/log/firmware/config 中文动作映射，未知 method 会明确打印“未注册业务处理器”；11 段 E2E 已能输出分段耗时和最终汇总 | 压缩策略、真实 OSS 上传和 E2E 证据自动归档未完整实现 | 接入全链路证据归档 | 人员1/人员3 |
 | 非阻塞与容错基础 | 部分完成 | 50% | 已修复若干 coroutine 未 await warning，停止流程可正常 await；数据保留和云同步已统一秒级/毫秒级时间戳过期判断，本地 `tests.test_database_time_utils` 已通过 | MongoDB/NoSQL 目标未实现，数据库写入和文件 IO 仍需全面后台化审计；真实 DB 清理专项未完成 | 建异步数据访问层、操作队列和 DB 清理验收脚本 | 人员1/人员2 |
 | Properties / OSD / State | 已通过 | 80% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；11 段 E2E 的 OSD/state 阶段已在服务器通过，输出 `dock_osd=1, drone_osd=1, state=1, invalid=0`；脚本已忽略旧版 `reason=property_changed` state 和旧 helper 的部分 value-wrapper OSD 残留，当前有效样本仍按 Dock3 必填字段严格校验 | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 85% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；服务器多设备专项已验证 `DRONE-SIM-001,DRONE-SIM-002` 上线、离线空拓扑、重连恢复和非法拓扑拒绝；organization 多设备绑定服务器复测已验证 `sub_devices=2` 和 `status_reply result=0`；服务器 device 解绑专项已验证 `device_unbinding events ok: count=3`、空 `update_topo`、`unbind=True`；E2E device 单段已通过 | `domain/type/sub_type` 官方产品枚举、真实云端字段差异未精校 | 精校设备类型枚举和真实云端字段 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 84% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；服务器多设备绑定已通过，输出 3 次 `device_binding`、`update_topo schema ok ... sub_devices=2`、`memory binding ok`、`sub-device paired ok` 和 `organization request test ok`；device 解绑服务器专项已覆盖多设备解绑事件和空拓扑 | 真实云端差异仍需精校 | 继续真实云端字段精校 | 人员1 |
-| DRC 指令飞行 | 已通过 | 82% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；服务器最新 DRC 专项已用 `property_get` 网关遥测生成电子围栏内目标点，`takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`，输出 `dock3 drc test ok (accepted=15, events=7, ignored_duplicate=8, ignored_unknown=0, ignored_total=9)` | 链路抖动、超时边界和严格清理旧回包环境仍需精校；Wayline 真实航点执行仍归入 G-P1-06 | 补 DRC 严格 `--fail-on-stale` 环境和 SITL 行为证据归档 | 人员1/人员2 |
+| DRC 指令飞行 | 已通过 | 85% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；服务器最新 DRC 专项已用 `property_get` 网关遥测生成电子围栏内目标点，`takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`，输出 `dock3 drc test ok (accepted=15, events=8, ignored_mismatched=0, ignored_legacy=3, ignored_late=7, ignored_duplicate=7, ignored_unknown=0, ignored_total=10)`，并输出 `stale_samples` 定位重复旧回包 | 链路抖动、超时边界和严格清理旧回包环境仍需精校；Wayline 真实航点执行仍归入 G-P1-06 | 补 DRC 严格 `--fail-on-stale` 环境和 SITL 行为证据归档 | 人员1/人员2 |
 | CMD 远程调试 | 已通过 | 80% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、格式化/重启模拟保护和进度事件已通过专项；服务器重跑验证 `cover_close` 后 `cover_state=0`，最新输出 `dock3 cmd test ok (accepted=60, events=18, ignored_total=60)`，E2E cmd 单段 `steps=1, elapsed=5.0s` | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
 | Wayline 航线管理 | 已通过 | 73% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；mock KMZ 下载、校验、解析和内部任务转换已进入 `flighttask_prepare`；`flighttask_execute` 已触发机巢 `request_takeoff` 安全调用；服务器 11 段 E2E 已覆盖一键启航离线闭环 | 媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补媒体计数和真实 SITL 航点执行 | 人员1/人员2 |
 | P0/P1 E2E 回归 | 已通过 | 94% | `tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过；`tools/e2e_full_chain_test.py --only device --timeout 12 --quiet-stale --device-extra-sub-device-json ...` 已通过；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `steps=11, elapsed=18.9s`；当前 `--fail-on-stale` 会覆盖 OSD/state 旧样本统计 | 严格 `--fail-on-stale` 服务器复测、真实硬件/真实推流/真实 OTA 未完成 | 建立严格环境回归并继续真实 SITL/硬件联动 | 人员1 |
@@ -91,7 +101,7 @@
 | OSD / State | `python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale` | `dock3 osd/state test ok` |
 | Device topology | `python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale`；多设备加 `--extra-sub-device-json '{"sn":"DRONE-SIM-002","domain":"0","type":60,"sub_type":0,"index":"B"}'` | `dock3 device topology test ok` |
 | Organization | `python tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` | `organization request test ok` |
-| DRC 专项 | `python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` | `dock3 drc test ok` |
+| DRC 专项 | `python tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale --osd-wait 6` | `dock3 drc test ok`；如存在旧回包会输出 `stale_samples` |
 | DRC 批量 | `python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` | `drc batch test ok` |
 | CMD | `python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` | `dock3 cmd test ok` |
 | Wayline | `python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` | `dock3 wayline test ok` |

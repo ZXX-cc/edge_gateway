@@ -128,19 +128,16 @@ http://Ubuntu服务器IP:8090
 
 已完成：
 
-- Ubuntu 部署基础链路验证
-- Mosquitto 本地 MQTT 联通
-- ArduPilot SITL 联通
-- 网关连接 MQTT 和 MAVLink
-- MQTT `osd/state/events/services_reply` 基础流转
-- Web 调试台初版
-- Dock1 -> Dock3 目标确认
-- 客户总需求与 Dock3 最终协议口径确认
-- DJI Cloud API Demo Docker 联调在线显示 Dock/Aircraft
+- Ubuntu 服务器内 Dock3 纯模拟链路已形成当前基线，整体进度约 81%。
+- P0/P1 当前 34 项门禁中已有 24 项可用；评分卡口径见 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。
+- MQTT topic/reply、设备上线、组织绑定、拓扑、properties、OSD/state、错误码、request trace 已形成可重复脚本证据。
+- CMD、DRC、Wayline、Media、Live、HMS/log、firmware/config 已有专项脚本通过记录。
+- `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段。
+- DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
 
 下一阶段：
 
-- 按客户需求覆盖矩阵补齐 Dock3 协议矩阵
-- 对齐当前 243 个已注册 method 的 Dock3 状态
-- 固化上云 API 模拟器和机巢模拟器
-- 补齐 request trace、MongoDB 目标架构和自动化 smoke test
+- 关闭 P0/P1 剩余强门禁：SITL 模式/基础飞控、真实 SITL 航点执行、Ubuntu 机巢 v1.3 实跑、非阻塞主链路审计。
+- 继续精校客户需求涉及的 Dock3 字段、枚举、单位和错误码。
+- 清理旧进程或旧 broker 回包源，执行严格 `--fail-on-stale` 服务器回归。
+- 补齐相机/云台真实 adapter、短周期数据保留专项、P2 adapter/mock/限制说明。

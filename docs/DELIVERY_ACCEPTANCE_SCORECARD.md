@@ -74,14 +74,15 @@ P2 问题影响 P0/P1 = 0 项
 | 优先级 | Usable | Partial / In Progress | Missing / Pending | 当前风险 |
 |---|---:|---:|---:|---|
 | P0 | 12 | 5 | 0 | P0-07/08/12/13/16 仍需 SITL 模式/飞控、机巢专项或非阻塞审计；P0-17 当前核心 E2E 已通过 |
-| P1 | 9 | 5 | 3 | DRC、指点飞行、KMZ 基础解析、media、live、HMS/log、firmware/config 已形成可用证据；一键启航、真实 SITL 航点和机巢状态机仍是主要缺口 |
+| P1 | 12 | 5 | 0 | DRC、指点飞行、KMZ 基础解析、media、live、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码和 P0/P1 E2E 已形成可用证据；一键启航 Ubuntu MQTT/真实 SITL、机巢状态机、真实航点、payload adapter 和数据保留仍是主要缺口 |
 | P2 | 0 | 0 | 10 | P2 目前只有规划口径，仍需 adapter/mock/限制说明 |
-| 合计 | 21 | 10 | 13 | 当前不能声称达到 90% 可用或 100% 开发完成 |
+| 合计 | 24 | 10 | 10 | 当前不能声称达到 90% 可用或 100% 开发完成 |
 
 当前最重要结论：
 
 - P0 尚未 100% 可用，不能进入交付声明。
-- P1 已形成 DRC、指点飞行、Wayline mock KMZ、media、live、HMS/log、firmware/config 的局部可用闭环。
+- P1 已形成 DRC、指点飞行、Wayline mock KMZ、media、live、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码和 E2E 回归的局部可用闭环。
+- P0/P1 合计已有 24/34 项可用，但 P0/P1 强门禁仍未关闭，不能用“整体模拟链路约 81%”替代交付验收结论。
 - P2 不能空白；即使允许有问题，也必须在第 30 天前补齐入口、日志、错误码和限制说明。
 
 ## 5. P0 评分卡
@@ -112,8 +113,8 @@ P2 问题影响 P0/P1 = 0 项
 |---|---|---|---|
 | P1-01 | 一键启航主流程 | Usable | `e2e_takeoff_flow_test.py` |
 | P1-02 | 机巢 v1.3 完整状态机 | Usable | `nest_v13_protocol_test.py` |
-| P1-03 | DRC 心跳和超时恢复 | Usable | 扩展 `mqtt_dock3_drc_test.py` |
-| P1-04 | `takeoff_to_point` 和指点飞行 | Usable | DRC + SITL 专项 |
+| P1-03 | DRC 心跳和超时恢复 | Usable | `mqtt_dock3_drc_test.py --timeout 12 --quiet-stale --osd-wait 6`，含 `drc_state`、官方心跳和退出验证 |
+| P1-04 | `takeoff_to_point` 和指点飞行 | Usable | DRC 专项已验证 `takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`；真实 SITL 航点语义归 P1-06 |
 | P1-05 | KMZ/WPML 基础解析 | Usable | 扩展 `mqtt_dock3_wayline_test.py` |
 | P1-06 | 真实 SITL 航点执行 | Usable | SITL Wayline E2E |
 | P1-07 | 媒体基础 | Usable | `mqtt_dock3_media_test.py` |
