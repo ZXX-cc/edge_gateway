@@ -75,6 +75,11 @@ from src.utils.dji_error_codes import (
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.device_db import DeviceDB
 from src.database.alarm_db import AlarmDB
+from src.device.nest_hms_mapper import (
+    build_nest_hms_alarms,
+    is_nest_hms_alarm,
+    nest_hms_signature,
+)
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from web.mavlink.properties.mapping import build_properties_from_osd, merge_properties
 
@@ -216,6 +221,8 @@ class DeviceManager:
         # ===== HMS告警缓存 =====
         self._hms_alarms: List[dict] = []
         self._hms_alarm_counter = 0
+        self._last_nest_hms_signature = tuple()
+        self._last_nest_operation_signature = ""
 
         # ===== 系统状态定时更新线程 =====
         self._system_update_thread: Optional[threading.Thread] = None
@@ -788,6 +795,12 @@ class DeviceManager:
         """
         updates = build_dock3_properties_from_nest(nest_data)
         updates = self._merge_updates_with_current(updates)
+        state_updates = self._extract_nest_state_updates(updates)
+        changed_state = {
+            key: value
+            for key, value in state_updates.items()
+            if self._properties.get(key) != value
+        }
 
         # 一键起飞允许状态
         if 'takeoff_allowed' in nest_data:
@@ -803,6 +816,117 @@ class DeviceManager:
 
         if updates:
             self.update_properties(updates, notify=False)
+        if changed_state:
+            self._notify_state({'property': changed_state})
+
+        self._sync_nest_hms_alarms(nest_data)
+        self._notify_nest_operation_if_needed(nest_data, changed_state)
+
+    @staticmethod
+    def _extract_nest_state_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Return discrete nest-driven fields that should emit Dock3 state."""
+        state_fields = {
+            'alarm_state',
+            'air_conditioner',
+            'charging_state',
+            'cover_state',
+            'drone_charge_state',
+            'drone_in_dock',
+            'emergency_stop_state',
+            'putter_state',
+            'supplement_light_state',
+        }
+        return {key: value for key, value in updates.items() if key in state_fields}
+
+    def _sync_nest_hms_alarms(self, nest_data: dict):
+        """Synchronize active nest status alarms into the HMS cache."""
+        nest_alarms = build_nest_hms_alarms(nest_data, self.gateway_sn)
+        signature = nest_hms_signature(nest_alarms)
+        if signature == self._last_nest_hms_signature:
+            return
+
+        old_nest_alarm_ids = [
+            str(alarm.get('alarm_id') or alarm.get('id'))
+            for alarm in self._hms_alarms
+            if is_nest_hms_alarm(alarm) and (alarm.get('alarm_id') or alarm.get('id'))
+        ]
+        new_nest_alarm_ids = {
+            str(alarm.get('alarm_id') or alarm.get('id'))
+            for alarm in nest_alarms
+            if alarm.get('alarm_id') or alarm.get('id')
+        }
+        removed_alarm_ids = [
+            alarm_id for alarm_id in old_nest_alarm_ids
+            if alarm_id not in new_nest_alarm_ids
+        ]
+
+        non_nest_alarms = [
+            alarm for alarm in self._hms_alarms
+            if not is_nest_hms_alarm(alarm)
+        ]
+        self._hms_alarms = non_nest_alarms + nest_alarms
+        self._last_nest_hms_signature = signature
+
+        self._notify_event('hms', hms_event_data(self._hms_alarms))
+        logger.info(
+            "Nest HMS synchronized: active=%s, removed=%s",
+            len(nest_alarms),
+            len(removed_alarm_ids),
+        )
+
+        for alarm in nest_alarms:
+            self._schedule_async(self._save_alarm_to_db(
+                alarm_id=alarm.get('id', ''),
+                alarm_level=alarm.get('level', 0),
+                alarm_content=alarm.get('content', ''),
+                alarm_type=alarm.get('type', 'nest_status'),
+                create_time=alarm.get('create_time', int(time.time()))
+            ))
+        if removed_alarm_ids:
+            self._schedule_async(self._clear_alarms_from_db(removed_alarm_ids))
+
+    def _notify_nest_operation_if_needed(self, nest_data: dict, changed_state: Dict[str, Any]):
+        """Emit a lightweight operation event when important nest state changes."""
+        status_flags = {
+            'estop_state': bool(nest_data.get('estop_state')),
+            'fault_state': bool(nest_data.get('fault_state')),
+            'system_busy': bool(nest_data.get('system_busy')),
+            'takeoff_allowed': bool(nest_data.get('takeoff_allowed')),
+            'takeoff_in_progress': bool(nest_data.get('takeoff_in_progress')),
+            'landing_in_progress': bool(nest_data.get('landing_in_progress')),
+            'emergency_landing': bool(nest_data.get('emergency_landing')),
+            'error_code': nest_data.get('error_code', 0),
+        }
+        signature = json.dumps(
+            {
+                'changed_state': changed_state,
+                'status_flags': status_flags,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        if signature == self._last_nest_operation_signature:
+            return
+        if not changed_state and not any(
+            value for key, value in status_flags.items()
+            if key != 'takeoff_allowed'
+        ):
+            self._last_nest_operation_signature = signature
+            return
+
+        self._last_nest_operation_signature = signature
+        now_ms = int(time.time() * 1000)
+        self._notify_event('dock_operation', {
+            'operation_id': f'nest-status-{now_ms}',
+            'event_type': 'state_changed',
+            'command': 'nest_status_sync',
+            'timestamp': now_ms,
+            'result': 0,
+            'output': {'status': 'ok'},
+            'changed_state': changed_state,
+            'nest_status': status_flags,
+        })
 
     def _merge_updates_with_current(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """把嵌套属性更新与当前属性深合并，避免局部字段互相覆盖。"""

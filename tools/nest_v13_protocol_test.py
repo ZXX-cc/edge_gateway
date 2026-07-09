@@ -25,6 +25,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
 from src.generated_dialect.gcs_order_protocol import GCSCommand, REJECT_REASONS  # noqa: E402
+from src.device.nest_hms_mapper import build_nest_hms_alarms  # noqa: E402
 from src.modules.drone_nest_module import DroneNestModule  # noqa: E402
 from src.nest_simulator import (  # noqa: E402
     BIT_ALLOW_TAKEOFF,
@@ -190,12 +191,37 @@ def check_module_parsing_and_cloud_fields() -> None:
     )
 
 
+def check_nest_hms_alarm_mapping() -> None:
+    alarms = build_nest_hms_alarms(
+        {
+            "data_valid": True,
+            "estop_state": True,
+            "fault_state": True,
+            "emergency_landing": True,
+            "nest_heartbeat": False,
+            "plc_heartbeat": False,
+            "drone_heartbeat": True,
+            "error_code": 12004,
+        },
+        "EDGEGW001",
+    )
+    by_key = {alarm["hms_key"]: alarm for alarm in alarms}
+    require("dock3.nest.estop.active" in by_key, "estop HMS alarm missing")
+    require("dock3.nest.fault.active" in by_key, "fault HMS alarm missing")
+    require("dock3.nest.emergency_landing.active" in by_key, "emergency landing HMS alarm missing")
+    require("dock3.nest.error_code.active" in by_key, "error code HMS alarm missing")
+    require("dock3.nest.nest_heartbeat.lost" in by_key, "nest heartbeat HMS alarm missing")
+    require("dock3.nest.plc_heartbeat.lost" in by_key, "PLC heartbeat HMS alarm missing")
+    require(by_key["dock3.nest.error_code.active"]["alarm_id"] == "nest-error-code-12004", "error alarm id mismatch")
+
+
 def run(verbose: bool = False) -> int:
     checks = [
         ("message ids 12003/12004/12005", check_message_ids),
         ("command table", check_command_table),
         ("simulator state and rejections", check_simulator_state_and_rejections),
         ("module parsing and cloud fields", check_module_parsing_and_cloud_fields),
+        ("nest HMS alarm mapping", check_nest_hms_alarm_mapping),
     ]
     for title, fn in checks:
         if verbose:

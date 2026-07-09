@@ -2,13 +2,17 @@
 
 更新时间：2026-07-09
 
-本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“客户需求相关能力按 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个客户需求相关字段、method、topic、reply 或 smoke test，都必须更新本文档。
+本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“客户需求相关网关能力按 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个客户需求相关字段、method、topic、reply 或 smoke test，都必须更新本文档。
+
+当前需求来源以客户最新三份资料为准：`项目优先级整理.docx` 定义优先级，`业务流程.md` 定义业务闭环，`网关和平台侧重点.docx` 定义网关/平台边界。`DJI_Dock固件功能清单77.docx` 作为历史功能全集参考，不再作为当前优先级的第一来源。
+
+本项目只评估**网关侧 Dock3 云端模拟链路 + 设备侧 MAVLink/机巢 adapter**。平台侧台账、权限、前端页面、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库和告警通知推送不计入本网关项目缺口。
 
 如果只需要快速查看当前哪些模块已完成、哪些未完成，看 `docs/DOCK3_MODULE_STATUS.md`。
 
 如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项均已通过 Ubuntu 模拟验证；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在 Ubuntu 串联通过 properties、device、OSD/state、CMD、DRC、Wayline 6 个阶段，输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，且各阶段 `ignored_total=0`。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。人员1负责的云端 topic/reply 边界和专项验收脚本已收敛到共享 MQTT 客户端，当前重点转向 config/firmware、机巢 v1.3、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
+当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项均已通过 Ubuntu 模拟验证；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在 Ubuntu 串联通过 properties、device、OSD/state、CMD、DRC、Wayline 6 个阶段，输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，且各阶段 `ignored_total=0`。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接已补齐，`tools/nest_v13_protocol_test.py --verbose` 已扩展到 `checks=5`。人员1负责的云端 topic/reply 边界和专项验收脚本已收敛到共享 MQTT 客户端，当前重点转向 config/firmware、机巢 v1.3 Ubuntu 实跑、真实 SITL 航点执行和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
 当前进度估算：**约 73%**。
 
@@ -22,7 +26,16 @@
 | 非阻塞、日志、容错基础 | 64% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已通过 Ubuntu 专项复测；NoSQL/MongoDB 仍待迁移 |
 | 模拟器和测试工具 | 96% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/P0 批量测试工具可用，`e2e_full_chain_test.py` 已串联当前 P0/P1 核心 MQTT 域并通过 Ubuntu 复测；config/firmware 模拟器仍待补 |
 
-综合按当前目标“服务器内跑通客户需求相关 Dock3 云端模拟链路，不接真实实体设备”估算为约 73%。该百分比不是验收承诺，后续每完成一个客户需求相关分组再调整。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 73%。该百分比不是验收承诺，后续每完成一个客户需求相关网关分组再调整。
+
+## 0. 客户三文档后的当前状态
+
+| 状态 | 当前结论 |
+|---|---|
+| 已做到 | MQTT topic/reply 边界、设备上线/心跳、组织绑定、`update_topo` 设备拓扑、properties、OSD/state、错误码、request trace、CMD 基础控制、DRC 基础链路和心跳、Wayline mock KMZ 基础闭环、Media 基础、Live mock、HMS/log、P0/P1 核心 E2E |
+| 部分做到 | 飞控真实 SITL 行为、机巢 v1.3 状态机、一键启航、真实航点执行、多设备/解绑/离线、相机/云台真实控制、数据保留和操作记录 |
+| 未做到/待迁移 | 固件升级模拟、配置更新、真实 OTA、真实 OSS 上传、真实直播推流、真实 PSDK/ESDK、MongoDB/NoSQL 目标架构、生产 TLS/鉴权 |
+| 不属于本网关项目 | 航线库编辑、前端页面、用户权限、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库、告警通知推送 |
 
 ## 1. 当前验收基线
 
@@ -383,6 +396,22 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 
 ## 4. 下一组执行顺序
 
+### 4.1 按客户优先级重排后的下一步
+
+下面这张表是后续开发真实顺序，优先级来自 `项目优先级整理.docx` 的模块级“高/中/低”。下方历史 Batch 表只保留已经完成过的迁移记录，不再作为下一步排序依据。
+
+| 顺序 | 客户优先级 | 目标 | 交付物 | 验收 |
+|---:|---|---|---|---|
+| 1 | 高 | 机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | 机巢状态到 Dock3 state/HMS/dock_operation 已完成本地桥接；后续补机巢 v1.3 网关联调、CMD 进阶失败码、拒绝原因和状态机 | `tools/nest_v13_protocol_test.py --verbose` + `mqtt_dock3_cmd_test.py` + 网关/机巢模拟器命令链路日志 |
+| 2 | 高 | 航线真实上传、KMZ/WPML、MAVLink Mission、真实任务进度 | 真实 SITL 航点执行、距离/高度进度计算、FlyTo/takeoff_to_point 真实进度 | Wayline + SITL E2E，不能只依赖 mock 回包 |
+| 3 | 高 | DRC 速度、航向、高度控制优化 | type_mask 动态计算、LOCAL_NED 坐标系、CONDITION_YAW 航向控制、高度控制专项 | 扩展 DRC 专项 + SITL 行为证据 |
+| 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚和飞机 OTA 透传 | firmware/config handler、后台任务、进度事件、失败码、配置持久化/回滚 | 新增 `tools/mqtt_dock3_firmware_config_test.py` |
+| 5 | 高 | OSD 字段补全 | wireless_link、maintain_status、电池/GPS/云台缺口字段、字段单位和枚举矩阵 | 扩展 OSD/state 专项和字段矩阵 |
+| 6 | 高 | 真实直播推流、真实文件列表、相机变焦/对焦 | 文件系统扫描、真实推流 adapter、相机/云台 adapter 或明确硬件不可用失败码 | media/live/payload 专项 |
+| 7 | 中 | 设备重启/格式化/重置、HMS 真实触发、机巢环境、多设备 OSD、NTRIP | 运维命令状态、真实告警源、环境字段转换、多设备 OSD、RTCM 注入 | CMD/HMS/OSD/RTK 专项 |
+
+### 4.2 已完成迁移批次记录
+
 | 批次 | 目标 | 交付物 | 验收 |
 |---|---|---|---|
 | Batch 1 | properties 官方可写边界 | `src/cloud_api/dock3_properties.py`、`tools/mqtt_dock3_properties_test.py`、`docs/INTERFACE_DESIGN_SPEC.md` | 已通过 Ubuntu 跑 `python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale`；后续进入客户需求相关 `osd/state` 字段精校 |
@@ -398,6 +427,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 7 | media 基础 | `tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，输出 `accepted=6, events=2, ignored_total=0` | 已完成当前 media 基础专项；后续精校真实上传 adapter |
 | Batch 8 | live 基础 | `src/cloud_api/dock3_live.py`、`tools/mqtt_dock3_live_test.py` 已通过 Ubuntu 专项，覆盖 mock 推流、画质、镜头、停止、能力查询、状态事件和非法参数拒绝 | 已完成本轮专项；后续接真实推流 adapter |
 | Batch 9 | HMS/log 基础 | `tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` 已通过 Ubuntu 复测，输出 `dock3 hms/log test ok (accepted=8, events=5, ignored_total=7)`；覆盖 HMS 查询/清除、日志列表、上传模拟、取消、进度事件和非法参数拒绝 | 已完成本轮专项；后续精校真实 HMS 文案 key、日志压缩和真实上传 adapter |
+| Batch 10 | 机巢状态/HMS/dock_operation 桥接 | 新增 `src/device/nest_hms_mapper.py`，`DeviceManager.update_from_nest()` 已同步机巢状态到 Dock3 state、HMS 和 `dock_operation`；`tools/nest_v13_protocol_test.py --verbose` 扩展到 `checks=5` | 本地通过 `tests.test_device_manager_nest_sync`、机巢属性/模块单测和 v1.3 离线专项；待 Ubuntu 网关 + 机巢模拟器实跑留证 |
 
 ## 5. 更新规则
 

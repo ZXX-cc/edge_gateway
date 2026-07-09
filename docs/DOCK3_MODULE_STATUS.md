@@ -4,7 +4,9 @@
 
 本文档给多人协同开发使用，用一张表说明当前 DJI Dock 3 迁移中每个模块的完成状态、已验证内容、未完成内容和下一步。更细的过程记录见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`，接口字段和错误码见 `docs/INTERFACE_DESIGN_SPEC.md`。
 
-客户 Word 文档中的功能清单和业务流程已经归一到 `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md`。后续开发口径是：客户文档定义业务范围，DJI Dock 3 官方 Cloud API 定义最终协议标准。旧 Dock/Dock1/Dock2 字段只能作为差异对照或内部适配线索，不能作为最终验收口径。
+客户最新三份资料已经归一到 `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md` 和 `docs/CUSTOMER_REQUIREMENTS_TRACEABILITY_MATRIX.md`。后续开发口径是：`项目优先级整理.docx` 定义优先级，`业务流程.md` 定义业务闭环，`网关和平台侧重点.docx` 定义网关/平台边界；DJI Dock 3 官方 Cloud API 定义最终协议标准。旧 `DJI_Dock固件功能清单77.docx` 只作为历史参考，旧 Dock/Dock1/Dock2 字段只能作为差异对照或内部适配线索。
+
+本项目不是“平台 + 网关”全系统交付，只评估**网关侧 Dock3 云端模拟链路 + 设备侧 MAVLink/机巢 adapter**。平台侧台账、权限、前端页面、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库和告警通知推送不计入本网关项目缺口。
 
 客户未要求独立 Web 调试台或前端页面，后续计划不把 `web/`、页面截图或 Demo 页面作为交付项。它们只可作为内部联调参考；正式验收证据以 MQTT 脚本、日志、trace、数据库记录和 E2E 输出为准。
 
@@ -17,7 +19,16 @@
 | 待迁移 | 当前仍是旧实现、占位或未开始按 Dock3 官方文档改造 |
 | 暂缓 | 当前纯模拟阶段不阻塞主链路，后续接真实设备或 SDK 时再做 |
 
-当前整体进度估算：**约 73%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 云端模拟链路”，不代表真实 DJI Dock 3 设备接入完成。
+当前整体进度估算：**约 73%**。该进度只针对“Ubuntu 服务器内跑通 Dock3 网关模拟链路”，不代表真实 DJI Dock 3 设备全量接入完成，也不代表平台侧完成度。
+
+## 客户三文档后的当前状态
+
+| 状态 | 当前结论 |
+|---|---|
+| 已做到 | MQTT topic/reply 边界、设备上线/心跳、组织绑定、`update_topo` 设备拓扑、properties、OSD/state、错误码、request trace、CMD 基础控制、DRC 基础链路和心跳、Wayline mock KMZ 基础闭环、Media 基础、Live mock、HMS/log、P0/P1 核心 E2E |
+| 部分做到 | 飞控真实 SITL 行为、机巢 v1.3 状态机、一键启航、真实航点执行、多设备/解绑/离线、相机/云台真实控制、数据保留和操作记录 |
+| 未做到/待迁移 | 固件升级模拟、配置更新、真实 OTA、真实 OSS 上传、真实直播推流、真实 PSDK/ESDK、MongoDB/NoSQL 目标架构、生产 TLS/鉴权 |
+| 不属于本网关项目 | 航线库编辑、前端页面、用户权限、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库、告警通知推送 |
 
 ## 30 天目标口径
 
@@ -57,10 +68,10 @@
 | P0/P1 E2E 回归 | 已通过 | 78% | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 串联 properties、device、OSD/state、CMD、DRC、Wayline，Ubuntu 输出 `dock3 e2e full-chain test ok (steps=6, elapsed=19.0s)`，各阶段 `exit=0` 且 `ignored_total=0`；media、live、HMS/log 均已通过 Ubuntu 专项 | firmware/config 和一键启航尚未接入同一入口 | 每完成一个剩余 P1 域就接入 E2E 编排 | 人员1 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
 | MAVLink 飞控联动 | 部分完成 | 60% | 网关能连接 SITL，Telemetry、FlightControl、ModeControl、WaypointManager、RTK 基础运行；已新增共享 ArduPilot flight mode 映射，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择，`set_flight_mode` 支持 `mode/mode_code/flight_mode` 并在底层失败时返回非 0 | 解锁/起飞/航线执行、非阻塞超时恢复仍需完善；模式切换需 Ubuntu SITL 复测 | 跑 set_flight_mode + SITL 模式切换专项 | 人员2 |
-| MAVLink 机巢模拟器 | 部分完成 | 50% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调 | 机巢动作闭环、状态机、错误恢复和云端一键启航联动仍需完善 | 补机巢模拟器专项测试 | 人员2/人员3 |
+| MAVLink 机巢模拟器 | 部分完成 | 58% | 自定义 dialect、`DRONE_NEST_*` 消息、机巢连接路径已有基础联调；`tools/nest_v13_protocol_test.py --verbose` 已扩展到 5 项检查，覆盖消息 ID、命令表、拒绝原因、状态位、云端字段和机巢 HMS 告警映射 | Ubuntu 网关 + 机巢模拟器实跑、一键启航联动、真实耗时和错误恢复仍需完善 | 补网关/模拟器联调日志和一键启航状态机 | 人员2/人员3 |
 | Media 媒体管理 | 已通过 | 55% | `file_list_get/file_delete/adjust_upload_priority/highest_priority_upload_flighttask_media` 支持本地目录扫描、删除、优先级状态和上传事件；Ubuntu 输出 `dock3 media test ok (accepted=6, events=2, ignored_total=0)` | 真实云端 OSS 凭证、断点续传和上传完成事件仍需精校 | 后续接入完整 E2E 复测和真实上传适配 | 人员1 |
 | Live 直播功能 | 已通过 | 45% | `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop` 已通过 Ubuntu 专项；输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)`；支持 `mock://` 纯模拟、状态回包和 `live_status_notify` 事件 | 真实 RTMP/WebRTC/GB28181 推流适配未完成 | 后续接真实推流 adapter 和高级协议能力 | 人员1/人员3 |
-| HMS 管理 | 已通过 | 55% | `hms_get/hms_clear` 的 Dock3 `output.status`、告警结构规范化、模拟告警注入和 `hms` 事件已通过 Ubuntu 专项；`hms_get` 返回 `total=1`，`hms_clear` 返回 `cleared_count=1`，两次 `hms` 事件均被观察到 | 真实 HMS 文案 key 和硬件故障源仍需精校 | 接机巢故障位映射 | 人员1 |
+| HMS 管理 | 已通过 | 60% | `hms_get/hms_clear` 的 Dock3 `output.status`、告警结构规范化、模拟告警注入和 `hms` 事件已通过 Ubuntu 专项；`DeviceManager.update_from_nest()` 已把机巢 `fault/estop/emergency_landing/error_code/heartbeat lost` 同步为 Dock3 HMS，并发 `dock_operation` 证据事件 | 真实 HMS 文案 key、硬件故障源和 Ubuntu 机巢实跑证据仍需精校 | 接机巢故障位实跑证据和告警文案精校 | 人员1 |
 | Firmware 固件升级 | 待迁移 | 10% | 有 OTA/升级相关旧入口 | 升级任务、进度、失败码、后台化未按 Dock3 精校 | 后台任务化固件升级模拟 | 人员1/人员3 |
 | Remote Log 远程日志 | 已通过 | 60% | 本地日志落盘、日志列表扫描、`device_log_list_get`、`device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝已补齐；Ubuntu 专项已验证 `device_log_list_get` 返回日志列表并发现本次测试日志 `edge_gateway_hms_log_test_1783563034390.log` | 日志压缩、真实 OSS 上传和超时策略未完整实现 | 补压缩和真实上传 adapter | 人员1/人员3 |
 | Config 配置更新 | 待迁移 | 15% | 有配置相关旧入口 | Dock3 config topic/method、配置持久化和回滚未对齐 | 对齐 `config.html` 并补模拟器 | 人员1 |
@@ -88,6 +99,7 @@
 | Media | `python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` | `dock3 media test ok` |
 | Live | `python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` | `dock3 live test ok` |
 | HMS/Log | `python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` | `dock3 hms/log test ok` |
+| 机巢 v1.3 离线专项 | `python tools/nest_v13_protocol_test.py --verbose` | `nest v1.3 protocol test ok (checks=5)` |
 
 ## 当前待复测命令
 
@@ -97,8 +109,11 @@
 
 ## 下一批建议
 
-| 优先级 | 模块 | 原因 | 预期交付 |
+| 优先级 | 模块 | 客户来源 | 预期交付 |
 |---:|---|---|---|
-| 1 | Firmware/Config | P1 运维剩余主要缺口 | 固件升级模拟、配置下发、持久化和回滚 |
-| 2 | MAVLink 专项 | 人员2需要把纯协议模拟推进到真实 SITL 行为 | 模式映射、解锁/起飞/航线执行、超时恢复 |
-| 3 | NoSQL/Request Trace | 关系到主线程非阻塞和可追踪性 | MongoDB/异步数据层方案、请求链路表、操作记录 |
+| 1 | 机巢物理控制联动 + 机巢真实状态/告警 | `项目优先级整理.docx` 高：机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | 网关到机巢模拟器实跑证据、状态机拒绝原因、HMS/operation record、CMD 进阶失败码 |
+| 2 | 真实航线/SITL + DRC 控制优化 | `项目优先级整理.docx` 高：航线任务真实上传、真实进度、flyto/takeoff_to_point 进度、DRC 速度/航向/高度优化 | KMZ/WPML 到 MAVLink Mission、真实 SITL 航点执行、距离/高度进度计算、type_mask/坐标系/航向高度专项 |
+| 3 | OTA/Firmware/Config | `项目优先级整理.docx` 高：OTA真实下载与刷写，含断点续传、MD5校验、备份、回滚 | `mqtt_dock3_firmware_config_test.py`、升级任务状态、进度事件、失败码、配置持久化/回滚 |
+| 4 | OSD 字段补全 + HMS 真实触发 | `项目优先级整理.docx` 高/中：OSD 字段补全、HMS 告警真实触发、多设备 OSD | 字段矩阵、wireless_link/maintain_status 等缺省字段、真实告警源映射、多设备 OSD |
+| 5 | 真实媒体/直播 + 相机变焦/对焦 | `项目优先级整理.docx` 高：直播推流实现、文件列表真实获取、变焦真实控制、对焦真实控制 | 文件系统扫描、真实推流 adapter、OSS/上传边界、相机/云台 adapter 或明确硬件不可用失败码 |
+| 6 | NoSQL/非阻塞/证据归档 | `网关和平台侧重点.docx`：网关只存实时断点和短周期数据 | 异步数据层方案、短周期保留策略、压测/超时注入、E2E 证据归档 |

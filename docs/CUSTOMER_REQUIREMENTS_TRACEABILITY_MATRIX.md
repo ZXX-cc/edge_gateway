@@ -1,15 +1,15 @@
 # 客户需求可追溯矩阵
 
-更新时间：2026-07-07
+更新时间：2026-07-09
 
-本文档把客户 Word 文档的章节追溯到当前 Dock3 交付 backlog、实现缺口和验收证据。它解决的问题是：每个客户章节最终由哪个 Dock3 功能域承接、落到哪些 P0/P1/P2 项、需要关闭哪些代码缺口、用什么脚本证明可用。
+本文档把客户最新三份资料的章节追溯到当前 Dock3 网关交付 backlog、实现缺口和验收证据。它解决的问题是：每个客户章节最终由哪个 Dock3 功能域或设备侧 adapter 承接、落到哪些 P0/P1/P2 项、需要关闭哪些代码缺口、用什么脚本证明可用。
 
 追溯链路：
 
 ```text
-客户文档章节
+客户三文档章节
   -> 业务能力
-  -> Dock3 云端落点或设备侧 adapter
+  -> 网关侧能力域 / Dock3 云端落点 / 设备侧 adapter
   -> P0/P1/P2 backlog ID
   -> P0/P1 gap ID
   -> 验收脚本、日志、MQTT 样例、trace 或数据库证据
@@ -17,10 +17,12 @@
 
 开发口径：
 
-- 客户文档定义业务范围和优先级。
+- `项目优先级整理.docx`、`业务流程.md`、`网关和平台侧重点.docx` 是当前业务范围、优先级和边界的主输入。
+- `DJI_Dock固件功能清单77.docx` 降级为历史功能全集参考，不再作为当前优先级的第一来源。
 - 客户需求涉及的上云能力由 DJI Dock 3 Cloud API 定义最终 topic、method、payload、reply、字段、枚举、单位和错误码。
 - 客户文档中的 Dock1/Dock2/旧 Dock 表述只保留业务意图，不作为最终云端字段标准。
 - 机巢 v1.3、MAVLink、ViewLink、媒体源和负载协议属于设备侧 adapter，不改变云端 Dock3 口径。
+- 本项目只交付网关侧能力；平台侧台账、权限、前端页面、长期统计、业务工单、多设备批量调度和告警通知只作为边界说明。
 - 客户暂未提及/当前业务未用到的 Dock3 能力可以 Deferred，不进入 30 天 P0/P1 强迁移。
 - 客户未要求 Web 调试台或前端页面，`web/` 目录只作为历史调试/adapter 代码来源，不作为客户交付或计划项。
 - 30 天内 P0/P1 必须 100% 可用；P2 可以带已记录问题，但不能影响 P0/P1 主链路。
@@ -36,9 +38,31 @@
 | `docs/30_DAY_MILESTONE_PLAN.md` | 30 天阶段计划和里程碑 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 启动顺序、验收命令、通过标准和证据归档 |
 
-## 2. `DJI_Dock固件功能清单77.docx` 章节追溯
+## 2. 客户三文档追溯总览
 
-该文档不是纯 Dock1 文档，而是客户整理的飞机、机巢、交互、负载和架构功能全集。迁移时要把业务能力转成 Dock3 云端语义。
+| 客户资料 | 网关侧能力域 | 平台侧排除项 | Backlog/Gaps | 验收证据 |
+|---|---|---|---|---|
+| `项目优先级整理.docx` | 航线任务、机巢运维、DRC、遥测状态、负载媒体、设备拓扑、本地数据、告警安全、OTA | 前端展示、用户权限、长期统计和平台批量调度不纳入本网关缺口 | 全部 P0/P1/P2；重点 G-P0-02、G-P0-03、G-P0-04、G-P0-05、G-P0-07、G-P1-01、G-P1-06、G-P1-12、G-P1-13 | P0/P1 专项脚本、E2E、trace、DB 记录 |
+| `业务流程.md` | 启动、绑定、拓扑、OSD/state、任务状态机、一键启航、异常处理、设备管理、数据流 | 平台页面、业务工单、任务可视化和长期报表只作为云端配套 | P0-01 到 P0-17、P1-01、P1-02、P1-17 | P0 批量、organization/device、Wayline、DRC、CMD、E2E |
+| `网关和平台侧重点.docx` | 明确网关负责硬件控制、实时状态、断网续传、本地安全兜底、短周期数据和升级执行 | 航线库编辑、用户/组织/设备权限、全量历史数据、媒体资源库、通知推送、统计分析 | 所有 backlog 只评估网关侧；平台侧功能不得作为本网关失败项 | 文档一致性检查、平台排除项搜索 |
+
+### 2.1 网关侧能力域映射
+
+| 网关能力域 | 客户边界结论 | Dock3/设备侧落点 | 当前状态 |
+|---|---|---|---|
+| 航线任务管理 | 执行状态机、硬件校验、断点续飞、航点动作在网关 | `wayline` + MAVLink Mission + `mission_db/waypoint_db` | Wayline mock KMZ 已通过，真实 SITL 航点和一键启航待补 |
+| 机巢运维管控 | 舱盖、充电、空调、补光灯、重启等硬件控制在网关 | `cmd` + 机巢 v1.3 adapter | CMD 基础已通过，完整状态机和真实硬件耗时待补 |
+| DRC 实时飞行控制 | 模式、指令仲裁、摇杆转 MAVLink、心跳超时在网关 | `drc` + `flight_control/mode_control` | 云端模拟闭环已通过，真实 SITL 边界继续精校 |
+| 遥测与状态上报 | MAVLink 原始数据采集、结构化、OSD/state 和断网缓存由网关负责 | `osd/state/properties` + `telemetry_db` | OSD/state 已通过，字段单位和枚举继续精校 |
+| 负载与媒体管理 | 相机/云台控制、媒体元数据、上传执行、直播推流执行在网关 | `media/live` + payload adapter | media/live mock 已通过，真实 OSS/推流/相机云台待补 |
+| 设备管理与拓扑 | 子设备发现、能力集、属性设置、本地配置持久化在网关 | `device/organization/status:update_topo` | 基础已通过，多设备/解绑/离线待补 |
+| 数据库与数据存储 | 网关存实时断点、短周期遥测、待上报队列和近期告警 | SQLite/SQLAlchemy，MongoDB 为后续目标 | SQLite 已用，NoSQL/异步数据层待迁移 |
+| 告警与安全策略 | 硬件告警采集、安全兜底、严重告警联动在网关 | `hms/events/state` + 本地安全策略 | HMS/log 已通过，真实故障源和联动待补 |
+| OTA 固件升级 | 下载、校验、升级执行、失败回滚在网关 | `firmware/config` + operation record | 待迁移 |
+
+## 3. `DJI_Dock固件功能清单77.docx` 历史参考追溯
+
+该文档不再作为当前优先级的第一来源，但仍可作为飞机、机巢、交互、负载和架构功能全集的历史参考。迁移时要把业务能力转成 Dock3 云端语义，并按客户三文档确认是否属于网关侧交付。
 
 | 客户章节 | 业务能力 | Dock3 落点 | Backlog | Gap | 验收证据 |
 |---|---|---|---|---|---|
@@ -66,7 +90,7 @@
 | 第5章 四维度汇总对照表 | 飞控、机巢、交互、负载的总表和优先级 | 本追溯矩阵 + backlog + runbook | 全部 P0/P1/P2 | 全部 G-P0/G-P1 | backlog 和 runbook 逐项关项 |
 | 第6章 关键架构建议 | 系统分层、接口边界、协议选择、技术选型、实施路径、风险 | Dock3 云端 adapter + MAVLink/机巢 adapter + 状态机编排器 | P0-01、P0-06、P0-12、P0-16、P0-17、P1-17 | G-P0-01、G-P0-04、G-P0-07、G-P0-08、G-P1-17 | P0/P1 E2E、非阻塞审计、压测 |
 
-## 3. 第六章接口追溯
+## 4. 第六章接口追溯
 
 第六章的核心结论是：网关不是继续实现 Dock1，而是在 Dock3 云端协议和客户设备侧协议之间做适配与编排。
 
@@ -82,7 +106,7 @@
 | IF-008 探照灯 | 第三方负载或 GPIO/CAN/串口 | `src/payload/third_party.py`、`src/cloud_api/dock3_cmd.py` | P0-11、P2-01 | P2 风险 | CMD 基础 + P2 mock |
 | IF-009 飞控到云台直连 | MAVLink Gimbal v2 设备侧路径 | `src/modules/flight_control.py`、`src/payload/gimbal.py` | P1-09 | G-P1-09 | payload 专项 |
 
-## 4. `2677.docx` 章节追溯
+## 5. `2677.docx` 章节追溯
 
 该文档描述当前项目的架构和代码能力，是落地方式来源。
 
@@ -101,9 +125,9 @@
 | 第8章 Auto-Takeoff | 一键启航 | `src/mission/manager.py`、`src/cloud_api/dock3_wayline.py`、`src/modules/drone_nest_module.py` | P1-01、P1-02、P1-17 | 起飞流程 E2E |
 | 第9章 架构模式 | 非阻塞、状态机、adapter、可观测性 | `src/database/`、`src/media/`、`src/modules/`、`tools/` | P0-15、P0-16、P1-16、P1-17 | trace、压测、E2E |
 
-## 5. `BUSINESS_FLOW.docx` 业务流程追溯
+## 6. `业务流程.md` / `BUSINESS_FLOW.docx` 业务流程追溯
 
-该文档定义从启动到业务闭环的端到端流程，必须用于 P1 全链路验收。
+`业务流程.md` 是当前客户业务流程主文档，`BUSINESS_FLOW.docx` 保留为旧流程参考。二者共同定义从启动到业务闭环的端到端流程，必须用于 P1 全链路验收。
 
 | 业务流程 | Dock3 落点 | Backlog | Gap | 验收 |
 |---|---|---|---|---|
@@ -122,7 +146,7 @@
 | 自定义数据 | 透传数据、设备侧 adapter | P2-02 | P2 风险 | custom data mock |
 | 系统数据流 | request trace、操作记录、保留策略、非阻塞 | P0-15、P0-16、P1-16、P1-17 | G-P0-06、G-P0-07、G-P1-16、G-P1-17 | trace、retention、E2E |
 
-## 6. `机巢协议v1.3.docx` 协议追溯
+## 7. `机巢协议v1.3.docx` 协议追溯
 
 该文档是设备侧协议，不是云端最终标准。它必须通过 adapter 映射到 Dock3 `cmd/properties/state/events/hms`。
 
@@ -130,18 +154,18 @@
 |---|---|---|---|---|---|
 | 通信关系 | 地面站作为 TCP client，机巢为 server `192.168.1.11` | 设备侧 adapter 配置 | P0-12、P1-02 | G-P0-04、G-P1-02 | 机巢 v1.3 专项 |
 | `DRONE_NEST_COMMAND` 12003 | 地面站发送机巢控制命令 | Dock3 `cmd` 或业务 service 触发 | P0-11、P0-12、P1-02 | G-P0-04、G-P1-02 | 命令帧发送和参数校验 |
-| `DRONE_NEST_RESPONSE` 12004 | 机巢周期状态 | Dock3 `properties/state/hms` | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位和 HMS 映射 |
+| `DRONE_NEST_RESPONSE` 12004 | 机巢周期状态 | Dock3 `properties/state/hms/events` | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位、HMS 和 `dock_operation` 映射 |
 | `DRONE_NEST_ORDER_RESPONSE` 12005 | 单次命令应答 | Dock3 `services_reply`、events、operation record | P0-11、P0-14、P0-15、P1-15 | G-P0-06、G-P1-15 | 成功、拒绝、超时、失败码 |
 | 起飞/降落相关命令 | 起飞、起飞中止、降落中止 | 一键启航、Wayline、events/state | P0-08、P1-01、P1-02 | G-P0-03、G-P1-01、G-P1-02 | 起飞流程 E2E |
 | 舱盖命令 | 开盖、关盖、停止 | Dock3 `cmd`、`cover_state` | P0-11、P0-13 | G-P0-05 | CMD + 机巢状态 |
 | 充电命令 | 充电、不充电 | Dock3 `cmd`、`drone_charge_state` | P0-11、P0-13、P1-02 | G-P0-05、G-P1-02 | CMD + 充电状态 |
 | 归中/夹紧命令 | 抓紧、释放、停止 | Dock3 `cmd`、state/properties | P0-11、P0-13、P1-02 | G-P0-05、G-P1-02 | CMD + 状态位 |
-| 急停/初始化/故障恢复 | 急停、取消急停、初始化、故障恢复 | `cmd`、`hms`、events | P0-11、P0-13、P1-10、P1-15 | G-P0-05、G-P1-10、G-P1-15 | CMD + HMS |
+| 急停/初始化/故障恢复 | 急停、取消急停、初始化、故障恢复 | `cmd`、`hms`、events | P0-11、P0-13、P1-10、P1-15 | G-P0-05、G-P1-10、G-P1-15 | CMD + HMS；机巢急停/故障已进入本地 HMS 映射 |
 | 大灯/飞机电源 | 开关灯、飞机上电/下电 | `cmd`、properties/state | P0-11、P1-15 | G-P1-15 | CMD 进阶 |
-| `boolstate1` | 心跳、急停、充电、校准、备飞、busy、fault、R 轴、大灯 | Dock3 机场状态、properties、HMS | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位专项 |
+| `boolstate1` | 心跳、急停、充电、校准、备飞、busy、fault、R 轴、大灯 | Dock3 机场状态、properties、HMS | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位专项；离线专项已覆盖 HMS 映射 |
 | `boolstate2` | 起飞/降落流程、中止流程、备用降落点、允许起飞 | 一键启航状态机、events/state | P1-01、P1-02 | G-P1-01、G-P1-02 | 起飞流程 E2E |
 
-## 7. 完整性门禁
+## 8. 完整性门禁
 
 | 门禁 | 通过标准 |
 |---|---|
@@ -153,11 +177,11 @@
 | Deferred 门禁 | 客户未用 Dock3 能力可以延期，但必须记录原因、后续触发条件，且不影响 P0/P1 |
 | 非阻塞门禁 | 数据库、媒体、日志、固件、上传、压缩不得阻塞 MQTT 回调、MAVLink 接收和状态机 |
 
-## 8. 当前未完全闭合的追溯项
+## 9. 当前未完全闭合的追溯项
 
 | 项 | 原因 | 处理方式 |
 |---|---|---|
 | Dock3 官方字段逐项编号 | 当前文档已做业务域映射，但还未把客户需求涉及的 Dock3 字段逐项列成字段级矩阵 | 在 P0-06、P0-13、P1-07 到 P1-13 开发时同步补字段级用例；客户未用字段可 Deferred |
 | P2 高级能力 | 真实 PSDK/ESDK、AirSense、GB28181/WebRTC、远程解禁依赖真实设备或外部平台 | 30 天内至少保留 adapter、mock、错误码、日志和限制说明 |
-| 全链路 E2E | 当前缺 `e2e_full_chain_test.py` 和 `e2e_takeoff_flow_test.py` | 按 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` 的目标窗口优先补齐 |
+| 全链路 E2E | 当前核心 `e2e_full_chain_test.py` 已覆盖 properties、device、OSD/state、CMD、DRC、Wayline；一键启航和 firmware/config 尚未接入同一入口 | 按 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` 优先补 `e2e_takeoff_flow_test.py` 和 firmware/config 专项 |
 | 旧 Dock/Dock1/Dock2 表述 | 客户文档中存在旧表达，容易误导实现 | 所有实现和验收都以 Dock3 Cloud API 为最终标准 |
