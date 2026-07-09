@@ -127,6 +127,10 @@ def resolve_takeoff_target(args, osd_payload: Any | None = None) -> tuple[dict[s
     }, "fallback"
 
 
+def is_fallback_target_allowed(args, target_source: str) -> bool:
+    return target_source != "fallback" or bool(getattr(args, "allow_fallback_target", False))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test DJI Dock3 DRC category")
     add_config_argument(parser)
@@ -151,6 +155,11 @@ def main():
     parser.add_argument("--target-lon", type=float, default=None)
     parser.add_argument("--target-height", type=float, default=50.0)
     parser.add_argument("--target-offset-meters", type=float, default=30.0)
+    parser.add_argument(
+        "--allow-fallback-target",
+        action="store_true",
+        help="Allow the built-in fallback target when no drone OSD is received. Prefer --target-lat/--target-lon for strict tests.",
+    )
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     if (args.target_lat is None) != (args.target_lon is None):
@@ -262,6 +271,14 @@ def main():
 
         osd_topic, osd_payload = wait_for_drone_osd(client, osd_topics, args.osd_wait)
         target, target_source = resolve_takeoff_target(args, osd_payload)
+        if not is_fallback_target_allowed(args, target_source):
+            print(
+                "error: no drone OSD received before takeoff_to_point; "
+                f"topics={','.join(osd_topics)}. "
+                "Provide --target-lat/--target-lon or rerun with --allow-fallback-target.",
+                file=sys.stderr,
+            )
+            return 11
         if target_source == "fallback":
             print(
                 "warning: no drone OSD received before takeoff_to_point; "

@@ -15,6 +15,7 @@ from mqtt_dock3_drc_test import (  # noqa: E402
     FALLBACK_TARGET_LONGITUDE,
     _candidate_drone_sns,
     _osd_topics,
+    is_fallback_target_allowed,
     resolve_takeoff_target,
     wait_for_drone_osd,
 )
@@ -26,6 +27,7 @@ def args(**overrides):
         "target_lon": None,
         "target_height": 50.0,
         "target_offset_meters": 30.0,
+        "allow_fallback_target": False,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -73,6 +75,12 @@ class Dock3DrcToolTargetTest(unittest.TestCase):
         self.assertEqual(source, "fallback")
         self.assertEqual(target["target_latitude"], FALLBACK_TARGET_LATITUDE)
         self.assertEqual(target["target_longitude"], FALLBACK_TARGET_LONGITUDE)
+
+    def test_fallback_target_requires_explicit_allow(self):
+        self.assertFalse(is_fallback_target_allowed(args(), "fallback"))
+        self.assertTrue(is_fallback_target_allowed(args(allow_fallback_target=True), "fallback"))
+        self.assertTrue(is_fallback_target_allowed(args(), "drone_osd"))
+        self.assertTrue(is_fallback_target_allowed(args(), "cli"))
 
     def test_resolve_takeoff_target_rejects_partial_cli_target(self):
         with self.assertRaises(ValueError):

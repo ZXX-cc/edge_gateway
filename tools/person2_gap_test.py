@@ -19,7 +19,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, output_status, result_code
-from mqtt_dock3_drc_test import DEFAULT_DRONE_SN, _osd_topics, resolve_takeoff_target, wait_for_drone_osd
+from mqtt_dock3_drc_test import (
+    DEFAULT_DRONE_SN,
+    _osd_topics,
+    is_fallback_target_allowed,
+    resolve_takeoff_target,
+    wait_for_drone_osd,
+)
 from tool_config import add_config_argument, resolve_mqtt_settings
 
 
@@ -167,6 +173,13 @@ def phase_drc_sitl(args) -> int:
             target, target_source = resolve_takeoff_target(args, osd_payload)
         except ValueError as exc:
             _print_step("DRC 目标点解析", False, {"reason": str(exc)})
+            return 12
+        if not is_fallback_target_allowed(args, target_source):
+            _print_step("DRC 目标点解析", False, {
+                "reason": "未收到飞行器 OSD，不能自动生成电子围栏内目标点",
+                "topics": _osd_topics(args.drone_sn),
+                "hint": "传入 --target-lat/--target-lon，或显式添加 --allow-fallback-target",
+            })
             return 12
         _print_step("DRC 目标点解析", True, {
             "source": target_source,
@@ -360,6 +373,7 @@ def main() -> int:
     parser.add_argument("--target-lon", type=float, default=None)
     parser.add_argument("--target-height", type=float, default=50.0)
     parser.add_argument("--target-offset-meters", type=float, default=30.0)
+    parser.add_argument("--allow-fallback-target", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     if (args.target_lat is None) != (args.target_lon is None):
