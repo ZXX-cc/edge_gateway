@@ -36,9 +36,9 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertEqual([step.key for step in p0_steps], ["properties", "osd-state"])
 
     def test_selected_steps_only_preserves_default_order(self):
-        steps = selected_steps("all", "wayline,properties", "")
+        steps = selected_steps("all", "firmware-config,wayline,properties", "")
 
-        self.assertEqual([step.key for step in steps], ["properties", "wayline"])
+        self.assertEqual([step.key for step in steps], ["properties", "wayline", "firmware-config"])
 
     def test_selected_steps_rejects_unknown_key(self):
         with self.assertRaises(ValueError):
@@ -65,6 +65,22 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertIn("mqtt_dock3_osd_state_test.py", command[1])
         self.assertIn("--reply-timeout", command)
         self.assertIn("--allow-invalid", command)
+        self.assertNotIn("--fail-on-stale", command)
+
+    def test_build_command_uses_step_timeout_override(self):
+        step = next(step for step in STEPS if step.key == "firmware-config")
+        command = build_command(step, self.args(timeout=12.0))
+
+        timeout_index = command.index("--timeout")
+        self.assertEqual(command[timeout_index + 1], "20.0")
+        self.assertIn("mqtt_dock3_firmware_config_test.py", command[1])
+
+    def test_takeoff_flow_step_is_p1_and_omits_stale_flag(self):
+        step = next(step for step in STEPS if step.key == "takeoff-flow")
+        command = build_command(step, self.args(fail_on_stale=True))
+
+        self.assertEqual(step.phase, "p1")
+        self.assertIn("e2e_takeoff_flow_test.py", command[1])
         self.assertNotIn("--fail-on-stale", command)
 
 

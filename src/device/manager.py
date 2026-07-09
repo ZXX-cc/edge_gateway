@@ -24,6 +24,7 @@ import os
 import json
 import shutil
 import asyncio
+import copy
 from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
@@ -45,7 +46,9 @@ from src.cloud_api.dock3_device import (
     validate_update_topo_payload,
 )
 from src.cloud_api.dock3_cmd import (
+    TASK_STATUS_CANCELED,
     TASK_STATUS_FAILED,
+    TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_OK,
     TASK_STATUS_REJECTED,
     command_output,
@@ -172,6 +175,10 @@ class DeviceManager:
         self._org_data = self._load_organization_data()
         # 绑定信息本地缓存结构：
         # { "organization": {...}, "device_bindings": {sn: {...}} }
+        self._config_data_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            'data', 'device_config.json'
+        )
 
         # ===== 基础时间记录（必须在_init_properties之前定义） =====
         self._acc_time_start = time.time()
@@ -213,6 +220,12 @@ class DeviceManager:
         self._ota_file_name = ""
         self._ota_thread: Optional[threading.Thread] = None
         self._ota_cancel_flag = False
+
+        # ===== 配置更新缓存 =====
+        config_data = self._load_config_data()
+        self._config_store: Dict[str, Any] = config_data.get("config", {})
+        self._config_revision = int(config_data.get("revision", 0) or 0)
+        self._config_history: List[Dict[str, Any]] = config_data.get("history", [])
 
         # ===== 调试/仿真模式 =====
         self._debug_mode = False
@@ -284,6 +297,7 @@ class DeviceManager:
                 '4g_link_state': 0,
                 'sdr_link_state': 0,
                 'link_workmode': 0,
+                'sim_slot': 0,
                 'sdr_quality': 0,
                 '4g_quality': 0,
                 '4g_uav_quality': 0,
@@ -291,6 +305,7 @@ class DeviceManager:
                 'sdr_freq_band': 0.0,
                 '4g_freq_band': 0.0,
             },
+            'esim': {'activated': 0, 'operator': 0, 'status': 'inactive'},
 
             # ---- 直播/媒体属性 (pushMode=1, 部分可写) ----
             'air_transfer_enable': False,    # rw: 空中回传
@@ -591,6 +606,47 @@ class DeviceManager:
             return True
         except Exception as e:
             logger.error(f"Failed to save organization data: {e}")
+            return False
+
+    def _load_config_data(self) -> dict:
+        """加载本地配置更新状态，用于 config_get/config_rollback。"""
+        default_data = {
+            "revision": 0,
+            "config": {},
+            "history": [],
+        }
+        try:
+            if os.path.exists(self._config_data_path):
+                with open(self._config_data_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    return default_data
+                config = data.get("config")
+                history = data.get("history")
+                return {
+                    "revision": int(data.get("revision", 0) or 0),
+                    "config": config if isinstance(config, dict) else {},
+                    "history": history if isinstance(history, list) else [],
+                }
+        except Exception as e:
+            logger.warning("Failed to load config data: %s", e)
+        return default_data
+
+    def _save_config_data(self) -> bool:
+        """保存本地配置更新状态。"""
+        try:
+            os.makedirs(os.path.dirname(self._config_data_path), exist_ok=True)
+            payload = {
+                "revision": self._config_revision,
+                "config": self._config_store,
+                "history": self._config_history[-20:],
+                "updated_at": int(time.time() * 1000),
+            }
+            with open(self._config_data_path, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            logger.error("Failed to save config data: %s", e)
             return False
 
     def _get_device_binding_info(self, sn: str) -> dict:
@@ -1334,39 +1390,60 @@ class DeviceManager:
         固件升级任务创建 (ota_create)
 
         状态机：idle -> checking -> downloading -> verifying -> upgrading -> completed/failed
-        真实流程：
-        1. 校验参数和当前状态
-        2. 启动后台线程下载固件
-        3. 校验MD5
-        4. 执行刷写（调用系统命令或重启进入bootloader）
-        5. 上报进度和结果
+        当 file_url 使用 mock:// 或 data.simulate=true 时走可重复模拟流程；
+        真实 URL 仍保留下载、校验和刷写脚本路径。
         """
         data = msg.get('data', {})
         devices = data.get('devices', [])
 
-        if not devices:
-            return MessageBuilder.build_reply(
-                msg, result=-1, msg_str="No devices in OTA request"
-            )
+        if not isinstance(devices, list) or not devices:
+            return self._build_ota_rejected(msg, "ota_create.devices must be non-empty array")
 
         if self._ota_state != 'idle':
-            return MessageBuilder.build_reply(
-                msg, result=-1,
-                msg_str=f"OTA already in progress: {self._ota_state}"
+            return self._build_ota_rejected(
+                msg,
+                f"OTA already in progress: {self._ota_state}",
+                result=DEVICE_STATE_UNSUPPORTED,
             )
 
         # 取第一个设备作为当前升级目标
         device_info = devices[0]
-        self._ota_target_version = device_info.get('product_version', '')
-        self._ota_package_url = device_info.get('file_url', '')
-        package_size = device_info.get('file_size', 0)
-        self._ota_md5 = device_info.get('md5', '')
-        self._ota_file_name = device_info.get('file_name', '')
+        if not isinstance(device_info, dict):
+            return self._build_ota_rejected(msg, "ota_create.devices[0] must be object")
+
+        self._ota_target_version = (
+            device_info.get('product_version')
+            or device_info.get('firmware_version')
+            or device_info.get('version')
+            or data.get('product_version')
+            or data.get('firmware_version')
+            or ""
+        )
+        self._ota_package_url = (
+            device_info.get('file_url')
+            or device_info.get('url')
+            or data.get('file_url')
+            or data.get('url')
+            or ""
+        )
+        try:
+            package_size = int(device_info.get('file_size') or data.get('file_size') or 0)
+        except (TypeError, ValueError):
+            return self._build_ota_rejected(msg, "ota_create.file_size must be int")
+        self._ota_md5 = device_info.get('md5', data.get('md5', ''))
+        self._ota_file_name = device_info.get('file_name', data.get('file_name', ''))
         upgrade_type = device_info.get('firmware_upgrade_type', 3)
+        simulate = bool(data.get('simulate') or data.get('simulation_mode'))
+        if str(self._ota_package_url).startswith('mock://'):
+            simulate = True
+        auto_complete = bool(data.get('auto_complete', simulate))
+
+        if not self._ota_target_version:
+            return self._build_ota_rejected(msg, "ota_create product_version required")
 
         self._ota_state = 'checking'
         self._ota_progress = 0
-        self._ota_task_id = str(int(time.time() * 1000))
+        self._ota_task_id = str(data.get('task_id') or device_info.get('task_id') or int(time.time() * 1000))
         self._ota_cancel_flag = False
 
         self.update_properties({
@@ -1376,22 +1453,50 @@ class DeviceManager:
         logger.info(f"OTA task created: target={self._ota_target_version}, "
                    f"url={self._ota_package_url}, type={upgrade_type}")
 
-        # 启动异步升级线程
-        self._ota_thread = threading.Thread(
-            target=self._ota_worker,
-            args=(self._ota_package_url, package_size, self._ota_md5),
-            daemon=True
-        )
-        self._ota_thread.start()
+        if simulate:
+            if auto_complete:
+                self._ota_thread = threading.Thread(
+                    target=self._ota_simulation_worker,
+                    daemon=True
+                )
+                self._ota_thread.start()
+            else:
+                self._ota_state = 'upgrading'
+                self.report_ota_progress(TASK_STATUS_IN_PROGRESS, 10, 'wait_for_upgrade')
+                logger.info("OTA simulation waiting for cancel/next step: task_id=%s", self._ota_task_id)
+        else:
+            if not self._ota_package_url:
+                self._ota_state = 'idle'
+                self.update_properties({
+                    'firmware_upgrade_status': self._firmware_status_map('idle')
+                }, notify=False)
+                return self._build_ota_rejected(msg, "ota_create.file_url required for real firmware upgrade")
+            # 启动异步升级线程
+            self._ota_thread = threading.Thread(
+                target=self._ota_worker,
+                args=(self._ota_package_url, package_size, self._ota_md5),
+                daemon=True
+            )
+            self._ota_thread.start()
 
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'output': {'status': 'in_progress'}
-        })
+        return MessageBuilder.build_reply(msg, result=0, data=command_output(
+            TASK_STATUS_IN_PROGRESS,
+            extra={
+                'task_id': self._ota_task_id,
+                'target_version': self._ota_target_version,
+                'firmware_upgrade_type': upgrade_type,
+                'simulation_mode': simulate,
+            },
+        ))
 
     def handle_ota_cancel(self, msg: dict) -> dict:
         """固件升级取消 (ota_cancel)"""
         if self._ota_state == 'idle':
-            return MessageBuilder.build_reply(msg, result=-1, msg_str="No OTA in progress")
+            return self._build_ota_rejected(
+                msg,
+                "No OTA in progress",
+                result=DEVICE_STATE_UNSUPPORTED,
+            )
 
         self._ota_cancel_flag = True
         self._ota_state = 'idle'
@@ -1399,8 +1504,65 @@ class DeviceManager:
         self.update_properties({
             'firmware_upgrade_status': self._firmware_status_map('idle')
         })
+        self._notify_event('ota_result', {
+            'output': {'status': TASK_STATUS_CANCELED},
+            'task_id': self._ota_task_id,
+            'result': 0,
+            'error_code': 0,
+            'error_msg': '',
+            'target_version': self._ota_target_version,
+        })
         logger.info("OTA cancelled")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0, data=command_output(
+            TASK_STATUS_CANCELED,
+            extra={'task_id': self._ota_task_id},
+        ))
+
+    def _build_ota_rejected(
+        self,
+        msg: dict,
+        reason: str,
+        result: int = INVALID_COMMAND_FORMAT,
+    ) -> dict:
+        logger.warning("OTA request rejected: %s", reason)
+        return MessageBuilder.build_reply(
+            msg,
+            result=result,
+            data=command_output(TASK_STATUS_REJECTED),
+            msg_str=reason,
+        )
+
+    def _ota_simulation_worker(self):
+        """可重复的固件升级模拟流程，不依赖外网下载或真实刷写脚本。"""
+        try:
+            for progress, step in (
+                (10, 'download_firmware'),
+                (50, 'download_firmware'),
+                (60, 'verify_firmware'),
+                (95, 'upgrade_firmware'),
+            ):
+                if self._ota_cancel_flag:
+                    raise Exception("OTA cancelled")
+                self.report_ota_progress(TASK_STATUS_IN_PROGRESS, progress, step)
+                time.sleep(0.05)
+
+            if self._ota_cancel_flag:
+                raise Exception("OTA cancelled")
+            self._properties['firmware_version'] = self._ota_target_version or self._properties.get('firmware_version', '')
+            self._properties['firmware_upgrade_status'] = self._firmware_status_map('completed')
+            self.report_ota_progress(TASK_STATUS_OK, 100, 'upgrade_firmware')
+            self.report_ota_result(True)
+            logger.info("OTA simulation completed: version=%s", self._ota_target_version)
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning("OTA simulation stopped: %s", error_msg)
+            if error_msg != "OTA cancelled":
+                self._properties['firmware_upgrade_status'] = self._firmware_status_map('failed')
+                self.report_ota_progress(TASK_STATUS_FAILED, self._ota_progress, 'upgrade_firmware')
+                self.report_ota_result(False, error_code=-1, error_msg=error_msg)
+        finally:
+            if self._ota_state != 'idle':
+                self._ota_state = 'idle'
 
     def _ota_worker(self, package_url: str, package_size: int, expected_md5: str):
         """
@@ -1539,6 +1701,9 @@ class DeviceManager:
             'firmware_upgrade_status': self._firmware_status_map(self._ota_state)
         }, notify=False)
         self._notify_event('ota_result', {
+            'output': {
+                'status': TASK_STATUS_OK if success else TASK_STATUS_FAILED,
+            },
             'task_id': self._ota_task_id,
             'result': 0 if success else -1,
             'error_code': error_code,
@@ -1553,7 +1718,10 @@ class DeviceManager:
         """OTA状态字符串转枚举值"""
         mapping = {
             'idle': 0, 'checking': 1, 'downloading': 2,
-            'verifying': 3, 'upgrading': 4, 'completed': 5, 'failed': 6
+            'verifying': 3, 'upgrading': 4, 'completed': 5, 'failed': 6,
+            TASK_STATUS_IN_PROGRESS: 1,
+            TASK_STATUS_OK: 5,
+            TASK_STATUS_CANCELED: 0,
         }
         return mapping.get(status, 0)
 
@@ -1567,37 +1735,176 @@ class DeviceManager:
         Response: { result, applied_keys, failed_keys }
         Event: config_update_result
         """
-        data = msg.get('data', {})
-        config = data.get('config', {})
+        config, reason = self._extract_config_update(msg.get('data', {}))
+        if reason:
+            return self._build_config_rejected(msg, reason)
 
         logger.info(f"Config update received: {config}")
         applied = {}
         failed = {}
+        property_snapshot = {}
+        before_config = copy.deepcopy(self._config_store)
 
         for key, value in config.items():
-            # 尝试应用配置到属性或配置文件
+            key = str(key)
             if key in self._properties:
                 if key in self._writable_props:
-                    self.set_property(key, value, notify=False)
-                    applied[key] = value
+                    property_snapshot[key] = copy.deepcopy(self._properties.get(key))
+                    if self.set_property(key, value, notify=False):
+                        applied[key] = value
+                        self._config_store[key] = value
+                    else:
+                        failed[key] = "invalid writable property value"
                 else:
                     failed[key] = "read-only property"
             else:
-                # 未知配置项，记录但不报错
+                # 配置项不一定等同于物模型属性，未知项作为本地业务配置持久化。
                 applied[key] = value
+                self._config_store[key] = value
+
+        status = TASK_STATUS_OK if not failed else TASK_STATUS_FAILED
+        result = 0 if not failed else INVALID_COMMAND_FORMAT
+        if applied:
+            self._config_history.append({
+                "revision": self._config_revision,
+                "config": before_config,
+                "properties": property_snapshot,
+                "timestamp": int(time.time() * 1000),
+            })
+            self._config_history = self._config_history[-20:]
+            self._config_revision += 1
+            self._save_config_data()
 
         # 上报配置更新结果
-        self._notify_event('config_update_result', {
-            'config': config,
-            'applied': applied,
-            'failed': failed,
-            'status': 'success' if not failed else 'partial'
-        })
-
-        return MessageBuilder.build_reply(msg, result=0, data={
+        event_data = command_output(status, extra={
+            'config_revision': self._config_revision,
             'applied_keys': list(applied.keys()),
-            'failed_keys': list(failed.keys())
+            'failed_keys': list(failed.keys()),
+            'failed': failed,
         })
+        event_data['result'] = result
+        self._notify_event('config_update_result', event_data)
+
+        return MessageBuilder.build_reply(msg, result=result, data=command_output(status, extra={
+            'config_revision': self._config_revision,
+            'applied_keys': list(applied.keys()),
+            'failed_keys': list(failed.keys()),
+            'failed': failed,
+        }))
+
+    def handle_config_get(self, msg: dict) -> dict:
+        """查询当前本地配置缓存。"""
+        data = msg.get('data', {})
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            return self._build_config_rejected(msg, "config_get data must be an object")
+
+        keys = (
+            data.get('keys')
+            or data.get('config_keys')
+            or data.get('config_names')
+            or data.get('config')
+            or []
+        )
+        if isinstance(keys, str):
+            keys = [keys]
+        if keys and not isinstance(keys, list):
+            return self._build_config_rejected(msg, "config_get keys must be an array")
+
+        if keys:
+            selected = {
+                str(key): copy.deepcopy(self._config_store[str(key)])
+                for key in keys
+                if str(key) in self._config_store
+            }
+        else:
+            selected = copy.deepcopy(self._config_store)
+
+        return MessageBuilder.build_reply(msg, result=0, data=command_output(
+            TASK_STATUS_OK,
+            extra={
+                'config_revision': self._config_revision,
+                'config': selected,
+                'total': len(selected),
+            },
+        ))
+
+    def handle_config_rollback(self, msg: dict) -> dict:
+        """回滚到上一版本地配置。"""
+        if not self._config_history:
+            return self._build_config_rejected(
+                msg,
+                "No config history to rollback",
+                result=DEVICE_STATE_UNSUPPORTED,
+            )
+
+        snapshot = self._config_history.pop()
+        rolled_back_to_revision = int(snapshot.get("revision", 0) or 0)
+        self._config_store = copy.deepcopy(snapshot.get("config", {}))
+        for key, value in (snapshot.get("properties") or {}).items():
+            if key in self._properties:
+                self._properties[key] = value
+
+        self._config_revision += 1
+        self._save_config_data()
+        data = command_output(TASK_STATUS_OK, extra={
+            'config_revision': self._config_revision,
+            'rolled_back_to_revision': rolled_back_to_revision,
+            'config': copy.deepcopy(self._config_store),
+        })
+        data['result'] = 0
+        self._notify_event('config_rollback_result', data)
+        return MessageBuilder.build_reply(msg, result=0, data=data)
+
+    def _extract_config_update(self, data: Any) -> tuple[dict, str]:
+        """兼容 Dock3 config_update 常见 dict/list 载荷。"""
+        if data is None:
+            return {}, "config_update data must be an object"
+        if not isinstance(data, dict):
+            return {}, "config_update data must be an object"
+
+        raw_config = None
+        for key in ("config", "configs", "settings", "items"):
+            if key in data:
+                raw_config = data.get(key)
+                break
+
+        if raw_config is None:
+            return {}, "config_update missing config"
+
+        if isinstance(raw_config, dict):
+            config = copy.deepcopy(raw_config)
+        elif isinstance(raw_config, list):
+            config = {}
+            for index, item in enumerate(raw_config):
+                if not isinstance(item, dict):
+                    return {}, f"config_update configs[{index}] must be object"
+                if "key" in item and "value" in item:
+                    config[str(item["key"])] = item["value"]
+                else:
+                    for item_key, item_value in item.items():
+                        config[str(item_key)] = item_value
+        else:
+            return {}, "config_update config must be object or array"
+
+        if not config:
+            return {}, "config_update config cannot be empty"
+        return config, ""
+
+    def _build_config_rejected(
+        self,
+        msg: dict,
+        reason: str,
+        result: int = INVALID_COMMAND_FORMAT,
+    ) -> dict:
+        logger.warning("Config request rejected: %s", reason)
+        return MessageBuilder.build_reply(
+            msg,
+            result=result,
+            data=command_output(TASK_STATUS_REJECTED),
+            msg_str=reason,
+        )
 
     def handle_config(self, msg: dict) -> dict:
         """
@@ -1605,7 +1912,10 @@ class DeviceManager:
         设备主动请求云端配置（ntp/app_id/app_key/app_license）
         这里处理云端下发的配置响应（如果云端通过 services 下发）
         """
-        return self.handle_config_update(msg)
+        data = msg.get('data', {})
+        if isinstance(data, dict) and any(key in data for key in ("config", "configs", "settings", "items")):
+            return self.handle_config_update(msg)
+        return self.handle_config_get(msg)
 
     # ========== API处理器：设备绑定与组织 ==========
 
@@ -1967,11 +2277,58 @@ class DeviceManager:
         wireless['link_workmode'] = mode
         self.update_properties({'wireless_link': wireless})
         logger.info("SDR workmode switch: %s=%s", used_field, mode)
+        extra = {'link_workmode': mode}
+        if used_field in {'action', 'mode'}:
+            extra[used_field] = mode
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
+
+    def handle_sim_slot_switch(self, msg: dict) -> dict:
+        """SIM/eSIM 卡槽切换，模拟记录当前卡槽。"""
+        data = msg.get('data', {})
+        sim_slot = data.get('sim_slot', data.get('slot', 0))
+        if not isinstance(sim_slot, int) or isinstance(sim_slot, bool) or sim_slot not in (0, 1):
+            return self._reject_cmd(msg, "sim_slot_switch.sim_slot out of range, allowed: 0,1")
+
+        wireless = self._properties.get('wireless_link', {}).copy()
+        wireless['sim_slot'] = sim_slot
+        self.update_properties({'wireless_link': wireless})
+        logger.info("SIM slot switch: sim_slot=%s", sim_slot)
         return self._build_cmd_reply(
             msg,
             result=0,
             status=TASK_STATUS_OK,
-            extra={'link_workmode': mode},
+            extra={'sim_slot': sim_slot},
+        )
+
+    def handle_esim_activate(self, msg: dict) -> dict:
+        """eSIM 激活模拟入口，避免联调脚本被误判为未知指令。"""
+        esim = self._properties.get('esim', {}).copy()
+        esim.update({'activated': 1, 'status': 'activated'})
+        self.update_properties({'esim': esim})
+        logger.info("eSIM activate simulated")
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'activated': 1, 'simulation_mode': True},
+        )
+
+    def handle_esim_operator_switch(self, msg: dict) -> dict:
+        """eSIM 运营商切换模拟入口。"""
+        data = msg.get('data', {})
+        operator = data.get('operator', 0)
+        if not isinstance(operator, int) or isinstance(operator, bool) or operator < 0:
+            return self._reject_cmd(msg, "esim_operator_switch.operator must be non-negative int")
+
+        esim = self._properties.get('esim', {}).copy()
+        esim.update({'operator': operator, 'status': 'operator_switched'})
+        self.update_properties({'esim': esim})
+        logger.info("eSIM operator switch: operator=%s", operator)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'operator': operator, 'simulation_mode': True},
         )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
@@ -2066,7 +2423,10 @@ class DeviceManager:
             return self._reject_cmd(msg, "; ".join(errors))
         self.update_properties({'battery_store_mode': action})
         logger.info(f"Battery store mode: {action}")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
+        extra = {'action': data.get('action', action), 'battery_store_mode': action}
+        if data.get('action') != action:
+            extra['normalized_action'] = action
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
 
     # ========== API处理器：RTK/降落点 ==========
 
@@ -2100,6 +2460,29 @@ class DeviceManager:
         logger.info(f"RTK ref points set: {len(points)} points")
         # TODO: 持久化到配置文件
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_rtk_calibration(self, msg: dict) -> dict:
+        """一键 RTK 标定模拟入口。"""
+        data = msg.get('data', {})
+        devices = data.get('devices', [])
+        if devices is None:
+            devices = []
+        if not isinstance(devices, list):
+            return self._reject_cmd(msg, "rtk_calibration.devices must be array")
+
+        self.update_properties({'mode_code': 5})
+        self._notify_cmd_progress('rtk_calibration')
+        logger.info("RTK calibration simulated: devices=%s", len(devices))
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={
+                'calibration_status': 'started',
+                'devices_count': len(devices),
+                'simulation_mode': True,
+            },
+        )
 
     def handle_rtk_ref_points_query(self, msg: dict) -> dict:
         """RTK参考点查询"""

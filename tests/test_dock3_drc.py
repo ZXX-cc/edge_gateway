@@ -120,6 +120,21 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("seq" in error for error in errors))
 
+    def test_flight_authority_grab_returns_status_info(self):
+        controller = DrcController()
+
+        reply = controller.handle_flight_authority_grab({
+            "method": "flight_authority_grab",
+            "tid": "tid-authority",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+        self.assertEqual(reply["data"]["authority"], "flight")
+        self.assertEqual(reply["data"]["flight_authority"], 1)
+
     def test_takeoff_to_point_normalizes_official_payload(self):
         ok, normalized, errors = normalize_takeoff_to_point({
             "flight_id": "flight-001",

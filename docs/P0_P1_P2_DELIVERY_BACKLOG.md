@@ -34,7 +34,7 @@ P0/P1 具体代码缺口、目标窗口和缺失脚本优先级见 `docs/P0_P1_I
 | P1 | 一键启航、机巢完整状态机、真实 SITL 航点、媒体、直播、HMS/log、固件/config、多设备/解绑/离线 | 航线库编辑、多设备批量业务调度、媒体资源库、告警通知推送 |
 | P2 | PSDK/ESDK、远程解禁、高级飞安、真实硬件高级能力、生产 TLS/鉴权、性能深度优化 | 平台数据仓库、报表系统、权限体系和业务运营能力 |
 
-当前网关项目整体进度按“Ubuntu 纯模拟环境下 Dock3 网关链路”估算约 **73%**。该数字不代表真实 Dock3 硬件全量接入，也不代表平台侧完成度。
+当前网关项目整体进度按“Ubuntu 纯模拟环境下 Dock3 网关链路”估算约 **76%**。该数字不代表真实 Dock3 硬件全量接入，也不代表平台侧完成度。
 
 ### 1.1 按 `项目优先级整理.docx` 重排后的执行顺序
 
@@ -45,7 +45,7 @@ P0/P1 具体代码缺口、目标窗口和缺失脚本优先级见 `docs/P0_P1_I
 | 1 | 高 | 机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | P0-11、P0-12、P0-13、P1-02、P1-15 / G-P0-04、G-P0-05、G-P1-02、G-P1-15 | CMD 基础可用；机巢状态到 Dock3 state/HMS/dock_operation 已有本地桥接和离线专项，Ubuntu 网关 + 机巢模拟器实跑仍需前置 |
 | 2 | 高 | 航线任务真实上传、KMZ/WPML 解析、MAVLink Mission 上传、任务/flyto/takeoff_to_point 真实进度 | P0-08、P0-10、P1-04、P1-05、P1-06 / G-P0-03、G-P1-04、G-P1-05、G-P1-06 | mock 闭环可用，真实 SITL 航点和进度计算必须提前 |
 | 3 | 高 | DRC 速度控制、航向/高度控制优化，坐标系和 type_mask 精校 | P0-09、P1-03、P1-04 / G-P1-03、G-P1-04 | 云端模拟已通过，真实 MAVLink 语义继续前置验证 |
-| 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚，含飞机 OTA 透传 | P1-12、P1-13 / G-P1-12、G-P1-13 | 虽在旧表为 P1，按客户高优先级提前到高优先队列 |
+| 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚，含飞机 OTA 透传 | P1-12、P1-13 / G-P1-12、G-P1-13 | 模拟闭环已通过 Ubuntu 专项；真实 OTA adapter 和操作记录继续推进 |
 | 5 | 高 | OSD 字段补全，包含缺省 DJI 字段、无线链路、维护状态和关键电池/GPS字段 | P0-06 / G-P0-01 | 专项已通过，字段精校仍是高优先级 |
 | 6 | 高 | 真实直播推流、文件列表真实获取、媒体文件真实扫描 | P1-07、P1-08 / G-P1-07、G-P1-08 | mock 已通过，真实文件/推流 adapter 按客户高优先级前移 |
 | 7 | 高 | 相机变焦真实控制、对焦真实控制 | P1-09 / G-P1-09 | 现有入口偏模拟/内存状态，需真实相机或 adapter |
@@ -102,12 +102,12 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-09 | 相机/云台基础控制 | P 类负载、云台 | payload/camera/gimbal、DRC payload | 部分可用 | 拍照、录像、变焦、云台角度、云台速度基础命令可用 | Payload 专项 |
 | P1-10 | HMS 告警 | HMS 管理 | Dock3 `hms` | 已可用 | 告警 key、设备、级别、查询/清除和事件结构已通过 Ubuntu 专项；机巢故障/急停/错误码/心跳丢失到 HMS 的本地映射已补齐，真实 HMS 文案 key 和硬件故障源后续精校 | `mqtt_dock3_hms_log_test.py` |
 | P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 已可用 | 日志列表、上传模拟、进度事件和非法参数失败码已补齐；Ubuntu 专项已验证 `device_log_list_get` 返回日志列表和本次测试日志 | `mqtt_dock3_hms_log_test.py` |
-| P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 待实现 | 任务创建、进度、失败码、后台任务模型可用 | `mqtt_dock3_firmware_config_test.py` |
-| P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 待实现 | 配置下发、持久化、回滚、状态事件可用 | `mqtt_dock3_firmware_config_test.py` |
+| P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 已可用 | 任务创建、进度、取消、结果事件、失败码、后台任务模型已通过 Ubuntu 专项；真实 OTA adapter 后续优化 | `mqtt_dock3_firmware_config_test.py` |
+| P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 已可用 | 配置下发、查询、持久化、回滚、状态事件已通过 Ubuntu 专项；真实云端字段精校后续优化 | `mqtt_dock3_firmware_config_test.py` |
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 网关短周期数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、短周期遥测保留、近期告警保留和清理策略可用；全量历史统计和长期数据仓库归平台侧 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live/HMS/log 已通过专项，firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 已可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；E2E 已接入 takeoff-flow、media/live/HMS/log/firmware/config，服务器 11 段全量复测已通过 | `e2e_full_chain_test.py` |
 
 ## 5. P2 允许带问题但必须有边界
 
@@ -152,7 +152,7 @@ P2 可以在 30 天末保留问题，但不能空白、不能影响 P0/P1、不�
 | `python tools/mqtt_dock3_live_test.py --timeout 12` | P1 live |
 | `python tools/mqtt_dock3_hms_log_test.py --timeout 20` | P1 HMS/log |
 | `python tools/mqtt_dock3_firmware_config_test.py --timeout 20` | P1 firmware/config |
-| `python tools/e2e_takeoff_flow_test.py --timeout 60` | P1 一键启航 |
-| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；media/live/HMS/log 已由专项脚本覆盖，firmware/config 后续接入 |
+| `python tools/e2e_takeoff_flow_test.py --timeout 12` | P1 一键启航 |
+| `python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` | P0/P1 当前核心全链路；已接入 takeoff-flow、media/live/HMS/log/firmware/config，服务器 11 段全量复测已留证 |
 
 执行顺序和证据保存要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。

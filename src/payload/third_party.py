@@ -298,14 +298,31 @@ class ThirdPartyController:
         data = msg.get('data', {})
         payload_index = data.get('payload_index', 0)
         logger.info(f"Payload authority grab: index={payload_index}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "output": {"status": "ok"},
+                "authority": "payload",
+                "payload_index": payload_index,
+            },
+        )
 
     def handle_payload_authority_release(self, msg: dict) -> dict:
         """负载控制权释放"""
         data = msg.get('data', {})
         payload_index = data.get('payload_index', 0)
         logger.info(f"Payload authority release: index={payload_index}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "output": {"status": "ok"},
+                "authority": "payload",
+                "payload_index": payload_index,
+                "released": True,
+            },
+        )
 
     def handle_payload_status_query(self, msg: dict) -> dict:
         """负载状态查询"""

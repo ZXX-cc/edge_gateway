@@ -36,10 +36,20 @@ class Dock3CmdTest(unittest.TestCase):
 
         ok, _, _, errors = validate_action_payload(
             "battery_store_mode_switch",
-            {"action": 0},
+            {"action": 9},
         )
         self.assertFalse(ok)
         self.assertTrue(any("out of range" in error for error in errors))
+
+    def test_battery_store_accepts_link_script_action_zero(self):
+        ok, value, field, errors = validate_action_payload(
+            "battery_store_mode_switch",
+            {"action": 0},
+        )
+
+        self.assertTrue(ok, errors)
+        self.assertEqual(value, 1)
+        self.assertEqual(field, "action")
 
     def test_sdr_accepts_official_link_workmode_and_legacy_mode_alias(self):
         ok, value, field, errors = validate_action_payload(
@@ -57,6 +67,14 @@ class Dock3CmdTest(unittest.TestCase):
         self.assertTrue(ok, errors)
         self.assertEqual(value, 0)
         self.assertEqual(field, "mode")
+
+        ok, value, field, errors = validate_action_payload(
+            "sdr_workmode_switch",
+            {"action": 0},
+        )
+        self.assertTrue(ok, errors)
+        self.assertEqual(value, 0)
+        self.assertEqual(field, "action")
 
     def test_command_output_matches_dock3_status_shape(self):
         data = command_output(TASK_STATUS_OK, extra={"action": 1})

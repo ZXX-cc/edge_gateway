@@ -75,7 +75,7 @@ ACTION_SPECS: Dict[str, CommandActionSpec] = {
     "sdr_workmode_switch": CommandActionSpec(
         method="sdr_workmode_switch",
         field="link_workmode",
-        aliases=("mode",),
+        aliases=("mode", "action"),
         allowed_values=(0, 1),
         label="图传链路工作模式",
     ),
@@ -135,6 +135,13 @@ def validate_action_payload(method: str, data: Any) -> Tuple[bool, Optional[int]
         return False, None, used_field, [
             f"{method}.{used_field} must be int enum"
         ]
+
+    if method == "battery_store_mode_switch" and used_field == "action" and value == 0:
+        # Some Dock3 link-test scripts use action=0 to mean "disable storage
+        # mode / normal battery mode". The Dock3 property enum remains 1/2, so
+        # normalize the command value to 1 while accepting the compatibility
+        # payload instead of reporting an invalid command.
+        value = 1
 
     if value not in spec.allowed_set:
         allowed = ",".join(str(item) for item in sorted(spec.allowed_set))

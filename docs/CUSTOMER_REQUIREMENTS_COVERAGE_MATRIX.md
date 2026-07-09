@@ -100,7 +100,7 @@
 | 直播 | Dock3 live | 基础可用，真实推流 adapter 待补 |
 | 云台/相机 | Dock3 payload/camera/gimbal | 部分入口存在，真实链路待补 |
 | 媒体 + OSS 上传 | Dock3 media | 基础可用，真实 OSS/断点续传待补 |
-| HMS + 远程运维 | Dock3 hms/log/firmware/config | HMS/log 已通过 Ubuntu 专项，firmware/config 待迁移 |
+| HMS + 远程运维 | Dock3 hms/log/firmware/config | HMS/log、firmware/config 均已通过 Ubuntu 专项，真实 OTA/真实上传 adapter 后续补 |
 | PSDK | Dock3 psdk | 暂缓/占位 |
 | 高级能力 | WebRTC、GB28181、远程解禁等 | 后续分组补齐 |
 
@@ -129,13 +129,13 @@
 | 媒体管理 | 已可用 | 55% | 文件列表、删除、上传优先级和上传事件已通过专项；真实 OSS/断点续传待补 | `media` |
 | 直播 | 已可用 | 45% | mock 推流启动/停止、质量、镜头、状态事件已通过专项；真实 RTMP/WebRTC/GB28181 adapter 待补 | `live` |
 | HMS 告警 | 已可用 | 60% | HMS 告警查询/清除和事件已通过 Ubuntu 专项；机巢故障/急停/错误码/心跳丢失到 HMS 的本地映射已补齐，文案 key 和真实故障源待精校 | `hms` |
-| 固件升级 | 开发中 | 10% | 升级任务、进度、失败码、后台化待迁移 | `firmware` |
+| 固件升级 | 已可用 | 55% | 升级任务、进度、取消、结果事件、失败码已通过 Ubuntu 专项；真实 OTA adapter 待补 | `firmware` |
 | 远程日志 | 已可用 | 60% | 日志列表、上传模拟、取消、进度事件和失败码已通过 Ubuntu 专项；压缩和真实上传 adapter 待补 | `log` |
-| 配置更新 | 开发中 | 15% | 配置下发、持久化、回滚、事件待迁移 | `config` |
+| 配置更新 | 已可用 | 65% | 配置下发、查询、持久化、回滚、事件已通过 Ubuntu 专项；真实云端字段精校待补 | `config` |
 | 自定义飞行区/远程解禁/AirSense | 未覆盖到可用 | 5% | 文件、证书、缓存、生效逻辑待定义 | `custom-fly-region`、`flysafe`、`airsense` |
 | PSDK/ESDK 透传 | 未覆盖到可用 | 5% | 真实负载协议和透传契约待定义 | `psdk`、`psdk/esdk transmit` |
 
-当前总体判断：按“Ubuntu 服务器内 Dock3 模拟链路”口径，项目处于约 73% 基线；按客户全量业务能力口径，固件、配置、机巢状态机和一键启航仍是必须补齐项。
+当前总体判断：按“Ubuntu 服务器内 Dock3 模拟链路”口径，项目处于约 76% 基线；按客户全量业务能力口径，一键启航、机巢状态机、真实 OTA adapter 和真实 SITL 航点执行仍是必须补齐项。
 
 ## 7. P0/P1 可用与 100% 开发完成定义
 
@@ -159,16 +159,16 @@ P0/P1 是 30 天硬验收范围，不能用“总完成率 90%”掩盖 P0 或 P
 | Media 专项 | 已有 | `tools/mqtt_dock3_media_test.py` 已通过 Ubuntu 专项 |
 | Live 专项 | 已有 | `tools/mqtt_dock3_live_test.py` 已通过 Ubuntu 专项 |
 | HMS/Log 专项 | 已有 | `tools/mqtt_dock3_hms_log_test.py` 已通过 Ubuntu 专项 |
-| Firmware/Config 专项 | 缺失 | 新增 `tools/mqtt_dock3_firmware_config_test.py` |
+| Firmware/Config 专项 | 已有 | `tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale` 已通过 Ubuntu 专项 |
 | 机巢 v1.3 专项 | 部分已有 | `tools/nest_v13_protocol_test.py --verbose` 已覆盖离线协议基础、状态位和 HMS 映射，仍需网关 + 机巢模拟器实跑留证 |
-| 全链路 E2E | 已有 | `tools/e2e_full_chain_test.py` 已覆盖当前核心 MQTT 域；一键启航和 firmware/config 后续继续接入 |
+| 全链路 E2E | 已有 | `tools/e2e_full_chain_test.py` 已覆盖当前核心 MQTT 域并已接入 firmware/config；一键启航后续继续接入 |
 
 ## 9. 下一步优先级
 
 | 优先级 | 工作项 | 原因 |
 |---:|---|---|
-| 1 | 补齐 firmware/config | 客户运维闭环仍缺固件升级模拟、配置下发、持久化和回滚 |
-| 2 | 补齐一键启航 + 机巢 v1.3 状态机 | 起飞前检查、开盖、断充、释放、起飞、返航、降落、充电仍未形成可重复 E2E |
-| 3 | 打通 MAVLink/SITL 真实起飞、航线、返航状态 | 当前协议回包可用，但飞控真实行为闭环还不够 |
+| 1 | 补齐一键启航 + 机巢 v1.3 状态机 | 起飞前检查、开盖、断充、释放、起飞、返航、降落、充电仍未形成可重复 E2E |
+| 2 | 打通 MAVLink/SITL 真实起飞、航线、返航状态 | 当前协议回包可用，但飞控真实行为闭环还不够 |
+| 3 | 补真实 OTA adapter 和操作记录 | firmware/config 模拟闭环已通过，但真实下载、校验、刷写、备份和回滚仍需设备侧 adapter |
 | 4 | 补相机/云台真实控制和多设备/解绑/离线 | 客户文档把负载控制和设备拓扑列为网关侧责任 |
 | 5 | 非阻塞/NoSQL/证据归档 | 断网续传、短周期数据、日志压缩和操作记录需要稳定证据 |

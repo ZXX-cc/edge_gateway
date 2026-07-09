@@ -62,6 +62,7 @@ class DrcController:
         self._last_flyto_cmd = None
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
+        self._flight_authority_grabbed = False
 
         # MAVLink模块引用(由外部注入)
         self._mode_control = None
@@ -665,6 +666,20 @@ class DrcController:
     def handle_drc_heartbeat(self, msg: dict) -> dict:
         """Compatibility alias for older local tests."""
         return self.handle_drc_heart_beat(msg)
+
+    def handle_flight_authority_grab(self, msg: dict) -> dict:
+        """获取飞行控制权，供 Dock3 联调脚本验证控制链路。"""
+        self._flight_authority_grabbed = True
+        logger.info("Flight authority grabbed")
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                "output": {"status": "ok"},
+                "authority": "flight",
+                "flight_authority": 1,
+            },
+        )
 
     # ---- DRC实时控制 ----
 

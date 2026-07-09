@@ -58,7 +58,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Live 专项，已通过 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
 | `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
-| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media、live；HMS/log 已有专项证据 |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media、live、HMS/log、firmware/config |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须补齐：
@@ -70,8 +70,9 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 已通过 `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
 | Ubuntu 复测 `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/上传模拟、取消、失败码 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
-| `tools/e2e_takeoff_flow_test.py` | 一键启航：起飞前检查、机巢动作、起飞、任务、返航、降落、充电；`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
-| 扩展 `tools/e2e_full_chain_test.py` | 继续接入 HMS/log/firmware/config 等剩余 P1 域 | P1 |
+| `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：起飞前检查、机巢动作、起飞、任务、返航、降落、充电 | P1 |
+| `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
+| 扩展 `tools/e2e_full_chain_test.py` | 当前已接入 HMS/log/firmware/config，后续继续接一键启航 MQTT/SITL 证据 | P1 |
 
 ## 3. 启动前检查
 
@@ -239,8 +240,9 @@ python tools/nest_v13_protocol_test.py --timeout 12
 python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale
-python tools/mqtt_dock3_firmware_config_test.py --timeout 20
-python tools/e2e_takeoff_flow_test.py --simulate --timeout 60 --quiet-stale
+python tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale
+python tools/e2e_takeoff_flow_test.py --timeout 60
+python tools/mqtt_one_key_takeoff_flow_test.py --simulate --timeout 60 --quiet-stale
 python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
 ```
 
@@ -253,6 +255,7 @@ P1 通过标准：
 | Media | 文件列表、删除、上传优先级、上传事件可用 |
 | Live | 开始/停止直播、质量、镜头、状态事件可用；当前 Ubuntu 专项已通过 |
 | HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
+| Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
 | Firmware/Config | 升级模拟、进度、配置下发、持久化、回滚可用 |
 | 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、media 可重复通过；live 和 HMS/log 专项已通过 |
 | 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |

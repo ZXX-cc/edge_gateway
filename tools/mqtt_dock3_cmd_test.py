@@ -86,6 +86,7 @@ def run_switch_checks(client, args):
         ("alarm_state_switch", {"action": 0}, "alarm_state", 0),
         ("battery_store_mode_switch", {"action": 2}, "battery_store_mode", 2),
         ("battery_store_mode_switch", {"action": 1}, "battery_store_mode", 1),
+        ("battery_store_mode_switch", {"action": 0}, "battery_store_mode", 1),
     ]
 
     for method, data, prop_name, expected in cases:
@@ -110,11 +111,18 @@ def run_switch_checks(client, args):
     if rc != 0:
         return rc
 
+    rc, _ = client.request("sdr_workmode_switch", {"action": 1}, args.timeout)
+    if rc != 0:
+        return rc
+    rc = require_nested_property(client, args, "wireless_link", ["link_workmode"], 1)
+    if rc != 0:
+        return rc
+
     invalid_cases = [
         ("battery_maintenance_switch", {"action": 2}),
         ("air_conditioner_mode_switch", {"action": 9}),
         ("alarm_state_switch", {"action": 2}),
-        ("battery_store_mode_switch", {"action": 0}),
+        ("battery_store_mode_switch", {"action": 9}),
         ("sdr_workmode_switch", {"link_workmode": 9}),
     ]
     for method, data in invalid_cases:

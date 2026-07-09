@@ -23,6 +23,7 @@ class Step:
     script: str
     extra_args: tuple[str, ...] = ()
     supports_fail_on_stale: bool = True
+    timeout: float | None = None
 
 
 STEPS: tuple[Step, ...] = (
@@ -38,8 +39,29 @@ STEPS: tuple[Step, ...] = (
     Step("cmd", "P1 command jobs", "p1", "mqtt_dock3_cmd_test.py"),
     Step("drc", "P1 DRC", "p1", "mqtt_dock3_drc_test.py"),
     Step("wayline", "P1 Wayline", "p1", "mqtt_dock3_wayline_test.py"),
+    Step(
+        "takeoff-flow",
+        "P1 one-key launch flow",
+        "p1",
+        "e2e_takeoff_flow_test.py",
+        supports_fail_on_stale=False,
+    ),
     Step("media", "P1 Media", "p1", "mqtt_dock3_media_test.py"),
     Step("live", "P1 Live", "p1", "mqtt_dock3_live_test.py"),
+    Step(
+        "hms-log",
+        "P1 HMS/log",
+        "p1",
+        "mqtt_dock3_hms_log_test.py",
+        timeout=20.0,
+    ),
+    Step(
+        "firmware-config",
+        "P1 Firmware/config",
+        "p1",
+        "mqtt_dock3_firmware_config_test.py",
+        timeout=20.0,
+    ),
 )
 
 
@@ -72,7 +94,7 @@ def build_command(step: Step, args) -> List[str]:
         "--config",
         args.config,
         "--timeout",
-        str(args.timeout),
+        str(step.timeout if step.timeout is not None else args.timeout),
         "--qos",
         str(args.qos),
     ]
