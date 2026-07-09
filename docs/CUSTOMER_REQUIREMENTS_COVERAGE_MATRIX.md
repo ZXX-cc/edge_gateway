@@ -1,6 +1,6 @@
 # 客户需求覆盖矩阵
 
-更新时间：2026-07-07
+更新时间：2026-07-09
 
 本文档把客户提供的 Word 文档统一整理成当前项目的开发口径。最终交付目标不是继续实现 Dock1，而是把客户文档中的业务能力迁移到 **DJI Dock 3 上云 API** 语义下完成。
 
@@ -69,7 +69,7 @@
 | 直播 | Dock3 live | 基础可用，真实推流 adapter 待补 |
 | 云台/相机 | Dock3 payload/camera/gimbal | 部分入口存在，真实链路待补 |
 | 媒体 + OSS 上传 | Dock3 media | 基础可用，真实 OSS/断点续传待补 |
-| HMS + 远程运维 | Dock3 hms/log/firmware/config | HMS/log 代码和脚本已补，firmware/config 待迁移 |
+| HMS + 远程运维 | Dock3 hms/log/firmware/config | HMS/log 已通过 Ubuntu 专项，firmware/config 待迁移 |
 | PSDK | Dock3 psdk | 暂缓/占位 |
 | 高级能力 | WebRTC、GB28181、远程解禁等 | 后续分组补齐 |
 
@@ -97,14 +97,14 @@
 | 一键启航业务流 | 开发中 | 45% | 起飞前检查、舱盖/夹紧/充电/备飞/飞控串联待补 | `wayline` + `cmd` + `events` |
 | 媒体管理 | 已可用 | 55% | 文件列表、删除、上传优先级和上传事件已通过专项；真实 OSS/断点续传待补 | `media` |
 | 直播 | 已可用 | 45% | mock 推流启动/停止、质量、镜头、状态事件已通过专项；真实 RTMP/WebRTC/GB28181 adapter 待补 | `live` |
-| HMS 告警 | 部分可用 | 35% | HMS 告警查询/清除和事件代码已补；文案 key、真实故障源和 Ubuntu 专项待补 | `hms` |
+| HMS 告警 | 已可用 | 55% | HMS 告警查询/清除和事件已通过 Ubuntu 专项；文案 key 和真实故障源待精校 | `hms` |
 | 固件升级 | 开发中 | 10% | 升级任务、进度、失败码、后台化待迁移 | `firmware` |
-| 远程日志 | 部分可用 | 45% | 日志列表、上传模拟、取消、进度事件和失败码代码已补；压缩、真实上传和 Ubuntu 专项待补 | `log` |
+| 远程日志 | 已可用 | 60% | 日志列表、上传模拟、取消、进度事件和失败码已通过 Ubuntu 专项；压缩和真实上传 adapter 待补 | `log` |
 | 配置更新 | 开发中 | 15% | 配置下发、持久化、回滚、事件待迁移 | `config` |
 | 自定义飞行区/远程解禁/AirSense | 未覆盖到可用 | 5% | 文件、证书、缓存、生效逻辑待定义 | `custom-fly-region`、`flysafe`、`airsense` |
 | PSDK/ESDK 透传 | 未覆盖到可用 | 5% | 真实负载协议和透传契约待定义 | `psdk`、`psdk/esdk transmit` |
 
-当前总体判断：按“Ubuntu 服务器内 Dock3 模拟链路”口径，项目处于约 60% 基线；按客户全量业务能力口径，媒体、直播、HMS、固件、日志、配置、机巢状态机和一键启航仍是必须补齐项。
+当前总体判断：按“Ubuntu 服务器内 Dock3 模拟链路”口径，项目处于约 73% 基线；按客户全量业务能力口径，固件、配置、机巢状态机和一键启航仍是必须补齐项。
 
 ## 6. P0/P1 可用与 100% 开发完成定义
 
@@ -125,12 +125,12 @@ P0/P1 是 30 天硬验收范围，不能用“总完成率 90%”掩盖 P0 或 P
 |---|---|---|
 | P0 批量测试 | 已有 | 保留 `tools/mqtt_dock3_p0_batch_test.py`，清理旧回包后支持严格模式 |
 | Properties/Device/DRC/CMD/Wayline 专项 | 已有 | 作为当前已可用基线继续扩展 |
-| Media 专项 | 缺失 | 新增 `tools/mqtt_dock3_media_test.py` |
-| Live 专项 | 缺失 | 新增 `tools/mqtt_dock3_live_test.py` |
-| HMS/Log 专项 | 缺失 | 新增 `tools/mqtt_dock3_hms_log_test.py` |
+| Media 专项 | 已有 | `tools/mqtt_dock3_media_test.py` 已通过 Ubuntu 专项 |
+| Live 专项 | 已有 | `tools/mqtt_dock3_live_test.py` 已通过 Ubuntu 专项 |
+| HMS/Log 专项 | 已有 | `tools/mqtt_dock3_hms_log_test.py` 已通过 Ubuntu 专项 |
 | Firmware/Config 专项 | 缺失 | 新增 `tools/mqtt_dock3_firmware_config_test.py` |
 | 机巢 v1.3 专项 | 缺失 | 新增 `tools/nest_v13_protocol_test.py`，覆盖命令、拒绝条件、状态位 |
-| 全链路 E2E | 缺失 | 新增 `tools/e2e_full_chain_test.py`，覆盖上线到任务闭环 |
+| 全链路 E2E | 已有 | `tools/e2e_full_chain_test.py` 已覆盖当前核心 MQTT 域；一键启航和 firmware/config 后续继续接入 |
 
 ## 8. 下一步优先级
 

@@ -1,6 +1,6 @@
 # 全链路验收 Runbook
 
-更新时间：2026-07-07
+更新时间：2026-07-09
 
 本文档用于证明 Edge Gateway 按客户需求和 DJI Dock 3 口径完成全链路可用。它不是开发计划，而是验收执行手册。
 
@@ -57,7 +57,8 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
 | `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Live 专项，已通过 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
-| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media、live；HMS/log 待复测后接入 |
+| `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media、live；HMS/log 已有专项证据 |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须补齐：
@@ -118,6 +119,8 @@ BROKER_MODE=check scripts/start_support_stack.sh
 ```
 
 如果 `1883` 没有监听，按脚本输出的 `systemctl status`、`journalctl -u mosquitto`、配置文件行号、重复 `listener` 提示和前台 `mosquitto -c ... -v` 结果修复 Mosquitto。当前常见问题是 `/etc/mosquitto/conf.d/local.conf` 内配置项写错，或 `mosquitto.conf` 与 `conf.d/local.conf` 同时声明 `listener 1883/8084`。
+
+2026-07-09 Ubuntu 复测记录：宿主机 Mosquitto 曾因 `/etc/mosquitto/mosquitto.conf` 与 `/etc/mosquitto/conf.d/local.conf` 同时声明 `listener 1883/8084` 启动失败。删除主配置中的重复 listener 后，`scripts/start_support_stack.sh` 已验证启动成功：MQTT Broker 监听 `1883`，云端模拟器、MQTT 观察端和机巢模拟器均显示“已启动”，Web 观察台和 ArduCopter SITL 因 `START_WEB=0`、`START_SITL=0` 按配置跳过。
 
 ### 4.2 MQTT 观察终端
 
@@ -249,9 +252,9 @@ P1 通过标准：
 | 一键启航 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电可串联 |
 | Media | 文件列表、删除、上传优先级、上传事件可用 |
 | Live | 开始/停止直播、质量、镜头、状态事件可用；当前 Ubuntu 专项已通过 |
-| HMS/Log | 告警事件、日志列表、上传模拟、取消、失败码可用；当前代码和脚本已补，待 Ubuntu 专项复测 |
+| HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
 | Firmware/Config | 升级模拟、进度、配置下发、持久化、回滚可用 |
-| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、media 可重复通过；live 专项已通过，后续接入 HMS/log |
+| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、media 可重复通过；live 和 HMS/log 专项已通过 |
 | 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |
 
 ## 7. P2 验收边界

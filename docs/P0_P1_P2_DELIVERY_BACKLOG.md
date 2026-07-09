@@ -1,6 +1,6 @@
 # P0/P1/P2 交付 Backlog
 
-更新时间：2026-07-07
+更新时间：2026-07-09
 
 本文档把客户需求、当前项目状态和 Dock3 迁移目标整理成可执行 backlog。开发顺序必须按 **P0 -> P1 -> P2** 推进。
 
@@ -71,14 +71,14 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | P1-07 | 媒体基础 | 媒体管理 | Dock3 `media` | 已可用 | 文件列表、删除、上传优先级、上传事件已通过 Ubuntu 专项；真实 OSS 凭证和断点续传后续精校 | `mqtt_dock3_media_test.py` |
 | P1-08 | 直播基础 | 直播功能 | Dock3 `live` | 已可用 | 开始/停止直播、质量、镜头、能力查询、状态事件和非法参数拒绝已通过 Ubuntu 专项；真实 RTMP/WebRTC/GB28181 adapter 后续精校 | `mqtt_dock3_live_test.py` |
 | P1-09 | 相机/云台基础控制 | P 类负载、云台 | payload/camera/gimbal、DRC payload | 部分可用 | 拍照、录像、变焦、云台角度、云台速度基础命令可用 | Payload 专项 |
-| P1-10 | HMS 告警 | HMS 管理 | Dock3 `hms` | 部分可用 | 告警 key、设备、级别、查询/清除和事件结构已补代码与脚本；需 Ubuntu 专项复测后关项 | `mqtt_dock3_hms_log_test.py` |
-| P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 部分可用 | 日志列表、上传模拟、取消、进度事件和非法参数失败码已补代码与脚本；需 Ubuntu 专项复测后关项 | `mqtt_dock3_hms_log_test.py` |
+| P1-10 | HMS 告警 | HMS 管理 | Dock3 `hms` | 已可用 | 告警 key、设备、级别、查询/清除和事件结构已通过 Ubuntu 专项；真实 HMS 文案 key 和硬件故障源后续精校 | `mqtt_dock3_hms_log_test.py` |
+| P1-11 | 远程日志 | 运维流程 | Dock3 `log` | 已可用 | 日志列表、上传模拟、进度事件和非法参数失败码已补齐；Ubuntu 专项已验证 `device_log_list_get` 返回日志列表和本次测试日志 | `mqtt_dock3_hms_log_test.py` |
 | P1-12 | 固件升级模拟 | OTA | Dock3 `firmware` | 待实现 | 任务创建、进度、失败码、后台任务模型可用 | `mqtt_dock3_firmware_config_test.py` |
 | P1-13 | 配置更新 | 配置管理 | Dock3 `config` | 待实现 | 配置下发、持久化、回滚、状态事件可用 | `mqtt_dock3_firmware_config_test.py` |
 | P1-14 | 多设备/解绑/离线 | 设备管理 | `device`、`organization`、`update_topo` | 部分可用 | 多子设备、解绑、离线、重连不破坏拓扑状态 | Device/Organization 专项 |
 | P1-15 | 远程调试进阶失败码 | CMD | Dock3 `cmd` | 部分可用 | 真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3 | CMD 专项 |
 | P1-16 | 数据保留和操作记录 | 运维/审计 | DB、trace、retention | 部分可用 | 操作记录、遥测保留、告警保留和清理策略可用 | DB/日志专项 |
-| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live 已通过专项，HMS/log 已有专项脚本待复测并接入 E2E，firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
+| P1-17 | P0/P1 E2E 回归 | 全链路可用性 | 全模块 | 部分可用 | 当前已迁移 P0/P1 核心 MQTT 域可一键回归；media/live/HMS/log 已通过专项，firmware/config 完成后继续接入 | `e2e_full_chain_test.py` |
 
 ## 4. P2 允许带问题但必须有边界
 

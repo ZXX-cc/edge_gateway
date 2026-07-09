@@ -790,7 +790,7 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | Media / Live | 13 | 已路由，media/live 基础专项已通过；真实上传和真实推流 adapter 待精校 |
 | DRC | 24 | P0 覆盖 `drc_mode_enter`、`drc_mode_exit`；`tools/mqtt_dock3_drc_test.py` 已通过 Ubuntu 专项复测，覆盖官方 DRC 字段和值域；旧批量工具覆盖兼容控制数据 |
 | Dock | 8 | P0 覆盖 `dock_status_query`；新增 `mqtt_dock3_osd_state_test.py` 覆盖 Dock3 机场 OSD 基础结构，字段枚举仍待精校 |
-| Log | 3 | 已路由，HMS/log 基础代码和专项脚本已补；Ubuntu 复测和压缩/真实上传待补 |
+| Log | 3 | 已路由，HMS/log 基础专项已通过 Ubuntu 复测；压缩和真实上传 adapter 待补 |
 | FlySafe | 3 | 已路由，暂缓 |
 | Flight Area | 2 | 已路由，待 `custom-fly-region.html` 校验 |
 | Custom Data | 4 | 已路由，暂缓 |
