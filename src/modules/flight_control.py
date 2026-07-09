@@ -517,6 +517,13 @@ class FlightControl(BaseModule):
 
         return basic_modes + auto_modes + quadplane_modes + special_modes
 
+    def _first_available_mode(self, candidates: list[str]) -> Optional[str]:
+        """Return the first mode supported by the active vehicle profile."""
+        for mode in candidates:
+            if mode in self.mode_mapping:
+                return mode
+        return None
+
     def get_current_mode(self) -> Dict:
         """✅ 获取当前模式（统一接口）"""
         return {
@@ -579,12 +586,20 @@ class FlightControl(BaseModule):
             "altitude": takeoff_altitude
         })
 
-        # 步骤3: 切换到TAKEOFF模式
-        self.log("步骤3: 切换到TAKEOFF模式...")
-        mode_result = self.set_mode("TAKEOFF")
+        # 步骤3: 切换到起飞可用模式。ArduCopter 使用 GUIDED + NAV_TAKEOFF，
+        # ArduPlane/QuadPlane 可优先使用 TAKEOFF。
+        takeoff_mode = self._first_available_mode(["TAKEOFF", "GUIDED"])
+        if not takeoff_mode:
+            result["message"] = f"当前机型不支持起飞模式，profile={self.mode_profile}"
+            result["steps"].append({"step": "set_takeoff_mode", "status": "failed", "reason": "unsupported_mode"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        self.log(f"步骤3: 切换到{takeoff_mode}模式...")
+        mode_result = self.set_mode(takeoff_mode)
 
         if not mode_result["success"]:
-            result["message"] = mode_result["message"]
+            result["message"] = f"切换{takeoff_mode}模式失败: {mode_result['message']}"
             result["steps"].append({"step": "set_takeoff_mode", "status": "failed"})
             self.log(result["message"], "ERROR")
             return result
@@ -592,6 +607,7 @@ class FlightControl(BaseModule):
         result["steps"].append({
             "step": "set_takeoff_mode",
             "status": "completed",
+            "mode": takeoff_mode,
             "elapsed_time": mode_result.get("elapsed_time", 0)
         })
 
@@ -781,12 +797,19 @@ class FlightControl(BaseModule):
             "altitude": altitude
         }
 
-        # 步骤1: 切换到TAKEOFF模式
-        self.log("步骤1: 切换到TAKEOFF模式...")
-        mode_result = self.set_mode("TAKEOFF")
+        # 步骤1: 切换到起飞可用模式
+        takeoff_mode = self._first_available_mode(["TAKEOFF", "GUIDED"])
+        if not takeoff_mode:
+            result["message"] = f"当前机型不支持起飞模式，profile={self.mode_profile}"
+            result["steps"].append({"step": "set_takeoff_mode", "status": "failed", "reason": "unsupported_mode"})
+            self.log(result["message"], "ERROR")
+            return result
+
+        self.log(f"步骤1: 切换到{takeoff_mode}模式...")
+        mode_result = self.set_mode(takeoff_mode)
 
         if not mode_result["success"]:
-            result["message"] = f"切换TAKEOFF模式失败: {mode_result['message']}"
+            result["message"] = f"切换{takeoff_mode}模式失败: {mode_result['message']}"
             result["steps"].append({"step": "set_takeoff_mode", "status": "failed"})
             self.log(result["message"], "ERROR")
             return result
@@ -794,6 +817,7 @@ class FlightControl(BaseModule):
         result["steps"].append({
             "step": "set_takeoff_mode",
             "status": "completed",
+            "mode": takeoff_mode,
             "elapsed_time": mode_result.get("elapsed_time", 0)
         })
 
@@ -817,7 +841,7 @@ class FlightControl(BaseModule):
         })
 
         result["success"] = True
-        result["message"] = f"起飞成功！已切换到TAKEOFF模式，目标高度: {altitude}m"
+        result["message"] = f"起飞成功！已切换到{takeoff_mode}模式，目标高度: {altitude}m"
         self.log(result["message"])
 
         return result
@@ -833,8 +857,14 @@ class FlightControl(BaseModule):
 
         result = {"success": False, "message": "", "target_system": self.target_system}
 
-        # 切换到LAND模式
-        mode_result = self.set_mode("QLAND")
+        # ArduCopter 使用 LAND；QuadPlane/Plane 有 QLAND 时优先使用 QLAND。
+        landing_mode = self._first_available_mode(["QLAND", "LAND"])
+        if not landing_mode:
+            result["message"] = f"当前机型不支持降落模式，profile={self.mode_profile}"
+            self.log(result["message"], "ERROR")
+            return result
+
+        mode_result = self.set_mode(landing_mode)
 
         if not mode_result["success"]:
             result["message"] = mode_result["message"]
@@ -842,7 +872,8 @@ class FlightControl(BaseModule):
             return result
 
         result["success"] = True
-        result["message"] = "降落命令已发送，飞机将在当前位置降落"
+        result["mode"] = landing_mode
+        result["message"] = f"降落命令已发送，飞机将在当前位置降落（{landing_mode}）"
         self.log(result["message"])
 
         return result

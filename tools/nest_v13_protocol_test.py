@@ -208,6 +208,12 @@ def run(verbose: bool = False) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate nest v1.3 MAVLink protocol adapter offline")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Accepted for runbook compatibility; offline checks do not need a timeout.",
+    )
     args = parser.parse_args()
     try:
         return run(verbose=args.verbose)
