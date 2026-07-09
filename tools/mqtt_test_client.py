@@ -170,9 +170,12 @@ class MqttRequestClient:
         self.connected_event = Event()
         self.connect_rc: Optional[int] = None
         self.pending: dict[str, dict[str, Any]] = {}
+        self.completed_tids: set[str] = set()
         self.stats = {
             "accepted": 0,
             "ignored_late": 0,
+            "ignored_duplicate": 0,
+            "ignored_unknown": 0,
             "ignored_mismatched": 0,
             "ignored_legacy": 0,
             "ignored_wrong_topic": 0,
@@ -245,10 +248,18 @@ class MqttRequestClient:
         tid = payload.get("tid") if isinstance(payload, dict) else None
         waiter = self.pending.get(tid)
         if not waiter:
-            self.stats["ignored_late"] += 1
+            self._record_late_reply(tid)
             if not self.quiet_stale:
                 method = payload.get("method") if isinstance(payload, dict) else None
-                print(f"ignored <- {msg.topic}, method={method}, tid={tid}")
+                category = "duplicate" if tid in self.completed_tids else "unknown"
+                print(f"ignored {category} reply <- {msg.topic}, method={method}, tid={tid}")
+            return
+
+        if waiter["event"].is_set():
+            self._record_late_reply(tid, duplicate=True)
+            if not self.quiet_stale:
+                method = payload.get("method") if isinstance(payload, dict) else None
+                print(f"ignored duplicate reply while pending <- {msg.topic}, method={method}, tid={tid}")
             return
 
         expected_topic = waiter["expected_topic"]
@@ -340,21 +351,25 @@ class MqttRequestClient:
         if not need_reply:
             if waiter["event"].wait(timeout):
                 self.pending.pop(tid, None)
+                self._mark_completed_tid(tid)
                 payload = waiter["payload"]
                 print(f"{method} unexpectedly received reply for no-reply request", file=sys.stderr)
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return 8, payload
             self.pending.pop(tid, None)
+            self._mark_completed_tid(tid)
             if verbose:
                 print(f"no reply observed as expected: method={method}, tid={tid}")
             return 0, None
 
         if not waiter["event"].wait(timeout):
             self.pending.pop(tid, None)
+            self._mark_completed_tid(tid)
             print(f"timeout waiting for {method}, tid={tid}", file=sys.stderr)
             return 2, None
 
         self.pending.pop(tid, None)
+        self._mark_completed_tid(tid)
         payload = waiter["payload"]
         if verbose:
             print(f"received <- {waiter['topic']}, method={payload.get('method')}, tid={tid}")
@@ -471,6 +486,16 @@ class MqttRequestClient:
 
     def publish_json(self, topic: str, payload: dict) -> None:
         return self.client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=self.qos)
+
+    def _mark_completed_tid(self, tid: str) -> None:
+        self.completed_tids.add(tid)
+
+    def _record_late_reply(self, tid: Optional[str], duplicate: bool = False) -> None:
+        self.stats["ignored_late"] += 1
+        if duplicate or tid in self.completed_tids:
+            self.stats["ignored_duplicate"] += 1
+        else:
+            self.stats["ignored_unknown"] += 1
 
     def stale_total(self) -> int:
         return (

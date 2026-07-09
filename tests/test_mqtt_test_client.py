@@ -249,6 +249,52 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertFalse(self.client.pending[self.tid]["event"].is_set())
         self.assertEqual(self.client.stats["ignored_legacy"], 1)
 
+    def test_completed_tid_reply_is_counted_as_duplicate(self):
+        self.client.pending.clear()
+        self.client._mark_completed_tid(self.tid)
+        payload = {
+            "tid": self.tid,
+            "method": "dock_status_query",
+            "gateway": "EDGEGW001",
+            "data": {"result": 0},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.reply_topic, payload))
+
+        self.assertEqual(self.client.stats["ignored_late"], 1)
+        self.assertEqual(self.client.stats["ignored_duplicate"], 1)
+        self.assertEqual(self.client.stats["ignored_unknown"], 0)
+
+    def test_unknown_tid_reply_is_counted_as_unknown_late(self):
+        self.client.pending.clear()
+        payload = {
+            "tid": "unknown-tid",
+            "method": "dock_status_query",
+            "gateway": "EDGEGW001",
+            "data": {"result": 0},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.reply_topic, payload))
+
+        self.assertEqual(self.client.stats["ignored_late"], 1)
+        self.assertEqual(self.client.stats["ignored_duplicate"], 0)
+        self.assertEqual(self.client.stats["ignored_unknown"], 1)
+
+    def test_second_reply_while_pending_is_counted_as_duplicate(self):
+        self.client.pending[self.tid]["event"].set()
+        payload = {
+            "tid": self.tid,
+            "method": "dock_status_query",
+            "gateway": "EDGEGW001",
+            "data": {"result": 0},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.reply_topic, payload))
+
+        self.assertEqual(self.client.stats["ignored_late"], 1)
+        self.assertEqual(self.client.stats["ignored_duplicate"], 1)
+        self.assertEqual(self.client.stats["ignored_unknown"], 0)
+
     def test_expected_status_ignores_legacy_reply_without_output_status(self):
         self.client.pending[self.tid]["expected_status"] = "ok"
         legacy = {

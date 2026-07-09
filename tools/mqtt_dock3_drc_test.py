@@ -421,10 +421,12 @@ def main():
         stale_total = client.stale_total()
         if args.fail_on_stale and stale_total:
             print(
-                "stale duplicate replies observed "
+                "stale/duplicate replies observed "
                 f"(ignored_mismatched={client.stats['ignored_mismatched']}, "
                 f"ignored_legacy={client.stats['ignored_legacy']}, "
                 f"ignored_late={client.stats['ignored_late']}, "
+                f"ignored_duplicate={client.stats['ignored_duplicate']}, "
+                f"ignored_unknown={client.stats['ignored_unknown']}, "
                 f"ignored_wrong_topic={client.stats['ignored_wrong_topic']})",
                 file=sys.stderr,
             )
@@ -437,6 +439,8 @@ def main():
             f"ignored_mismatched={client.stats['ignored_mismatched']}, "
             f"ignored_legacy={client.stats['ignored_legacy']}, "
             f"ignored_late={client.stats['ignored_late']}, "
+            f"ignored_duplicate={client.stats['ignored_duplicate']}, "
+            f"ignored_unknown={client.stats['ignored_unknown']}, "
             f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
             f"ignored_total={stale_total})"
         )
