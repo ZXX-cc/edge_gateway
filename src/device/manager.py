@@ -284,6 +284,7 @@ class DeviceManager:
                 '4g_link_state': 0,
                 'sdr_link_state': 0,
                 'link_workmode': 0,
+                'sim_slot': 0,
                 'sdr_quality': 0,
                 '4g_quality': 0,
                 '4g_uav_quality': 0,
@@ -291,6 +292,7 @@ class DeviceManager:
                 'sdr_freq_band': 0.0,
                 '4g_freq_band': 0.0,
             },
+            'esim': {'activated': 0, 'operator': 0, 'status': 'inactive'},
 
             # ---- 直播/媒体属性 (pushMode=1, 部分可写) ----
             'air_transfer_enable': False,    # rw: 空中回传
@@ -1967,11 +1969,58 @@ class DeviceManager:
         wireless['link_workmode'] = mode
         self.update_properties({'wireless_link': wireless})
         logger.info("SDR workmode switch: %s=%s", used_field, mode)
+        extra = {'link_workmode': mode}
+        if used_field in {'action', 'mode'}:
+            extra[used_field] = mode
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
+
+    def handle_sim_slot_switch(self, msg: dict) -> dict:
+        """SIM/eSIM 卡槽切换，模拟记录当前卡槽。"""
+        data = msg.get('data', {})
+        sim_slot = data.get('sim_slot', data.get('slot', 0))
+        if not isinstance(sim_slot, int) or isinstance(sim_slot, bool) or sim_slot not in (0, 1):
+            return self._reject_cmd(msg, "sim_slot_switch.sim_slot out of range, allowed: 0,1")
+
+        wireless = self._properties.get('wireless_link', {}).copy()
+        wireless['sim_slot'] = sim_slot
+        self.update_properties({'wireless_link': wireless})
+        logger.info("SIM slot switch: sim_slot=%s", sim_slot)
         return self._build_cmd_reply(
             msg,
             result=0,
             status=TASK_STATUS_OK,
-            extra={'link_workmode': mode},
+            extra={'sim_slot': sim_slot},
+        )
+
+    def handle_esim_activate(self, msg: dict) -> dict:
+        """eSIM 激活模拟入口，避免联调脚本被误判为未知指令。"""
+        esim = self._properties.get('esim', {}).copy()
+        esim.update({'activated': 1, 'status': 'activated'})
+        self.update_properties({'esim': esim})
+        logger.info("eSIM activate simulated")
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'activated': 1, 'simulation_mode': True},
+        )
+
+    def handle_esim_operator_switch(self, msg: dict) -> dict:
+        """eSIM 运营商切换模拟入口。"""
+        data = msg.get('data', {})
+        operator = data.get('operator', 0)
+        if not isinstance(operator, int) or isinstance(operator, bool) or operator < 0:
+            return self._reject_cmd(msg, "esim_operator_switch.operator must be non-negative int")
+
+        esim = self._properties.get('esim', {}).copy()
+        esim.update({'operator': operator, 'status': 'operator_switched'})
+        self.update_properties({'esim': esim})
+        logger.info("eSIM operator switch: operator=%s", operator)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'operator': operator, 'simulation_mode': True},
         )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
@@ -2066,7 +2115,10 @@ class DeviceManager:
             return self._reject_cmd(msg, "; ".join(errors))
         self.update_properties({'battery_store_mode': action})
         logger.info(f"Battery store mode: {action}")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
+        extra = {'action': data.get('action', action), 'battery_store_mode': action}
+        if data.get('action') != action:
+            extra['normalized_action'] = action
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
 
     # ========== API处理器：RTK/降落点 ==========
 
@@ -2100,6 +2152,29 @@ class DeviceManager:
         logger.info(f"RTK ref points set: {len(points)} points")
         # TODO: 持久化到配置文件
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_rtk_calibration(self, msg: dict) -> dict:
+        """一键 RTK 标定模拟入口。"""
+        data = msg.get('data', {})
+        devices = data.get('devices', [])
+        if devices is None:
+            devices = []
+        if not isinstance(devices, list):
+            return self._reject_cmd(msg, "rtk_calibration.devices must be array")
+
+        self.update_properties({'mode_code': 5})
+        self._notify_cmd_progress('rtk_calibration')
+        logger.info("RTK calibration simulated: devices=%s", len(devices))
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={
+                'calibration_status': 'started',
+                'devices_count': len(devices),
+                'simulation_mode': True,
+            },
+        )
 
     def handle_rtk_ref_points_query(self, msg: dict) -> dict:
         """RTK参考点查询"""
