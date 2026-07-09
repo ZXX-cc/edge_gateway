@@ -53,7 +53,7 @@
 | G-P0-05 | P0-13 机巢关键状态 | `boolstate1/boolstate2`、舱盖、夹紧、充电、急停、故障、备飞已有专项覆盖；本地已补机巢状态到 Dock3 state/HMS/dock_operation 的桥接，真实 Dock3 枚举和 Ubuntu 机巢实跑证据仍需补齐 | `src/device/nest_property_mapper.py`, `src/device/nest_hms_mapper.py`, `src/device/manager.py`, `src/cloud_api/dock3_cmd.py`, `tools/nest_v13_protocol_test.py` | `nest_v13_protocol_test.py --verbose` + `mqtt_dock3_cmd_test.py` + 网关/机巢实跑 HMS/operation evidence | Day 8-11 | In Progress |
 | G-P0-06 | P0-15 Request Trace | Ubuntu properties 专项后 trace 断言已通过，能按 method 汇总 `mqtt_received/mqtt_handler_completed/mqtt_publish_reply`，并统计 Dock3 property/set 逐属性 `result=0/1` | `src/mqtt/client.py`, `src/cloud_api/connection_manager.py`, `src/utils/request_trace.py`, `tools/request_trace_query.py` | 后续全链路 E2E 保存 trace 证据 | Day 4-10 | Closed |
 | G-P0-07 | P0-16 非阻塞主链路 | 网关侧 DB、文件、媒体、日志、固件等路径需要系统性审计，缺自动化卡顿/超时验证；平台长期统计和数据仓库不纳入此缺口 | `src/database/*`, `src/media/manager.py`, `src/modules/log_manager.py`, `src/device/manager.py` | E2E 压测和超时注入 | Day 8-15 | Open |
-| G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段已通过服务器全量复测，输出 `dock3 e2e full-chain test ok (steps=11, elapsed=16.2s)` | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_shared.py` | 后续保留严格 `--fail-on-stale` 环境复测 | Day 25-27 | Closed |
+| G-P0-08 | P0-17 全链路最小闭环 | 当前核心 MQTT 域已有一键 E2E：properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段已通过服务器全量复测；`--fail-on-stale` 已覆盖 OSD/state 旧样本统计 | `tools/e2e_full_chain_test.py`, `tools/mqtt_test_client.py`, `tools/mqtt_dock3_osd_state_test.py` | 后续执行服务器严格 `--fail-on-stale` 环境复测 | Day 25-27 | Closed |
 
 ## 3. P1 缺口
 
@@ -75,7 +75,7 @@
 | G-P1-14 | P1-14 多设备/解绑/离线 | 当前单子设备拓扑、组织绑定、绑定后 `device_binding/update_topo` 和 `status_reply` 已通过；仍需多子设备、解绑、离线、重连回归 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py` | 扩展 `tools/mqtt_dock3_device_test.py` 和 `tools/mqtt_organization_test.py` | Day 21-24 | In Progress |
 | G-P1-15 | P1-15 CMD 进阶失败码 | CMD 基础已通过，但真实耗时、失败码、安全拒绝和任务进度需更贴近 Dock3 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 扩展 `tools/mqtt_dock3_cmd_test.py` | Day 21-24 | Needs Test |
 | G-P1-16 | P1-16 网关短周期数据保留和操作记录 | 操作记录、短周期遥测保留、近期告警保留和清理策略有基础，但缺 P1 验收证据；全量历史归档、统计报表和长期数据仓库属于平台侧 | `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
-| G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已通过 Ubuntu 的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py` 已接入 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；服务器全量 E2E 已通过 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 后续补严格 `--fail-on-stale` 环境并保存证据 | Day 25-27 | Closed |
+| G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已通过 Ubuntu 的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py` 已接入 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；服务器全量 E2E 已通过，严格 stale 参数已覆盖 OSD/state 阶段 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 后续执行服务器严格 `--fail-on-stale` 环境并保存证据 | Day 25-27 | Closed |
 
 ## 4. 缺失脚本优先级
 

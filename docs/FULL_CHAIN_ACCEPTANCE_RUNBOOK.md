@@ -58,10 +58,10 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Live 专项，已通过 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
 | `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
-| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、media、live、HMS/log、firmware/config |
+| `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
-30 天内必须补齐：
+30 天内必须可重复验收：
 
 | 脚本 | 必须覆盖 | 优先级 |
 |---|---|---|
@@ -70,9 +70,9 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 已通过 `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
 | Ubuntu 复测 `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/上传模拟、取消、失败码 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
-| `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：起飞前检查、机巢动作、起飞、任务、返航、降落、充电 | P1 |
+| 已通过 `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：mock KMZ、机巢 `request_takeoff`、任务完成事件 | P1 |
 | `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
-| 扩展 `tools/e2e_full_chain_test.py` | 当前已接入 HMS/log/firmware/config，后续继续接一键启航 MQTT/SITL 证据 | P1 |
+| 已通过 `tools/e2e_full_chain_test.py` | 11 段 P0/P1 全链路；清理旧进程后继续用 `--fail-on-stale` 做严格验收 | P1 |
 
 ## 3. 启动前检查
 
@@ -233,15 +233,15 @@ P0 通过标准：
 
 ## 6. P1 验收
 
-P1 当前部分脚本尚未实现。30 天交付前必须补齐，并纳入同一 runbook。
+P1 当前基础验收入口已补齐。真实硬件、真实推流、真实 OTA 和真实 SITL 航点执行仍按风险项继续推进。
 
 ```bash
-python tools/nest_v13_protocol_test.py --timeout 12
+python tools/nest_v13_protocol_test.py --verbose
 python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale
 python tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale
-python tools/e2e_takeoff_flow_test.py --timeout 60
+python tools/e2e_takeoff_flow_test.py --timeout 12
 python tools/mqtt_one_key_takeoff_flow_test.py --simulate --timeout 60 --quiet-stale
 python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale
 ```
@@ -251,14 +251,24 @@ P1 通过标准：
 | 检查项 | 通过条件 |
 |---|---|
 | 机巢 v1.3 | 命令、应答、状态、拒绝条件、关键 bit 位全部可测 |
-| 一键启航 | 起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电可串联 |
+| 一键启航 | 当前离线闭环已覆盖 mock KMZ、任务准备、任务执行、机巢 `request_takeoff` 和任务完成事件；真实机巢耗时动作继续实跑 |
 | Media | 文件列表、删除、上传优先级、上传事件可用 |
 | Live | 开始/停止直播、质量、镜头、状态事件可用；当前 Ubuntu 专项已通过 |
 | HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
-| Firmware/Config | 升级模拟、进度、配置下发、持久化、回滚可用 |
-| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、media 可重复通过；live 和 HMS/log 专项已通过 |
-| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过 |
+| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复通过 |
+| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器已输出 `dock3 e2e full-chain test ok (steps=11, elapsed=16.2s)` |
+
+## 6.1 严格旧消息验收
+
+日常联调用 `--quiet-stale` 保持脚本输出简洁；清理旧网关、旧 Web 调试台、旧模拟器和 broker retained 消息后，执行严格验收：
+
+```bash
+python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale --fail-on-stale
+python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale --fail-on-stale
+```
+
+严格模式中，`osd-state` 会把旧版 value-wrapper OSD、旧 `reason=property_changed` state、无关 state 和旧 reply 一起计入 stale。出现任何 stale 都应先清理环境，再重新执行。
 
 ## 7. P2 验收边界
 

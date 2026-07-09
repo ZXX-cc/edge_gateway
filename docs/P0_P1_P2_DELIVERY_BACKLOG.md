@@ -83,7 +83,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-14 | 错误码边界 | DJI 错误码、异常分支 | `services_reply`、`property/set_reply`、`drc/up` | 已可用 | 对外不暴露内部负数；未知 method、topic 错误、参数错误有官方码 | `tests/test_dji_error_codes.py` |
 | P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | 已可用 | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；properties 专项后 trace 已能统计三段事件和 `result=0/1` | `request_trace_query.py`、Ubuntu trace 断言通过 |
 | P0-16 | 非阻塞主链路 | 第六章技术栈和风险 | MQTT/MAVLink/DB/文件后台化 | 部分可用 | MQTT 回调、MAVLink 接收、状态机不得被 DB、文件、上传、压缩、升级阻塞 | 代码审计 + E2E 压测 |
-| P0-17 | 全链路最小闭环 | 业务流程全景 | 上线 -> 绑定 -> 拓扑 -> OSD -> 控制 -> 任务 -> 事件 | 已可用 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已串联 properties、device、OSD/state、CMD、DRC、Wayline，6 段全部通过且 `ignored_total=0` | `e2e_full_chain_test.py` |
+| P0-17 | 全链路最小闭环 | 业务流程全景 | 上线 -> 绑定 -> 拓扑 -> OSD -> 控制 -> 任务 -> 事件 | 已可用 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器串联 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段并通过；OSD/state 已纳入 `--fail-on-stale` 严格门禁 | `e2e_full_chain_test.py` |
 
 ## 4. P1 必须可用
 

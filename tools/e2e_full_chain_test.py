@@ -34,7 +34,6 @@ STEPS: tuple[Step, ...] = (
         "P0 OSD/state",
         "p0",
         "mqtt_dock3_osd_state_test.py",
-        supports_fail_on_stale=False,
     ),
     Step("cmd", "P1 command jobs", "p1", "mqtt_dock3_cmd_test.py"),
     Step("drc", "P1 DRC", "p1", "mqtt_dock3_drc_test.py"),

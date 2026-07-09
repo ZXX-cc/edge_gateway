@@ -275,10 +275,20 @@ class Dock3OsdStateClient(MqttRequestClient):
             observe_topics={self.dock_osd_topic, self.drone_osd_topic, self.state_topic},
             mqtt_module=mqtt_module,
         )
+        self.stats["ignored_observed_legacy"] = 0
+
+    def stale_total(self) -> int:
+        return super().stale_total() + int(self.stats.get("ignored_observed_legacy", 0))
 
     def _record_invalid(self, topic: str, errors: List[str], payload: Any) -> None:
         preview = json.dumps(payload, ensure_ascii=False)[:500]
         self.invalid_samples.append(f"{topic}: {'; '.join(errors)}; payload={preview}")
+
+    def _record_ignored_legacy(self, topic: str, reason: str, payload: Any) -> None:
+        self.stats["ignored_observed_legacy"] += 1
+        if not self.quiet_stale:
+            tid = payload.get("tid") if isinstance(payload, dict) else None
+            print(f"ignored legacy observed sample <- {topic}, reason={reason}, tid={tid}")
 
     def _handle_invalid_json(self, topic: str, exc: Exception) -> None:
         if topic in self.observed_topics:
@@ -302,7 +312,7 @@ class Dock3OsdStateClient(MqttRequestClient):
             if topic == self.dock_osd_topic:
                 errors = validate_dock_osd(payload, self.sn)
                 if errors and is_ignorable_legacy_osd(payload, errors):
-                    pass
+                    self._record_ignored_legacy(topic, "legacy_value_wrapped_osd", payload)
                 elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
@@ -312,7 +322,7 @@ class Dock3OsdStateClient(MqttRequestClient):
             elif topic == self.drone_osd_topic:
                 errors = validate_drone_osd(payload, self.sn)
                 if errors and is_ignorable_legacy_osd(payload, errors):
-                    pass
+                    self._record_ignored_legacy(topic, "legacy_value_wrapped_osd", payload)
                 elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
@@ -325,7 +335,7 @@ class Dock3OsdStateClient(MqttRequestClient):
                     all(error.startswith("ignored state ") for error in errors)
                     or is_ignorable_legacy_state(payload, errors)
                 ):
-                    pass
+                    self._record_ignored_legacy(topic, "legacy_or_irrelevant_state", payload)
                 elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
@@ -370,7 +380,10 @@ class Dock3OsdStateClient(MqttRequestClient):
 
     def print_summary(self) -> None:
         dock_count, drone_count, state_count = self.counts()
-        print(f"dock_osd={dock_count}, drone_osd={drone_count}, state={state_count}, invalid={len(self.invalid_samples)}")
+        print(
+            f"dock_osd={dock_count}, drone_osd={drone_count}, state={state_count}, "
+            f"invalid={len(self.invalid_samples)}, ignored_legacy={self.stats.get('ignored_observed_legacy', 0)}"
+        )
         if self.valid_dock_osd:
             data = self.valid_dock_osd[-1].get("data", {})
             summary = {
@@ -439,6 +452,7 @@ def main() -> int:
     parser.add_argument("--state-property", default="silent_mode")
     parser.add_argument("--allow-invalid", action="store_true", help="Do not fail when invalid samples are observed before valid samples.")
     parser.add_argument("--quiet-stale", action="store_true")
+    parser.add_argument("--fail-on-stale", action="store_true", help="Fail if legacy/irrelevant OSD or state samples are observed.")
     parser.add_argument("--gateway-domain", default="3")
     parser.add_argument("--gateway-type", type=int, default=2)
     parser.add_argument("--gateway-sub-type", type=int, default=0)
@@ -497,6 +511,16 @@ def main() -> int:
                 print(f"invalid sample: {sample}", file=sys.stderr)
             print("invalid osd/state samples observed", file=sys.stderr)
             return 5
+
+        stale_total = client.stale_total()
+        if args.fail_on_stale and stale_total:
+            print(
+                "stale osd/state samples observed "
+                f"(ignored_legacy={client.stats.get('ignored_observed_legacy', 0)}, "
+                f"ignored_reply_stale={stale_total - int(client.stats.get('ignored_observed_legacy', 0))})",
+                file=sys.stderr,
+            )
+            return 6
 
         client.print_summary()
         print("dock3 osd/state test ok")

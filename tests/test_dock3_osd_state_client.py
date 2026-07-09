@@ -175,6 +175,8 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.counts(), (0, 0, 0))
         self.assertEqual(self.client.invalid_samples, [])
         self.assertEqual(self.client.observed_count(self.client.state_topic), 1)
+        self.assertEqual(self.client.stats["ignored_observed_legacy"], 1)
+        self.assertEqual(self.client.stale_total(), 1)
 
     def test_legacy_partial_value_wrapped_dock_osd_is_ignored(self):
         payload = envelope(
@@ -193,6 +195,8 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.counts(), (0, 0, 0))
         self.assertEqual(self.client.invalid_samples, [])
         self.assertEqual(self.client.observed_count(self.client.dock_osd_topic), 1)
+        self.assertEqual(self.client.stats["ignored_observed_legacy"], 1)
+        self.assertEqual(self.client.stale_total(), 1)
 
     def test_legacy_partial_value_wrapped_drone_osd_is_ignored(self):
         payload = envelope(
@@ -214,6 +218,8 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.counts(), (0, 0, 0))
         self.assertEqual(self.client.invalid_samples, [])
         self.assertEqual(self.client.observed_count(self.client.drone_osd_topic), 1)
+        self.assertEqual(self.client.stats["ignored_observed_legacy"], 1)
+        self.assertEqual(self.client.stale_total(), 1)
 
     def test_property_set_uses_shared_request_and_checks_property_result(self):
         original_publish = self.client.client.publish

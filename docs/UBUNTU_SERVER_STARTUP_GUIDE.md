@@ -774,7 +774,9 @@ ignored legacy stale reply
 
 ```bash
 python tools/mqtt_dock3_p0_batch_test.py --timeout 12 --quiet-stale --fail-on-stale
+python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale --fail-on-stale
 python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale --fail-on-stale
+python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale --fail-on-stale
 ```
 
 如果 `--fail-on-stale` 失败，先排查是否还有旧进程或 broker 规则在抢答：

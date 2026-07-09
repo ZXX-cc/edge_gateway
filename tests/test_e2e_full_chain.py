@@ -58,14 +58,14 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertIn("--fail-on-stale", command)
         self.assertIn("EDGEGW001", command)
 
-    def test_build_command_omits_fail_on_stale_for_osd_state(self):
+    def test_build_command_passes_fail_on_stale_for_osd_state(self):
         step = next(step for step in STEPS if step.key == "osd-state")
         command = build_command(step, self.args(fail_on_stale=True, osd_allow_invalid=True))
 
         self.assertIn("mqtt_dock3_osd_state_test.py", command[1])
         self.assertIn("--reply-timeout", command)
         self.assertIn("--allow-invalid", command)
-        self.assertNotIn("--fail-on-stale", command)
+        self.assertIn("--fail-on-stale", command)
 
     def test_build_command_uses_step_timeout_override(self):
         step = next(step for step in STEPS if step.key == "firmware-config")
