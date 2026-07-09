@@ -79,7 +79,7 @@ class TelemetryReporter:
         }
         """
         topic = TopicBuilder.osd(device_sn)
-        payload = MessageBuilder.build_osd(device_sn, osd_data)
+        payload = MessageBuilder.build_osd(self.gateway_sn, osd_data)
         return self._publish_with_cache(topic, payload, qos=0)
 
     # ---- 状态变更上报 ----
@@ -98,7 +98,7 @@ class TelemetryReporter:
         }
         """
         topic = TopicBuilder.state(device_sn)
-        payload = MessageBuilder.build_state(device_sn, state_data)
+        payload = MessageBuilder.build_state(self.gateway_sn, state_data)
         return self._publish_with_cache(topic, payload, qos=1)
 
     # ---- 事件上报 ----
@@ -140,7 +140,7 @@ class TelemetryReporter:
         """
         with self._cache_lock:
             # 清理过期缓存
-            self._clean_old_cache()
+            self._clean_old_cache_locked()
 
             # 添加新缓存
             cache_item = {
@@ -157,12 +157,11 @@ class TelemetryReporter:
             self._cache.append(cache_item)
             logger.debug(f"Message cached: topic={topic}, cache_size={len(self._cache)}")
 
-    def _clean_old_cache(self):
-        """清理过期缓存"""
+    def _clean_old_cache_locked(self):
+        """清理过期缓存。调用方必须持有 _cache_lock。"""
         now = int(time.time())
-        with self._cache_lock:
-            self._cache = [item for item in self._cache
-                           if now - item['timestamp'] <= MAX_CACHE_TIME]
+        self._cache = [item for item in self._cache
+                       if now - item['timestamp'] <= MAX_CACHE_TIME]
 
     def _recover_cache(self):
         """恢复缓存的消息"""

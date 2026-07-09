@@ -61,6 +61,8 @@ from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
 from src.database.retention_manager import DataRetentionManager
 from src.database.cloud_sync_manager import CloudSyncManager
+from src.database.connection import SessionLocal, init_database
+from src.database.telemetry_db import TelemetryDB
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 logger = get_logger("main")
@@ -181,6 +183,7 @@ class EdgeGateway:
 
             # 6.2 初始化云端同步管理器（混合存储架构）
             self.cloud_sync_manager = CloudSyncManager()
+            init_database()
 
             # 7. 初始化RTK模块（延迟到start中，因为需要telemetry_module）
 
@@ -573,7 +576,7 @@ class EdgeGateway:
             else:
                 self.mqtt.publish_event(event)
         def device_state_cb(state):
-            self.mqtt.publish_state(gateway_sn, state)
+            self.telemetry_reporter.report_state(gateway_sn, state)
 
         self.device.set_callbacks(device_event_cb, device_state_cb)
 
@@ -587,15 +590,36 @@ class EdgeGateway:
         self.cloud_conn._start_request_cleaner()
 
         # 遥测回调
+        def persist_telemetry(device_sn: str, osd_data: dict):
+            try:
+                with SessionLocal() as session:
+                    TelemetryDB.save_telemetry_sync(session, device_sn, osd_data)
+                    session.commit()
+            except Exception as e:
+                logger.warning(
+                    "Failed to persist telemetry: device_sn=%s, error=%s",
+                    device_sn,
+                    e,
+                    exc_info=True,
+                )
+
         def osd_cb(osd_data):
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
-            self.mqtt.publish_osd(gateway_sn, self.device.build_dock3_dock_osd())
+            dock_osd = self.device.build_dock3_dock_osd()
+            self.telemetry_reporter.report_osd(gateway_sn, dock_osd)
+
+            published_drone_osd = False
             for sub_device in self.device.get_all_sub_devices():
                 if sub_device.online:
-                    self.mqtt.publish_osd(sub_device.sn, osd_data)
+                    persist_telemetry(sub_device.sn, osd_data)
+                    self.telemetry_reporter.report_osd(sub_device.sn, osd_data)
+                    published_drone_osd = True
+            if not published_drone_osd:
+                persist_telemetry(gateway_sn, osd_data)
+
         def state_cb(state_data):
-            self.mqtt.publish_state(gateway_sn, state_data)
+            self.telemetry_reporter.report_state(gateway_sn, state_data)
 
         self.telemetry.set_callbacks(osd_cb, state_cb)
         self.telemetry.start()  # 启动OSD定时推送线程 (0.5Hz)
@@ -620,7 +644,7 @@ class EdgeGateway:
         def dock_event_cb(event):
             self.mqtt.publish_event(event)
         def dock_state_cb(state):
-            self.mqtt.publish_state(gateway_sn, state)
+            self.telemetry_reporter.report_state(gateway_sn, state)
         self.dock.set_callbacks(dock_event_cb, dock_state_cb)
         self.dock.set_telemetry_reporter(self.telemetry_reporter)
         self.dock.set_telemetry_processor(self.telemetry)
