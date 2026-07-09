@@ -214,6 +214,35 @@ class OrganizationRequestClientTest(unittest.TestCase):
         self.assertEqual(bind_devices[2]["device_model_key"], "2-123-4")
         self.assertTrue(all(device["organization_id"] == "org-001" for device in bind_devices))
 
+    def test_verify_device_binding_events_checks_count_and_sns(self):
+        events = [
+            {"method": "device_binding", "data": {"device_sn": "EDGEGW001"}},
+            {"method": "device_binding", "data": {"device_sn": "DRONE-A"}},
+        ]
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = org_tool.verify_device_binding_events(
+                events,
+                expected_sns=["EDGEGW001", "DRONE-A"],
+                expected_count=2,
+            )
+
+        self.assertEqual(rc, 0)
+
+    def test_verify_device_binding_events_rejects_missing_sn(self):
+        events = [
+            {"method": "device_binding", "data": {"device_sn": "EDGEGW001"}},
+        ]
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = org_tool.verify_device_binding_events(
+                events,
+                expected_sns=["EDGEGW001", "DRONE-A"],
+                expected_count=2,
+            )
+
+        self.assertEqual(rc, 14)
+
 
 if __name__ == "__main__":
     unittest.main()

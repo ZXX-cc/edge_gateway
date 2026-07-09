@@ -133,6 +133,18 @@ def parse_args():
     parser.add_argument("--expect-organization-name", default="")
     parser.add_argument("--expect-timeout", action="store_true")
     parser.add_argument("--expect-event", action="append", default=[], help="Require an emitted event method. Repeat for multiple events.")
+    parser.add_argument(
+        "--expect-device-binding-sn",
+        action="append",
+        default=[],
+        help="Require a device_binding event for this SN. Repeat for gateway and sub-devices.",
+    )
+    parser.add_argument(
+        "--expect-device-binding-count",
+        type=int,
+        default=None,
+        help="Require an exact number of generated device_binding events.",
+    )
     parser.add_argument("--expect-bound", action="store_true", help="Verify gateway in-memory binding state after bind.")
     parser.add_argument(
         "--expect-bound-sn",
@@ -248,6 +260,43 @@ def wait_for_events(recorded_events, expected_methods, timeout):
     missing = expected - seen
     print(f"missing expected events: {', '.join(sorted(missing))}; seen={sorted(seen)}", file=sys.stderr)
     return 6
+
+
+def _unique_ordered(values):
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def verify_device_binding_events(recorded_events, expected_sns=None, expected_count=None):
+    events = [event for event in recorded_events if event.get("method") == "device_binding"]
+    errors = []
+
+    if expected_count is not None and len(events) != expected_count:
+        errors.append(f"device_binding count mismatch: expected={expected_count}, actual={len(events)}")
+
+    expected_sns = _unique_ordered(expected_sns or [])
+    if expected_sns:
+        actual_sns = {event.get("data", {}).get("device_sn") for event in events}
+        missing_sns = sorted(set(expected_sns) - actual_sns)
+        if missing_sns:
+            errors.append(f"missing device_binding SNs: {', '.join(missing_sns)}")
+
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        print(json.dumps({"device_binding_events": events}, ensure_ascii=False, indent=2))
+        return 14
+
+    if expected_sns or expected_count is not None:
+        actual_sns = [event.get("data", {}).get("device_sn") for event in events]
+        print(f"device_binding events ok: count={len(events)}, sns={','.join(actual_sns)}")
+    return 0
 
 
 def wait_for_status_reply(recorded_replies, reply_event, timeout, expected_result):
@@ -598,6 +647,15 @@ def main():
             if rc != 0:
                 return rc
 
+        if args.expect_device_binding_sn or args.expect_device_binding_count is not None:
+            rc = verify_device_binding_events(
+                recorded_events,
+                expected_sns=args.expect_device_binding_sn,
+                expected_count=args.expect_device_binding_count,
+            )
+            if rc != 0:
+                return rc
+
         if (
             args.expect_topo_sub_device_count is not None
             or args.expect_topo_sub_device_sn
@@ -628,7 +686,10 @@ def main():
                 print(f"memory binding verification failed: {error}", file=sys.stderr)
                 return 6
 
-        for sn in args.expect_bound_sn:
+        expected_bound_sns = _unique_ordered(args.expect_bound_sn)
+        if args.expect_bound:
+            expected_bound_sns = [sn for sn in expected_bound_sns if sn != gateway_sn]
+        for sn in expected_bound_sns:
             error = verify_memory_binding_for_sn(device, sn, args.organization_id)
             if error:
                 print(f"memory binding verification failed: {error}", file=sys.stderr)
