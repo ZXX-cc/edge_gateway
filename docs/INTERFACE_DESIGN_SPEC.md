@@ -270,7 +270,7 @@ thing/product/{gateway_sn}/services_reply
 python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 ```
 
-成功标志：`dock3 cmd test ok (...)`。2026-07-06 Ubuntu 已验证成功，实际输出 `dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)`。
+成功标志：`dock3 cmd test ok (...)`。2026-07-09 Ubuntu 已验证成功，实际输出 `dock3 cmd test ok (accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60)`；E2E cmd 单段输出 `dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)`。
 
 ### 2.5 Wayline / 航线管理
 

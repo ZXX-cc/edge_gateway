@@ -2,6 +2,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from .models import TelemetryData
+from .time_utils import expired_timestamp_condition
 
 MAX_LOCAL_TELEMETRY = 3600
 
@@ -135,10 +136,8 @@ class TelemetryDB:
 
     @staticmethod
     async def clear_old_data_async(session: AsyncSession, device_sn: str, hours_to_keep: int = 2):
-        import time
-        cutoff_time = int(time.time()) - (hours_to_keep * 3600)
         await session.execute(
             delete(TelemetryData)
             .where(TelemetryData.device_sn == device_sn)
-            .where(TelemetryData.timestamp < cutoff_time)
+            .where(expired_timestamp_condition(TelemetryData.timestamp, hours_to_keep * 3600))
         )

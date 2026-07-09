@@ -1,13 +1,12 @@
-import time
 import logging
 import asyncio
 from typing import Dict, Optional, List, Callable
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import timedelta
 
 from .connection import get_async_session_local, init_database_async
 from .models import OperationRecord, Alarm, MediaFile
+from .time_utils import expired_timestamp_condition
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +64,10 @@ class CloudSyncManager:
         """同步操作记录到云端"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            three_days_ago = int(time.time()) - 3 * 24 * 3600
             result = await session.execute(
                 select(OperationRecord)
-                .filter(OperationRecord.end_time < three_days_ago)
+                .filter(OperationRecord.end_time.isnot(None))
+                .filter(expired_timestamp_condition(OperationRecord.end_time, 3 * 24 * 3600))
                 .filter(OperationRecord.status.in_(['completed', 'failed']))
             )
             records = result.scalars().all()
@@ -85,10 +84,9 @@ class CloudSyncManager:
         """同步告警记录到云端"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            one_day_ago = int(time.time()) - 24 * 3600
             result = await session.execute(
                 select(Alarm)
-                .filter(Alarm.create_time < one_day_ago)
+                .filter(expired_timestamp_condition(Alarm.create_time, 24 * 3600))
                 .filter(Alarm.is_read == 1)
             )
             alarms = result.scalars().all()
@@ -105,10 +103,9 @@ class CloudSyncManager:
         """同步媒体文件元数据到云端（上传完成后）"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            seven_days_ago = int(time.time()) - 7 * 24 * 3600
             result = await session.execute(
                 select(MediaFile)
-                .filter(MediaFile.created_at < seven_days_ago)
+                .filter(expired_timestamp_condition(MediaFile.created_at, 7 * 24 * 3600))
                 .filter(MediaFile.upload_status == 'completed')
             )
             media_files = result.scalars().all()

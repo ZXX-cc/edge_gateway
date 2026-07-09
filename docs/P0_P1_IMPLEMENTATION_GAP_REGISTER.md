@@ -73,8 +73,8 @@
 | G-P1-12 | P1-12 固件升级模拟 | `ota_create/ota_cancel/firmware_upgrade` 的模拟任务、进度事件、结果事件、失败码和后台任务模型已通过 Ubuntu MQTT 专项；真实 OTA adapter 后续单列优化 | `src/device/manager.py`, `tools/mqtt_dock3_firmware_config_test.py`, `tests/test_device_manager_firmware_config.py` | `tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale` | Day 21-24 | Closed |
 | G-P1-13 | P1-13 配置更新 | 配置下发、查询、持久化、版本号、回滚和状态事件已通过 Ubuntu MQTT 专项；真实云端字段精校后续单列优化 | `src/device/manager.py`, `tools/mqtt_dock3_firmware_config_test.py`, `tests/test_device_manager_firmware_config.py` | `tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale` | Day 21-24 | Closed |
 | G-P1-14 | P1-14 多设备/解绑/离线 | 已补 `DeviceManager` 子设备缓存语义：空拓扑只标记离线，不丢已知子设备；重连保留 paired 状态；解绑会清空子设备并上报空拓扑。服务器已通过 `tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale --extra-sub-device-json ...`，覆盖双子设备上线、离线空拓扑、重连恢复、非法拓扑拒绝、逐 SN `device_unbinding` 事件和解绑后空 `update_topo`，输出 `device_unbinding events ok: count=3`、`reconnect=True`、`unbind=True`；E2E device 单段也已通过。organization 多设备绑定已通过服务器 MQTT 复测：`airport_organization_bind` 同时绑定网关和两个子设备，成功后更新绑定缓存、`paired` 状态、3 次 `device_binding` 事件和 `update_topo sub_devices=2`，并收到 `status_reply result=0`。剩余是真实云端字段精校 | `src/device/manager.py`, `src/cloud_api/dock3_device.py`, `src/cloud_api/connection_manager.py`, `tools/mqtt_dock3_device_test.py`, `tools/mqtt_organization_test.py`, `tools/e2e_full_chain_test.py` | 继续真实云端字段精校 | Day 21-24 | Closed |
-| G-P1-15 | P1-15 CMD 进阶失败码 | CMD 基础已通过，但真实耗时、失败码、安全拒绝和任务进度需更贴近 Dock3 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 扩展 `tools/mqtt_dock3_cmd_test.py` | Day 21-24 | Needs Test |
-| G-P1-16 | P1-16 网关短周期数据保留和操作记录 | 操作记录、短周期遥测保留、近期告警保留和清理策略有基础，但缺 P1 验收证据；全量历史归档、统计报表和长期数据仓库属于平台侧 | `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
+| G-P1-15 | P1-15 CMD 进阶失败码 | CMD 模拟链路已通过服务器专项：`accepted=60, events=18`，覆盖安全拒绝、格式化/重启模拟保护、任务进度事件和 E2E cmd 单段；真实硬件耗时和执行开关继续作为 adapter 精校风险 | `src/cloud_api/dock3_cmd.py`, `src/device/manager.py`, `src/database/operation_db.py` | 清理旧回包源后追加 `--fail-on-stale` 严格复测 | Day 21-24 | Closed |
+| G-P1-16 | P1-16 网关短周期数据保留和操作记录 | 已补数据保留/云同步混合时间戳过期判断：秒级历史字段和毫秒级 Dock3 事件字段均可正确清理；仍缺真实 DB 清理专项和操作记录留存验收 | `src/database/time_utils.py`, `src/database/retention_manager.py`, `src/database/operation_db.py`, `src/database/telemetry_db.py`, `src/database/alarm_db.py` | DB/日志专项或 E2E 检查 | Day 21-24 | In Progress |
 | G-P1-17 | P1-17 P0/P1 E2E 回归 | 当前已覆盖已通过 Ubuntu 的 P0/P1 核心 MQTT 域，`tools/e2e_full_chain_test.py` 已接入 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；服务器全量 E2E 已通过，严格 stale 参数已覆盖 OSD/state 阶段 | `tools/e2e_full_chain_test.py`, `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 后续执行服务器严格 `--fail-on-stale` 环境并保存证据 | Day 25-27 | Closed |
 
 ## 4. 缺失脚本优先级
@@ -89,8 +89,9 @@
 | 6 | `tools/mqtt_dock3_live_test.py` | G-P1-08 已通过 Ubuntu 专项 |
 | 7 | `tools/mqtt_dock3_hms_log_test.py` | G-P1-10、G-P1-11 已通过 Ubuntu 专项 |
 | 8 | `tools/mqtt_dock3_firmware_config_test.py` | 已通过 Ubuntu MQTT 专项，关闭 G-P1-12、G-P1-13 |
-| 9 | 扩展 device/organization/cmd 测试 | G-P1-14 已补 device 多子设备/离线/重连本地验证入口和 organization 多子设备绑定本地验证入口；G-P1-15 继续扩 CMD |
-| 10 | `tools/e2e_full_chain_test.py` | 已接入当前已通过专项的 10 个 P0/P1 域；待服务器全量复测后更新证据 |
+| 9 | 扩展 device/organization/cmd 测试 | G-P1-14、G-P1-15 已通过服务器专项或 E2E 单段；后续只保留真实云端/硬件字段精校 |
+| 10 | `tools/e2e_full_chain_test.py` | 已接入当前已通过专项的 11 个 P0/P1 域，服务器 11 段全量复测已通过 |
+| 11 | DB/日志专项 | G-P1-16 已补混合时间戳清理基础，下一步补真实 DB 清理和操作记录留存验收 |
 
 ## 5. 关项规则
 

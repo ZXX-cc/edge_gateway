@@ -699,10 +699,12 @@ python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 dock3 cmd test ok (accepted=..., events=..., ignored_total=...)
 ```
 
-2026-07-06 Ubuntu 已验证成功，实际输出：
+2026-07-09 Ubuntu 已验证成功，实际输出：
 
 ```text
-dock3 cmd test ok (accepted=55, events=13, ignored_mismatched=0, ignored_legacy=55, ignored_late=0, ignored_total=55)
+dock3 cmd test ok (accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60)
+--- cmd exit=0 elapsed=5.0s ---
+dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)
 ```
 
 如果脚本曾看到同一个 `tid`、同一个 method，但回包缺少 `data.output.status` 且 `result=0`，说明 broker 上仍有旧版网关或旧 handler 抢答。新版脚本会把这类旧成功回包计入 `ignored_legacy` 并继续等待正确 Dock3 回包；非 0 错误回包会直接打印出来，不再静默忽略。如果最终超时，先用 `pgrep -af 'src/main.py|web/app.py|mqtt'` 清理重复进程，再重启唯一网关实例。

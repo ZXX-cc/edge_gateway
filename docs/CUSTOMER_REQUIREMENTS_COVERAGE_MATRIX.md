@@ -121,7 +121,7 @@
 | 设备拓扑和绑定 | 已可用 | 75% | `domain/type/sub_type` 官方枚举、多设备真实语义待精校 | `device`、`organization`、`status/status_reply` |
 | Properties / OSD / State | 已可用 | 75% | `properties` 和 OSD/state 专项均已通过 Ubuntu 复测；客户需求涉及的单位、枚举和真实 Dock3 字段仍需精校 | `properties`、`osd`、`state` |
 | DRC 指令飞行 | 已可用 | 68% | 心跳、超时恢复、飞控模式语义待补 | `drc`、`drc/down`、`drc/up` |
-| CMD 远程调试 | 已可用 | 72% | 真实执行耗时、失败码、设备动作开关待补 | `cmd` |
+| CMD 远程调试 | 已可用 | 80% | 服务器专项已通过 60 条 CMD 回包、18 条进度/状态事件和 E2E cmd 单段；真实执行耗时、硬件重启/格式化开关待 adapter 精校 | `cmd` |
 | Wayline 航线 | 部分可用 | 62% | KMZ/WPML、媒体计数、真实 SITL 航点执行待补 | `wayline` |
 | MAVLink 飞控联动 | 部分可用 | 55% | 解锁/起飞/航线/返航/模式映射和非阻塞超时待补 | MAVLink + Dock3 events/state |
 | 机巢 v1.3 协议 | 部分可用 | 63% | 离线专项已覆盖命令字、拒绝原因、状态位、云端字段和 HMS 映射；Ubuntu 网关 + 机巢模拟器实跑、状态机闭环和 boolstate2 精细映射待补 | `cmd`、`properties`、`state`、`hms` |

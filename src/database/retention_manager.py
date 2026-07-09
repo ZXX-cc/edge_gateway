@@ -22,6 +22,7 @@ from typing import Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.database.connection import get_async_session_local, async_engine, DATABASE_URL, init_database_async
+from src.database.time_utils import expired_timestamp_condition
 
 logger = get_logger("retention")
 
@@ -140,39 +141,36 @@ class DataRetentionManager:
             deleted_counts = {}
 
             if self._telemetry_hours > 0:
-                cut_off = int(time.time()) - self._telemetry_hours * 3600
                 from src.database.models import TelemetryData
                 result = await session.execute(
                     delete(TelemetryData)
-                    .where(TelemetryData.timestamp < cut_off)
+                    .where(expired_timestamp_condition(TelemetryData.timestamp, self._telemetry_hours * 3600))
                 )
                 deleted_counts['telemetry'] = result.rowcount if hasattr(result, 'rowcount') else 0
 
             if self._operation_days > 0:
-                cut_off = int(time.time()) - self._operation_days * 24 * 3600
                 from src.database.models import OperationRecord
                 result = await session.execute(
                     delete(OperationRecord)
-                    .where(OperationRecord.end_time < cut_off)
+                    .where(OperationRecord.end_time.isnot(None))
+                    .where(expired_timestamp_condition(OperationRecord.end_time, self._operation_days * 24 * 3600))
                 )
                 deleted_counts['operation'] = result.rowcount if hasattr(result, 'rowcount') else 0
 
             if self._alarm_days > 0:
-                cut_off = int(time.time()) - self._alarm_days * 24 * 3600
                 from src.database.models import Alarm
                 result = await session.execute(
                     delete(Alarm)
-                    .where(Alarm.create_time < cut_off)
+                    .where(expired_timestamp_condition(Alarm.create_time, self._alarm_days * 24 * 3600))
                 )
                 deleted_counts['alarm'] = result.rowcount if hasattr(result, 'rowcount') else 0
 
             if self._media_uploaded_days > 0:
-                cut_off = int(time.time()) - self._media_uploaded_days * 24 * 3600
                 from src.database.models import MediaFile
                 result = await session.execute(
                     delete(MediaFile)
                     .where(MediaFile.upload_status == 'completed')
-                    .where(MediaFile.created_at < cut_off)
+                    .where(expired_timestamp_condition(MediaFile.created_at, self._media_uploaded_days * 24 * 3600))
                 )
                 deleted_counts['media_uploaded'] = result.rowcount if hasattr(result, 'rowcount') else 0
 
