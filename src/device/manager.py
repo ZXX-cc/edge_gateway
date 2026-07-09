@@ -88,6 +88,8 @@ from web.mavlink.properties.mapping import build_properties_from_osd, merge_prop
 
 logger = get_logger("device")
 
+NEST_COMMAND_TARGET_HOLD_SECONDS = 5.0
+
 
 class SubDevice:
     """子设备信息"""
@@ -244,6 +246,7 @@ class DeviceManager:
         self._hms_alarm_counter = 0
         self._last_nest_hms_signature = tuple()
         self._last_nest_operation_signature = ""
+        self._pending_nest_command_targets: Dict[str, Dict[str, Any]] = {}
 
         # ===== 系统状态定时更新线程 =====
         self._system_update_thread: Optional[threading.Thread] = None
@@ -859,6 +862,7 @@ class DeviceManager:
         """
         updates = build_dock3_properties_from_nest(nest_data)
         updates = self._merge_updates_with_current(updates)
+        updates = self._filter_pending_nest_command_targets(updates)
         state_updates = self._extract_nest_state_updates(updates)
         changed_state = {
             key: value
@@ -885,6 +889,43 @@ class DeviceManager:
 
         self._sync_nest_hms_alarms(nest_data)
         self._notify_nest_operation_if_needed(nest_data, changed_state)
+
+    def _remember_nest_command_target(self, command_name: str, prop_name: str, prop_value: int):
+        """Keep the desired command state ahead of stale nest telemetry snapshots."""
+        self._pending_nest_command_targets[prop_name] = {
+            "value": prop_value,
+            "command": command_name,
+            "timestamp": time.time(),
+        }
+
+    def _filter_pending_nest_command_targets(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        if not updates or not self._pending_nest_command_targets:
+            return updates
+
+        now = time.time()
+        filtered = dict(updates)
+        for prop_name, target in list(self._pending_nest_command_targets.items()):
+            if now - float(target.get("timestamp", 0)) > NEST_COMMAND_TARGET_HOLD_SECONDS:
+                del self._pending_nest_command_targets[prop_name]
+                continue
+            if prop_name not in filtered:
+                continue
+
+            target_value = target.get("value")
+            incoming_value = filtered[prop_name]
+            if incoming_value == target_value:
+                del self._pending_nest_command_targets[prop_name]
+                continue
+
+            trace_command(
+                "gateway_nest_command_pending_state_hold",
+                method=target.get("command", ""),
+                property=prop_name,
+                target=target_value,
+                incoming=incoming_value,
+            )
+            del filtered[prop_name]
+        return filtered
 
     @staticmethod
     def _extract_nest_state_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -2081,6 +2122,7 @@ class DeviceManager:
                     prop_name,
                     prop_value,
                 )
+                self._remember_nest_command_target(command_name, prop_name, prop_value)
                 self.update_properties({prop_name: prop_value})
                 return True
             logger.warning(f"{command_name}: Nest module not available, MAVLink command not sent")
@@ -2122,6 +2164,7 @@ class DeviceManager:
                 return False
 
             # 先更新属性（实际项目中应等待机巢响应确认后再更新）
+            self._remember_nest_command_target(command_name, prop_name, prop_value)
             self.update_properties({prop_name: prop_value})
             return True
 

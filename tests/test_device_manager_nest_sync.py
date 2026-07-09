@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 
@@ -138,6 +138,32 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertEqual(by_key["dock3.nest.error_code.active"]["alarm_id"], "nest-error-code-7")
         self.assertEqual(by_key["dock3.nest.plc_heartbeat.lost"]["alarm_id"], "nest-plc-heartbeat-lost")
         self.assertTrue(all(is_nest_hms_alarm(alarm) for alarm in alarms))
+
+    def test_recent_nest_command_target_ignores_stale_nest_snapshot(self):
+        sent_commands = []
+        self.manager._nest_module = SimpleNamespace(send_gcs_command=sent_commands.append)
+        self.manager.update_from_nest(nest_snapshot(gate_state=1))
+        self.assertEqual(self.manager.get_property("cover_state"), 1)
+
+        reply = self.manager.handle_cover_close({
+            "tid": "tid-cover-close",
+            "bid": "bid-cover-close",
+            "gateway": "EDGEGW001",
+            "method": "cover_close",
+            "data": {},
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertTrue(sent_commands)
+        self.assertEqual(self.manager.get_property("cover_state"), 0)
+
+        self.manager.update_from_nest(nest_snapshot(gate_state=1))
+        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertIn("cover_state", self.manager._pending_nest_command_targets)
+
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
+        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@
 | Device 设备管理/拓扑 | 已通过 | 85% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；服务器多设备专项已验证 `DRONE-SIM-001,DRONE-SIM-002` 上线、离线空拓扑、重连恢复和非法拓扑拒绝；organization 多设备绑定服务器复测已验证 `sub_devices=2` 和 `status_reply result=0`；服务器 device 解绑专项已验证 `device_unbinding events ok: count=3`、空 `update_topo`、`unbind=True`；E2E device 单段已通过 | `domain/type/sub_type` 官方产品枚举、真实云端字段差异未精校 | 精校设备类型枚举和真实云端字段 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 84% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；服务器多设备绑定已通过，输出 3 次 `device_binding`、`update_topo schema ok ... sub_devices=2`、`memory binding ok`、`sub-device paired ok` 和 `organization request test ok`；device 解绑服务器专项已覆盖多设备解绑事件和空拓扑 | 真实云端差异仍需精校 | 继续真实云端字段精校 | 人员1 |
 | DRC 指令飞行 | 已通过 | 78% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；最新 E2E DRC 阶段输出 `accepted=14, events=7, ignored_total=0` | 真实 MAVLink 模式语义、链路抖动和超时边界仍需精校 | 补 SITL 指点飞行和飞控模式联动 | 人员1/人员2 |
-| CMD 远程调试 | 已通过 | 80% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、格式化/重启模拟保护和进度事件已通过专项复测；最新服务器输出 `dock3 cmd test ok (accepted=60, events=18, ignored_total=60)`，E2E cmd 单段 `steps=1, elapsed=5.0s` | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
+| CMD 远程调试 | 待复测 | 78% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、格式化/重启模拟保护和进度事件已通过历史专项；服务器最新复测发现 `cover_close` 后旧机巢快照把 `cover_state` 覆盖回 `1`，代码已补短时 pending 目标状态保护和本地单测 | 需服务器重跑 CMD 专项确认；真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 重跑 `mqtt_dock3_cmd_test.py` 和 E2E cmd 单段 | 人员1/人员3 |
 | Wayline 航线管理 | 已通过 | 73% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；mock KMZ 下载、校验、解析和内部任务转换已进入 `flighttask_prepare`；`flighttask_execute` 已触发机巢 `request_takeoff` 安全调用；服务器 11 段 E2E 已覆盖一键启航离线闭环 | 媒体计数、真实 SITL 航点执行、返航事件字段仍未完成 | 补媒体计数和真实 SITL 航点执行 | 人员1/人员2 |
 | P0/P1 E2E 回归 | 已通过 | 94% | `tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过；`tools/e2e_full_chain_test.py --only device --timeout 12 --quiet-stale --device-extra-sub-device-json ...` 已通过；`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `steps=11, elapsed=18.9s`；当前 `--fail-on-stale` 会覆盖 OSD/state 旧样本统计 | 严格 `--fail-on-stale` 服务器复测、真实硬件/真实推流/真实 OTA 未完成 | 建立严格环境回归并继续真实 SITL/硬件联动 | 人员1 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
@@ -107,6 +107,7 @@
 
 | 大类 | Ubuntu 验收命令 | 成功标志 |
 |---|---|---|
+| P1-15 CMD 状态回读 | `python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale`；`python tools/e2e_full_chain_test.py --only cmd --timeout 12 --quiet-stale` | `cover_close` 后 `cover_state=0`，输出 `dock3 cmd test ok` 和 `dock3 e2e full-chain test ok (steps=1, ...)` |
 | P0-07 飞行模式映射 | `python -m unittest tests.test_flight_modes tests.test_mavlink_telemetry_mapping`；连接 SITL 后依次执行 `python tools/mqtt_smoke_test.py --method set_flight_mode --payload '{"mode":"GUIDED"}' --timeout 12`、`python tools/mqtt_smoke_test.py --method set_flight_mode --payload '{"mode_code":9}' --timeout 12` | 单测通过；MQTT 回包 `result=0` 且 `data.mode` 分别为 `GUIDED`、`LAND`；SITL 日志不再出现关键模式 `UNKNOWN(9)` |
 
 ## 下一批建议

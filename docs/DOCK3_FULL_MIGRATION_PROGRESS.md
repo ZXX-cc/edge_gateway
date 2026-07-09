@@ -12,7 +12,7 @@
 
 如果要按客户需求排开发优先级，看 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`。如果要查 P0/P1 代码缺口和脚本补齐顺序，看 `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md`。如果要执行全链路验收，看 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`。如果要判定 90% 可用率、100% 开发完成和 P0/P1 强门禁，看 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。30 天交付口径是 P0/P1 100% 可用，P2 可存在已记录问题但不能影响主链路。
 
-当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、organization 多设备绑定、device topology、DRC 大类专项和批量链路、CMD/远程调试大类、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项、firmware/config 专项均已通过 Ubuntu 模拟验证；`tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)`。CMD 单段服务器验收已覆盖 60 条回包、18 条事件和 E2E cmd 单段，输出 `dock3 cmd test ok (accepted=60, events=18, ignored_total=60)`、`dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)`。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接已补齐，`flighttask_execute` 已安全触发机巢 `request_takeoff`，`tools/nest_v13_protocol_test.py --verbose` 已扩展到 `checks=5`。人员1负责的云端 topic/reply 边界、专项验收脚本、一键启航离线闭环、P0/P1 核心 E2E、device 多设备拓扑、organization 多子设备绑定和 CMD 进阶模拟验收已收敛到共享测试入口；当前 `--fail-on-stale` 已覆盖 OSD/state 旧样本统计。下一步转向严格环境服务器复测、机巢 v1.3 Ubuntu 实跑、真实 SITL 航点执行、数据保留专项和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
+当前结论：**Dock3 P0 总批量、properties 大类专项、OSD/state、organization 基础 requests 链路、organization 多设备绑定、device topology、DRC 大类专项和批量链路、Wayline/航线管理 P1 基础闭环、Media 基础链路、Live mock 推流基础链路、HMS/远程日志 P1 专项、firmware/config 专项均已通过 Ubuntu 模拟验证；`tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过，`tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已在服务器通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)`。CMD 单段历史验收曾覆盖 60 条回包、18 条事件和 E2E cmd 单段；最新服务器复测暴露 `cover_close` 后旧机巢快照覆盖 `cover_state=1`，本地已修复并待服务器重跑。外围启动脚本在修复 Mosquitto 重复 listener 配置后已验证可启动 MQTT Broker、云端模拟器、MQTT 观察端和机巢模拟器。机巢状态到 Dock3 state/HMS/dock_operation 的本地桥接已补齐，`flighttask_execute` 已安全触发机巢 `request_takeoff`，`tools/nest_v13_protocol_test.py --verbose` 已扩展到 `checks=5`。人员1负责的云端 topic/reply 边界、专项验收脚本、一键启航离线闭环、P0/P1 核心 E2E、device 多设备拓扑、organization 多子设备绑定已收敛到共享测试入口；当前 `--fail-on-stale` 已覆盖 OSD/state 旧样本统计。下一步转向 CMD 服务器复测、严格环境服务器复测、机巢 v1.3 Ubuntu 实跑、真实 SITL 航点执行、数据保留专项和字段精校。客户暂未提及或当前业务未用到的 Dock3 能力可以延期，不纳入 30 天 P0/P1 强迁移。**
 
 当前进度估算：**约 80%**。
 
@@ -63,7 +63,7 @@
 | organization full 专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_organization_test.py --config config/gateway.yaml --action full ... --publish-events --expect-status-reply` 输出 `organization request test ok`；验证 `airport_organization_get/bind`、`device_binding`、`update_topo status_reply result=0` 和内存绑定；多子设备绑定已通过服务器 MQTT 复测，输出 `sub_devices=2`、3 次 `device_binding`、两个子设备 `paired ok` |
 | DRC 专项字段校验 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_mismatched=0, ignored_legacy=4, ignored_late=1, ignored_total=5)`；验证 `drc_mode_enter` 官方 payload、`stick_control` 官方杆量、`drone_control` 官方废弃字段和值域错误 |
 | DRC 批量验收 | 已通过 Ubuntu 专项复测 | `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 输出 `drc batch test ok (accepted=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；覆盖 enter/exit、`drc_state`、杆量、飞行器/负载控制和速度控制 |
-| CMD/远程调试专项 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 输出 `dock3 cmd test ok (accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60)`；E2E cmd 单段输出 `dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)`；验证调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、格式化/重启模拟保护和任务进度事件 |
+| CMD/远程调试专项 | 待服务器复测 | 历史服务器复测输出 `dock3 cmd test ok (accepted=60, events=18, ignored_total=60)`；最新复测在 `cover_close` 后发现旧机巢快照覆盖 `cover_state=1`，本地已补短时 pending 目标状态保护并通过单测；待服务器重跑 `tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale` 和 E2E cmd 单段 |
 | Wayline/航线管理 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale` 输出 `dock3 wayline test ok (accepted=11, events=8, ignored_mismatched=0, ignored_legacy=11, ignored_late=0, ignored_total=11)`；覆盖 `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel`、参数错误和状态不支持错误分支；纯模拟任务不触发真实飞控 `AUTO/LOITER/返航/降落` 控制 |
 | Media/媒体管理 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 输出 `dock3 media test ok (accepted=6, events=2, ignored_total=0)`；覆盖 `file_list_get`、`adjust_upload_priority`、`highest_priority_upload_flighttask_media`、`file_delete`、非法删除错误码和事件 |
 | Live/直播 P1 | 已通过 Ubuntu 专项复测 | `tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale` 输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)`；覆盖 `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop`、`mock://` 推流、`live_status_notify` 事件和非法 `live_start` 错误码 |
@@ -348,7 +348,7 @@ python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 | 项目 | 状态 | 说明 |
 |---|---|---|
 | `debug_mode_open/debug_mode_close` | 已通过 Ubuntu 专项复测 | 开启后 `mode_code=2`，关闭后 `mode_code=0`，回包 `output.status=ok` |
-| `cover_open/cover_close/charge_open/charge_close/putter_open/putter_close` | 已通过 Ubuntu 专项复测 | 保留 MAVLink 机巢命令发送；无机巢模块时默认模拟更新状态；回包和事件均带 `output.status` |
+| `cover_open/cover_close/charge_open/charge_close/putter_open/putter_close` | 待服务器复测 | 保留 MAVLink 机巢命令发送；本地已补 pending 目标状态保护，防止旧机巢快照立即覆盖刚下发的目标状态；回包和事件均带 `output.status` |
 | `cover_force_close` | 已通过 Ubuntu 专项复测 | 飞行器仍在舱内时返回 `314000` 和 `output.status=rejected` |
 | `supplement_light_open/close` | 已通过 Ubuntu 专项复测 | 联动 `supplement_light_state` |
 | `battery_maintenance_switch` | 已通过 Ubuntu 专项复测 | 校验 `action=0/1`，非法值返回 `325001` |
@@ -367,7 +367,7 @@ python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_cmd_test.py --timeout 12 --quiet-stale
 ```
 
-成功标志：`dock3 cmd test ok (...)`。2026-07-09 已通过，实际输出 `accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60`；E2E cmd 单段输出 `dock3 e2e full-chain test ok (steps=1, elapsed=5.0s)`。该脚本一次覆盖调试模式、补光灯、电池保养、空调、报警、电池模式、SDR、舱盖、充电、推杆、飞行器开关机、格式化、重启、重置和错误分支。`ignored_legacy/ignored_late` 表示 broker 环境中仍存在旧格式或晚到重复回包源，当前脚本已按 Dock3 格式继续等待正确回包；清理旧进程或 broker retained/旧规则后，可追加 `--fail-on-stale` 做严格验证。
+成功标志：`dock3 cmd test ok (...)`。历史服务器输出为 `accepted=60, events=18, ignored_mismatched=0, ignored_legacy=16, ignored_late=44, ignored_wrong_topic=0, ignored_total=60`；最新复测发现 `cover_close` 状态回读被旧快照覆盖，代码已修复，待重新执行服务器专项和 E2E cmd 单段。该脚本一次覆盖调试模式、补光灯、电池保养、空调、报警、电池模式、SDR、舱盖、充电、推杆、飞行器开关机、格式化、重启、重置和错误分支。`ignored_legacy/ignored_late` 表示 broker 环境中仍存在旧格式或晚到重复回包源，当前脚本已按 Dock3 格式继续等待正确回包；清理旧进程或 broker retained/旧规则后，可追加 `--fail-on-stale` 做严格验证。
 
 ### 3.7 wayline
 
@@ -424,7 +424,7 @@ python tools/mqtt_dock3_wayline_test.py --timeout 12 --quiet-stale
 | Batch 3 | drc 控制数据 | `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` 已通过 P0 总批量验证；官方 payload 校验、`tools/mqtt_dock3_drc_test.py` 和 `tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale` 均已通过 Ubuntu 专项复测 | 已完成本轮专项；下一步精校 DRC 心跳、`takeoff_to_point` 和超时恢复 |
 | Batch 4 | P0 总批量验收 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 已通过 Ubuntu 复测；`airport_bind_status` services 兼容项默认跳过 | 下一步清理旧回包来源后用 `--fail-on-stale` 做严格环境验证 |
 | Batch 4.1 | device topology | `update_topo` 完整 topic/payload/status_reply；严格字段校验和专项脚本已通过 Ubuntu 复测 | 已完成本轮专项；后续继续精校官方设备类型枚举 |
-| Batch 4.2 | cmd/远程调试 | `debug_mode_*`、`cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_*`、`*_switch` 已完成代码收敛并通过 Ubuntu 专项复测；最新输出 `accepted=60, events=18`，E2E cmd 单段 `steps=1, elapsed=5.0s` | P1-15 当前模拟验收已关闭；真实硬件重启/格式化/耗时仍按 adapter 精校风险跟踪 |
+| Batch 4.2 | cmd/远程调试 | `debug_mode_*`、`cover_*`、`charge_*`、`putter_*`、`drone_*`、`device_*`、`*_switch` 已完成代码收敛；针对服务器最新 `cover_close -> cover_state` 回读失败，已补 pending 目标状态保护，避免旧机巢快照立即覆盖刚下发的目标状态 | 待服务器重跑 CMD 专项和 E2E cmd 单段；真实硬件重启/格式化/耗时仍按 adapter 精校风险跟踪 |
 | Batch 5 | wayline | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环和 mock KMZ 解析已完成代码收敛并通过 Ubuntu 专项复测 | 已完成本轮专项；下一步进入 media/live 或 HMS，Wayline 后续补远端 KMZ 下载、媒体计数、真实 SITL 航点执行 |
 | Batch 6 | P0/P1 E2E 回归 | `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过服务器 10 段复测，串联 properties、device、OSD/state、CMD、DRC、Wayline、media、live、HMS-log、firmware-config，全部 `exit=0`，总耗时 13.6s | 已完成 P0/P1 核心 MQTT 全链路基线；一键启航入口已接入并已通过 11 段服务器复测，后续补 `--fail-on-stale` 严格环境 |
 | Batch 7 | media 基础 | `tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 已通过 Ubuntu 复测，输出 `accepted=6, events=2, ignored_total=0` | 已完成当前 media 基础专项；后续精校真实上传 adapter |

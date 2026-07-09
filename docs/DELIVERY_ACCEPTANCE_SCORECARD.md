@@ -124,7 +124,7 @@ P2 问题影响 P0/P1 = 0 项
 | P1-12 | 固件升级模拟 | Usable | `mqtt_dock3_firmware_config_test.py` |
 | P1-13 | 配置更新 | Usable | `mqtt_dock3_firmware_config_test.py` |
 | P1-14 | 多设备/解绑/离线 | Usable | Device/Organization 专项 |
-| P1-15 | 远程调试进阶失败码 | Usable | 扩展 `mqtt_dock3_cmd_test.py` |
+| P1-15 | 远程调试进阶失败码 | Needs Retest | 最新服务器复测发现 `cover_close` 状态回读失败；代码已修复，重跑 `mqtt_dock3_cmd_test.py` |
 | P1-16 | 网关短周期数据保留和操作记录 | Usable | DB/日志专项或 E2E 检查 |
 | P1-17 | P0/P1 E2E 回归 | Usable | `e2e_full_chain_test.py` |
 
