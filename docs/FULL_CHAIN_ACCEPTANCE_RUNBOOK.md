@@ -301,7 +301,7 @@ ss -tnp | grep ':1883' || true
 
 确认旧进程 PID 后，只停止已确认的旧服务并保留当前 `src/main.py` 实例；重启当前网关后，先重跑 properties 严格命令，成功后再跑完整 E2E。
 
-2026-07-10 进度记录：当前服务器仅发现一个 `src/main.py` 实例；`demo_platform/app.py` 仅订阅观测 topic，`mqtt_cloud_simulator.py` 仅订阅 `requests/status`，均不是 `property/set_reply` 的发布者。`ss` 还发现未显示 PID 的本机 `127.0.0.1:46088` 连接，以及 `192.168.2.73`、`192.168.2.94` 两个外部客户端；严格回归前应继续由 broker 管理员定位这些连接的 client ID 与发布 topic。
+2026-07-10 进度记录：当前服务器仅发现一个 `src/main.py` 实例；`demo_platform/app.py` 仅订阅观测 topic，`mqtt_cloud_simulator.py` 仅订阅 `requests/status`，均不是 `property/set_reply` 的发布者。后续 broker 审计已确认重复回包发布者为旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`：它对每一个 properties 请求都额外发布缺少 `method` 的 `property/set_reply`，同时发布旧 `state`。当前网关客户端 `edge_gateway_EDGEGW001` 对相同请求只发布一条格式正确的 Dock3 回包。
 
 如果当前网关 request trace 已证明每个 `tid` 仅发布一次、但严格测试仍收到第二条旧回包，可临时启用 broker 发布审计：
 
@@ -313,6 +313,14 @@ sudo bash scripts/mqtt_broker_audit.sh disable
 ```
 
 `Received PUBLISH from <client_id>` 会显示旧回包的发布客户端。审计结束必须执行 `disable`，恢复默认 broker 日志量。
+
+已知 client ID 时，可直接从 broker 日志和当前连接中查找其来源：
+
+```bash
+sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
+```
+
+日志若显示本机 `IP:port`，用输出提示中的 `lsof` 命令找出 PID 后停止该旧模拟器；若显示远端地址，则在远端主机停止对应旧模拟器。不要停止当前 `edge_gateway_EDGEGW001` 网关。确认旧客户端下线后，再执行严格 properties 测试。
 
 ## 7. P2 验收边界
 
