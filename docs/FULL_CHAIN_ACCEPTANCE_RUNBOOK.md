@@ -301,6 +301,8 @@ ss -tnp | grep ':1883' || true
 
 确认旧进程 PID 后，只停止已确认的旧服务并保留当前 `src/main.py` 实例；重启当前网关后，先重跑 properties 严格命令，成功后再跑完整 E2E。
 
+2026-07-10 进度记录：当前服务器仅发现一个 `src/main.py` 实例；`demo_platform/app.py` 仅订阅观测 topic，`mqtt_cloud_simulator.py` 仅订阅 `requests/status`，均不是 `property/set_reply` 的发布者。`ss` 还发现未显示 PID 的本机 `127.0.0.1:46088` 连接，以及 `192.168.2.73`、`192.168.2.94` 两个外部客户端；严格回归前应继续由 broker 管理员定位这些连接的 client ID 与发布 topic。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：

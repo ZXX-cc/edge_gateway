@@ -134,6 +134,7 @@ http://Ubuntu服务器IP:8090
 - CMD、DRC、Wayline、Media、Live、HMS/log、firmware/config 已有专项脚本通过记录。
 - `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段。
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
+- P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 当前仍被外部旧进程阻塞：9 条 `method=null` 回包均为 `retain=false, dup=false`，当前网关的 Dock3 回包正确，尚不能宣称严格全链路通过。
 
 下一阶段：
 
