@@ -56,6 +56,6 @@ http://192.168.2.188:8095
 - `基础上线巡检`：读取关键属性，观察 OSD/state/status。
 - `APIDock3/CMD 动作`：调试模式、舱盖、充电、推杆、补光灯。
 - `DRC 链路`：进入 DRC、心跳、杆量/速度、退出。
-- `真实 HD 航线`：先调用 `flight_arm`，按 QLAN 别名切到 QSTABILIZE 完成解锁，再使用 `HD.original.waypoints` 执行真实 SITL/QGC 航线准备、执行和进度查询。
+- `真实 HD 航线`：先调用 `set_flight_mode`，使用 `{"mode":"QLAN","arm":true}` 按 QLAN 别名切到 QSTABILIZE 完成解锁，再使用 `HD.original.waypoints` 执行真实 SITL/QGC 航线准备、执行和进度查询。
 
 页面不再把模拟航线、直播媒体、真实 Adapter 等未进入当前主线的项目放在主导航中。真实航线是否通过，以 QGC 中可见航线任务执行、`flighttask_progress` 和飞行器 OSD 电量/高度/经纬度变化共同留证。

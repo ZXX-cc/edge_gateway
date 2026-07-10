@@ -184,17 +184,18 @@ class FlightModeMappingTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
 
-    def test_flight_arm_avoids_non_armable_qland(self):
-        for payload in ({"mode": "QLAN"}, {"flight_mode": "QLAND"}, {"mode_code": 7}):
+    def test_set_flight_mode_arm_avoids_non_armable_qland(self):
+        for payload in ({"mode": "QLAN", "arm": True}, {"flight_mode": "QLAND", "arm": True}, {"mode_code": 7, "arm": True}):
             with self.subTest(payload=payload):
                 manager = MissionManager()
                 flight_control = RecordingFlightControl()
                 manager.set_flight_control(flight_control)
 
-                reply = manager.handle_flight_arm(base_msg(payload))
+                reply = manager.handle_set_flight_mode(base_msg(payload))
 
                 self.assertEqual(reply["data"]["result"], 0)
                 self.assertEqual(reply["data"]["mode"], "QSTABILIZE")
+                self.assertEqual(reply["data"]["armed"], True)
                 self.assertEqual(flight_control.calls, ["QSTABILIZE"])
 
 

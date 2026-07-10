@@ -1676,18 +1676,39 @@ class MissionManager:
         - { "mode": "GUIDED" }
         - { "mode": 4 }
         - { "mode_code": 4 }
+        - { "mode": "QLAN", "arm": true }  # SITL/调试扩展：按 QSTABILIZE 解锁
         """
         data = msg.get('data', {})
-        ok, normalized, reason = normalize_flight_mode_request(data)
+        mode_payload = dict(data) if isinstance(data, dict) else {}
+        for key in ("flight_mode", "mode_name", "mode"):
+            raw_mode = mode_payload.get(key)
+            if isinstance(raw_mode, str) and raw_mode.strip().upper() == "QLAN":
+                mode_payload[key] = "QSTABILIZE"
+
+        ok, normalized, reason = normalize_flight_mode_request(mode_payload)
         if not ok or normalized is None:
             logger.warning(f"Invalid set_flight_mode payload: {reason}, data={data}")
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
-        mode_name = normalized.mode_name
+        requested_mode = normalized.mode_name
+        mode_name = requested_mode
+        should_arm = bool(mode_payload.get("arm") or mode_payload.get("unlock") or mode_payload.get("armed"))
+        if should_arm and mode_name in {"QLAND", "LAND"}:
+            available_modes = (
+                self._flight_control.get_available_modes()
+                if self._flight_control and hasattr(self._flight_control, "get_available_modes")
+                else []
+            )
+            for candidate in ("QSTABILIZE", "QHOVER", "QLOITER", "GUIDED", "MANUAL"):
+                if not available_modes or candidate in available_modes:
+                    mode_name = candidate
+                    break
+            logger.warning("set_flight_mode arm requested non-armable mode %s, using %s", requested_mode, mode_name)
+
         logger.info(
             "Set flight mode: %s (mode_code=%s, source=%s)",
             mode_name,
-            normalized.mode_code,
+            mode_to_dji_code(mode_name),
             normalized.source_key,
         )
 
@@ -1704,91 +1725,31 @@ class MissionManager:
             error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
             return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
 
+        armed = self._flight_control.is_armed_status() if hasattr(self._flight_control, "is_armed_status") else None
+        if should_arm and not armed:
+            if not self._flight_control.arm():
+                reason = "arm command send failed"
+                logger.warning(reason)
+                return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
+
+            wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
+            if callable(wait_for_armed):
+                arm_result = wait_for_armed(target_state=True, timeout=float(mode_payload.get("timeout", 10.0)))
+                if not arm_result.get("success"):
+                    reason = arm_result.get("message") or "arm timeout"
+                    logger.warning(f"飞控解锁失败: {reason}")
+                    return MessageBuilder.build_reply(msg, result=DEVICE_COMMAND_TIMEOUT, msg_str=reason)
+            armed = True
+
         return MessageBuilder.build_reply(
             msg,
             result=0,
             data={
                 "mode": mode_name,
-                "mode_code": normalized.mode_code,
+                "mode_code": mode_to_dji_code(mode_name),
+                "requested_mode": requested_mode,
+                "armed": armed,
             },
-        )
-
-    def handle_flight_arm(self, msg: dict) -> dict:
-        """
-        飞控解锁。
-
-        可选先切到指定模式，默认使用 QSTABILIZE，方便 QuadPlane/SITL 在执行真实航线前完成解锁。
-        QLAND/LAND 是降落模式，不可用于地面解锁；这里会自动避开。
-        Request:
-        - { "flight_mode": "QSTABILIZE" }
-        - { "mode": "QSTABILIZE" }
-        - { "mode": "QLAN" }  # demo 侧别名，按 QSTABILIZE 处理
-        """
-        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
-        if not self._flight_control:
-            reason = "FlightControl not available"
-            logger.warning(reason)
-            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
-
-        mode_payload = dict(data)
-        for key in ("flight_mode", "mode_name", "mode"):
-            raw_mode = mode_payload.get(key)
-            if isinstance(raw_mode, str) and raw_mode.strip().upper() == "QLAN":
-                mode_payload[key] = "QSTABILIZE"
-        if not any(key in mode_payload for key in ("flight_mode", "mode_name", "mode_code", "mode")):
-            mode_payload["flight_mode"] = "QSTABILIZE"
-
-        ok, normalized, reason = normalize_flight_mode_request(mode_payload)
-        if not ok or normalized is None:
-            logger.warning(f"Invalid flight_arm mode payload: {reason}, data={data}")
-            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
-
-        requested_mode = normalized.mode_name
-        arm_mode = requested_mode
-        if requested_mode in {"QLAND", "LAND"}:
-            available_modes = (
-                self._flight_control.get_available_modes()
-                if hasattr(self._flight_control, "get_available_modes")
-                else []
-            )
-            for candidate in ("QSTABILIZE", "QHOVER", "QLOITER", "GUIDED", "MANUAL"):
-                if not available_modes or candidate in available_modes:
-                    arm_mode = candidate
-                    break
-            logger.warning("flight_arm requested non-armable mode %s, using %s", requested_mode, arm_mode)
-
-        mode_result = self._flight_control.set_mode(arm_mode)
-        if not mode_result.get("success"):
-            reason = mode_result.get("message") or "set pre-arm flight mode failed"
-            logger.warning(f"飞控解锁前模式切换失败: {reason}")
-            error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
-            return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
-
-        mode_code = mode_to_dji_code(arm_mode)
-        if self._flight_control.is_armed_status():
-            return MessageBuilder.build_reply(
-                msg,
-                result=0,
-                data={"armed": True, "mode": arm_mode, "mode_code": mode_code, "requested_mode": requested_mode},
-            )
-
-        if not self._flight_control.arm():
-            reason = "arm command send failed"
-            logger.warning(reason)
-            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
-
-        wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
-        if callable(wait_for_armed):
-            arm_result = wait_for_armed(target_state=True, timeout=float(data.get("timeout", 10.0)))
-            if not arm_result.get("success"):
-                reason = arm_result.get("message") or "arm timeout"
-                logger.warning(f"飞控解锁失败: {reason}")
-                return MessageBuilder.build_reply(msg, result=DEVICE_COMMAND_TIMEOUT, msg_str=reason)
-
-        return MessageBuilder.build_reply(
-            msg,
-            result=0,
-            data={"armed": True, "mode": arm_mode, "mode_code": mode_code, "requested_mode": requested_mode},
         )
 
     # ---- 进度上报 ----

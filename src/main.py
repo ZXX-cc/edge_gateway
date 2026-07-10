@@ -792,7 +792,6 @@ class EdgeGateway:
             'one_key_return_home': self.mission.handle_one_key_return_home,
             'cancel_return_home': self.mission.handle_cancel_return_home,
             'set_flight_mode': self.mission.handle_set_flight_mode,
-            'flight_arm': self.mission.handle_flight_arm,
             'go_home': self.mission.handle_go_home,
             'landing': self.mission.handle_landing,
             'emergency_stop': self.mission.handle_emergency_stop,

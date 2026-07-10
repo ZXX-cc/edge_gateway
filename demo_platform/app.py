@@ -233,7 +233,7 @@ def point_from_method(method: str, topic: str) -> str | None:
     # method/topic 是最稳定的业务信号，用它把刷屏日志归并成测试证据。
     name = method.lower()
     topic_l = topic.lower()
-    if any(key in name for key in ("flight_arm", "flighttask", "wayline", "breakpoint", "return_home")):
+    if any(key in name for key in ("flighttask", "wayline", "breakpoint", "return_home")):
         return "real_wayline"
     if any(key in name for key in ("drc", "heart_beat", "drone_control", "fly_to_point", "takeoff_to_point")) or "/drc/" in topic_l:
         return "drc"
@@ -701,7 +701,7 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"label": "退出 DRC", "method": "drc_mode_exit", "data": {"restore_mission": False}},
         ],
         "real_hd_wayline": [
-            {"label": "切 QLAN/QSTABILIZE 并解锁", "method": "flight_arm", "data": {"mode": "QLAN", "timeout": 10}},
+            {"label": "切 QLAN/QSTABILIZE 并解锁", "method": "set_flight_mode", "data": {"mode": "QLAN", "arm": True, "timeout": 10}},
             {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": real_hd_wayline_file, "simulate_mission": {"is_enable": 0, "latitude": 44.0474824, "longitude": 125.3614503}}},
             {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
             {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},

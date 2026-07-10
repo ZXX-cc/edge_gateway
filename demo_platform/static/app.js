@@ -45,8 +45,8 @@ const retestItems = [
     title: "SITL/QGC 真实 HD 航线执行",
     status: "needs_data",
     command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "先完成 flight_arm 解锁，再让 QGC 中看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
-    evidence: "flight_arm 回包、SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
+    expect: "先通过 set_flight_mode(mode=QLAN, arm=true) 解锁，再让 QGC 中看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
+    evidence: "set_flight_mode 回包、SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
   },
   {
     id: "cmd-advanced",
@@ -127,7 +127,7 @@ const actionGroups = {
     action("关闭补光灯", "关闭机场补光灯。", "supplement_light_close", {}),
   ],
   mission: [
-    action("解锁 QLAN 模式", "按 QLAN 别名切到 QSTABILIZE 并发送 MAVLink arm；避免 QLAND 不可解锁。", "flight_arm", {mode: "QLAN", timeout: 10}),
+    action("解锁 QLAN 模式", "使用 set_flight_mode，按 QLAN 别名切到 QSTABILIZE 并 arm；避免 QLAND 不可解锁。", "set_flight_mode", {mode: "QLAN", arm: true, timeout: 10}),
     action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
