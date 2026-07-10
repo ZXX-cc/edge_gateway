@@ -3,6 +3,7 @@ MAVLink连接管理模块
 core/connection.py
 """
 import os
+import struct
 import sys
 import time
 from typing import Optional, Set
@@ -31,6 +32,36 @@ def _extract_msg_id(msg) -> Optional[int]:
     except Exception:
         return None
     return None
+
+
+def _x25_checksum(data: bytes, extra: int) -> int:
+    """Calculate the MAVLink X25 checksum including a message CRC extra."""
+    checksum = 0xFFFF
+    for byte in data + bytes([extra]):
+        tmp = byte ^ (checksum & 0xFF)
+        tmp ^= (tmp << 4) & 0xFF
+        checksum = ((checksum >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
+    return checksum
+
+
+def build_mavlink_v1_heartbeat(source_system: int, source_component: int, sequence: int = 0) -> bytes:
+    """Build a standard MAVLink v1 GCS heartbeat without relying on a dialect."""
+    payload = struct.pack("<IBBBBB", 0, 6, 8, 0, 0, 3)
+    header = struct.pack(
+        "<BBBBBB",
+        0xFE,
+        len(payload),
+        sequence & 0xFF,
+        source_system & 0xFF,
+        source_component & 0xFF,
+        0,
+    )
+    return header + payload + struct.pack("<H", _x25_checksum(payload, 50))
+
+
+def send_udp_bootstrap_heartbeat(sock, target: tuple[str, int], source_system: int, source_component: int) -> None:
+    """Register a UDP peer so a passive nest simulator can return its status."""
+    sock.sendto(build_mavlink_v1_heartbeat(source_system, source_component), target)
 
 
 class MAVLinkConnection:
@@ -171,6 +202,14 @@ class MAVLinkConnection:
                     srcComponent=self.source_component
                 )
                 self.master = CustomUDPMAVLinkWrapper(mav_instance, sock, valid_message_ids)
+
+                # The nest simulator is intentionally passive: it learns the
+                # gateway's ephemeral UDP address from the first packet, then
+                # starts sending DRONE_NEST_RESPONSE status frames.  A standard
+                # MAVLink heartbeat is non-mutating and works with real devices
+                # as well as the custom dialect simulator.
+                send_udp_bootstrap_heartbeat(sock, (host, port), self.source_system, self.source_component)
+                print(f"[Connection] 已发送机巢 UDP 注册心跳: {host}:{port}")
 
                 print(f"[Connection] ✅ UDP自定义dialect连接已建立: {host}:{port}")
                 self.status = ConnectionStatus.CONNECTED
