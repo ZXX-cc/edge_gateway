@@ -5,6 +5,7 @@ MQTT客户端模块
 import json
 import time
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Dict, Optional, List
 import paho.mqtt.client as mqtt
 
@@ -48,12 +49,24 @@ class MQTTClient:
         self._running = False
         self._connect_count = 0
         self._last_osd_log_time = 0
+        # 文件扫描、媒体删除等本地 IO 不能占用 Paho 的网络回调线程。
+        # 控制类 method 仍保持原有串行调用，以免改变设备状态机的执行顺序。
+        worker_count = self.config.get('background_handler_workers', 2)
+        try:
+            self._background_worker_count = max(1, int(worker_count))
+        except (TypeError, ValueError):
+            self._background_worker_count = 2
+        self._background_executor: Optional[ThreadPoolExecutor] = None
+        self._background_methods = set()
+        self._background_futures: set[Future] = set()
+        self._background_lock = threading.Lock()
         self._trace = get_request_trace_recorder()
         self._trace.start()
 
     def connect(self) -> bool:
         """连接到NanoMQ Broker"""
         try:
+            self._ensure_background_executor()
             self.client = mqtt.Client(
                 client_id=f"edge_gateway_{self.gateway_sn}",
                 clean_session=False
@@ -86,6 +99,7 @@ class MQTTClient:
             return self.connected
 
         except Exception as e:
+            self._shutdown_background_executor()
             logger.error(f"MQTT connection failed: {e}", exc_info=True)
             return False
 
@@ -96,8 +110,31 @@ class MQTTClient:
             self.client.loop_stop()
             self.client.disconnect()
         self.connected = False
+        self._shutdown_background_executor()
         self._trace.record("mqtt_disconnected", direction="system", gateway=self.gateway_sn)
         logger.info("MQTT disconnected")
+
+    def _ensure_background_executor(self):
+        """按需创建后台 IO 处理器，允许同一客户端在断开后重新连接。"""
+        with self._background_lock:
+            if self._background_executor is None:
+                self._background_executor = ThreadPoolExecutor(
+                    max_workers=self._background_worker_count,
+                    thread_name_prefix="mqtt-io",
+                )
+
+    def _shutdown_background_executor(self):
+        """停止接收新的后台 IO 任务，不等待文件扫描或删除完成。"""
+        with self._background_lock:
+            executor = self._background_executor
+            self._background_executor = None
+            self._background_futures.clear()
+        if executor is None:
+            return
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:  # Python 3.8 兼容
+            executor.shutdown(wait=False)
 
     def subscribe_downstream(self):
         """
@@ -402,20 +439,27 @@ class MQTTClient:
 
     # ---- 处理器注册 ----
 
-    def register_handler(self, method: str, handler: Callable):
+    def register_handler(self, method: str, handler: Callable, *, background: bool = False):
         """
         注册API方法处理器
 
         Args:
             method: API方法名(如 'flyto', 'camera_photo_take')
             handler: 处理函数(msg: dict) -> dict
+            background: 是否在后台 IO 工作线程执行。仅用于文件扫描、删除等
+                不访问实时状态机的耗时本地操作。
         """
         self._topic_handlers[method] = handler
+        if background:
+            self._background_methods.add(method)
+        else:
+            self._background_methods.discard(method)
         logger.debug(f"Registered handler for method: {method}")
 
     def unregister_handler(self, method: str):
         """注销处理器"""
         self._topic_handlers.pop(method, None)
+        self._background_methods.discard(method)
 
     def set_status_reply_handler(self, handler: Callable):
         """设置 status_reply 处理器"""
@@ -700,58 +744,24 @@ class MQTTClient:
                             self._publish_reply_for_source_topic(msg.topic, error_reply)
                         return
 
-                    result = handler(payload)
-                    if is_downstream_command:
-                        trace_command(
-                            "mqtt_handler_completed",
-                            source_topic=msg.topic,
-                            method=method,
-                            tid=payload.get("tid"),
-                            result=self._reply_result(result),
-                        )
-                    elapsed_ms = int((time.perf_counter() - started) * 1000)
-                    self._trace.record(
-                        "mqtt_handler_completed",
-                        direction="in",
-                        topic=msg.topic,
-                        payload=payload,
-                        result=self._reply_result(result),
-                        elapsed_ms=elapsed_ms,
-                        extra={
-                            "reply_method": result.get('method') if isinstance(result, dict) else "",
-                            "reply_result": self._reply_result(result),
-                            "will_reply": bool(payload.get('need_reply') == 1 and result),
-                        },
-                    )
-                    logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
-                        ("method", method),
-                        ("tid", payload.get('tid')),
-                        ("source_topic", msg.topic),
-                        ("result", self._reply_result(result)),
-                        ("reply", format_with_labels(result, max_length=3000)),
-                    ]))
-                    # 如果需要响应，自动发送
-                    if payload.get('need_reply') == 1 and result:
-                        self._publish_reply_for_downstream_topic(msg.topic, result)
-                except Exception as e:
-                    self._trace.record(
-                        "mqtt_handler_exception",
-                        direction="in",
-                        topic=msg.topic,
-                        payload=payload,
-                        elapsed_ms=int((time.perf_counter() - started) * 1000),
-                        error=str(e),
-                    )
-                    logger.error(f"Handler error for {method}: {e}", exc_info=True)
-                    if payload.get('need_reply') == 1:
-                        error_reply = self._build_error_reply(
+                    if method in self._background_methods:
+                        self._submit_background_handler(
+                            handler,
                             payload,
-                            -1,
-                            f"Handler error for {method}: {e}",
-                            self.gateway_sn,
-                            context="handler_exception",
+                            msg.topic,
+                            started,
+                            is_downstream_command,
                         )
-                        self._publish_reply_for_downstream_topic(msg.topic, error_reply)
+                    else:
+                        self._execute_handler(
+                            handler,
+                            payload,
+                            msg.topic,
+                            started,
+                            is_downstream_command,
+                        )
+                except Exception as e:
+                    self._handle_handler_exception(payload, msg.topic, started, e)
             else:
                 if is_downstream_command:
                     trace_command(
@@ -790,3 +800,122 @@ class MQTTClient:
                 error=str(e),
             )
             logger.error(f"Message processing error: {e}", exc_info=True)
+
+    def _submit_background_handler(
+        self,
+        handler: Callable,
+        payload: dict,
+        source_topic: str,
+        started: float,
+        is_downstream_command: bool,
+    ):
+        """把明确标记的文件 IO handler 移出 MQTT 网络回调线程。"""
+        self._ensure_background_executor()
+        method = payload.get("method", "")
+        self._trace.record(
+            "mqtt_handler_queued",
+            direction="in",
+            topic=source_topic,
+            payload=payload,
+            extra={"execution": "background_io"},
+        )
+        if is_downstream_command:
+            trace_command(
+                "mqtt_handler_queued",
+                source_topic=source_topic,
+                method=method,
+                tid=payload.get("tid"),
+                execution="background_io",
+            )
+
+        with self._background_lock:
+            executor = self._background_executor
+            if executor is None:
+                raise RuntimeError("Background MQTT handler executor is unavailable")
+            future = executor.submit(
+                self._execute_handler,
+                handler,
+                payload,
+                source_topic,
+                started,
+                is_downstream_command,
+            )
+            self._background_futures.add(future)
+        future.add_done_callback(self._discard_background_future)
+
+    def _discard_background_future(self, future: Future):
+        with self._background_lock:
+            self._background_futures.discard(future)
+
+    def _execute_handler(
+        self,
+        handler: Callable,
+        payload: dict,
+        source_topic: str,
+        started: float,
+        is_downstream_command: bool,
+    ):
+        """执行 handler、记录链路耗时并按原 topic 返回 reply。"""
+        method = payload.get("method", "")
+        handler_started = time.perf_counter()
+        try:
+            result = handler(payload)
+            handler_elapsed_ms = int((time.perf_counter() - handler_started) * 1000)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if is_downstream_command:
+                trace_command(
+                    "mqtt_handler_completed",
+                    source_topic=source_topic,
+                    method=method,
+                    tid=payload.get("tid"),
+                    result=self._reply_result(result),
+                    handler_elapsed_ms=handler_elapsed_ms,
+                )
+            self._trace.record(
+                "mqtt_handler_completed",
+                direction="in",
+                topic=source_topic,
+                payload=payload,
+                result=self._reply_result(result),
+                elapsed_ms=elapsed_ms,
+                extra={
+                    "handler_elapsed_ms": handler_elapsed_ms,
+                    "execution": "background_io" if method in self._background_methods else "inline",
+                    "reply_method": result.get('method') if isinstance(result, dict) else "",
+                    "reply_result": self._reply_result(result),
+                    "will_reply": bool(payload.get('need_reply') == 1 and result),
+                },
+            )
+            logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
+                ("method", method),
+                ("tid", payload.get('tid')),
+                ("source_topic", source_topic),
+                ("handler_elapsed_ms", handler_elapsed_ms),
+                ("result", self._reply_result(result)),
+                ("reply", format_with_labels(result, max_length=3000)),
+            ]))
+            if payload.get('need_reply') == 1 and result:
+                self._publish_reply_for_downstream_topic(source_topic, result)
+        except Exception as error:
+            self._handle_handler_exception(payload, source_topic, started, error)
+
+    def _handle_handler_exception(self, payload: dict, source_topic: str, started: float, error: Exception):
+        method = payload.get("method", "")
+        self._trace.record(
+            "mqtt_handler_exception",
+            direction="in",
+            topic=source_topic,
+            payload=payload,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            error=str(error),
+        )
+        logger.error(f"Handler error for {method}: {error}", exc_info=True)
+        if payload.get('need_reply') == 1:
+            error_reply = self._build_error_reply(
+                payload,
+                -1,
+                f"Handler error for {method}: {error}",
+                self.gateway_sn,
+                context="handler_exception",
+            )
+            self._publish_reply_for_downstream_topic(source_topic, error_reply)

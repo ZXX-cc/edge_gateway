@@ -68,6 +68,18 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 logger = get_logger("main")
 
 
+# 这些 handler 会递归扫描日志/媒体目录或执行本地删除。必须移出 Paho MQTT
+# 网络回调线程；飞控、DRC 和机巢控制仍保持原有同步顺序，避免状态机并发。
+BACKGROUND_IO_METHODS = frozenset({
+    'fileupload_list',
+    'device_log_list_get',
+    'device_log_upload',
+    'file_list_get',
+    'file_delete',
+    'adjust_upload_priority',
+})
+
+
 def filter_dock_status_fields(updates: dict) -> dict:
     """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
     dock_updates = {}
@@ -231,7 +243,11 @@ class EdgeGateway:
             if self.mqtt.connect():
                 # 注册路由器到MQTT
                 for method, handler in self.router._routes.items():
-                    self.mqtt.register_handler(method, handler)
+                    self.mqtt.register_handler(
+                        method,
+                        handler,
+                        background=method in BACKGROUND_IO_METHODS,
+                    )
             else:
                 logger.warning("MQTT not connected, running in offline mode")
 

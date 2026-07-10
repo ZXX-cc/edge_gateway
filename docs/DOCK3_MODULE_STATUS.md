@@ -1,6 +1,6 @@
 # Dock3 模块完成状态总表
 
-更新时间：2026-07-09
+更新时间：2026-07-10
 
 本文档给多人协同开发使用，用一张表说明当前 DJI Dock 3 迁移中每个模块的完成状态、已验证内容、未完成内容和下一步。更细的过程记录见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`，接口字段和错误码见 `docs/INTERFACE_DESIGN_SPEC.md`。
 
@@ -68,7 +68,7 @@
 | MQTT topic/reply 边界 | 已通过 | 92% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证；人员1验收脚本已统一收敛到共享 MQTT 客户端，按 `tid + method + topic + Dock3格式` 过滤旧回包；OSD/state 已支持把旧 OSD/state 样本计入 `--fail-on-stale`；DRC 专项已输出 `stale_samples` 便于定位旧回包来源 | broker 中仍可能观察到旧进程产生的重复回包，需要清理环境后做严格验证 | 清理旧回包源，执行全链路 `--fail-on-stale` 严格验收 | 人员1 |
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
 | 日志与可观测性 | 已通过 | 90% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 复测；命令链 `command_trace` 已补 Dock3 properties/device/CMD/DRC/Wayline/media/live/HMS/log/firmware/config 中文动作映射，未知 method 会明确打印“未注册业务处理器”；11 段 E2E 已能输出分段耗时和最终汇总 | 压缩策略、真实 OSS 上传和 E2E 证据自动归档未完整实现 | 接入全链路证据归档 | 人员1/人员3 |
-| 非阻塞与容错基础 | 部分完成 | 50% | 已修复若干 coroutine 未 await warning，停止流程可正常 await；数据保留和云同步已统一秒级/毫秒级时间戳过期判断，本地 `tests.test_database_time_utils` 已通过 | MongoDB/NoSQL 目标未实现，数据库写入和文件 IO 仍需全面后台化审计；真实 DB 清理专项未完成 | 建异步数据访问层、操作队列和 DB 清理验收脚本 | 人员1/人员2 |
+| 非阻塞与容错基础 | 部分完成 | 58% | 已修复若干 coroutine 未 await warning，停止流程可正常 await；数据保留和云同步已统一秒级/毫秒级时间戳过期判断，本地 `tests.test_database_time_utils` 已通过；`fileupload_list`、设备日志列表/上传、媒体列表/删除和上传优先级等文件 IO handler 已改为受控后台执行，`tests.test_mqtt_background_handlers` 验证 MQTT 回调不等待慢扫描、异步 reply 正确返回，控制类 handler 保持同步顺序 | MongoDB/NoSQL 目标未实现，DB、固件和媒体上传仍需全面后台化审计；真实 DB 清理与 Ubuntu E2E 压测未完成 | 扩展后台任务审计，补操作队列、DB 清理和超时注入验收 | 人员1/人员2 |
 | Properties / OSD / State | 已通过 | 80% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；11 段 E2E 的 OSD/state 阶段已在服务器通过，输出 `dock_osd=1, drone_osd=1, state=1, invalid=0`；脚本已忽略旧版 `reason=property_changed` state 和旧 helper 的部分 value-wrapper OSD 残留，当前有效样本仍按 Dock3 必填字段严格校验 | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 85% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；服务器多设备专项已验证 `DRONE-SIM-001,DRONE-SIM-002` 上线、离线空拓扑、重连恢复和非法拓扑拒绝；organization 多设备绑定服务器复测已验证 `sub_devices=2` 和 `status_reply result=0`；服务器 device 解绑专项已验证 `device_unbinding events ok: count=3`、空 `update_topo`、`unbind=True`；E2E device 单段已通过 | `domain/type/sub_type` 官方产品枚举、真实云端字段差异未精校 | 精校设备类型枚举和真实云端字段 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 84% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；服务器多设备绑定已通过，输出 3 次 `device_binding`、`update_topo schema ok ... sub_devices=2`、`memory binding ok`、`sub-device paired ok` 和 `organization request test ok`；device 解绑服务器专项已覆盖多设备解绑事件和空拓扑 | 真实云端差异仍需精校 | 继续真实云端字段精校 | 人员1 |

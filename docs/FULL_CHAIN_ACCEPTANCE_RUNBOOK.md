@@ -1,6 +1,6 @@
 # 全链路验收 Runbook
 
-更新时间：2026-07-09
+更新时间：2026-07-10
 
 本文档用于证明 Edge Gateway 按客户需求和 DJI Dock 3 口径完成全链路可用。它不是开发计划，而是验收执行手册。
 
@@ -58,6 +58,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Live 专项，已通过 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
 | `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
+| `tests/test_mqtt_background_handlers.py` | P0-16 本地非阻塞回归 | 慢日志/媒体 IO handler 不占用 MQTT 网络回调线程，后台完成后 reply 可达；控制类 handler 保持同步顺序 |
 | `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
@@ -73,6 +74,14 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 已通过 `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：mock KMZ、机巢 `request_takeoff`、任务完成事件 | P1 |
 | `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
 | 已通过 `tools/e2e_full_chain_test.py` | 11 段 P0/P1 全链路；清理旧进程后继续用 `--fail-on-stale` 做严格验收 | P1 |
+
+P0-16 本地回归命令：
+
+```bash
+python -m unittest tests.test_mqtt_background_handlers
+```
+
+通过标准：慢日志/媒体 handler 已启动但未完成时，MQTT 回调立即返回；解除 handler 后，同一 `tid` 在正确 reply topic 收到 `result=0`。该单测不替代 Ubuntu 上的长时间 E2E 和 DB/上传超时注入。
 
 ## 3. 启动前检查
 
