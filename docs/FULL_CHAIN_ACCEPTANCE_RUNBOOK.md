@@ -83,6 +83,8 @@ python -m unittest tests.test_mqtt_background_handlers
 
 通过标准：慢日志/媒体 handler 已启动但未完成时，MQTT 回调立即返回；解除 handler 后，同一 `tid` 在正确 reply topic 收到 `result=0`。该单测不替代 Ubuntu 上的长时间 E2E 和 DB/上传超时注入。
 
+2026-07-10 Ubuntu 已通过：`tests.test_mqtt_background_handlers` 为 2/2；随后 `mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` 输出 `accepted=8, events=5`，`mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 输出 `accepted=6, events=2`。该证据确认日志/媒体后台 handler 的 services reply 和事件链路可用，但不替代后续 DB、上传和长时间 E2E 压测。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：
