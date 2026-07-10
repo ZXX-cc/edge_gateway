@@ -334,6 +334,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 2026-07-10 真实 SITL 航点上传已通过：`python tools/mqtt_dock3_wayline_test.py --real-sitl --timeout 30 --quiet-stale --fail-on-stale` 输出 `dock3 real SITL wayline test ok (accepted=1, events=2, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。`flighttask_prepare` 以 `simulate_mission.is_enable=0` 执行，KMZ 解析出 3 个航点并完成飞控上传握手；该安全模式未请求 AUTO/执行或起飞，真实执行需显式附加 `--execute-real`。
 
+2026-07-10 真实 HD.kml 执行与清理已通过：`python tools/mqtt_dock3_wayline_test.py --real-sitl --execute-real --execute-observe-seconds 15 --wayline-file /home/fenghuolun/zwz/HD.kml --timeout 30 --quiet-stale --fail-on-stale` 以非模拟方式上传 10 个航点，`QLAND` 请求回执为 `QSTABILIZE` 且 `armed=true`，`flighttask_execute` 进入 `AUTO`。15 秒后 `flighttask_progress` 返回运行中、第 2/10 航点、20%；随后工具对本次创建的精确任务 ID 自动发送 `flighttask_undo`，收到 `canceled`、状态 9 和相同 flight ID。输出 `dock3 real SITL wayline test ok (accepted=5, events=8, ignored_total=0)`；尚未把 HD.kml 的终态/返航作为通过条件。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：
