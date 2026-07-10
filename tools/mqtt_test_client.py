@@ -570,12 +570,25 @@ class MqttRequestClient:
         return metadata
 
     def stale_total(self) -> int:
+        """Return strict failures that are attributable to this test client.
+
+        All gateway replies share MQTT topics.  A reply whose ``tid`` was
+        never issued by this client can belong to the demo platform or another
+        concurrent acceptance tool, so it is retained in ``ignored_unknown``
+        for diagnosis but must not make this client's ``--fail-on-stale``
+        result fail.  Replies for a completed test ``tid`` remain duplicates
+        and are still strict failures.
+        """
         return (
             self.stats["ignored_mismatched"]
             + self.stats["ignored_legacy"]
-            + self.stats["ignored_late"]
+            + self.stats["ignored_duplicate"]
             + self.stats["ignored_wrong_topic"]
         )
+
+    def unrelated_reply_total(self) -> int:
+        """Return replies for unknown TIDs, normally emitted by other clients."""
+        return self.stats["ignored_unknown"]
 
     def stale_sample_summary(self, limit: int = 5) -> list[dict[str, Any]]:
         if limit <= 0:

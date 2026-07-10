@@ -288,6 +288,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["ignored_late"], 1)
         self.assertEqual(self.client.stats["ignored_duplicate"], 1)
         self.assertEqual(self.client.stats["ignored_unknown"], 0)
+        self.assertEqual(self.client.stale_total(), 1)
         self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "duplicate")
         self.assertEqual(self.client.stale_sample_summary()[-1]["tid"], self.tid)
 
@@ -312,7 +313,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             {"retain": True, "dup": True, "mid": 42, "qos": 1},
         )
 
-    def test_unknown_tid_reply_is_counted_as_unknown_late(self):
+    def test_unknown_tid_reply_is_tracked_without_failing_strict_client_check(self):
         self.client.pending.clear()
         payload = {
             "tid": "unknown-tid",
@@ -326,6 +327,8 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["ignored_late"], 1)
         self.assertEqual(self.client.stats["ignored_duplicate"], 0)
         self.assertEqual(self.client.stats["ignored_unknown"], 1)
+        self.assertEqual(self.client.unrelated_reply_total(), 1)
+        self.assertEqual(self.client.stale_total(), 0)
         self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "unknown")
         self.assertEqual(self.client.stale_sample_summary()[-1]["tid"], "unknown-tid")
 

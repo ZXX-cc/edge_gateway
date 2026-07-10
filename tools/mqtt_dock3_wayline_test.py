@@ -320,7 +320,11 @@ def main():
                 return rc
             ignored_total = client.ignored_total()
             if args.fail_on_stale and ignored_total:
-                print(f"stale replies observed: {client.stats}", file=sys.stderr)
+                print(
+                    "strict stale replies observed: "
+                    f"stats={client.stats}, samples={client.stale_sample_summary()}",
+                    file=sys.stderr,
+                )
                 return 9
             print(
                 f"dock3 {'real SITL ' if args.real_sitl else ''}wayline test ok "
@@ -328,6 +332,8 @@ def main():
                 f"ignored_mismatched={client.stats['ignored_mismatched']}, "
                 f"ignored_legacy={client.stats['ignored_legacy']}, "
                 f"ignored_late={client.stats['ignored_late']}, "
+                f"ignored_duplicate={client.stats['ignored_duplicate']}, "
+                f"ignored_unknown={client.unrelated_reply_total()}, "
                 f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
                 f"ignored_total={ignored_total})"
             )
