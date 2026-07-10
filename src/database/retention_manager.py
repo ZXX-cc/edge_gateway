@@ -44,6 +44,12 @@ class DataRetentionManager:
         self._max_db_size_mb = Config.get('retention.max_db_size_mb', 50)
 
         self._last_cleanup_time = 0
+        self._last_cleanup_counts = {
+            'telemetry': 0,
+            'operation': 0,
+            'alarm': 0,
+            'media_uploaded': 0,
+        }
         self._last_vacuum_time = 0
 
         self._db_file_path = self._extract_db_path()
@@ -99,7 +105,6 @@ class DataRetentionManager:
                 await self._check_db_size()
 
                 if current_time - self._last_cleanup_time >= self._cleanup_interval_hours * 3600:
-                    self._last_cleanup_time = current_time
                     await self._clean_expired_data()
 
                 if current_time - self._last_vacuum_time >= self._vacuum_interval_hours * 3600:
@@ -134,11 +139,16 @@ class DataRetentionManager:
             logger.error(f"Check DB size error: {e}")
 
     async def _clean_expired_data(self):
-        """异步清理过期数据"""
+        """异步清理过期数据，并返回各类别的删除数量。"""
         from sqlalchemy import delete
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
-            deleted_counts = {}
+            deleted_counts = {
+                'telemetry': 0,
+                'operation': 0,
+                'alarm': 0,
+                'media_uploaded': 0,
+            }
 
             if self._telemetry_hours > 0:
                 from src.database.models import TelemetryData
@@ -176,8 +186,13 @@ class DataRetentionManager:
 
             await session.commit()
 
+            self._last_cleanup_time = time.time()
+            self._last_cleanup_counts = dict(deleted_counts)
+
             if any(v > 0 for v in deleted_counts.values()):
                 logger.info(f"Data retention cleanup: {deleted_counts}")
+
+            return deleted_counts
 
     async def _run_vacuum(self):
         """异步执行 SQLite VACUUM 操作"""
@@ -193,9 +208,9 @@ class DataRetentionManager:
             logger.error(f"VACUUM execution error: {e}")
 
     async def manual_cleanup(self):
-        """异步手动触发一次清理"""
+        """异步手动触发一次清理，并返回各类别的删除数量。"""
         logger.info("Manual cleanup triggered")
-        await self._clean_expired_data()
+        return await self._clean_expired_data()
 
     def get_status(self) -> dict:
         return {
@@ -210,6 +225,7 @@ class DataRetentionManager:
                 'max_db_size_mb': self._max_db_size_mb
             },
             'last_cleanup_time': self._last_cleanup_time,
+            'last_cleanup_counts': dict(self._last_cleanup_counts),
             'last_vacuum_time': self._last_vacuum_time,
             'db_file_path': self._db_file_path
         }
