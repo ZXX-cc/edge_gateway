@@ -209,7 +209,23 @@ def run_real_sitl_prepare_check(client, args):
     )
     if rc != 0:
         return rc
-    print(f"real SITL execute accepted (flight_id={flight_id})")
+    time.sleep(args.execute_observe_seconds)
+    rc, progress = client.request(
+        "flighttask_progress",
+        {"flight_id": flight_id},
+        args.timeout,
+        [0],
+        "in_progress",
+    )
+    if rc != 0:
+        return rc
+    ext = progress.get("data", {}).get("output", {}).get("ext", {})
+    print(
+        "real SITL execute/progress verified "
+        f"(flight_id={flight_id}, observe_seconds={args.execute_observe_seconds}, "
+        f"waypoint_index={ext.get('current_waypoint_index')}, "
+        f"mission_state={ext.get('wayline_mission_state')})"
+    )
     return 0
 
 
@@ -235,12 +251,20 @@ def main():
         action="store_true",
         help="with --real-sitl, also request flighttask_execute/AUTO; use only in an isolated SITL",
     )
+    parser.add_argument(
+        "--execute-observe-seconds",
+        type=float,
+        default=8.0,
+        help="seconds to wait before reading flighttask_progress after --execute-real",
+    )
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     if args.execute_real and not args.real_sitl:
         parser.error("--execute-real requires --real-sitl")
+    if args.execute_observe_seconds < 0:
+        parser.error("--execute-observe-seconds must be non-negative")
 
     temp_dir = None
     if not args.wayline_file:
