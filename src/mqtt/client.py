@@ -3,8 +3,10 @@ MQTT客户端模块
 连接NanoMQ本地Broker，处理消息发布/订阅
 """
 import json
+import os
 import time
 import threading
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Dict, Optional, List
 import paho.mqtt.client as mqtt
@@ -49,6 +51,9 @@ class MQTTClient:
         self._running = False
         self._connect_count = 0
         self._last_osd_log_time = 0
+        # 仅写入本地 trace/command trace，不放入 Dock3 MQTT payload；用于在共享
+        # broker 中识别“当前网关发布”与外部旧进程的同 tid 回包。
+        self._trace_instance = f"{self.gateway_sn}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         # 文件扫描、媒体删除等本地 IO 不能占用 Paho 的网络回调线程。
         # 控制类 method 仍保持原有串行调用，以免改变设备状态机的执行顺序。
         worker_count = self.config.get('background_handler_workers', 2)
@@ -188,6 +193,8 @@ class MQTTClient:
             extra["publish_ok"] = ok
         if source_topic:
             extra["source_topic"] = source_topic
+        extra["publisher_pid"] = os.getpid()
+        extra["publisher_instance"] = self._trace_instance
         self._trace.record(
             event,
             direction=direction,
@@ -817,7 +824,11 @@ class MQTTClient:
             direction="in",
             topic=source_topic,
             payload=payload,
-            extra={"execution": "background_io"},
+            extra={
+                "execution": "background_io",
+                "gateway_pid": os.getpid(),
+                "gateway_instance": self._trace_instance,
+            },
         )
         if is_downstream_command:
             trace_command(
@@ -826,6 +837,8 @@ class MQTTClient:
                 method=method,
                 tid=payload.get("tid"),
                 execution="background_io",
+                gateway_pid=os.getpid(),
+                gateway_instance=self._trace_instance,
             )
 
         with self._background_lock:
@@ -870,6 +883,8 @@ class MQTTClient:
                     tid=payload.get("tid"),
                     result=self._reply_result(result),
                     handler_elapsed_ms=handler_elapsed_ms,
+                    gateway_pid=os.getpid(),
+                    gateway_instance=self._trace_instance,
                 )
             self._trace.record(
                 "mqtt_handler_completed",
@@ -881,6 +896,8 @@ class MQTTClient:
                 extra={
                     "handler_elapsed_ms": handler_elapsed_ms,
                     "execution": "background_io" if method in self._background_methods else "inline",
+                    "gateway_pid": os.getpid(),
+                    "gateway_instance": self._trace_instance,
                     "reply_method": result.get('method') if isinstance(result, dict) else "",
                     "reply_result": self._reply_result(result),
                     "will_reply": bool(payload.get('need_reply') == 1 and result),
