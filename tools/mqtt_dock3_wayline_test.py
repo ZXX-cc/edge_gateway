@@ -361,32 +361,6 @@ def run_real_sitl_prepare_check(client, args):
     vehicle to AUTO or request takeoff.
     """
     flight_id = args.flight_id or f"dock3-real-sitl-{int(time.time())}"
-    if args.execute_real and not args.skip_prearm_verify:
-        rc, prearm_payload = client.request(
-            "set_flight_mode",
-            {
-                # QLAND is intentionally requested here: the gateway must map
-                # it to a mode that permits arming (normally QSTABILIZE).
-                "mode": "QLAND",
-                "arm": True,
-                "timeout": args.arm_timeout,
-                "prearm_timeout": args.prearm_timeout,
-            },
-            args.timeout,
-            [0],
-            None,
-        )
-        if rc != 0:
-            return rc
-        prearm_data = prearm_payload.get("data", {}) if isinstance(prearm_payload, dict) else {}
-        if prearm_data.get("armed") is not True:
-            print(f"real SITL pre-arm did not confirm armed=true: {prearm_payload}", file=sys.stderr)
-            return 24
-        print(
-            "real SITL pre-arm verified "
-            f"(requested=QLAND, applied={prearm_data.get('mode')}, armed={prearm_data.get('armed')})"
-        )
-
     rc, prepare_payload = client.request(
         "flighttask_prepare",
         official_prepare_payload(flight_id, args.wayline_file, simulate=False),
@@ -412,6 +386,34 @@ def run_real_sitl_prepare_check(client, args):
             "AUTO/execute was not requested"
         )
         return 0
+
+    # Keep this after successful upload/prepare so an invalid local file or a
+    # failed MAVLink mission handshake never leaves the isolated SITL armed.
+    if not args.skip_prearm_verify:
+        rc, prearm_payload = client.request(
+            "set_flight_mode",
+            {
+                # QLAND is intentionally requested here: the gateway must map
+                # it to a mode that permits arming (normally QSTABILIZE).
+                "mode": "QLAND",
+                "arm": True,
+                "timeout": args.arm_timeout,
+                "prearm_timeout": args.prearm_timeout,
+            },
+            args.timeout,
+            [0],
+            None,
+        )
+        if rc != 0:
+            return rc
+        prearm_data = prearm_payload.get("data", {}) if isinstance(prearm_payload, dict) else {}
+        if prearm_data.get("armed") is not True:
+            print(f"real SITL pre-arm did not confirm armed=true: {prearm_payload}", file=sys.stderr)
+            return 24
+        print(
+            "real SITL pre-arm verified "
+            f"(requested=QLAND, applied={prearm_data.get('mode')}, armed={prearm_data.get('armed')})"
+        )
 
     rc, _ = client.request(
         "flighttask_execute",
