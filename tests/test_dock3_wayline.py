@@ -199,6 +199,31 @@ class RecordingActionFlightControl:
         return True
 
 
+class RecordingRealWaylineFlightControl:
+    def __init__(self):
+        self.calls = []
+        self.armed = False
+
+    def get_available_modes(self):
+        return ["QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "AUTO", "GUIDED", "MANUAL"]
+
+    def is_armed_status(self):
+        return self.armed
+
+    def set_mode(self, mode):
+        self.calls.append(("set_mode", mode))
+        return {"success": True, "message": "ok"}
+
+    def arm(self):
+        self.calls.append(("arm", None))
+        self.armed = True
+        return True
+
+    def _wait_for_armed(self, target_state, timeout=10.0):
+        self.calls.append(("wait_for_armed", target_state))
+        return {"success": self.armed == target_state, "message": "ok"}
+
+
 class RecordingNest:
     def __init__(self):
         self.calls = []
@@ -513,6 +538,27 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(undo["data"]["output"]["status"], "canceled")
         self.assertEqual(flight_control.calls, [])
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+    def test_real_flighttask_execute_prearms_before_auto(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        manager.set_flight_control(flight_control)
+        manager.start_mission_monitor = lambda: None
+        manager._simulate_mission = {"is_enable": 0}
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
+            "flight_id": "flight-001",
+        }))
+
+        self.assertEqual(execute["data"]["result"], 0)
+        self.assertEqual(execute["data"]["output"]["status"], "in_progress")
+        self.assertEqual(flight_control.calls, [
+            ("set_mode", "QSTABILIZE"),
+            ("arm", None),
+            ("wait_for_armed", True),
+            ("set_mode", "AUTO"),
+        ])
 
     def test_simulated_takeoff_flow_requests_nest_and_completes(self):
         events = []

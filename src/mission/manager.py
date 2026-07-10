@@ -1752,6 +1752,49 @@ class MissionManager:
             },
         )
 
+    def _select_pre_mission_arm_mode(self) -> str:
+        available_modes = (
+            self._flight_control.get_available_modes()
+            if self._flight_control and hasattr(self._flight_control, "get_available_modes")
+            else []
+        )
+        for candidate in ("QSTABILIZE", "QHOVER", "QLOITER", "GUIDED", "MANUAL"):
+            if not available_modes or candidate in available_modes:
+                return candidate
+        return "QSTABILIZE"
+
+    def _ensure_armed_for_real_wayline(self) -> tuple[bool, str]:
+        if not self._flight_control:
+            return True, ""
+
+        is_armed = (
+            self._flight_control.is_armed_status()
+            if hasattr(self._flight_control, "is_armed_status")
+            else None
+        )
+        if is_armed is True:
+            return True, ""
+
+        if not hasattr(self._flight_control, "arm"):
+            return True, ""
+
+        arm_mode = self._select_pre_mission_arm_mode()
+        logger.info("Real flighttask execute pre-arm: switch to %s before AUTO", arm_mode)
+        mode_result = self._flight_control.set_mode(arm_mode)
+        if not mode_result.get("success"):
+            return False, mode_result.get("message") or f"set pre-arm mode {arm_mode} failed"
+
+        if not self._flight_control.arm():
+            return False, "arm command send failed"
+
+        wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
+        if callable(wait_for_armed):
+            arm_result = wait_for_armed(target_state=True, timeout=10.0)
+            if not arm_result.get("success"):
+                return False, arm_result.get("message") or "arm timeout"
+
+        return True, ""
+
     # ---- 进度上报 ----
 
     def report_progress(self, waypoint_idx: int, total: int, status: str = "executing"):
@@ -2502,6 +2545,12 @@ class MissionManager:
             self.start_mission_monitor()
 
         if self._flight_control and not simulate_enabled:
+            armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
+            if not armed_ok:
+                logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
+                self._status = self.MISSION_FAILED
+                return MessageBuilder.build_reply(msg, result=-1, msg_str=armed_reason)
+
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"启动航线任务失败: {result.get('message')}")
