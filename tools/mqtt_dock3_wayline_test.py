@@ -298,6 +298,23 @@ def validate_real_sitl_progress(progress, flight_id, expected_file):
     return 0, progress_status, ext
 
 
+def cleanup_real_sitl_mission(client, args, flight_id: str) -> int:
+    """Cancel the isolated test mission so it cannot block the next run."""
+    if args.leave_real_mission_running:
+        print(f"real SITL mission left running by request (flight_id={flight_id})")
+        return 0
+    rc, _ = client.request(
+        "flighttask_undo",
+        {"flight_ids": [flight_id]},
+        args.timeout,
+        [0],
+        "canceled",
+    )
+    if rc == 0:
+        print(f"real SITL test mission cleaned up (flight_id={flight_id})")
+    return rc
+
+
 def run_wayline_checks(client, args):
     flight_id = args.flight_id or f"dock3-wayline-{int(time.time())}"
     rc, prepare_payload = client.request(
@@ -405,10 +422,12 @@ def run_real_sitl_prepare_check(client, args):
             None,
         )
         if rc != 0:
+            cleanup_real_sitl_mission(client, args, flight_id)
             return rc
         prearm_data = prearm_payload.get("data", {}) if isinstance(prearm_payload, dict) else {}
         if prearm_data.get("armed") is not True:
             print(f"real SITL pre-arm did not confirm armed=true: {prearm_payload}", file=sys.stderr)
+            cleanup_real_sitl_mission(client, args, flight_id)
             return 24
         print(
             "real SITL pre-arm verified "
@@ -423,6 +442,7 @@ def run_real_sitl_prepare_check(client, args):
         "in_progress",
     )
     if rc != 0:
+        cleanup_real_sitl_mission(client, args, flight_id)
         return rc
     time.sleep(args.execute_observe_seconds)
     rc, progress = client.request(
@@ -433,9 +453,11 @@ def run_real_sitl_prepare_check(client, args):
         None,
     )
     if rc != 0:
+        cleanup_real_sitl_mission(client, args, flight_id)
         return rc
     rc, progress_status, ext = validate_real_sitl_progress(progress, flight_id, expected_file)
     if rc != 0:
+        cleanup_real_sitl_mission(client, args, flight_id)
         return rc
 
     if args.require_completion:
@@ -450,9 +472,11 @@ def run_real_sitl_prepare_check(client, args):
                 None,
             )
             if rc != 0:
+                cleanup_real_sitl_mission(client, args, flight_id)
                 return rc
             rc, progress_status, ext = validate_real_sitl_progress(progress, flight_id, expected_file)
             if rc != 0:
+                cleanup_real_sitl_mission(client, args, flight_id)
                 return rc
             print(
                 "real SITL completion observation "
@@ -471,7 +495,13 @@ def run_real_sitl_prepare_check(client, args):
                 f"{json.dumps(real_sitl_osd_snapshot(client, args), ensure_ascii=False, sort_keys=True)}",
                 file=sys.stderr,
             )
+            cleanup_real_sitl_mission(client, args, flight_id)
             return 23
+
+    if progress_status != "ok":
+        cleanup_rc = cleanup_real_sitl_mission(client, args, flight_id)
+        if cleanup_rc != 0:
+            return cleanup_rc
 
     print(
         "real SITL execute/progress verified "
@@ -534,6 +564,11 @@ def main():
     parser.add_argument("--skip-prearm-verify", action="store_true", help="skip the QLAND-to-armable-mode verification before real execution")
     parser.add_argument("--arm-timeout", type=float, default=10.0, help="arm confirmation timeout for real-SITL pre-arm verification")
     parser.add_argument("--prearm-timeout", type=float, default=30.0, help="pre-arm readiness wait for real-SITL verification")
+    parser.add_argument(
+        "--leave-real-mission-running",
+        action="store_true",
+        help="do not automatically undo an in-progress real-SITL test mission",
+    )
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()

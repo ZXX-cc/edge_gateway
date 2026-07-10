@@ -410,6 +410,51 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(undo["data"]["result"], 0)
             self.assertFalse(breakpoint_path.exists())
 
+    def test_flighttask_undo_current_alias_releases_recovered_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            breakpoint_path = Path(tmp) / "breakpoint.json"
+            manager = MissionManager()
+            events = []
+            manager.set_event_callback(events.append)
+            manager._breakpoint_file_path = lambda: str(breakpoint_path)
+            manager._current_task_id = "recovered-flight-001"
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+            manager._current_waypoint_idx = 1
+            manager._breakpoint_waypoint_idx = 1
+            manager._status = manager.MISSION_PAUSED
+            manager._simulate_mission = {"is_enable": 1}
+            manager.stop_mission_monitor = lambda: True
+            manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+            manager._save_breakpoint_file("test persisted mission")
+
+            undo = manager.handle_flighttask_undo(base_msg("flighttask_undo", {
+                "flight_ids": ["current"],
+            }))
+
+            self.assertEqual(undo["data"]["result"], 0)
+            self.assertEqual(undo["data"]["canceled_flight_id"], "recovered-flight-001")
+            self.assertEqual(undo["data"]["output"]["ext"]["flight_id"], "recovered-flight-001")
+            self.assertEqual(undo["data"]["output"]["status"], "canceled")
+            self.assertFalse(breakpoint_path.exists())
+            self.assertIsNone(manager._current_task_id)
+            self.assertEqual(manager._current_wayline, [])
+            self.assertEqual(manager._status, manager.MISSION_CANCELED)
+            self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+    def test_flighttask_undo_rejects_unknown_task_without_clearing_active_task(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-active"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+
+        undo = manager.handle_flighttask_undo(base_msg("flighttask_undo", {
+            "flight_ids": ["flight-other"],
+        }))
+
+        self.assertEqual(undo["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(undo["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._current_task_id, "flight-active")
+
     def test_flighttask_return_saves_breakpoint_for_later_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             breakpoint_path = Path(tmp) / "breakpoint.json"

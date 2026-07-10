@@ -2981,6 +2981,7 @@ class MissionManager:
             data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=23)
         )
 
+    @serialize_flighttask
     def handle_flighttask_undo(self, msg: dict) -> dict:
         """
         取消任务 (flighttask_undo)
@@ -2997,27 +2998,77 @@ class MissionManager:
 
         logger.info(f"Flighttask undo: {flight_ids}")
 
-        # 如果当前任务在取消列表中，则执行取消逻辑
-        if self._current_task_id and self._current_task_id in flight_ids:
-            self._status = self.MISSION_CANCELED
-            self._wayline_mission_state = 9  # 航线停止
-            self.stop_mission_monitor()
-            self._clear_breakpoint_file()
-            logger.info(f"Current task {self._current_task_id} canceled, wayline_state=9(航线停止)")
-            self._call_nest_action("abort_takeoff", "flighttask_undo")
-            self._call_nest_action("abort_landing", "flighttask_undo")
+        # ``current`` 是本地运维/测试别名，避免操作者在网关重启恢复任务后
+        # 必须先从日志中手工抄录 flight_id。云端按真实 flight_id 取消的标准
+        # 用法保持不变；未知 ID 不能再伪装成成功取消。
+        current_aliases = {"current", "current_task", "active"}
+        request_current = any(item.strip().lower() in current_aliases for item in flight_ids)
+        canceled_task_id = self._current_task_id
+        if not canceled_task_id or (
+            canceled_task_id not in flight_ids and not request_current
+        ):
+            return self._reject_flighttask_request(
+                msg,
+                flight_ids[0],
+                DEVICE_STATE_UNSUPPORTED,
+                "请求取消的 flight_id 与当前任务不匹配",
+            )
 
-            # 执行返航
-            if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-                result = self._flight_control.one_click_return()
-                if not result.get("success"):
-                    logger.warning(f"返航指令失败: {result.get('message')}")
+        self._status = self.MISSION_CANCELED
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 28
+        self.stop_mission_monitor()
+        self._clear_breakpoint_file()
+        logger.info("Current task canceled: %s, wayline_state=9(航线停止)", canceled_task_id)
+        self._call_nest_action("abort_takeoff", "flighttask_undo")
+        self._call_nest_action("abort_landing", "flighttask_undo")
 
-        self._emit_wayline_progress(STATUS_CANCELED, current_step=28, percent=self._current_progress_percent())
+        # 取消状态必须进入持久层，否则网关重启会把仍标记为 running/paused 的
+        # 旧任务恢复回来，再次阻塞新的 flighttask_prepare。
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._update_mission_status(canceled_task_id, 'canceled'),),
+            daemon=True,
+        ).start()
+
+        # 真实飞控任务取消后安全返航；模拟任务只结束协议状态机。
+        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
+            result = self._flight_control.one_click_return()
+            if not result.get("success"):
+                logger.warning(f"返航指令失败: {result.get('message')}")
+
+        percent = self._current_progress_percent()
+        self._emit_wayline_progress(STATUS_CANCELED, current_step=28, percent=percent)
+        reply_data = self._wayline_reply_data(
+            STATUS_CANCELED,
+            current_step=28,
+            percent=percent,
+            flight_id=canceled_task_id,
+            extra={
+                'canceled_flight_id': canceled_task_id,
+                'requested_flight_ids': flight_ids,
+            },
+        )
+
+        # Reply/event 已带完整的取消任务上下文；随后清空内存状态，允许新的
+        # prepare 立即接管，并避免遗留 task_id 被误当作当前任务。
+        self._current_task_id = None
+        self._current_wayline = []
+        self._current_waypoint_idx = 0
+        self._breakpoint_waypoint_idx = 0
+        self._task_file = {}
+        self._task_file_summary = {}
+        self._ready_conditions = {}
+        self._executable_conditions = {}
+        self._break_point = {}
+        self._simulate_mission = {}
+        self._battery_safety_action = None
+        self._executed_waypoint_actions.clear()
+
         return MessageBuilder.build_reply(
             msg,
             result=0,
-            data=self._wayline_reply_data(STATUS_CANCELED, current_step=28)
+            data=reply_data,
         )
 
     def handle_flighttask_return(self, msg: dict) -> dict:
