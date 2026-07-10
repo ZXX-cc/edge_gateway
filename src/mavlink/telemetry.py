@@ -248,12 +248,10 @@ class TelemetryProcessor:
         return mode_to_dji_code(mode)
 
     def build_state_data(self, changed_fields: dict) -> dict:
-        """构建状态变更数据"""
-        return {
-            'gateway_sn': self.gateway_sn,
-            'timestamp': int(time.time() * 1000),
-            'changes': changed_fields
-        }
+        """构建符合 Dock3 state topic 的属性变更数据。"""
+        # ``TelemetryReporter.report_state`` 会补齐 tid/bid/gateway/timestamp
+        # 外层信封；此处只提供 Dock3 规定的 data.property 内容。
+        return {"property": dict(changed_fields)}
 
     def get_current_data(self) -> Dict[str, any]:
         """获取当前遥测数据"""

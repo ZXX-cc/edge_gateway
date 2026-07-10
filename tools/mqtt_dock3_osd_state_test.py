@@ -162,18 +162,12 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
         return errors
 
     properties = data.get("property")
-    if expected_property:
-        if not isinstance(properties, dict):
-            errors.append(f"ignored state without property.{expected_property}")
-            return errors
-        if expected_property not in properties:
-            errors.append(f"ignored state without property.{expected_property}")
-            return errors
-        if expected_property == "silent_mode" and properties[expected_property] not in {0, 1}:
-            errors.append(f"state data.property.silent_mode expected 0/1, actual={properties[expected_property]}")
+    if isinstance(properties, dict):
+        if not properties:
+            errors.append("state data.property must not be empty")
         return errors
 
-    if not isinstance(properties, dict) and "sub_device" not in data:
+    if "sub_device" not in data:
         errors.append("state data must contain property object or sub_device")
     return errors
 
@@ -190,7 +184,17 @@ def is_ignorable_legacy_state(payload: Dict[str, Any], errors: List[str]) -> boo
     """
     if payload.get("reason") != "property_changed":
         return False
-    return any(error.startswith("ignored state without property.") for error in errors)
+    return "state data must contain property object or sub_device" in errors
+
+
+def has_expected_state_property(payload: Dict[str, Any], expected_property: str) -> bool:
+    if not expected_property:
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    properties = data.get("property")
+    return isinstance(properties, dict) and expected_property in properties
 
 
 def is_value_wrapped_object(node: Any) -> bool:
@@ -264,7 +268,9 @@ class Dock3OsdStateClient(MqttRequestClient):
         self.valid_dock_osd: List[Dict[str, Any]] = []
         self.valid_drone_osd: List[Dict[str, Any]] = []
         self.valid_state: List[Dict[str, Any]] = []
+        self.expected_state: List[Dict[str, Any]] = []
         self.invalid_samples: List[str] = []
+        self.ignored_legacy_samples: List[Dict[str, Any]] = []
         super().__init__(
             host,
             port,
@@ -286,6 +292,23 @@ class Dock3OsdStateClient(MqttRequestClient):
 
     def _record_ignored_legacy(self, topic: str, reason: str, payload: Any) -> None:
         self.stats["ignored_observed_legacy"] += 1
+        sample: Dict[str, Any] = {"category": "legacy_observed", "topic": topic, "reason": reason}
+        if isinstance(payload, dict):
+            sample.update(
+                {
+                    "tid": payload.get("tid"),
+                    "bid": payload.get("bid"),
+                    "gateway": payload.get("gateway"),
+                    "message_reason": payload.get("reason"),
+                }
+            )
+            data = payload.get("data")
+            if isinstance(data, dict):
+                sample["data_keys"] = sorted(str(key) for key in data)[:20]
+                properties = data.get("property")
+                if isinstance(properties, dict):
+                    sample["property_keys"] = sorted(str(key) for key in properties)[:20]
+        self.ignored_legacy_samples.append(sample)
         if not self.quiet_stale:
             tid = payload.get("tid") if isinstance(payload, dict) else None
             print(f"ignored legacy observed sample <- {topic}, reason={reason}, tid={tid}")
@@ -331,16 +354,17 @@ class Dock3OsdStateClient(MqttRequestClient):
 
             elif topic == self.state_topic:
                 errors = validate_state(payload, self.sn, self.expected_state_property)
-                if errors and (
-                    all(error.startswith("ignored state ") for error in errors)
-                    or is_ignorable_legacy_state(payload, errors)
-                ):
+                if errors and is_ignorable_legacy_state(payload, errors):
                     self._record_ignored_legacy(topic, "legacy_or_irrelevant_state", payload)
                 elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
                     self.valid_state.append(payload)
-                    print(f"valid state <- {topic}, count={len(self.valid_state)}")
+                    if has_expected_state_property(payload, self.expected_state_property):
+                        self.expected_state.append(payload)
+                        print(f"valid expected state <- {topic}, count={len(self.expected_state)}")
+                    else:
+                        print(f"valid unrelated state <- {topic}")
 
             self.changed.set()
 
@@ -363,7 +387,7 @@ class Dock3OsdStateClient(MqttRequestClient):
 
     def counts(self) -> Tuple[int, int, int]:
         with self.lock:
-            return len(self.valid_dock_osd), len(self.valid_drone_osd), len(self.valid_state)
+            return len(self.valid_dock_osd), len(self.valid_drone_osd), len(self.expected_state)
 
     def has_counts(self, dock_count: int, drone_count: int, state_count: int) -> bool:
         dock_actual, drone_actual, state_actual = self.counts()
@@ -406,9 +430,9 @@ class Dock3OsdStateClient(MqttRequestClient):
             }
             print("drone_osd_summary:")
             print(json.dumps(summary, ensure_ascii=False, indent=2))
-        if self.valid_state:
+        if self.expected_state:
             print("state_summary:")
-            print(json.dumps(self.valid_state[-1].get("data", {}), ensure_ascii=False, indent=2))
+            print(json.dumps(self.expected_state[-1].get("data", {}), ensure_ascii=False, indent=2))
 
 
 def trigger_state(client: Dock3OsdStateClient, args) -> int:
@@ -520,6 +544,11 @@ def main() -> int:
                 f"ignored_reply_stale={stale_total - int(client.stats.get('ignored_observed_legacy', 0))})",
                 file=sys.stderr,
             )
+            if client.ignored_legacy_samples:
+                print(
+                    "stale_samples=" + json.dumps(client.ignored_legacy_samples[:5], ensure_ascii=False),
+                    file=sys.stderr,
+                )
             return 6
 
         client.print_summary()

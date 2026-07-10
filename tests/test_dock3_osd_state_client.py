@@ -177,6 +177,18 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.observed_count(self.client.state_topic), 1)
         self.assertEqual(self.client.stats["ignored_observed_legacy"], 1)
         self.assertEqual(self.client.stale_total(), 1)
+        self.assertEqual(self.client.ignored_legacy_samples[0]["message_reason"], "property_changed")
+
+    def test_unrelated_current_property_state_is_not_stale(self):
+        payload = envelope("EDGEGW001", {"property": {"mode_code": 7}})
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))
+
+        self.assertEqual(self.client.counts(), (0, 0, 0))
+        self.assertEqual(len(self.client.valid_state), 1)
+        self.assertEqual(self.client.invalid_samples, [])
+        self.assertEqual(self.client.stale_total(), 0)
 
     def test_legacy_partial_value_wrapped_dock_osd_is_ignored(self):
         payload = envelope(
