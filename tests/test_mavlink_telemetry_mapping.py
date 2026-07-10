@@ -124,6 +124,7 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(telemetry["voltage"], 16.6)
         self.assertEqual(telemetry["current"], 12.34)
         self.assertEqual(telemetry["batteryRemaining"], 100)
+        self.assertTrue(telemetry["battery_available"])
         self.assertEqual(build_osd_data(telemetry)["battery"]["voltage"], 16600)
 
     def test_mount_status_maps_legacy_gimbal_angles(self):

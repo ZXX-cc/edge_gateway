@@ -954,6 +954,14 @@ class MissionManager:
         if not telemetry:
             return False
 
+        # ``batteryRemaining=0`` is the historical default before a MAVLink
+        # battery frame arrives.  It must not be treated as a real 0% battery
+        # in SITL or during connection warm-up.  A received SYS_STATUS or
+        # BATTERY_STATUS frame marks this field as available; an explicit true
+        # keeps compatibility with external telemetry adapters.
+        if telemetry.get('battery_available') is not True:
+            return False
+
         battery = self._as_float(telemetry.get('batteryRemaining'), -1.0)
         if battery < 0:
             return False

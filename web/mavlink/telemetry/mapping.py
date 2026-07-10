@@ -40,6 +40,7 @@ TELEMETRY_DEFAULTS: Dict[str, Any] = {
     "voltage": 0.0,
     "current": 0.0,
     "batteryRemaining": 0,
+    "battery_available": False,
     "satelliteNumber": 0,
     "gps_fixed": 0,
     "gps_eph": 0,
@@ -194,6 +195,7 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             updated = True
         if battery_remaining != -1:
             data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
+            data["battery_available"] = True
             updated = True
     elif msg_name == "BATTERY_STATUS":
         voltages = getattr(msg, "voltages", None)
@@ -209,6 +211,7 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             updated = True
         if battery_remaining != -1:
             data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
+            data["battery_available"] = True
             updated = True
     elif msg_name == "GIMBAL_DEVICE_ATTITUDE_STATUS":
         if hasattr(msg, "q"):

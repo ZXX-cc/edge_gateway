@@ -221,6 +221,13 @@ def run_real_sitl_prepare_check(client, args):
         return rc
     progress_status = output_status(progress)
     if progress_status not in {"in_progress", "ok"}:
+        break_point = progress.get("data", {}).get("output", {}).get("ext", {}).get("break_point", {})
+        if progress_status == "failed" and isinstance(break_point, dict):
+            print(
+                "real SITL mission failed: "
+                f"reason={break_point.get('reason')}, break_reason={break_point.get('break_reason')}",
+                file=sys.stderr,
+            )
         print(f"unexpected real SITL progress status: {progress_status}, payload={progress}", file=sys.stderr)
         return 18
     ext = progress.get("data", {}).get("output", {}).get("ext", {})

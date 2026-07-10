@@ -22,6 +22,18 @@ class MissionProgressBoundsTest(unittest.TestCase):
 
         self.assertEqual(manager._current_progress_percent(), 100)
 
+    def test_unknown_battery_default_does_not_trigger_real_mission_safety_action(self):
+        manager = MissionManager()
+        manager._status = manager.MISSION_RUNNING
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._get_telemetry_snapshot = lambda: {
+            "batteryRemaining": 0,
+            "battery_available": False,
+        }
+
+        self.assertFalse(manager._handle_battery_safety())
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
 
 if __name__ == "__main__":
     unittest.main()
