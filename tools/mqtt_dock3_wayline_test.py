@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from mqtt_test_client import MqttRequestClient
+from mqtt_test_client import MqttRequestClient, output_status
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
 
@@ -215,15 +215,35 @@ def run_real_sitl_prepare_check(client, args):
         {"flight_id": flight_id},
         args.timeout,
         [0],
-        "in_progress",
+        None,
     )
     if rc != 0:
         return rc
+    progress_status = output_status(progress)
+    if progress_status not in {"in_progress", "ok"}:
+        print(f"unexpected real SITL progress status: {progress_status}, payload={progress}", file=sys.stderr)
+        return 18
     ext = progress.get("data", {}).get("output", {}).get("ext", {})
+    waypoint_count = ext.get("waypoint_count", args.expect_waypoint_count)
+    waypoint_index = ext.get("current_waypoint_index")
+    if not isinstance(waypoint_index, int) or not isinstance(waypoint_count, int) or not (0 <= waypoint_index < waypoint_count):
+        print(
+            "real SITL progress contains invalid waypoint index: "
+            f"index={waypoint_index}, waypoint_count={waypoint_count}, payload={progress}",
+            file=sys.stderr,
+        )
+        return 19
+    if progress_status == "ok" and waypoint_index != waypoint_count - 1:
+        print(
+            "completed real SITL mission did not finish at final waypoint: "
+            f"index={waypoint_index}, waypoint_count={waypoint_count}",
+            file=sys.stderr,
+        )
+        return 20
     print(
         "real SITL execute/progress verified "
         f"(flight_id={flight_id}, observe_seconds={args.execute_observe_seconds}, "
-        f"waypoint_index={ext.get('current_waypoint_index')}, "
+        f"status={progress_status}, waypoint_index={waypoint_index}, "
         f"mission_state={ext.get('wayline_mission_state')})"
     )
     return 0

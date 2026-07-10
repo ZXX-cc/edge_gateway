@@ -526,7 +526,19 @@ class MissionManager:
         return self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING)
 
     def _current_progress_percent(self) -> int:
+        if self._status == self.MISSION_COMPLETED:
+            return 100
         return progress_percent(self._current_waypoint_idx, len(self._current_wayline))
+
+    def _is_valid_current_waypoint_index(self, waypoint_index: Any) -> bool:
+        """Return whether a MAVLink MISSION_CURRENT index belongs to this task."""
+        if not self._current_wayline:
+            return False
+        try:
+            waypoint_index = int(waypoint_index)
+        except (TypeError, ValueError):
+            return False
+        return 0 <= waypoint_index < len(self._current_wayline)
 
     def _wayline_ext(self, flight_id: str = None) -> dict:
         ext = {
@@ -2209,7 +2221,15 @@ class MissionManager:
                 if master:
                     msg = master.recv_match(type='MISSION_CURRENT', blocking=False, timeout=1.0)
                     if msg:
-                        new_idx = msg.seq
+                        new_idx = int(msg.seq)
+                        if not self._is_valid_current_waypoint_index(new_idx):
+                            logger.warning(
+                                "Ignore out-of-range MISSION_CURRENT: seq=%s, waypoints=%s, task=%s",
+                                new_idx,
+                                len(self._current_wayline),
+                                self._current_task_id,
+                            )
+                            continue
                         self._execute_waypoint_actions(new_idx)
                         if new_idx != self._current_waypoint_idx:
                             self._current_waypoint_idx = new_idx
@@ -2262,7 +2282,7 @@ class MissionManager:
         """上报航线任务进度 (flighttask_progress)"""
         total = len(self._current_wayline)
         current = self._current_waypoint_idx
-        percent = int(current / total * 100) if total > 0 else 0
+        percent = 100 if status == 'completed' else progress_percent(current, total)
 
         # 状态映射到DJI标准status枚举
         status_map = {
