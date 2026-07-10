@@ -230,6 +230,8 @@ class MqttRequestClient:
             self._handle_invalid_json(msg.topic, exc)
             return
 
+        transport = self._transport_metadata(msg)
+
         if msg.topic in self.event_topics:
             method = payload.get("method") if isinstance(payload, dict) else None
             self.events_by_method.setdefault(method, []).append(payload)
@@ -252,7 +254,7 @@ class MqttRequestClient:
         if not waiter:
             category = "duplicate" if tid in self.completed_tids else "unknown"
             self._record_late_reply(tid)
-            self._record_stale_sample(category, msg.topic, payload)
+            self._record_stale_sample(category, msg.topic, payload, transport=transport)
             if not self.quiet_stale:
                 method = payload.get("method") if isinstance(payload, dict) else None
                 print(f"ignored {category} reply <- {msg.topic}, method={method}, tid={tid}")
@@ -260,7 +262,7 @@ class MqttRequestClient:
 
         if waiter["event"].is_set():
             self._record_late_reply(tid, duplicate=True)
-            self._record_stale_sample("duplicate_pending", msg.topic, payload)
+            self._record_stale_sample("duplicate_pending", msg.topic, payload, transport=transport)
             if not self.quiet_stale:
                 method = payload.get("method") if isinstance(payload, dict) else None
                 print(f"ignored duplicate reply while pending <- {msg.topic}, method={method}, tid={tid}")
@@ -271,7 +273,13 @@ class MqttRequestClient:
         actual_method = payload.get("method")
         if msg.topic != expected_topic:
             self.stats["ignored_wrong_topic"] += 1
-            self._record_stale_sample("wrong_topic", msg.topic, payload, expected_topic=expected_topic)
+            self._record_stale_sample(
+                "wrong_topic",
+                msg.topic,
+                payload,
+                expected_topic=expected_topic,
+                transport=transport,
+            )
             if not self.quiet_stale:
                 print(
                     f"ignored wrong topic reply <- {msg.topic}, "
@@ -281,7 +289,13 @@ class MqttRequestClient:
 
         if actual_method != expected_method:
             self.stats["ignored_mismatched"] += 1
-            self._record_stale_sample("mismatched", msg.topic, payload, expected_method=expected_method)
+            self._record_stale_sample(
+                "mismatched",
+                msg.topic,
+                payload,
+                expected_method=expected_method,
+                transport=transport,
+            )
             if not self.quiet_stale:
                 print(
                     f"ignored stale/mismatched reply <- {msg.topic}, "
@@ -292,7 +306,7 @@ class MqttRequestClient:
 
         if looks_like_legacy_stale_reply(payload):
             self.stats["ignored_legacy"] += 1
-            self._record_stale_sample("legacy", msg.topic, payload)
+            self._record_stale_sample("legacy", msg.topic, payload, transport=transport)
             if not self.quiet_stale:
                 print(f"ignored legacy stale reply <- {msg.topic}, method={actual_method}, tid={tid}")
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -301,7 +315,13 @@ class MqttRequestClient:
         expected_status = waiter.get("expected_status")
         if expected_status is not None and output_status(payload) is None and result_code(payload) == 0:
             self.stats["ignored_legacy"] += 1
-            self._record_stale_sample("legacy_no_status", msg.topic, payload, expected_method=expected_method)
+            self._record_stale_sample(
+                "legacy_no_status",
+                msg.topic,
+                payload,
+                expected_method=expected_method,
+                transport=transport,
+            )
             if not self.quiet_stale:
                 print(
                     f"ignored legacy reply without data.output.status <- {msg.topic}, "
@@ -512,6 +532,7 @@ class MqttRequestClient:
         payload: Any,
         expected_method: Optional[str] = None,
         expected_topic: Optional[str] = None,
+        transport: Optional[dict[str, Any]] = None,
     ) -> None:
         method = payload.get("method") if isinstance(payload, dict) else None
         tid = payload.get("tid") if isinstance(payload, dict) else None
@@ -532,10 +553,21 @@ class MqttRequestClient:
             sample["expected_method"] = expected_method
         if expected_topic is not None:
             sample["expected_topic"] = expected_topic
+        if transport:
+            sample["transport"] = transport
 
         self.stale_samples.append(sample)
         if len(self.stale_samples) > self._max_stale_samples:
             self.stale_samples.pop(0)
+
+    @staticmethod
+    def _transport_metadata(message: Any) -> dict[str, Any]:
+        """保留 MQTT broker 的重投/保留标记，供严格旧回包验收定位来源。"""
+        metadata = {}
+        for name in ("retain", "dup", "mid", "qos"):
+            if hasattr(message, name):
+                metadata[name] = getattr(message, name)
+        return metadata
 
     def stale_total(self) -> int:
         return (

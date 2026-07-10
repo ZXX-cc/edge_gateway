@@ -2,6 +2,7 @@
 """Category smoke test for DJI Dock3 properties."""
 
 import argparse
+import json
 import sys
 
 from mqtt_test_client import MqttRequestClient, property_result
@@ -140,6 +141,12 @@ def main():
                 f"ignored_wrong_topic={client.stats['ignored_wrong_topic']})",
                 file=sys.stderr,
             )
+            samples = client.stale_sample_summary(limit=12)
+            if samples:
+                print(
+                    "stale_samples=" + json.dumps(samples, ensure_ascii=False),
+                    file=sys.stderr,
+                )
             return 10
 
         print(

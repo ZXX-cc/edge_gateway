@@ -291,6 +291,27 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stale_sample_summary()[-1]["category"], "duplicate")
         self.assertEqual(self.client.stale_sample_summary()[-1]["tid"], self.tid)
 
+    def test_stale_sample_includes_broker_transport_metadata_when_available(self):
+        self.client.pending.clear()
+        self.client._mark_completed_tid(self.tid)
+        payload = {
+            "tid": self.tid,
+            "method": "dock_status_query",
+            "data": {"result": 0},
+        }
+        message = mqtt_message(self.reply_topic, payload)
+        message.retain = True
+        message.dup = True
+        message.mid = 42
+        message.qos = 1
+
+        self.client._on_message(None, None, message)
+
+        self.assertEqual(
+            self.client.stale_sample_summary()[-1]["transport"],
+            {"retain": True, "dup": True, "mid": 42, "qos": 1},
+        )
+
     def test_unknown_tid_reply_is_counted_as_unknown_late(self):
         self.client.pending.clear()
         payload = {

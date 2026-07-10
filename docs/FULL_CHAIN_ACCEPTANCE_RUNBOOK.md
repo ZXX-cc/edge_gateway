@@ -289,7 +289,7 @@ python tools/mqtt_dock3_osd_state_test.py --timeout 15 --quiet-stale --fail-on-s
 python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale --fail-on-stale
 ```
 
-严格模式中，`osd-state` 会把旧版 value-wrapper OSD、旧 `reason=property_changed` state、无关 state 和旧 reply 一起计入 stale。出现任何 stale 都应先清理环境，再重新执行。
+严格模式中，`osd-state` 会把旧版 value-wrapper OSD、旧 `reason=property_changed` state、无关 state 和旧 reply 一起计入 stale。properties 严格失败会输出 `stale_samples`，其中包含 `retain/dup/mid/qos`：`retain=true` 优先清理 broker retained 消息，`dup=true` 优先排查 QoS 重投；两者均为 false 时优先排查第二个旧网关/模拟器进程。出现任何 stale 都应先清理环境，再重新执行。
 
 ## 7. P2 验收边界
 
