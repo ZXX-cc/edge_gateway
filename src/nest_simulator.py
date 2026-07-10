@@ -48,6 +48,9 @@ _TAKEOFF_LAND_COMMAND_LABELS = {
     0x04: "降落流程终止",
 }
 
+BIT_NEST_HEARTBEAT = 0
+BIT_DRONE_HEARTBEAT = 1
+BIT_PLC_HEARTBEAT = 2
 BIT_ESTOP = 3
 BIT_CHARGING = 4
 BIT_READY = 6
@@ -59,6 +62,16 @@ BIT_LANDING_IN_PROGRESS = 1
 BIT_TAKEOFF_ABORT_PROGRESS = 2
 BIT_LANDING_ABORT_PROGRESS = 3
 BIT_ALLOW_TAKEOFF = 5
+
+DEFAULT_HEALTHY_BOOLSTATE1 = (
+    (1 << BIT_NEST_HEARTBEAT)
+    | (1 << BIT_DRONE_HEARTBEAT)
+    | (1 << BIT_PLC_HEARTBEAT)
+    | (1 << BIT_READY)
+    | (1 << BIT_R_AXIS_ZERO)
+    | (1 << 11)
+)
+DEFAULT_READY_BOOLSTATE2 = 1 << BIT_ALLOW_TAKEOFF
 
 REJECT_COMMAND_CONFLICT = 1
 REJECT_PLC_TIMEOUT = 2
@@ -90,7 +103,9 @@ _LIGHT_STATE_LABELS = {
     2: "关闭",
 }
 _BOOLSTATE1_BITS = {
-    1: "飞机上电",
+    BIT_NEST_HEARTBEAT: "机巢心跳正常",
+    BIT_DRONE_HEARTBEAT: "飞机上电/心跳正常",
+    BIT_PLC_HEARTBEAT: "PLC心跳正常",
     BIT_ESTOP: "急停",
     BIT_CHARGING: "充电中",
     BIT_READY: "系统就绪",
@@ -139,8 +154,11 @@ class NestSimulator:
             'charge_volt': 260,
             'charge_current': 0,
             'error_code': 0,
-            'boolstate1': 0,
-            'boolstate2': 0,
+            # 默认以健康待命状态模拟可起飞机巢。故障/急停/忙碌分支
+            # 仍可由命令和协议专项明确注入，不能让正常 E2E 因全零
+            # 状态位被误判为机巢离线。
+            'boolstate1': DEFAULT_HEALTHY_BOOLSTATE1,
+            'boolstate2': DEFAULT_READY_BOOLSTATE2,
             'clamp_state': 2,
             'gate_state': 2,
             'landing_light_state': 2
