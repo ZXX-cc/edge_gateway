@@ -303,6 +303,17 @@ ss -tnp | grep ':1883' || true
 
 2026-07-10 进度记录：当前服务器仅发现一个 `src/main.py` 实例；`demo_platform/app.py` 仅订阅观测 topic，`mqtt_cloud_simulator.py` 仅订阅 `requests/status`，均不是 `property/set_reply` 的发布者。`ss` 还发现未显示 PID 的本机 `127.0.0.1:46088` 连接，以及 `192.168.2.73`、`192.168.2.94` 两个外部客户端；严格回归前应继续由 broker 管理员定位这些连接的 client ID 与发布 topic。
 
+如果当前网关 request trace 已证明每个 `tid` 仅发布一次、但严格测试仍收到第二条旧回包，可临时启用 broker 发布审计：
+
+```bash
+sudo bash scripts/mqtt_broker_audit.sh enable
+python tools/mqtt_dock3_properties_test.py --timeout 20 --quiet-stale --fail-on-stale || true
+sudo grep -E 'Received PUBLISH|property/set_reply' /var/log/mosquitto/mosquitto.log | tail -n 120
+sudo bash scripts/mqtt_broker_audit.sh disable
+```
+
+`Received PUBLISH from <client_id>` 会显示旧回包的发布客户端。审计结束必须执行 `disable`，恢复默认 broker 日志量。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：
