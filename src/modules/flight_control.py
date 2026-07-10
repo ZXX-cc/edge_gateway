@@ -797,6 +797,23 @@ class FlightControl(BaseModule):
                 return mode
         return None
 
+    def _takeoff_mode_candidates(self) -> list[str]:
+        """Return safe mode priority for NAV_TAKEOFF on the active profile."""
+        # User-issued MAV_CMD_NAV_TAKEOFF is accepted by the SITL/ArduPilot
+        # stacks we validate against only from GUIDED.  TAKEOFF remains a
+        # fallback for profiles that expose it but do not support GUIDED.
+        return ["GUIDED", "TAKEOFF"]
+
+    def _ensure_armed_for_takeoff(self) -> Dict:
+        """Ensure the vehicle is armed before sending NAV_TAKEOFF."""
+        if self.is_armed_status():
+            return {"success": True, "message": "飞机已解锁", "already_armed": True}
+
+        arm_and_wait = getattr(self, "arm_and_wait", None)
+        if not callable(arm_and_wait):
+            return {"success": False, "message": "FlightControl safe arm gate unavailable"}
+        return arm_and_wait(timeout=10.0, readiness_timeout=30.0)
+
     def get_current_mode(self) -> Dict:
         """✅ 获取当前模式（统一接口）"""
         return {
@@ -859,9 +876,9 @@ class FlightControl(BaseModule):
             "altitude": takeoff_altitude
         })
 
-        # 步骤3: 切换到起飞可用模式。ArduCopter 使用 GUIDED + NAV_TAKEOFF，
-        # ArduPlane/QuadPlane 可优先使用 TAKEOFF。
-        takeoff_mode = self._first_available_mode(["TAKEOFF", "GUIDED"])
+        # 步骤3: 切换到起飞可用模式。当前真实 SITL 验收中，用户
+        # NAV_TAKEOFF 必须在 GUIDED 下执行，TAKEOFF 只作为兜底模式。
+        takeoff_mode = self._first_available_mode(self._takeoff_mode_candidates())
         if not takeoff_mode:
             result["message"] = f"当前机型不支持起飞模式，profile={self.mode_profile}"
             result["steps"].append({"step": "set_takeoff_mode", "status": "failed", "reason": "unsupported_mode"})
@@ -884,8 +901,25 @@ class FlightControl(BaseModule):
             "elapsed_time": mode_result.get("elapsed_time", 0)
         })
 
+        self.log("步骤4: 起飞前确认解锁...")
+        arm_result = self._ensure_armed_for_takeoff()
+        if not arm_result.get("success"):
+            result["message"] = f"起飞前解锁失败: {arm_result.get('message')}"
+            result["steps"].append({
+                "step": "arm_before_takeoff",
+                "status": "failed",
+                "reason": arm_result.get("message", "arm failed"),
+            })
+            self.log(result["message"], "ERROR")
+            return result
+        result["steps"].append({
+            "step": "arm_before_takeoff",
+            "status": "completed",
+            "already_armed": bool(arm_result.get("already_armed")),
+        })
+
         # 步骤4: 发送起飞命令
-        self.log(f"步骤4: 起飞到 {takeoff_altitude}m...")
+        self.log(f"步骤5: 起飞到 {takeoff_altitude}m...")
         if not self._send_command_long(
                 mavlink.MAV_CMD_NAV_TAKEOFF,
                 param7=takeoff_altitude
@@ -1249,7 +1283,7 @@ class FlightControl(BaseModule):
         }
 
         # 步骤1: 切换到起飞可用模式
-        takeoff_mode = self._first_available_mode(["TAKEOFF", "GUIDED"])
+        takeoff_mode = self._first_available_mode(self._takeoff_mode_candidates())
         if not takeoff_mode:
             result["message"] = f"当前机型不支持起飞模式，profile={self.mode_profile}"
             result["steps"].append({"step": "set_takeoff_mode", "status": "failed", "reason": "unsupported_mode"})
@@ -1272,8 +1306,25 @@ class FlightControl(BaseModule):
             "elapsed_time": mode_result.get("elapsed_time", 0)
         })
 
+        self.log("步骤2: 起飞前确认解锁...")
+        arm_result = self._ensure_armed_for_takeoff()
+        if not arm_result.get("success"):
+            result["message"] = f"起飞前解锁失败: {arm_result.get('message')}"
+            result["steps"].append({
+                "step": "arm_before_takeoff",
+                "status": "failed",
+                "reason": arm_result.get("message", "arm failed"),
+            })
+            self.log(result["message"], "ERROR")
+            return result
+        result["steps"].append({
+            "step": "arm_before_takeoff",
+            "status": "completed",
+            "already_armed": bool(arm_result.get("already_armed")),
+        })
+
         # 步骤2: 发送起飞命令
-        self.log(f"步骤2: 发送起飞命令（高度 {altitude}m）...")
+        self.log(f"步骤3: 发送起飞命令（高度 {altitude}m）...")
         if not self._send_command_long(
                 mavlink.MAV_CMD_NAV_TAKEOFF,
                 param7=altitude

@@ -1725,15 +1725,42 @@ class MissionManager:
                 msg_str='flight_takeoff failed',
             )
 
+        real_wayline_activation = not simulate_enabled and bool(self._current_wayline)
+        if real_wayline_activation:
+            if self.start_mission_monitor() is False:
+                self._record_takeoff_flow_step(
+                    steps,
+                    'flighttask_execute',
+                    status=STATUS_FAILED,
+                    result=-1,
+                    detail={'success': False, 'message': 'Mission monitor unavailable', 'real_sitl': True},
+                )
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=WAYLINE_EXECUTION_FAILED,
+                    data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                    msg_str='Mission monitor unavailable',
+                )
+
+            if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
+                self.stop_mission_monitor()
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=WAYLINE_EXECUTION_FAILED,
+                    data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                    msg_str='flighttask_execute failed',
+                )
+
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 6
         self._current_step = 23
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
-        self._record_takeoff_flow_step(steps, 'flighttask_execute', status=STATUS_IN_PROGRESS, detail={
-            'flight_id': flight_id,
-            'waypoint_count': len(self._current_wayline),
-        })
+        if not real_wayline_activation:
+            self._record_takeoff_flow_step(steps, 'flighttask_execute', status=STATUS_IN_PROGRESS, detail={
+                'flight_id': flight_id,
+                'waypoint_count': len(self._current_wayline),
+            })
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent(), flight_id=flight_id)
 
         if not auto_complete:

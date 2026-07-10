@@ -53,6 +53,8 @@ class RecordingFlightControl(FlightControl):
         self.mode_calls = []
         self.mode_timeouts = []
         self.command_calls = []
+        self.arm_wait_calls = []
+        self.arm_wait_result = {"success": True, "message": "armed"}
 
     def set_mode(self, mode, timeout=10.0):
         self.mode_calls.append(mode)
@@ -74,28 +76,50 @@ class RecordingFlightControl(FlightControl):
         )
         return True
 
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=30.0):
+        self.arm_wait_calls.append((timeout, readiness_timeout))
+        if self.arm_wait_result.get("success"):
+            self.is_armed = True
+        return dict(self.arm_wait_result)
+
 
 class FlightControlP0ModeSelectionTest(unittest.TestCase):
     def test_copter_takeoff_uses_guided_then_nav_takeoff(self):
         control = RecordingFlightControl()
         control._set_mode_profile("copter")
+        control.is_armed = True
 
         result = control.takeoff(altitude=30)
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.mode_calls, ["GUIDED"])
+        self.assertEqual(control.arm_wait_calls, [])
         self.assertEqual(control.command_calls[0]["command"], 22)
         self.assertEqual(control.command_calls[0]["param7"], 30)
 
-    def test_plane_takeoff_prefers_takeoff_mode(self):
+    def test_plane_takeoff_uses_guided_for_nav_takeoff_when_available(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
+        control.is_armed = True
 
         result = control.takeoff(altitude=40)
 
         self.assertTrue(result["success"], result)
-        self.assertEqual(control.mode_calls, ["TAKEOFF"])
+        self.assertEqual(control.mode_calls, ["GUIDED"])
+        self.assertEqual(control.arm_wait_calls, [])
         self.assertEqual(control.command_calls[0]["param7"], 40)
+
+    def test_takeoff_arms_before_nav_takeoff_when_disarmed(self):
+        control = RecordingFlightControl()
+        control._set_mode_profile("copter")
+
+        result = control.takeoff(altitude=25)
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(control.mode_calls, ["GUIDED"])
+        self.assertEqual(control.arm_wait_calls, [(10.0, 30.0)])
+        self.assertEqual(control.command_calls[0]["command"], 22)
+        self.assertEqual(control.command_calls[0]["param7"], 25)
 
     def test_copter_land_uses_land_mode(self):
         control = RecordingFlightControl()

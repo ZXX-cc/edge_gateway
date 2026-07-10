@@ -91,6 +91,10 @@ class RecordingFlightControl:
         self.calls.append(("land", None))
         return {"success": True, "message": "land ok"}
 
+    def set_mode(self, mode):
+        self.calls.append(("set_mode", mode))
+        return {"success": True, "message": f"set mode {mode}"}
+
 
 class OneKeyTakeoffFlowTest(unittest.TestCase):
     def test_one_key_takeoff_flow_closes_full_simulated_loop(self):
@@ -159,6 +163,33 @@ class OneKeyTakeoffFlowTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["status"], "in_progress")
         self.assertEqual(nest.commands, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE"])
         self.assertEqual(flight.calls, [("takeoff", 30.0)])
+
+    def test_real_one_key_takeoff_flow_switches_auto_for_prepared_wayline(self):
+        manager = MissionManager()
+        nest = RecordingNest()
+        flight = RecordingFlightControl()
+        events = []
+        manager.set_nest_module(nest)
+        manager.set_flight_control(flight)
+        manager.set_event_callback(events.append)
+        manager.start_mission_monitor = lambda: True
+        manager._current_task_id = "flight-real-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._simulate_mission = {"is_enable": 0}
+
+        reply = manager.handle_one_key_takeoff_flow(base_msg("one_key_takeoff_flow", {
+            "flight_id": "flight-real-001",
+            "takeoff_height": 25,
+            "auto_complete": False,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "in_progress")
+        self.assertEqual(flight.calls, [("takeoff", 25.0), ("set_mode", "AUTO")])
+        step_names = [step["name"] for step in reply["data"]["output"]["steps"]]
+        self.assertEqual(step_names[-1], "flighttask_execute")
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+        self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
 
 
 if __name__ == "__main__":

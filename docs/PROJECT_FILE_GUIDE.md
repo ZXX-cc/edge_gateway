@@ -178,6 +178,7 @@ src/core/connection.py
 | `tools/mqtt_dock3_cmd_test.py` | Dock3 CMD/远程调试专项验收，覆盖舱盖、充电、推杆、灯和设备动作 |
 | `tools/mqtt_dock3_wayline_test.py` | Dock3 Wayline 专项验收，覆盖任务准备、执行、进度、暂停、恢复和返航 |
 | `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环，覆盖 mock KMZ、`flighttask_prepare/execute`、机巢 `request_takeoff` 和模拟任务完成 |
+| `tools/mqtt_one_key_takeoff_sitl_test.py` | 一键启航真实 SITL 航线验收，默认使用服务器 `/home/fenghuolun/zwz/HD.kml`，覆盖 `flighttask_prepare`、`one_key_takeoff_flow`、QGC/SITL OSD 高度爬升和真实航点进度 |
 | `tools/e2e_full_chain_test.py` | P0/P1 全链路回归，默认串联 MQTT 专项和一键启航离线闭环 |
 | `tools/mqtt_drc_batch_test.py` | Dock3 DRC 控制数据批量验收工具，覆盖 `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` |
 | `tools/mqtt_cloud_simulator.py` | 上云 API 模拟器，支持 `requests_reply` 和 `status_reply` 模拟 |
