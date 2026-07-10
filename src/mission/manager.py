@@ -1807,6 +1807,57 @@ class MissionManager:
 
         return True, ""
 
+    def _real_wayline_flight_diagnostics(self, stage: str, reason: str) -> dict:
+        """Build a concise, safe diagnostic payload for real-wayline failures."""
+        diagnostics = {
+            "stage": stage,
+            "reason": reason,
+        }
+        if not self._flight_control:
+            return diagnostics
+
+        status_getter = getattr(self._flight_control, "get_status", None)
+        if callable(status_getter):
+            try:
+                status = status_getter()
+            except Exception as exc:
+                diagnostics["status_error"] = str(exc)
+            else:
+                diagnostics.update({
+                    "armed": status.get("armed"),
+                    "current_mode": status.get("current_mode_name"),
+                    "current_mode_id": status.get("current_mode_id"),
+                    "last_command_ack": status.get("last_command_ack"),
+                })
+        return diagnostics
+
+    def _fail_real_wayline_execute(self, msg: dict, flight_id: str, stage: str, reason: str) -> dict:
+        """Fail real-wayline execution without leaving a monitor or nest action running."""
+        self.stop_mission_monitor()
+        self._status = self.MISSION_FAILED
+        self._wayline_mission_state = 1
+        self._current_step = 23
+        diagnostics = self._real_wayline_flight_diagnostics(stage, reason)
+        self._emit_wayline_progress(
+            STATUS_FAILED,
+            current_step=23,
+            percent=self._current_progress_percent(),
+            flight_id=flight_id,
+            extra={"errors": [reason], "flight_control": diagnostics},
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=-1,
+            data=self._wayline_reply_data(
+                STATUS_FAILED,
+                current_step=23,
+                percent=self._current_progress_percent(),
+                flight_id=flight_id,
+                extra={"errors": [reason], "flight_control": diagnostics},
+            ),
+            msg_str=reason,
+        )
+
     # ---- 进度上报 ----
 
     def report_progress(self, waypoint_idx: int, total: int, status: str = "executing"):
@@ -2556,28 +2607,29 @@ class MissionManager:
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
 
-        self._call_nest_action("request_takeoff", "flighttask_execute")
-
         # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
         simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        if not simulate_enabled:
-            # 启动航点监控线程
-            self.start_mission_monitor()
-
         if self._flight_control and not simulate_enabled:
             armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
             if not armed_ok:
                 logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
-                self._status = self.MISSION_FAILED
-                return MessageBuilder.build_reply(msg, result=-1, msg_str=armed_reason)
+                return self._fail_real_wayline_execute(msg, flight_id, "pre_arm", armed_reason)
 
             result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
                 logger.warning(f"启动航线任务失败: {result.get('message')}")
-                self._status = self.MISSION_FAILED
-                return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    "auto_mode",
+                    result.get('message') or "AUTO mode switch failed",
+                )
         elif simulate_enabled:
             logger.info("Flighttask execute in simulation mode, skip AUTO mode switch and mission monitor")
+
+        if not simulate_enabled:
+            self.start_mission_monitor()
+        self._call_nest_action("request_takeoff", "flighttask_execute")
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(

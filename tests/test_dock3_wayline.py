@@ -432,6 +432,27 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
         self.assertEqual(flight_control.calls, [("pause_mission", None)])
 
+    def test_real_flighttask_execute_reports_auto_stage_and_skips_nest_when_fc_fails(self):
+        manager = MissionManager()
+        flight_control = FailingFlightControl()
+        manager.set_flight_control(flight_control)
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        monitor_calls = []
+        manager.start_mission_monitor = lambda: monitor_calls.append("start")
+        manager.stop_mission_monitor = lambda: monitor_calls.append("stop")
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {"flight_id": "flight-001"}))
+
+        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["output"]["status"], "failed")
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "auto_mode")
+        self.assertEqual(manager._status, manager.MISSION_FAILED)
+        self.assertEqual(monitor_calls, ["stop"])
+        self.assertEqual(flight_control.calls, [("set_mode", "AUTO")])
+
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
             "flight_id": "flight-001",
