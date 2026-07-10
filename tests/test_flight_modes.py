@@ -75,10 +75,24 @@ class RecordingFlightControl:
         self.success = success
         self.message = message
         self.calls = []
+        self.armed = False
 
     def set_mode(self, mode):
         self.calls.append(mode)
         return {"success": self.success, "message": self.message}
+
+    def get_available_modes(self):
+        return ["QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "AUTO", "GUIDED", "MANUAL"]
+
+    def is_armed_status(self):
+        return self.armed
+
+    def arm(self):
+        self.armed = True
+        return True
+
+    def _wait_for_armed(self, target_state, timeout=10.0):
+        return {"success": self.armed == target_state, "message": "ok"}
 
 
 class FlightModeMappingTest(unittest.TestCase):
@@ -169,6 +183,19 @@ class FlightModeMappingTest(unittest.TestCase):
         reply = manager.handle_set_flight_mode(base_msg({"mode": 4}))
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
+
+    def test_flight_arm_avoids_non_armable_qland(self):
+        for payload in ({"mode": "QLAN"}, {"flight_mode": "QLAND"}, {"mode_code": 7}):
+            with self.subTest(payload=payload):
+                manager = MissionManager()
+                flight_control = RecordingFlightControl()
+                manager.set_flight_control(flight_control)
+
+                reply = manager.handle_flight_arm(base_msg(payload))
+
+                self.assertEqual(reply["data"]["result"], 0)
+                self.assertEqual(reply["data"]["mode"], "QSTABILIZE")
+                self.assertEqual(flight_control.calls, ["QSTABILIZE"])
 
 
 if __name__ == "__main__":

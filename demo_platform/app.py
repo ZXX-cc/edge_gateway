@@ -57,7 +57,7 @@ KEY_POINT_DEFS = [
     ("mqtt_link", "MQTT 基础链路", "P0", "订阅/发布、topic 分类、服务回包"),
     ("apidock3_cmd", "APIDock3 命令下发", "P0", "services/property/drc 直接下发和回包"),
     ("sitl_osd", "SITL 飞行遥测", "P0", "飞行器电量、高度、经纬度、GPS、模式"),
-    ("real_wayline", "真实航线执行", "P0", "先解锁 QLAN/QLOITER，再 flighttask_prepare/execute/progress"),
+    ("real_wayline", "真实航线执行", "P0", "先用 QSTABILIZE/QLAN 前置解锁，再 flighttask_prepare/execute/progress"),
     ("flight_control", "基础飞控控制", "P0", "GUIDED、起飞、返航、降落"),
     ("dock_v13", "机场机构联动", "P1", "舱盖、推杆、充电、HMS、dock_operation"),
     ("drc", "DRC 控制链路", "P1", "进入、心跳、摇杆/指点飞行、退出"),
@@ -701,7 +701,7 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"label": "退出 DRC", "method": "drc_mode_exit", "data": {"restore_mission": False}},
         ],
         "real_hd_wayline": [
-            {"label": "切 QLAN/QLOITER 并解锁", "method": "flight_arm", "data": {"flight_mode": "QLOITER", "alias": "QLAN", "timeout": 10}},
+            {"label": "切 QLAN/QSTABILIZE 并解锁", "method": "flight_arm", "data": {"mode": "QLAN", "timeout": 10}},
             {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": real_hd_wayline_file, "simulate_mission": {"is_enable": 0, "latitude": 44.0474824, "longitude": 125.3614503}}},
             {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
             {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},

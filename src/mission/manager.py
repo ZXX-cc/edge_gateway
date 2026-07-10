@@ -16,7 +16,7 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
-from src.mavlink.flight_modes import normalize_flight_mode_request
+from src.mavlink.flight_modes import mode_to_dji_code, normalize_flight_mode_request
 from src.cloud_api.dock3_wayline import (
     STATUS_CANCELED,
     STATUS_FAILED,
@@ -1717,11 +1717,12 @@ class MissionManager:
         """
         飞控解锁。
 
-        可选先切到指定模式，默认使用 QLOITER，方便 QuadPlane/SITL 在执行真实航线前完成解锁。
+        可选先切到指定模式，默认使用 QSTABILIZE，方便 QuadPlane/SITL 在执行真实航线前完成解锁。
+        QLAND/LAND 是降落模式，不可用于地面解锁；这里会自动避开。
         Request:
-        - { "flight_mode": "QLOITER" }
-        - { "mode": "QLOITER" }
-        - { "mode_code": 9 }
+        - { "flight_mode": "QSTABILIZE" }
+        - { "mode": "QSTABILIZE" }
+        - { "mode": "QLAN" }  # demo 侧别名，按 QSTABILIZE 处理
         """
         data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
         if not self._flight_control:
@@ -1730,26 +1731,45 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
 
         mode_payload = dict(data)
+        for key in ("flight_mode", "mode_name", "mode"):
+            raw_mode = mode_payload.get(key)
+            if isinstance(raw_mode, str) and raw_mode.strip().upper() == "QLAN":
+                mode_payload[key] = "QSTABILIZE"
         if not any(key in mode_payload for key in ("flight_mode", "mode_name", "mode_code", "mode")):
-            mode_payload["flight_mode"] = "QLOITER"
+            mode_payload["flight_mode"] = "QSTABILIZE"
 
         ok, normalized, reason = normalize_flight_mode_request(mode_payload)
         if not ok or normalized is None:
             logger.warning(f"Invalid flight_arm mode payload: {reason}, data={data}")
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
-        mode_result = self._flight_control.set_mode(normalized.mode_name)
+        requested_mode = normalized.mode_name
+        arm_mode = requested_mode
+        if requested_mode in {"QLAND", "LAND"}:
+            available_modes = (
+                self._flight_control.get_available_modes()
+                if hasattr(self._flight_control, "get_available_modes")
+                else []
+            )
+            for candidate in ("QSTABILIZE", "QHOVER", "QLOITER", "GUIDED", "MANUAL"):
+                if not available_modes or candidate in available_modes:
+                    arm_mode = candidate
+                    break
+            logger.warning("flight_arm requested non-armable mode %s, using %s", requested_mode, arm_mode)
+
+        mode_result = self._flight_control.set_mode(arm_mode)
         if not mode_result.get("success"):
             reason = mode_result.get("message") or "set pre-arm flight mode failed"
             logger.warning(f"飞控解锁前模式切换失败: {reason}")
             error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
             return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
 
+        mode_code = mode_to_dji_code(arm_mode)
         if self._flight_control.is_armed_status():
             return MessageBuilder.build_reply(
                 msg,
                 result=0,
-                data={"armed": True, "mode": normalized.mode_name, "mode_code": normalized.mode_code},
+                data={"armed": True, "mode": arm_mode, "mode_code": mode_code, "requested_mode": requested_mode},
             )
 
         if not self._flight_control.arm():
@@ -1768,7 +1788,7 @@ class MissionManager:
         return MessageBuilder.build_reply(
             msg,
             result=0,
-            data={"armed": True, "mode": normalized.mode_name, "mode_code": normalized.mode_code},
+            data={"armed": True, "mode": arm_mode, "mode_code": mode_code, "requested_mode": requested_mode},
         )
 
     # ---- 进度上报 ----

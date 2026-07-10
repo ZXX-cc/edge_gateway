@@ -4,7 +4,7 @@
 
 - 飞行总览：机场/飞行器在线、SITL 遥测、电量、高度、经纬度、GPS/RTK、最近命令结果
 - APIDock3 命令：直接通过云端 API topic 下发 services、property、DRC 命令
-- 真实航线：先解锁 QLAN/QLOITER，再下发真实 HD 航线准备、执行、进度、暂停、恢复、返航、终止
+- 真实航线：先用 QSTABILIZE/QLAN 前置解锁，再下发真实 HD 航线准备、执行、进度、暂停、恢复、返航、终止
 - DRC 飞控：进入控制、心跳、速度推送、退出控制
 - 飞行日志：按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包
 - 复测留证：只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项
@@ -56,6 +56,6 @@ http://192.168.2.188:8095
 - `基础上线巡检`：读取关键属性，观察 OSD/state/status。
 - `APIDock3/CMD 动作`：调试模式、舱盖、充电、推杆、补光灯。
 - `DRC 链路`：进入 DRC、心跳、杆量/速度、退出。
-- `真实 HD 航线`：先调用 `flight_arm` 切到 QLAN/QLOITER 前置模式并解锁，再使用 `HD.original.waypoints` 执行真实 SITL/QGC 航线准备、执行和进度查询。
+- `真实 HD 航线`：先调用 `flight_arm`，按 QLAN 别名切到 QSTABILIZE 完成解锁，再使用 `HD.original.waypoints` 执行真实 SITL/QGC 航线准备、执行和进度查询。
 
 页面不再把模拟航线、直播媒体、真实 Adapter 等未进入当前主线的项目放在主导航中。真实航线是否通过，以 QGC 中可见航线任务执行、`flighttask_progress` 和飞行器 OSD 电量/高度/经纬度变化共同留证。

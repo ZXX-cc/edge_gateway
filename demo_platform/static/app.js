@@ -31,7 +31,7 @@ const keyPointActions = {
 const viewMeta = {
   dashboard: ["飞行总览", "查看真实 SITL/QGC 航线、飞行器遥测和最近命令状态。"],
   dock: ["APIDock3 命令", "直接通过云端 API topic 下发 Dock3 services、property 和 DRC 命令。"],
-  mission: ["真实航线", "先解锁 QLAN/QLOITER，再下发 HD 航线准备、执行、进度查询。"],
+  mission: ["真实航线", "先用 QSTABILIZE/QLAN 前置解锁，再下发 HD 航线准备、执行、进度查询。"],
   drc: ["DRC 飞控", "进入控制、心跳、速度推送、退出控制。"],
   ops: ["飞行日志", "按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包。"],
   retest: ["复测留证", "只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项。"],
@@ -127,7 +127,7 @@ const actionGroups = {
     action("关闭补光灯", "关闭机场补光灯。", "supplement_light_close", {}),
   ],
   mission: [
-    action("解锁 QLAN 模式", "切到 QLOITER/QLAN 前置模式并发送 MAVLink arm；真实航线执行前先点这个。", "flight_arm", {flight_mode: "QLOITER", alias: "QLAN", timeout: 10}),
+    action("解锁 QLAN 模式", "按 QLAN 别名切到 QSTABILIZE 并发送 MAVLink arm；避免 QLAND 不可解锁。", "flight_arm", {mode: "QLAN", timeout: 10}),
     action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
