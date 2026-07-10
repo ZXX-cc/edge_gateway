@@ -40,6 +40,24 @@ def write_mock_kmz(path: Path):
         archive.writestr("wpmz/template.kml", kml)
 
 
+def write_real_sitl_waypoints(path: Path):
+    """Build an executable ArduPilot mission for --real-sitl --execute-real.
+
+    A sequence of MAV_CMD_NAV_WAYPOINT items alone can enter AUTO but remain
+    on the ground in Copter SITL.  The real-execute probe therefore starts
+    with MAV_CMD_NAV_TAKEOFF (22), followed by two nearby waypoints.  Keep
+    this separate from the KMZ fixture so KMZ parsing/upload remains covered
+    by the safe --real-sitl upload-only path.
+    """
+    path.write_text(
+        "QGC WPL 110\n"
+        "0\t1\t3\t22\t0\t0\t0\t0\t-35.363262\t149.165237\t30\t1\n"
+        "1\t0\t3\t16\t0\t0\t0\t0\t-35.363462\t149.165437\t40\t1\n"
+        "2\t0\t3\t16\t0\t0\t0\t0\t-35.363662\t149.165637\t50\t1\n",
+        encoding="utf-8",
+    )
+
+
 def file_url(path: str) -> str:
     parsed = Path(path).expanduser().resolve()
     return parsed.as_uri() if parsed.exists() else path
@@ -379,10 +397,15 @@ def main():
     temp_dir = None
     if not args.wayline_file:
         temp_dir = tempfile.TemporaryDirectory()
-        mock_path = Path(temp_dir.name) / "simulated-wayline.kmz"
-        write_mock_kmz(mock_path)
+        if args.real_sitl and args.execute_real:
+            mock_path = Path(temp_dir.name) / "simulated-executable-wayline.waypoints"
+            write_real_sitl_waypoints(mock_path)
+            print(f"mock executable SITL waypoints -> {mock_path}")
+        else:
+            mock_path = Path(temp_dir.name) / "simulated-wayline.kmz"
+            write_mock_kmz(mock_path)
+            print(f"mock wayline kmz -> {mock_path}")
         args.wayline_file = str(mock_path)
-        print(f"mock wayline kmz -> {args.wayline_file}")
 
     try:
         client = Dock3WaylineClient(
