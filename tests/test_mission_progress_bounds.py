@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from src.mission.manager import MissionManager
 
@@ -33,6 +34,32 @@ class MissionProgressBoundsTest(unittest.TestCase):
 
         self.assertFalse(manager._handle_battery_safety())
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
+    def test_monitor_reads_dispatcher_waypoint_cache_before_mavlink_socket(self):
+        manager = MissionManager()
+        manager.set_waypoint_manager(SimpleNamespace(
+            current_waypoint=2,
+            dispatcher=SimpleNamespace(_running=True),
+        ))
+
+        class SocketMustNotBeRead:
+            def recv_match(self, **kwargs):
+                raise AssertionError("dispatcher owns the MAVLink receive socket")
+
+        self.assertEqual(manager._read_mission_current_index(SocketMustNotBeRead()), 2)
+
+    def test_monitor_uses_direct_mavlink_only_without_running_dispatcher(self):
+        manager = MissionManager()
+        manager.set_waypoint_manager(SimpleNamespace(
+            current_waypoint=2,
+            dispatcher=SimpleNamespace(_running=False),
+        ))
+
+        class StandaloneMaster:
+            def recv_match(self, **kwargs):
+                return SimpleNamespace(seq=1)
+
+        self.assertEqual(manager._read_mission_current_index(StandaloneMaster()), 1)
 
 
 if __name__ == "__main__":

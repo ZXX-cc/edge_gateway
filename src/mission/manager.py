@@ -2313,12 +2313,34 @@ class MissionManager:
         """停止航点监控线程"""
         self._monitor_running = False
         if self._mission_monitor_thread:
-            self._mission_monitor_thread.join(timeout=2.0)
+            if self._mission_monitor_thread is not threading.current_thread():
+                self._mission_monitor_thread.join(timeout=2.0)
             self._mission_monitor_thread = None
         logger.info("Mission monitor stopped")
 
+    def _read_mission_current_index(self, master) -> Optional[int]:
+        """Read MISSION_CURRENT without competing with the dispatcher receiver.
+
+        In the gateway runtime, ``MessageDispatcher`` is the single consumer
+        of the MAVLink socket and publishes MISSION_CURRENT to
+        ``WaypointManager``.  Calling ``master.recv_match`` from the mission
+        monitor races that receiver and can permanently miss the final
+        waypoint.  Use the dispatcher-updated cache whenever it is available;
+        retain the direct read only for standalone integrations without a
+        running dispatcher.
+        """
+        waypoint_manager = self._waypoint_manager
+        dispatcher = getattr(waypoint_manager, 'dispatcher', None) if waypoint_manager else None
+        if dispatcher is not None and getattr(dispatcher, '_running', False):
+            return getattr(waypoint_manager, 'current_waypoint', None)
+
+        if not master:
+            return None
+        msg = master.recv_match(type='MISSION_CURRENT', blocking=False, timeout=1.0)
+        return getattr(msg, 'seq', None) if msg else None
+
     def _mission_monitor_loop(self):
-        """航点监控循环：监听 MISSION_CURRENT，上报进度"""
+        """航点监控循环：读取 MISSION_CURRENT，上报进度。"""
         master = self._get_mavlink_master()
         while self._monitor_running:
             try:
@@ -2326,62 +2348,63 @@ class MissionManager:
                     self._monitor_running = False
                     break
 
-                if master:
-                    msg = master.recv_match(type='MISSION_CURRENT', blocking=False, timeout=1.0)
-                    if msg:
-                        new_idx = int(msg.seq)
-                        if not self._is_valid_current_waypoint_index(new_idx):
-                            logger.warning(
-                                "Ignore out-of-range MISSION_CURRENT: seq=%s, waypoints=%s, task=%s",
-                                new_idx,
-                                len(self._current_wayline),
-                                self._current_task_id,
-                            )
-                            continue
-                        self._execute_waypoint_actions(new_idx)
-                        if new_idx != self._current_waypoint_idx:
-                            self._current_waypoint_idx = new_idx
-                            logger.info(f"Waypoint changed: {new_idx}/{len(self._current_wayline)}")
+                new_idx = self._read_mission_current_index(master)
+                if new_idx is None:
+                    time.sleep(0.1)
+                    continue
+                new_idx = int(new_idx)
+                if not self._is_valid_current_waypoint_index(new_idx):
+                    logger.warning(
+                        "Ignore out-of-range MISSION_CURRENT: seq=%s, waypoints=%s, task=%s",
+                        new_idx,
+                        len(self._current_wayline),
+                        self._current_task_id,
+                    )
+                    time.sleep(0.1)
+                    continue
+                self._execute_waypoint_actions(new_idx)
+                if new_idx != self._current_waypoint_idx:
+                    self._current_waypoint_idx = new_idx
+                    logger.info(f"Waypoint changed: {new_idx}/{len(self._current_wayline)}")
 
-                            # 上报进度
-                            self._report_mission_progress()
+                    # 上报进度
+                    self._report_mission_progress()
 
-                            # 记录断点（用于断点续飞）
-                            self._breakpoint_waypoint_idx = new_idx
-                            self._break_point = {
-                                **(self._break_point or {}),
-                                'index': new_idx,
-                                'total_waypoints': len(self._current_wayline),
-                                'progress': (
-                                    new_idx / len(self._current_wayline)
-                                    if self._current_wayline else 0
-                                ),
-                            }
-                            self._save_breakpoint_file("航点进度更新")
+                    # 记录断点（用于断点续飞）
+                    self._breakpoint_waypoint_idx = new_idx
+                    self._break_point = {
+                        **(self._break_point or {}),
+                        'index': new_idx,
+                        'total_waypoints': len(self._current_wayline),
+                        'progress': (
+                            new_idx / len(self._current_wayline)
+                            if self._current_wayline else 0
+                        ),
+                    }
+                    self._save_breakpoint_file("航点进度更新")
 
-                            # 检测任务完成
-                            if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
-                                self._status = self.MISSION_COMPLETED
-                                self._wayline_mission_state = 9  # 航线停止
-                                self._current_step = 33  # 通知任务结果
-                                self._report_mission_progress(status='completed')
-                                self._clear_breakpoint_file()
+                    # 检测任务完成
+                    if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
+                        self._status = self.MISSION_COMPLETED
+                        self._wayline_mission_state = 9  # 航线停止
+                        self._current_step = 33  # 通知任务结果
+                        self._report_mission_progress(status='completed')
+                        self._clear_breakpoint_file()
 
-                                # 更新数据库状态
-                                if self._current_task_id:
-                                    threading.Thread(
-                                        target=self._run_db_coroutine,
-                                        args=(self._update_mission_status(self._current_task_id, 'completed'),),
-                                        daemon=True
-                                    ).start()
+                        # 更新数据库状态
+                        if self._current_task_id:
+                            threading.Thread(
+                                target=self._run_db_coroutine,
+                                args=(self._update_mission_status(self._current_task_id, 'completed'),),
+                                daemon=True
+                            ).start()
 
-                                # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
-                                self._call_nest_action("request_landing", "mission_completed")
+                        # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
+                        self._call_nest_action("request_landing", "mission_completed")
 
-                                self.stop_mission_monitor()
-                                logger.info("Mission completed!, wayline_state=9(航线停止)")
-                else:
-                    time.sleep(1.0)
+                        self.stop_mission_monitor()
+                        logger.info("Mission completed!, wayline_state=9(航线停止)")
+                time.sleep(0.05)
             except Exception as e:
                 logger.error(f"Mission monitor error: {e}")
                 time.sleep(1.0)
