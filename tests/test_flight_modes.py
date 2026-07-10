@@ -91,8 +91,21 @@ class RecordingFlightControl:
         self.armed = True
         return True
 
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=0.0):
+        self.armed = True
+        return {"success": True, "message": "ok"}
+
     def _wait_for_armed(self, target_state, timeout=10.0):
         return {"success": self.armed == target_state, "message": "ok"}
+
+
+class ArmabilityGateFlightControl(RecordingFlightControl):
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=30.0):
+        self.calls.append(("arm_and_wait", timeout, readiness_timeout))
+        return {
+            "success": False,
+            "message": "等待飞控预解锁就绪超时: 飞控预解锁检查尚未通过",
+        }
 
 
 class FlightModeMappingTest(unittest.TestCase):
@@ -197,6 +210,25 @@ class FlightModeMappingTest(unittest.TestCase):
                 self.assertEqual(reply["data"]["mode"], "QSTABILIZE")
                 self.assertEqual(reply["data"]["armed"], True)
                 self.assertEqual(flight_control.calls, ["QSTABILIZE"])
+
+    def test_set_flight_mode_uses_armability_gate_before_arm(self):
+        manager = MissionManager()
+        flight_control = ArmabilityGateFlightControl()
+        manager.set_flight_control(flight_control)
+
+        reply = manager.handle_set_flight_mode(base_msg({
+            "mode": "QLAN",
+            "arm": True,
+            "timeout": 7,
+            "prearm_timeout": 12,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
+        self.assertEqual(flight_control.calls, [
+            "QSTABILIZE",
+            ("arm_and_wait", 7.0, 12.0),
+        ])
+        self.assertFalse(flight_control.armed)
 
 
 if __name__ == "__main__":

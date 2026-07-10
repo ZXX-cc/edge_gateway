@@ -278,8 +278,11 @@ class MissionManager:
         self._event_callback: Optional[Callable] = None
 
         # 航点监控线程
+        self._mission_monitor_lock = threading.Lock()
         self._mission_monitor_thread: Optional[threading.Thread] = None
         self._monitor_running = False
+        self._mission_monitor_stop_event = threading.Event()
+        self._mission_monitor_generation = 0
         self._battery_safety_action: Optional[str] = None
         self._executed_waypoint_actions = set()
 
@@ -520,12 +523,6 @@ class MissionManager:
             daemon=True
         ).start()
 
-    def _get_mavlink_master(self):
-        """获取MAVLink master对象"""
-        if self._mavlink_conn and hasattr(self._mavlink_conn, 'master') and self._mavlink_conn.master:
-            return self._mavlink_conn.master
-        return None
-
     def _send_mavlink_message(self, msg) -> bool:
         """发送MAVLink消息"""
         if self._mavlink_conn and hasattr(self._mavlink_conn, 'send_message'):
@@ -628,7 +625,8 @@ class MissionManager:
         return status_map.get(self._status, STATUS_OK)
 
     def _emit_wayline_progress(self, status: str, current_step: int = None,
-                               percent: int = None, flight_id: str = None):
+                               percent: int = None, flight_id: str = None,
+                               extra: dict = None):
         if not self._event_callback:
             return
         event = MessageBuilder.build_event(
@@ -640,6 +638,7 @@ class MissionManager:
                     current_step=current_step,
                     percent=percent,
                     flight_id=flight_id,
+                    extra=extra,
                 )
             },
             self.gateway_sn
@@ -1315,7 +1314,14 @@ class MissionManager:
         self._executed_waypoint_actions.clear()
 
         # 启动航点监控线程
-        self.start_mission_monitor()
+        if self.start_mission_monitor() is False:
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="Mission monitor unavailable",
+            )
 
         # 更新数据库状态
         threading.Thread(
@@ -1477,6 +1483,27 @@ class MissionManager:
                 self._breakpoint_waypoint_idx,
             )
 
+        simulate_enabled = self._simulate_mission.get('is_enable') == 1
+        if not simulate_enabled and not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(f"恢复航线失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                msg_str=reason,
+            )
+
+        # 必须先预留监控线程，再向飞控发送断点/AUTO 指令。监控线程在任务仍为
+        # PAUSED 时只等待，不消费航点；这样启动失败不会留下无监控的 AUTO 飞行。
+        if self.start_mission_monitor() is False:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=23),
+                msg_str="Mission monitor unavailable",
+            )
+
         # 断点续飞：使用 WaypointManager 设置当前航点
         if self._waypoint_manager and self._breakpoint_waypoint_idx > 0:
             logger.info(f"Breakpoint resume: set current waypoint to {self._breakpoint_waypoint_idx}")
@@ -1484,23 +1511,13 @@ class MissionManager:
             if not ok:
                 logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
 
-        simulate_enabled = self._simulate_mission.get('is_enable') == 1
         if not simulate_enabled:
-            if not self._flight_control:
-                reason = "FlightControl not available"
-                logger.warning(f"恢复航线失败: {reason}")
-                return MessageBuilder.build_reply(
-                    msg,
-                    result=DEVICE_STATE_UNSUPPORTED,
-                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                    msg_str=reason,
-                )
-
             if hasattr(self._flight_control, "resume_mission"):
                 result = self._flight_control.resume_mission()
             else:
                 result = self._flight_control.set_mode("AUTO")
             if not result.get("success"):
+                self.stop_mission_monitor()
                 reason = result.get("message") or "resume mission failed"
                 logger.warning(f"恢复航线失败: {reason}")
                 error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
@@ -1524,8 +1541,6 @@ class MissionManager:
                 daemon=True
             ).start()
 
-        # 启动监控并切换到AUTO模式
-        self.start_mission_monitor()
         self._wayline_mission_state = 6  # 航线执行
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
@@ -1795,20 +1810,36 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
 
         armed = self._flight_control.is_armed_status() if hasattr(self._flight_control, "is_armed_status") else None
-        if should_arm and not armed:
-            if not self._flight_control.arm():
-                reason = "arm command send failed"
-                logger.warning(reason)
-                return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
-
-            wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
-            if callable(wait_for_armed):
-                arm_result = wait_for_armed(target_state=True, timeout=float(mode_payload.get("timeout", 10.0)))
-                if not arm_result.get("success"):
-                    reason = arm_result.get("message") or "arm timeout"
-                    logger.warning(f"飞控解锁失败: {reason}")
-                    return MessageBuilder.build_reply(msg, result=DEVICE_COMMAND_TIMEOUT, msg_str=reason)
-            armed = True
+        if should_arm:
+            arm_timeout = self._as_float(mode_payload.get("timeout", 10.0), 10.0)
+            readiness_timeout = self._as_float(
+                mode_payload.get(
+                    "prearm_timeout",
+                    Config.get('mission.precheck.armable_timeout', 0.0),
+                ),
+                0.0,
+            )
+            arm_and_wait = getattr(self._flight_control, "arm_and_wait", None)
+            if callable(arm_and_wait):
+                arm_result = arm_and_wait(
+                    timeout=arm_timeout,
+                    readiness_timeout=readiness_timeout,
+                )
+            else:
+                arm_result = {
+                    "success": False,
+                    "message": "FlightControl safe arm gate unavailable",
+                }
+            if not arm_result.get("success"):
+                reason = arm_result.get("message") or "arm failed"
+                logger.warning(f"飞控解锁失败: {reason}")
+                error_code = (
+                    DEVICE_COMMAND_TIMEOUT
+                    if "超时" in reason or "timeout" in reason.lower()
+                    else DEVICE_STATE_UNSUPPORTED
+                )
+                return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
+            armed = self._flight_control.is_armed_status() if hasattr(self._flight_control, "is_armed_status") else True
 
         return MessageBuilder.build_reply(
             msg,
@@ -1834,18 +1865,30 @@ class MissionManager:
 
     def _ensure_armed_for_real_wayline(self) -> tuple[bool, str]:
         if not self._flight_control:
-            return True, ""
+            return False, "FlightControl not available"
 
+        arm_and_wait = getattr(self._flight_control, "arm_and_wait", None)
+        if not callable(arm_and_wait):
+            return False, "FlightControl safe arm gate unavailable"
+
+        readiness_timeout = self._as_float(
+            Config.get('mission.precheck.armable_timeout', 0.0),
+            0.0,
+        )
         is_armed = (
             self._flight_control.is_armed_status()
             if hasattr(self._flight_control, "is_armed_status")
             else None
         )
         if is_armed is True:
-            return True, ""
-
-        if not hasattr(self._flight_control, "arm"):
-            return True, ""
+            arm_result = arm_and_wait(
+                timeout=10.0,
+                readiness_timeout=readiness_timeout,
+            )
+            return (
+                bool(arm_result.get("success")),
+                "" if arm_result.get("success") else arm_result.get("message") or "arm readiness failed",
+            )
 
         arm_mode = self._select_pre_mission_arm_mode()
         logger.info("Real flighttask execute pre-arm: switch to %s before AUTO", arm_mode)
@@ -1853,14 +1896,12 @@ class MissionManager:
         if not mode_result.get("success"):
             return False, mode_result.get("message") or f"set pre-arm mode {arm_mode} failed"
 
-        if not self._flight_control.arm():
-            return False, "arm command send failed"
-
-        wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
-        if callable(wait_for_armed):
-            arm_result = wait_for_armed(target_state=True, timeout=10.0)
-            if not arm_result.get("success"):
-                return False, arm_result.get("message") or "arm timeout"
+        arm_result = arm_and_wait(
+            timeout=10.0,
+            readiness_timeout=readiness_timeout,
+        )
+        if not arm_result.get("success"):
+            return False, arm_result.get("message") or "arm failed"
 
         return True, ""
 
@@ -2298,93 +2339,215 @@ class MissionManager:
 
     # ---- 航点监控线程 ----
 
-    def start_mission_monitor(self):
-        """启动航点监控线程"""
-        if self._monitor_running:
-            return
-        self._monitor_running = True
-        self._mission_monitor_thread = threading.Thread(
-            target=self._mission_monitor_loop, daemon=True
-        )
-        self._mission_monitor_thread.start()
-        logger.info("Mission monitor started")
+    def start_mission_monitor(self) -> bool:
+        """确保航点监控运行；旧监控正在退出时短暂等待并接管。"""
+        waypoint_manager = self._waypoint_manager
+        if not waypoint_manager:
+            logger.error("Mission monitor requires WaypointManager; monitor not started")
+            return False
 
-    def stop_mission_monitor(self):
-        """停止航点监控线程"""
-        self._monitor_running = False
-        if self._mission_monitor_thread:
-            self._mission_monitor_thread.join(timeout=2.0)
-            self._mission_monitor_thread = None
-        logger.info("Mission monitor stopped")
+        deadline = time.monotonic() + 2.0
+        while True:
+            with self._mission_monitor_lock:
+                existing_thread = self._mission_monitor_thread
+                existing_stop_event = self._mission_monitor_stop_event
+                if existing_thread and existing_thread.is_alive():
+                    if not existing_stop_event.is_set():
+                        return True
+                    stopping_thread = existing_thread
+                else:
+                    if hasattr(waypoint_manager, 'get_current_waypoint_snapshot'):
+                        current, revision = waypoint_manager.get_current_waypoint_snapshot()
+                    else:
+                        current = getattr(waypoint_manager, 'current_waypoint', None)
+                        revision = None
 
-    def _mission_monitor_loop(self):
-        """航点监控循环：监听 MISSION_CURRENT，上报进度"""
-        master = self._get_mavlink_master()
-        while self._monitor_running:
-            try:
-                if self._handle_battery_safety():
-                    self._monitor_running = False
+                    self._mission_monitor_generation += 1
+                    generation = self._mission_monitor_generation
+                    stop_event = threading.Event()
+                    monitor_thread = threading.Thread(
+                        target=self._mission_monitor_loop,
+                        args=(waypoint_manager, revision, current, stop_event, generation),
+                        daemon=True,
+                    )
+                    self._mission_monitor_stop_event = stop_event
+                    self._mission_monitor_thread = monitor_thread
+                    self._monitor_running = True
+                    monitor_thread.start()
                     break
 
-                if master:
-                    msg = master.recv_match(type='MISSION_CURRENT', blocking=False, timeout=1.0)
-                    if msg:
-                        new_idx = int(msg.seq)
-                        if not self._is_valid_current_waypoint_index(new_idx):
-                            logger.warning(
-                                "Ignore out-of-range MISSION_CURRENT: seq=%s, waypoints=%s, task=%s",
-                                new_idx,
-                                len(self._current_wayline),
-                                self._current_task_id,
-                            )
+            if stopping_thread is threading.current_thread():
+                logger.error("Mission monitor cannot restart itself while stopping")
+                return False
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error("Mission monitor restart timed out waiting for previous owner")
+                return False
+            stopping_thread.join(timeout=remaining)
+
+        logger.info("Mission monitor started")
+        return True
+
+    def stop_mission_monitor(self) -> bool:
+        """停止当前代航点监控；线程未退出时保留所有权，禁止重复启动。"""
+        with self._mission_monitor_lock:
+            monitor_thread = self._mission_monitor_thread
+            stop_event = self._mission_monitor_stop_event
+            stop_event.set()
+            self._monitor_running = False
+
+        if monitor_thread and monitor_thread is not threading.current_thread():
+            monitor_thread.join(timeout=2.0)
+
+        stopped = monitor_thread is None or not monitor_thread.is_alive()
+        with self._mission_monitor_lock:
+            if self._mission_monitor_thread is monitor_thread and stopped:
+                self._mission_monitor_thread = None
+
+        if not stopped:
+            logger.warning("Mission monitor stop timed out; restart remains blocked")
+        logger.info("Mission monitor stopped")
+        return stopped
+
+    def _process_mission_current(
+        self,
+        waypoint_index: Any,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        """处理已分发的航点状态；任务完成时返回 True。"""
+        if stop_event and stop_event.is_set():
+            return False
+
+        try:
+            new_idx = int(waypoint_index)
+        except (TypeError, ValueError):
+            logger.warning("Ignore invalid MISSION_CURRENT index: %r", waypoint_index)
+            return False
+
+        if not self._is_valid_current_waypoint_index(new_idx):
+            logger.warning(
+                "Ignore out-of-range MISSION_CURRENT: seq=%s, waypoints=%s, task=%s",
+                new_idx,
+                len(self._current_wayline),
+                self._current_task_id,
+            )
+            return False
+
+        self._execute_waypoint_actions(new_idx)
+        if stop_event and stop_event.is_set():
+            return False
+        if new_idx == self._current_waypoint_idx:
+            return False
+
+        self._current_waypoint_idx = new_idx
+        logger.info(f"Waypoint changed: {new_idx}/{len(self._current_wayline)}")
+
+        # 上报进度
+        self._report_mission_progress()
+
+        # 记录断点（用于断点续飞）
+        self._breakpoint_waypoint_idx = new_idx
+        self._break_point = {
+            **(self._break_point or {}),
+            'index': new_idx,
+            'total_waypoints': len(self._current_wayline),
+            'progress': (
+                new_idx / len(self._current_wayline)
+                if self._current_wayline else 0
+            ),
+        }
+        self._save_breakpoint_file("航点进度更新")
+
+        # 检测任务完成
+        if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
+            self._status = self.MISSION_COMPLETED
+            self._wayline_mission_state = 9  # 航线停止
+            self._current_step = 33  # 通知任务结果
+            self._report_mission_progress(status='completed')
+            self._clear_breakpoint_file()
+
+            # 更新数据库状态
+            if self._current_task_id:
+                threading.Thread(
+                    target=self._run_db_coroutine,
+                    args=(self._update_mission_status(self._current_task_id, 'completed'),),
+                    daemon=True
+                ).start()
+
+            # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
+            self._call_nest_action("request_landing", "mission_completed")
+
+            logger.info("Mission completed!, wayline_state=9(航线停止)")
+            return True
+
+        return False
+
+    def _mission_monitor_loop(
+        self,
+        waypoint_manager,
+        revision: Optional[int],
+        last_waypoint: Optional[int],
+        stop_event: threading.Event,
+        generation: int,
+    ):
+        """等待 Dispatcher 已分发的 MISSION_CURRENT 并上报进度。"""
+        supports_wait = (
+            revision is not None
+            and hasattr(waypoint_manager, 'wait_for_current_waypoint')
+        )
+
+        try:
+            while not stop_event.is_set():
+                try:
+                    # start_mission_monitor 会在真实飞控动作前预留线程。任务尚未
+                    # 进入 RUNNING 时不要消费 MISSION_CURRENT，避免预启动阶段
+                    # 执行航点动作；状态切换后再从保存的 revision 顺序处理。
+                    if self._status != self.MISSION_RUNNING:
+                        if stop_event.wait(0.1):
+                            break
+                        continue
+
+                    if self._handle_battery_safety():
+                        stop_event.set()
+                        break
+
+                    if supports_wait:
+                        waypoint_index, revision = waypoint_manager.wait_for_current_waypoint(
+                            revision,
+                            timeout=0.5,
+                        )
+                    else:
+                        # 兼容只暴露 current_waypoint 的轻量测试/适配器；生产路径
+                        # 使用上面的 Condition 接口，不进行忙轮询。
+                        if stop_event.wait(0.2):
+                            break
+                        current_waypoint = getattr(waypoint_manager, 'current_waypoint', None)
+                        if current_waypoint == last_waypoint:
                             continue
-                        self._execute_waypoint_actions(new_idx)
-                        if new_idx != self._current_waypoint_idx:
-                            self._current_waypoint_idx = new_idx
-                            logger.info(f"Waypoint changed: {new_idx}/{len(self._current_wayline)}")
+                        last_waypoint = current_waypoint
+                        waypoint_index = current_waypoint
 
-                            # 上报进度
-                            self._report_mission_progress()
+                    if stop_event.is_set():
+                        break
 
-                            # 记录断点（用于断点续飞）
-                            self._breakpoint_waypoint_idx = new_idx
-                            self._break_point = {
-                                **(self._break_point or {}),
-                                'index': new_idx,
-                                'total_waypoints': len(self._current_wayline),
-                                'progress': (
-                                    new_idx / len(self._current_wayline)
-                                    if self._current_wayline else 0
-                                ),
-                            }
-                            self._save_breakpoint_file("航点进度更新")
-
-                            # 检测任务完成
-                            if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
-                                self._status = self.MISSION_COMPLETED
-                                self._wayline_mission_state = 9  # 航线停止
-                                self._current_step = 33  # 通知任务结果
-                                self._report_mission_progress(status='completed')
-                                self._clear_breakpoint_file()
-
-                                # 更新数据库状态
-                                if self._current_task_id:
-                                    threading.Thread(
-                                        target=self._run_db_coroutine,
-                                        args=(self._update_mission_status(self._current_task_id, 'completed'),),
-                                        daemon=True
-                                    ).start()
-
-                                # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
-                                self._call_nest_action("request_landing", "mission_completed")
-
-                                self.stop_mission_monitor()
-                                logger.info("Mission completed!, wayline_state=9(航线停止)")
-                else:
-                    time.sleep(1.0)
-            except Exception as e:
-                logger.error(f"Mission monitor error: {e}")
-                time.sleep(1.0)
+                    if waypoint_index is not None:
+                        if self._process_mission_current(waypoint_index, stop_event):
+                            stop_event.set()
+                            break
+                except Exception as e:
+                    logger.error(f"Mission monitor error: {e}")
+                    if stop_event.wait(1.0):
+                        break
+        finally:
+            current_thread = threading.current_thread()
+            with self._mission_monitor_lock:
+                if (
+                    self._mission_monitor_thread is current_thread
+                    and self._mission_monitor_generation == generation
+                ):
+                    self._mission_monitor_thread = None
+                    self._monitor_running = False
 
     def _report_mission_progress(self, status: str = 'executing'):
         """上报航线任务进度 (flighttask_progress)"""
@@ -2696,15 +2859,30 @@ class MissionManager:
             )
 
         self._current_task_id = flight_id
-        self._status = self.MISSION_RUNNING
-        self._wayline_mission_state = 6  # 航线执行
-        self._current_step = 23  # 航线执行中
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
 
         # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
         simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        if self._flight_control and not simulate_enabled:
+        if not simulate_enabled:
+            # 在解锁和 AUTO 前预留唯一监控 owner。线程会等到下面把状态切为
+            # RUNNING 后才消费航点，因此失败时尚未对真实飞控产生副作用。
+            if self.start_mission_monitor() is False:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    "mission_monitor",
+                    "Mission monitor unavailable",
+                )
+
+        if not simulate_enabled:
+            if not self._flight_control:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    "flight_control",
+                    "FlightControl not available",
+                )
             armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
             if not armed_ok:
                 logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
@@ -2722,8 +2900,9 @@ class MissionManager:
         elif simulate_enabled:
             logger.info("Flighttask execute in simulation mode, skip AUTO mode switch and mission monitor")
 
-        if not simulate_enabled:
-            self.start_mission_monitor()
+        self._status = self.MISSION_RUNNING
+        self._wayline_mission_state = 6  # 航线执行
+        self._current_step = 23  # 航线执行中
         self._call_nest_action("request_takeoff", "flighttask_execute")
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())

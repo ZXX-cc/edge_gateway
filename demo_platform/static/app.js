@@ -42,11 +42,11 @@ const retestItems = [
   {
     id: "real-hd-wayline",
     category: "SITL",
-    title: "SITL/QGC 真实 HD 航线执行",
+    title: "SITL/QGC 真实 HD 航线上传校验",
     status: "needs_data",
-    command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "先通过 set_flight_mode(mode=QLAN, arm=true) 解锁，再让 QGC 中看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
-    evidence: "set_flight_mode 回包、SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
+    command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale --real-sitl --wayline-file /home/fenghuolun/zwz/HD.waypoints --expect-waypoint-count 7",
+    expect: "将 /home/fenghuolun/zwz/HD.waypoints 的 7 个任务项上传到真实 SITL；该按钮不切 AUTO、不自动执行。",
+    evidence: "flighttask_prepare 回包中的 file.source、waypoint_count=7，以及飞控任务上传 ACK。",
   },
   {
     id: "cmd-advanced",
@@ -128,7 +128,7 @@ const actionGroups = {
   ],
   mission: [
     action("解锁 QLAN 模式", "使用 set_flight_mode，按 QLAN 别名切到 QSTABILIZE 并 arm；避免 QLAND 不可解锁。", "set_flight_mode", {mode: "QLAN", arm: true, timeout: 10}),
-    action("准备 SITL HD 航线", "上传 HD.copter-sitl.waypoints 到真实 SITL 飞控，避开 VTOL transition 空速等待。", "flighttask_prepare", realHdMissionData()),
+    action("准备 SITL HD 航线", "上传 /home/fenghuolun/zwz/HD.waypoints 到真实 ArduPlane/QuadPlane SITL。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
     action("暂停航线", "触发 flighttask_pause。", "flighttask_pause", {}),
@@ -170,8 +170,8 @@ function realHdMissionData() {
     execute_time: Date.now(),
     task_type: 0,
     file: {
-      url: "file:///home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
-      fingerprint: "hd-copter-sitl-qgc-wpl",
+      url: "file:///home/fenghuolun/zwz/HD.waypoints",
+      fingerprint: "hd-zwz-qgc-wpl",
     },
     ready_conditions: {},
     executable_conditions: {

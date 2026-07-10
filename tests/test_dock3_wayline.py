@@ -133,6 +133,12 @@ class FailingFlightControl:
         self.calls.append(("set_mode", mode))
         return {"success": False, "message": f"模式切换超时，当前模式: MANUAL, target={mode}"}
 
+    def is_armed_status(self):
+        return True
+
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=0.0):
+        return {"success": True, "message": "already armed"}
+
     def pause_mission(self):
         self.calls.append(("pause_mission", None))
         return {"success": False, "message": "暂停命令未收到 ACK"}
@@ -219,9 +225,23 @@ class RecordingRealWaylineFlightControl:
         self.armed = True
         return True
 
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=0.0):
+        self.calls.append(("arm_and_wait", readiness_timeout))
+        self.armed = True
+        return {"success": True, "message": "ok"}
+
     def _wait_for_armed(self, target_state, timeout=10.0):
         self.calls.append(("wait_for_armed", target_state))
         return {"success": self.armed == target_state, "message": "ok"}
+
+
+class UnreadyRealWaylineFlightControl(RecordingRealWaylineFlightControl):
+    def arm_and_wait(self, timeout=10.0, readiness_timeout=30.0):
+        self.calls.append(("arm_and_wait", readiness_timeout))
+        return {
+            "success": False,
+            "message": "等待飞控预解锁就绪超时: 飞控预解锁检查尚未通过",
+        }
 
 
 class RecordingNest:
@@ -450,8 +470,79 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["output"]["status"], "failed")
         self.assertEqual(execute["data"]["flight_control"]["stage"], "auto_mode")
         self.assertEqual(manager._status, manager.MISSION_FAILED)
-        self.assertEqual(monitor_calls, ["stop"])
+        self.assertEqual(monitor_calls, ["start", "stop"])
         self.assertEqual(flight_control.calls, [("set_mode", "AUTO")])
+
+    def test_real_flighttask_execute_reserves_monitor_before_flight_control(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        manager.set_flight_control(flight_control)
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        monitor_calls = []
+        manager.start_mission_monitor = lambda: monitor_calls.append("start") or False
+        manager.stop_mission_monitor = lambda: monitor_calls.append("stop")
+
+        execute = manager.handle_flighttask_execute(base_msg(
+            "flighttask_execute",
+            {"flight_id": "flight-001"},
+        ))
+
+        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "mission_monitor")
+        self.assertEqual(monitor_calls, ["start", "stop"])
+        self.assertEqual(flight_control.calls, [])
+        self.assertFalse(flight_control.armed)
+
+    def test_real_flighttask_execute_fails_closed_without_flight_control(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        monitor_calls = []
+        nest_calls = []
+        manager.start_mission_monitor = lambda: monitor_calls.append("start") or True
+        manager.stop_mission_monitor = lambda: monitor_calls.append("stop") or True
+        manager._call_nest_action = lambda action, context: nest_calls.append((action, context))
+
+        execute = manager.handle_flighttask_execute(base_msg(
+            "flighttask_execute",
+            {"flight_id": "flight-001"},
+        ))
+
+        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "flight_control")
+        self.assertEqual(manager._status, manager.MISSION_FAILED)
+        self.assertEqual(monitor_calls, ["start", "stop"])
+        self.assertEqual(nest_calls, [])
+
+    def test_real_resume_rejects_monitor_failure_before_fc_and_breakpoint_commands(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        waypoint_manager = RecordingWaypointManager()
+        manager.set_flight_control(flight_control)
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._breakpoint_waypoint_idx = 1
+        manager._status = manager.MISSION_PAUSED
+        manager._simulate_mission = {"is_enable": 0}
+        manager._load_breakpoint_file = lambda: None
+        manager.start_mission_monitor = lambda: False
+        db_updates = []
+        manager._update_mission_status = lambda *args: db_updates.append(args)
+
+        resume = manager.handle_resume_wayline(base_msg("resume_wayline", {}))
+
+        self.assertEqual(resume["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(resume["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertEqual(flight_control.calls, [])
+        self.assertEqual(waypoint_manager.current_waypoints, [])
+        self.assertEqual(db_updates, [])
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
@@ -577,10 +668,31 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["output"]["status"], "in_progress")
         self.assertEqual(flight_control.calls, [
             ("set_mode", "QSTABILIZE"),
-            ("arm", None),
-            ("wait_for_armed", True),
+            ("arm_and_wait", 0.0),
             ("set_mode", "AUTO"),
         ])
+
+    def test_real_flighttask_execute_stops_before_auto_when_prearm_is_unhealthy(self):
+        manager = MissionManager()
+        flight_control = UnreadyRealWaylineFlightControl()
+        manager.set_flight_control(flight_control)
+        manager.start_mission_monitor = lambda: True
+        manager.stop_mission_monitor = lambda: True
+        manager._simulate_mission = {"is_enable": 0}
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
+            "flight_id": "flight-001",
+        }))
+
+        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "pre_arm")
+        self.assertEqual(flight_control.calls, [
+            ("set_mode", "QSTABILIZE"),
+            ("arm_and_wait", 0.0),
+        ])
+        self.assertFalse(flight_control.armed)
 
     def test_running_task_cannot_be_replaced_by_another_prepare_request(self):
         manager = MissionManager()

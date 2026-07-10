@@ -500,6 +500,8 @@ class EdgeGateway:
             self.cloud_conn.stop_heartbeat()
             self.cloud_conn.report_device_offline()
 
+        if self.mission:
+            self.mission.stop_mission_monitor()
         if self.telemetry:
             self.telemetry.stop()
         if self.dispatcher:
@@ -550,6 +552,8 @@ class EdgeGateway:
             self.cloud_conn.stop_heartbeat()
             self.cloud_conn.report_device_offline()
 
+        if self.mission:
+            self.mission.stop_mission_monitor()
         if self.telemetry:
             self.telemetry.stop()
         if self.dispatcher:

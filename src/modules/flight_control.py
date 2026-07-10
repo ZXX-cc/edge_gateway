@@ -5,12 +5,12 @@ modules/flight_control.py
 from typing import Optional, Dict
 from pymavlink import mavutil
 from pymavlink.mavutil import mavlink
+import math
 import time
 from enum import Enum
-from threading import Event
+from threading import Condition, Event, Lock, Thread
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
-from threading import Event, Thread
 from src.mavlink.flight_modes import (
     flight_mode_profile,
     mode_map_for_profile,
@@ -53,7 +53,23 @@ class FlightControl(BaseModule):
         self.current_mode_name = None
         self.is_armed = False  # ⭐ 默认为False
         self.last_command_ack = None
+        self._command_acks = {}
+        self._command_ack_condition = Condition()
+        self._arm_lock = Lock()
         self.mode_profile = "plane"
+
+        # 飞控解锁门禁。ArduPilot 在 EKF/AHRS 尚未就绪时会把
+        # MAV_SYS_STATUS_PREARM_CHECK 的 health 位保持为 0；只有该结构化
+        # 状态和心跳都新鲜时才允许发送 ARM，避免启动阶段盲目解锁。
+        self._armability_condition = Condition()
+        self._last_heartbeat_monotonic = 0.0
+        self._vehicle_system_status = None
+        self._prearm_check_present = False
+        self._prearm_check_enabled = False
+        self._prearm_check_healthy = False
+        self._prearm_status_monotonic = 0.0
+        self._last_arm_status_text = None
+        self._last_arm_status_text_time = 0.0
 
         # 任务信息
         self.mission_count = 0
@@ -124,11 +140,20 @@ class FlightControl(BaseModule):
         msg_type = message.msg_type
         msg = message.msg
 
+        if (
+            getattr(message, 'sysid', self.target_system) != self.target_system
+            or getattr(message, 'compid', self.target_component) != self.target_component
+        ):
+            return
+
         if msg_type == 'HEARTBEAT':
-            if message.sysid == self.target_system:
-                self._handle_heartbeat(msg)
+            self._handle_heartbeat(msg)
         elif msg_type == 'COMMAND_ACK':
             self._handle_command_ack(msg)
+        elif msg_type == 'SYS_STATUS':
+            self._handle_sys_status(msg)
+        elif msg_type == 'STATUSTEXT':
+            self._handle_statustext(msg)
         elif msg_type == 'MISSION_CURRENT':
             self.current_waypoint = msg.seq
         elif msg_type == 'MISSION_COUNT':
@@ -228,12 +253,7 @@ class FlightControl(BaseModule):
 
     def _perform_arm_and_takeoff(self):
         """执行解锁和起飞动作"""
-        # 解锁飞机
-        if not self.arm():
-            raise Exception("解锁命令发送失败")
-
-        # 等待解锁完成
-        arm_result = self._wait_for_armed(target_state=True, timeout=10.0)
+        arm_result = self.arm_and_wait(timeout=10.0, readiness_timeout=30.0)
         if not arm_result["success"]:
             raise Exception(f"解锁失败: {arm_result['message']}")
 
@@ -384,13 +404,48 @@ class FlightControl(BaseModule):
 
     def _handle_command_ack(self, msg):
         """处理命令确认"""
-        self.last_command_ack = {
+        ack = {
             'command': msg.command,
             'result': msg.result,
             'result_text': self._get_ack_result_text(msg.result),
             'timestamp': time.time()
         }
-        self.log(f"命令确认: {msg.command} -> {self.last_command_ack['result_text']}")
+        with self._command_ack_condition:
+            self.last_command_ack = ack
+            self._command_acks[msg.command] = ack
+            self._command_ack_condition.notify_all()
+        self.log(f"命令确认: {msg.command} -> {ack['result_text']}")
+
+    def _handle_sys_status(self, msg):
+        """缓存 ArduPilot 结构化预解锁检查状态。"""
+        prearm_mask = getattr(mavlink, 'MAV_SYS_STATUS_PREARM_CHECK', 1 << 28)
+        present = bool(int(getattr(msg, 'onboard_control_sensors_present', 0) or 0) & prearm_mask)
+        enabled = bool(int(getattr(msg, 'onboard_control_sensors_enabled', 0) or 0) & prearm_mask)
+        healthy = bool(int(getattr(msg, 'onboard_control_sensors_health', 0) or 0) & prearm_mask)
+        with self._armability_condition:
+            self._prearm_check_present = present
+            self._prearm_check_enabled = enabled
+            self._prearm_check_healthy = healthy
+            self._prearm_status_monotonic = time.monotonic()
+            if present and enabled and healthy:
+                self._last_arm_status_text = None
+                self._last_arm_status_text_time = 0.0
+            self._armability_condition.notify_all()
+
+    def _handle_statustext(self, msg):
+        """保留最近一次 Arm/PreArm 诊断，供 ACK 失败时返回真实原因。"""
+        raw_text = getattr(msg, 'text', '')
+        if isinstance(raw_text, bytes):
+            text = raw_text.decode('utf-8', errors='replace')
+        else:
+            text = str(raw_text)
+        text = text.rstrip('\x00').strip()
+        if not text.startswith(('Arm:', 'PreArm:')):
+            return
+        with self._armability_condition:
+            self._last_arm_status_text = text
+            self._last_arm_status_text_time = time.time()
+            self._armability_condition.notify_all()
 
     def _get_ack_result_text(self, result: int) -> str:
         ack_results = {0: "接受", 1: "临时拒绝", 2: "拒绝", 3: "不支持", 4: "失败", 5: "执行中", 6: "已取消"}
@@ -414,17 +469,17 @@ class FlightControl(BaseModule):
         return self._send_message(msg)
 
     def _wait_for_command_ack(self, command: int, since: float, timeout: float = 2.0) -> Optional[Dict]:
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            ack = self.last_command_ack
-            if (
-                ack
-                and ack.get("command") == command
-                and ack.get("timestamp", 0) >= since
-            ):
-                return ack
-            time.sleep(0.05)
-        return None
+        with self._command_ack_condition:
+            updated = self._command_ack_condition.wait_for(
+                lambda: (
+                    command in self._command_acks
+                    and self._command_acks[command].get('timestamp', 0) >= since
+                ),
+                timeout=max(0.0, timeout),
+            )
+            if not updated:
+                return None
+            return dict(self._command_acks[command])
 
     def _send_pause_continue(self, pause: bool) -> Dict:
         command = mavutil.mavlink.MAV_CMD_DO_PAUSE_CONTINUE
@@ -820,6 +875,184 @@ class FlightControl(BaseModule):
 
     # ========== 解锁/上锁 ==========
 
+    def _armability_snapshot(self, max_status_age: float) -> Dict:
+        """返回当前预解锁门禁状态；调用方须持有 _armability_condition。"""
+        now = time.monotonic()
+        heartbeat_age = (
+            now - self._last_heartbeat_monotonic
+            if self._last_heartbeat_monotonic > 0 else None
+        )
+        prearm_age = (
+            now - self._prearm_status_monotonic
+            if self._prearm_status_monotonic > 0 else None
+        )
+        flight_ready_states = {
+            getattr(mavlink, 'MAV_STATE_STANDBY', 3),
+            getattr(mavlink, 'MAV_STATE_ACTIVE', 4),
+        }
+
+        reason = ""
+        if heartbeat_age is None:
+            ready = False
+            reason = "飞控心跳尚未就绪"
+        elif heartbeat_age > max_status_age:
+            ready = False
+            reason = f"飞控心跳状态已过期 ({heartbeat_age:.1f}s)"
+        elif self._vehicle_system_status is None:
+            ready = False
+            reason = "飞控系统状态尚未就绪"
+        elif self._vehicle_system_status not in flight_ready_states:
+            ready = False
+            reason = f"飞控仍在启动、校准或异常状态 (system_status={self._vehicle_system_status})"
+        elif prearm_age is None:
+            ready = False
+            reason = "飞控预解锁状态尚未就绪"
+        elif prearm_age > max_status_age:
+            ready = False
+            reason = f"飞控预解锁状态已过期 ({prearm_age:.1f}s)"
+        elif not self._prearm_check_present or not self._prearm_check_enabled:
+            ready = False
+            reason = "飞控未启用 MAVLink 预解锁检查状态"
+        elif not self._prearm_check_healthy:
+            ready = False
+            reason = "飞控预解锁检查尚未通过"
+            if self._last_arm_status_text:
+                reason = f"{reason}: {self._last_arm_status_text}"
+        else:
+            ready = True
+
+        return {
+            'success': ready,
+            'message': "飞控预解锁检查已就绪" if ready else reason,
+            'heartbeat_age': heartbeat_age,
+            'prearm_status_age': prearm_age,
+            'system_status': self._vehicle_system_status,
+            'prearm_present': self._prearm_check_present,
+            'prearm_enabled': self._prearm_check_enabled,
+            'prearm_healthy': self._prearm_check_healthy,
+        }
+
+    def wait_until_armable(self, timeout: float = 30.0,
+                           max_status_age: float = 3.0) -> Dict:
+        """等待新鲜 HEARTBEAT 与 SYS_STATUS 共同确认飞控允许解锁。"""
+        try:
+            timeout = float(timeout)
+            max_status_age = float(max_status_age)
+        except (TypeError, ValueError):
+            return {'success': False, 'message': '预解锁等待参数无效'}
+        if not math.isfinite(timeout) or timeout < 0 or timeout > 60:
+            return {'success': False, 'message': '预解锁等待时间必须在 0 到 60 秒之间'}
+        if not math.isfinite(max_status_age) or not 0.1 <= max_status_age <= 10:
+            return {'success': False, 'message': '飞控状态新鲜度必须在 0.1 到 10 秒之间'}
+        deadline = time.monotonic() + timeout
+
+        with self._armability_condition:
+            while True:
+                snapshot = self._armability_snapshot(max_status_age)
+                if snapshot['success']:
+                    return snapshot
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    snapshot['message'] = f"等待飞控预解锁就绪超时: {snapshot['message']}"
+                    return snapshot
+                self._armability_condition.wait(timeout=min(0.25, remaining))
+
+    def _recent_arm_failure_text(self, since: float, timeout: float = 0.25) -> Optional[str]:
+        with self._armability_condition:
+            self._armability_condition.wait_for(
+                lambda: self._last_arm_status_text_time >= since,
+                timeout=max(0.0, timeout),
+            )
+            if self._last_arm_status_text_time >= since:
+                return self._last_arm_status_text
+            return None
+
+    def arm_and_wait(self, timeout: float = 10.0,
+                     readiness_timeout: float = 30.0) -> Dict:
+        """安全解锁：先通过预解锁门禁，再按 ARM ACK 与心跳确认结果。"""
+        try:
+            timeout = float(timeout)
+            readiness_timeout = float(readiness_timeout)
+        except (TypeError, ValueError):
+            return {'success': False, 'stage': 'validation', 'message': '解锁等待参数无效'}
+        if not math.isfinite(timeout) or not 1.0 <= timeout <= 30.0:
+            return {
+                'success': False,
+                'stage': 'validation',
+                'message': '解锁确认时间必须在 1 到 30 秒之间',
+            }
+        if (
+            not math.isfinite(readiness_timeout)
+            or not 0.0 <= readiness_timeout <= 60.0
+        ):
+            return {
+                'success': False,
+                'stage': 'validation',
+                'message': '预解锁等待时间必须在 0 到 60 秒之间',
+            }
+        with self._arm_lock:
+            return self._arm_and_wait_locked(timeout, readiness_timeout)
+
+    def _arm_and_wait_locked(self, timeout: float,
+                             readiness_timeout: float) -> Dict:
+        readiness = self.wait_until_armable(timeout=readiness_timeout)
+        if not readiness.get('success'):
+            return {**readiness, 'stage': 'prearm'}
+
+        if self.is_armed:
+            return {
+                **readiness,
+                'success': True,
+                'message': '飞机已解锁且飞控状态新鲜',
+                'already_armed': True,
+            }
+
+        deadline = time.monotonic() + timeout
+        command = mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+        since = time.time()
+        if not self.arm():
+            return {
+                'success': False,
+                'stage': 'send',
+                'message': '解锁命令发送失败',
+            }
+
+        ack_timeout = min(2.0, max(0.0, deadline - time.monotonic()))
+        ack = self._wait_for_command_ack(command, since, timeout=ack_timeout)
+        if ack and ack.get('result') not in (0, 5):
+            detail = self._recent_arm_failure_text(since)
+            reason = f"解锁被飞控拒绝: {ack.get('result_text', ack.get('result'))}"
+            if detail:
+                reason = f"{reason} ({detail})"
+            return {
+                'success': False,
+                'stage': 'command_ack',
+                'message': reason,
+                'ack': ack,
+            }
+
+        remaining = max(0.0, deadline - time.monotonic())
+        armed_result = self._wait_for_armed(target_state=True, timeout=remaining)
+        if armed_result.get('success'):
+            return {
+                **armed_result,
+                'stage': 'armed',
+                'ack': ack,
+            }
+
+        if ack is None:
+            message = f"解锁命令未收到 ACK，且{armed_result.get('message', '未检测到解锁状态')}"
+        else:
+            message = f"解锁命令已接受，但{armed_result.get('message', '未检测到解锁状态')}"
+        return {
+            **armed_result,
+            'success': False,
+            'stage': 'armed',
+            'message': message,
+            'ack': ack,
+        }
+
     def arm(self) -> bool:
         """解锁飞机"""
         self.log(f"发送解锁命令 (sysid={self.target_system})")
@@ -1038,6 +1271,23 @@ class FlightControl(BaseModule):
         """处理连接丢失"""
         self.log("🔌 检测到连接断开，正在恢复任务状态...", "WARNING")
 
+        # 所有飞行/预解锁缓存都属于上一条连接，断链后不得继续用于安全判断。
+        with self._armability_condition:
+            self._last_heartbeat_monotonic = 0.0
+            self._vehicle_system_status = None
+            self._prearm_check_present = False
+            self._prearm_check_enabled = False
+            self._prearm_check_healthy = False
+            self._prearm_status_monotonic = 0.0
+            self.is_armed = False
+            self.current_mode = None
+            self.current_mode_name = None
+            self._last_raw_mode = None
+            self._stable_mode_count = 0
+            self._last_raw_armed = None
+            self._stable_armed_count = 0
+            self._armability_condition.notify_all()
+
         try:
             current_state = self.auto_takeoff_state
 
@@ -1063,7 +1313,37 @@ class FlightControl(BaseModule):
         ✅ 处理心跳 - 更新最后心跳时间
         """
         # 更新心跳时间
-        self._last_heartbeat_time = time.time()
+        now_wall = time.time()
+        now_monotonic = time.monotonic()
+        self._last_heartbeat_time = now_wall
+        system_status = getattr(msg, 'system_status', None)
+        flight_ready_states = {
+            getattr(mavlink, 'MAV_STATE_STANDBY', 3),
+            getattr(mavlink, 'MAV_STATE_ACTIVE', 4),
+        }
+        reset_states = {
+            getattr(mavlink, 'MAV_STATE_UNINIT', 0),
+            getattr(mavlink, 'MAV_STATE_BOOT', 1),
+            getattr(mavlink, 'MAV_STATE_CALIBRATING', 2),
+            getattr(mavlink, 'MAV_STATE_POWEROFF', 7),
+        }
+        with self._armability_condition:
+            self._last_heartbeat_monotonic = now_monotonic
+            self._vehicle_system_status = system_status
+            if system_status not in flight_ready_states:
+                self._prearm_check_present = False
+                self._prearm_check_enabled = False
+                self._prearm_check_healthy = False
+                self._prearm_status_monotonic = 0.0
+            if system_status in reset_states:
+                self.is_armed = False
+                self.current_mode = None
+                self.current_mode_name = None
+                self._last_raw_mode = None
+                self._stable_mode_count = 0
+                self._last_raw_armed = None
+                self._stable_armed_count = 0
+            self._armability_condition.notify_all()
 
         # ... 保持原有心跳处理逻辑 ...
 

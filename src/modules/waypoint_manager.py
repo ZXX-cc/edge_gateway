@@ -4,7 +4,8 @@
 import time
 import threading
 import asyncio
-from typing import List, Dict, Optional
+from collections import deque
+from typing import List, Dict, Optional, Tuple
 from uuid import UUID
 from pymavlink import mavutil, mavwp
 from pymavlink.mavutil import mavlink
@@ -44,6 +45,12 @@ class WaypointManager(BaseModule):
         self.mission_upload_complete = threading.Event()
         self.received_waypoints = set()
         self.is_requesting = False
+
+        # MISSION_CURRENT 只能由 Dispatcher 的单一收包线程读取。任务监控线程
+        # 通过这个条件变量等待已分发的航点状态，避免再次读取 MAVLink socket。
+        self._current_waypoint_condition = threading.Condition()
+        self._current_waypoint_revision = 0
+        self._current_waypoint_history = deque(maxlen=256)
 
         # 消息分发器引用
         self.dispatcher: Optional[MessageDispatcher] = None
@@ -439,9 +446,43 @@ class WaypointManager(BaseModule):
 
     def _handle_mission_current(self, msg):
         """处理MISSION_CURRENT"""
-        if msg.seq != self.current_waypoint:
-            self.current_waypoint = msg.seq
-            self.log(f"当前航点: {msg.seq}")
+        waypoint = int(msg.seq)
+        with self._current_waypoint_condition:
+            changed = waypoint != self.current_waypoint
+            self.current_waypoint = waypoint
+            self._current_waypoint_revision += 1
+            self._current_waypoint_history.append(
+                (self._current_waypoint_revision, waypoint)
+            )
+            self._current_waypoint_condition.notify_all()
+
+        if changed:
+            self.log(f"当前航点: {waypoint}")
+
+    def get_current_waypoint_snapshot(self) -> Tuple[int, int]:
+        """返回当前航点及其版本号，供非收包线程安全读取。"""
+        with self._current_waypoint_condition:
+            return self.current_waypoint, self._current_waypoint_revision
+
+    def wait_for_current_waypoint(
+        self,
+        after_revision: int,
+        timeout: float = 1.0,
+    ) -> Tuple[Optional[int], int]:
+        """等待 after_revision 之后的新 MISSION_CURRENT 分发结果。"""
+        with self._current_waypoint_condition:
+            updated = self._current_waypoint_condition.wait_for(
+                lambda: self._current_waypoint_revision > after_revision,
+                timeout=timeout,
+            )
+            if not updated:
+                return None, self._current_waypoint_revision
+            for revision, waypoint in self._current_waypoint_history:
+                if revision > after_revision:
+                    return waypoint, revision
+
+            # 历史仅作有界缓冲；极慢消费者落后超过缓冲区时从最新值恢复。
+            return self.current_waypoint, self._current_waypoint_revision
 
     def _handle_mission_ack(self, msg):
         """处理MISSION_ACK - 上传成功后自动保存"""

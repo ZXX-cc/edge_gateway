@@ -34,7 +34,7 @@ GATEWAY_SN = os.environ.get("GATEWAY_SN", "EDGEGW001")
 DRONE_SN = os.environ.get("DRONE_SN", "DRONESIM001")
 REAL_HD_WAYPOINTS_PATH = os.environ.get(
     "REAL_HD_WAYPOINTS_PATH",
-    "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
+    "/home/fenghuolun/zwz/HD.waypoints",
 )
 
 CHANNELS = {
@@ -114,11 +114,20 @@ PERSON2_SCRIPT_ARGS = [*MQTT_SCRIPT_ARGS, "--drone-sn", DRONE_SN, "--timeout", "
 
 RETEST_ACTIONS: dict[str, dict[str, Any]] = {
     "real-hd-wayline": {
-        "title": "SITL/QGC 真实 HD 航线",
+        "title": "SITL/QGC 真实 HD 航线上传校验",
         "category": "SITL",
-        "command": [sys.executable, "tools/mqtt_dock3_wayline_test.py", *MQTT_SCRIPT_ARGS, "--timeout", "20", "--quiet-stale"],
+        "command": [
+            sys.executable,
+            "tools/mqtt_dock3_wayline_test.py",
+            *MQTT_SCRIPT_ARGS,
+            "--timeout", "20",
+            "--quiet-stale",
+            "--real-sitl",
+            "--wayline-file", REAL_HD_WAYPOINTS_PATH,
+            "--expect-waypoint-count", "7",
+        ],
         "timeout": 60,
-        "note": "以真实 SITL/QGC 航线执行为准，重点留存 flighttask_progress 与飞行器 OSD 经纬度/高度变化。",
+        "note": "上传并校验 /home/fenghuolun/zwz/HD.waypoints，不自动切 AUTO 或执行任务；执行请使用真实 HD 航线流程。",
     },
     "flight-mode-sitl": {
         "title": "SITL 飞行模式真实复测",
@@ -683,7 +692,7 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
 def workflow_steps() -> dict[str, list[dict[str, Any]]]:
     real_hd_wayline_file = {
         "url": wayline_file_url(REAL_HD_WAYPOINTS_PATH),
-        "fingerprint": "hd-copter-sitl-qgc-wpl",
+        "fingerprint": "hd-zwz-qgc-wpl",
     }
     real_hd_prepare_data = {
         "flight_id": "demo-flight-001",
@@ -726,7 +735,19 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"label": "退出 DRC", "method": "drc_mode_exit", "data": {"restore_mission": False}},
         ],
         "real_hd_wayline": [
-            {"label": "切 QLAN/QSTABILIZE 并解锁", "method": "set_flight_mode", "data": {"mode": "QLAN", "arm": True, "timeout": 10}},
+            {
+                "label": "切 QLAN/QSTABILIZE 并解锁",
+                "method": "set_flight_mode",
+                "data": {
+                    "mode": "QLAN",
+                    "arm": True,
+                    "timeout": 10,
+                    "prearm_timeout": 30,
+                },
+                # SITL 的 EKF3 可能在启动后约 30 秒才通过 PREARM_CHECK；
+                # 页面必须比网关门禁等待更久，避免页面先超时而飞控稍后才解锁。
+                "reply_timeout": 60,
+            },
             {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": real_hd_prepare_data},
             {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
             {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},
@@ -752,7 +773,13 @@ def run_workflow(workflow_id: str, timeout: float = 8.0) -> dict[str, Any]:
 
     for step in steps_by_id[workflow_id]:
         channel = step.get("channel", "services")
-        result = publish_command(step["method"], step.get("data", {}), channel, timeout=timeout)
+        reply_timeout = float(step.get("reply_timeout", timeout))
+        result = publish_command(
+            step["method"],
+            step.get("data", {}),
+            channel,
+            timeout=reply_timeout,
+        )
         result["label"] = step.get("label", step["method"])
         run["steps"].append(result)
         broadcast("workflow", run)

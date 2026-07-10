@@ -1,6 +1,12 @@
+import threading
+import time
 import unittest
+from queue import Empty, Queue
+from types import SimpleNamespace
 
+from src.core.message_dispatcher import MessageDispatcher
 from src.mission.manager import MissionManager
+from src.modules.waypoint_manager import WaypointManager
 
 
 class MissionProgressBoundsTest(unittest.TestCase):
@@ -33,6 +39,299 @@ class MissionProgressBoundsTest(unittest.TestCase):
 
         self.assertFalse(manager._handle_battery_safety())
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
+    def test_mission_current_revision_advances_for_repeated_sequence(self):
+        waypoint_manager = WaypointManager()
+        _, initial_revision = waypoint_manager.get_current_waypoint_snapshot()
+
+        waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+        waypoint, first_revision = waypoint_manager.wait_for_current_waypoint(
+            initial_revision,
+            timeout=0,
+        )
+        self.assertEqual(waypoint, 1)
+        self.assertGreater(first_revision, initial_revision)
+
+        waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+        waypoint, second_revision = waypoint_manager.wait_for_current_waypoint(
+            first_revision,
+            timeout=0,
+        )
+        self.assertEqual(waypoint, 1)
+        self.assertGreater(second_revision, first_revision)
+
+    def test_mission_monitor_never_reads_mavlink_master(self):
+        class CountingMaster:
+            def __init__(self):
+                self.recv_match_calls = 0
+
+            def recv_match(self, *args, **kwargs):
+                self.recv_match_calls += 1
+                return SimpleNamespace(seq=1)
+
+        master = CountingMaster()
+        manager = MissionManager()
+        manager.set_mavlink_connection(SimpleNamespace(master=master))
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+        manager._execute_waypoint_actions = lambda waypoint_index: None
+        manager._save_breakpoint_file = lambda reason="": None
+
+        progress_reported = threading.Event()
+        manager._report_mission_progress = lambda status="executing": progress_reported.set()
+
+        try:
+            manager.start_mission_monitor()
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+            self.assertTrue(progress_reported.wait(2.0), "mission progress was not updated")
+        finally:
+            manager.stop_mission_monitor()
+
+        self.assertEqual(master.recv_match_calls, 0)
+        self.assertEqual(manager._current_waypoint_idx, 1)
+        self.assertEqual(manager._breakpoint_waypoint_idx, 1)
+        self.assertEqual(manager._break_point["index"], 1)
+        self.assertAlmostEqual(manager._break_point["progress"], 1 / 3)
+
+    def test_dispatcher_keeps_heartbeat_while_mission_monitor_runs(self):
+        class RawMessage:
+            def __init__(self, msg_type, seq=None):
+                self._msg_type = msg_type
+                self.seq = seq
+
+            def get_type(self):
+                return self._msg_type
+
+            def get_msgId(self):
+                return 0 if self._msg_type == "HEARTBEAT" else 42
+
+            def get_srcSystem(self):
+                return 1
+
+            def get_srcComponent(self):
+                return 1
+
+        class QueueConnection:
+            use_custom_dialect = False
+
+            def __init__(self):
+                self.messages = Queue()
+                self.heartbeat_received = threading.Event()
+
+            def is_connected(self):
+                return True
+
+            def recv_message(self, timeout=0.1):
+                try:
+                    return self.messages.get(timeout=timeout)
+                except Empty:
+                    return None
+
+            def update_heartbeat(self):
+                self.heartbeat_received.set()
+
+            def check_heartbeat_timeout(self):
+                return False
+
+        connection = QueueConnection()
+        dispatcher = MessageDispatcher(connection)
+        waypoint_manager = WaypointManager()
+        dispatcher.register_hook("*", waypoint_manager)
+
+        manager = MissionManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+        manager._execute_waypoint_actions = lambda waypoint_index: None
+        manager._save_breakpoint_file = lambda reason="": None
+        progress_reported = threading.Event()
+        manager._report_mission_progress = lambda status="executing": progress_reported.set()
+
+        try:
+            dispatcher.start()
+            manager.start_mission_monitor()
+            connection.messages.put(RawMessage("HEARTBEAT"))
+            connection.messages.put(RawMessage("MISSION_CURRENT", seq=1))
+
+            self.assertTrue(connection.heartbeat_received.wait(2.0))
+            self.assertTrue(progress_reported.wait(2.0))
+        finally:
+            manager.stop_mission_monitor()
+            dispatcher.stop()
+
+        self.assertEqual(manager._current_waypoint_idx, 1)
+
+    def test_mission_monitor_ignores_waypoint_snapshot_from_before_start(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+
+        waypoint_manager._handle_mission_current(SimpleNamespace(seq=2))
+        progress_reported = threading.Event()
+        manager._report_mission_progress = lambda status="executing": progress_reported.set()
+
+        try:
+            manager.start_mission_monitor()
+            self.assertFalse(progress_reported.wait(0.2))
+        finally:
+            manager.stop_mission_monitor()
+
+        self.assertEqual(manager._current_waypoint_idx, 0)
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
+    def test_prestarted_monitor_waits_until_mission_is_running(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_PAUSED
+        manager._handle_battery_safety = lambda: False
+        manager._save_breakpoint_file = lambda reason="": None
+
+        processed = threading.Event()
+        manager._execute_waypoint_actions = lambda waypoint_index: processed.set()
+        manager._report_mission_progress = lambda status="executing": None
+
+        try:
+            manager.start_mission_monitor()
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+            self.assertFalse(processed.wait(0.2))
+
+            manager._status = manager.MISSION_RUNNING
+            self.assertTrue(processed.wait(2.0))
+        finally:
+            manager.stop_mission_monitor()
+
+        self.assertEqual(manager._current_waypoint_idx, 1)
+
+    def test_mission_monitor_processes_burst_waypoints_in_order(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [
+            {"seq": 0},
+            {"seq": 1},
+            {"seq": 2},
+            {"seq": 3},
+        ]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+        manager._save_breakpoint_file = lambda reason="": None
+
+        processed = []
+        reached_second = threading.Event()
+        manager._execute_waypoint_actions = lambda waypoint_index: processed.append(waypoint_index)
+
+        def report_progress(status="executing"):
+            if manager._current_waypoint_idx == 2:
+                reached_second.set()
+
+        manager._report_mission_progress = report_progress
+
+        try:
+            manager.start_mission_monitor()
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=2))
+            self.assertTrue(reached_second.wait(2.0))
+        finally:
+            manager.stop_mission_monitor()
+
+        self.assertEqual(processed, [1, 2])
+        self.assertEqual(manager._current_waypoint_idx, 2)
+
+    def test_mission_monitor_does_not_start_duplicate_thread(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._handle_battery_safety = lambda: False
+
+        try:
+            self.assertTrue(manager.start_mission_monitor())
+            monitor_thread = manager._mission_monitor_thread
+            self.assertTrue(manager.start_mission_monitor())
+            self.assertIs(manager._mission_monitor_thread, monitor_thread)
+        finally:
+            manager.stop_mission_monitor()
+
+    def test_mission_monitor_restarts_after_stopping_owner_exits(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._report_mission_progress = lambda status="executing": None
+
+        action_started = threading.Event()
+        release_action = threading.Event()
+
+        def blocking_action(waypoint_index):
+            action_started.set()
+            release_action.wait(1.0)
+
+        manager._execute_waypoint_actions = blocking_action
+
+        try:
+            self.assertTrue(manager.start_mission_monitor())
+            old_thread = manager._mission_monitor_thread
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+            self.assertTrue(action_started.wait(1.0))
+
+            manager._mission_monitor_stop_event.set()
+            release_timer = threading.Timer(0.1, release_action.set)
+            release_timer.start()
+            try:
+                self.assertTrue(manager.start_mission_monitor())
+            finally:
+                release_timer.cancel()
+
+            self.assertIsNot(manager._mission_monitor_thread, old_thread)
+            self.assertTrue(manager._mission_monitor_thread.is_alive())
+        finally:
+            release_action.set()
+            manager.stop_mission_monitor()
+
+    def test_mission_monitor_completion_cleans_up_its_own_thread(self):
+        manager = MissionManager()
+        waypoint_manager = WaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+        manager._handle_battery_safety = lambda: False
+        manager._execute_waypoint_actions = lambda waypoint_index: None
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._clear_breakpoint_file = lambda: None
+        manager._call_nest_action = lambda action, context: None
+
+        completed = threading.Event()
+
+        def report_progress(status="executing"):
+            if status == "completed":
+                completed.set()
+
+        manager._report_mission_progress = report_progress
+
+        try:
+            manager.start_mission_monitor()
+            waypoint_manager._handle_mission_current(SimpleNamespace(seq=1))
+            self.assertTrue(completed.wait(2.0), "mission did not complete")
+            deadline = time.monotonic() + 1.0
+            while manager._mission_monitor_thread is not None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIsNone(manager._mission_monitor_thread)
+        finally:
+            manager.stop_mission_monitor()
+
+        self.assertEqual(manager._status, manager.MISSION_COMPLETED)
 
 
 if __name__ == "__main__":
