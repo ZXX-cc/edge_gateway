@@ -30,6 +30,15 @@ mkdir -p "${LOG_ROOT}"
 log_file="${LOG_ROOT}/${timestamp}_${safe_name}.log"
 
 echo "[信息] 完整测试日志: ${log_file}"
+if git -C "${PROJECT_ROOT}" rev-parse --verify HEAD >/dev/null 2>&1; then
+  echo "[信息] Git 提交: $(git -C "${PROJECT_ROOT}" rev-parse HEAD)"
+  if [[ -n "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]]; then
+    echo "[警告] 工作区存在未提交修改："
+    git -C "${PROJECT_ROOT}" status --short
+  else
+    echo "[信息] 工作区状态: clean"
+  fi
+fi
 "$@" 2>&1 | tee "${log_file}"
 command_rc=${PIPESTATUS[0]}
 
