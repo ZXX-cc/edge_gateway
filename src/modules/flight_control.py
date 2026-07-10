@@ -455,10 +455,14 @@ class FlightControl(BaseModule):
         result = self._send_pause_continue(pause=True)
         if result.get("success"):
             return result
-        fallback_mode = self._first_available_mode(["LOITER", "QLOITER", "QHOVER"])
+        fallback_mode = self._first_available_mode(["QLOITER", "QHOVER", "LOITER", "GUIDED"])
         if fallback_mode:
             self.log(f"航线暂停命令未确认，尝试切换 {fallback_mode} 悬停")
-            return self.set_mode(fallback_mode)
+            mode_result = self.set_mode(fallback_mode)
+            if mode_result.get("success"):
+                mode_result["fallback_from"] = result.get("message")
+                mode_result["action"] = "暂停"
+            return mode_result
         return result
 
     def resume_mission(self) -> Dict:

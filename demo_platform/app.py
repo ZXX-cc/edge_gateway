@@ -33,7 +33,7 @@ GATEWAY_SN = os.environ.get("GATEWAY_SN", "EDGEGW001")
 DRONE_SN = os.environ.get("DRONE_SN", "DRONESIM001")
 REAL_HD_WAYPOINTS_PATH = os.environ.get(
     "REAL_HD_WAYPOINTS_PATH",
-    "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.original.waypoints",
+    "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
 )
 
 CHANNELS = {
@@ -675,8 +675,8 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
 def workflow_steps() -> dict[str, list[dict[str, Any]]]:
     real_hd_wayline_file = {
         "path": REAL_HD_WAYPOINTS_PATH,
-        "fingerprint": "hd-original-qgc-wpl",
-        "name": "HD.original.waypoints",
+        "fingerprint": "hd-copter-sitl-qgc-wpl",
+        "name": "HD.copter-sitl.waypoints",
     }
     return {
         "startup_check": [

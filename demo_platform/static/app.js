@@ -128,7 +128,7 @@ const actionGroups = {
   ],
   mission: [
     action("解锁 QLAN 模式", "使用 set_flight_mode，按 QLAN 别名切到 QSTABILIZE 并 arm；避免 QLAND 不可解锁。", "set_flight_mode", {mode: "QLAN", arm: true, timeout: 10}),
-    action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
+    action("准备 SITL HD 航线", "上传 HD.copter-sitl.waypoints 到真实 SITL 飞控，避开 VTOL transition 空速等待。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
     action("暂停航线", "触发 flighttask_pause。", "flighttask_pause", {flight_id: "demo-flight-001"}),
@@ -170,9 +170,9 @@ function realHdMissionData() {
     execute_time: Date.now(),
     task_type: 0,
     file: {
-      path: "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.original.waypoints",
-      fingerprint: "hd-original-qgc-wpl",
-      name: "HD.original.waypoints",
+      path: "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
+      fingerprint: "hd-copter-sitl-qgc-wpl",
+      name: "HD.copter-sitl.waypoints",
     },
     simulate_mission: {
       is_enable: 0,

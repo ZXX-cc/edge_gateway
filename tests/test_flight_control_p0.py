@@ -17,6 +17,7 @@ try:
             "MAV_MODE_FLAG_CUSTOM_MODE_ENABLED",
             "MAV_CMD_NAV_TAKEOFF",
             "MAV_CMD_COMPONENT_ARM_DISARM",
+            "MAV_CMD_DO_PAUSE_CONTINUE",
         )
     )
 except Exception:
@@ -34,6 +35,7 @@ if _needs_stub:
         MAV_MODE_FLAG_CUSTOM_MODE_ENABLED=1,
         MAV_CMD_NAV_TAKEOFF=22,
         MAV_CMD_COMPONENT_ARM_DISARM=400,
+        MAV_CMD_DO_PAUSE_CONTINUE=193,
         MAVLink_command_long_message=_TakeoffMessage,
         MAVLink_set_mode_message=_TakeoffMessage,
     )
@@ -111,6 +113,18 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertEqual(result["mode"], "QLAND")
         self.assertEqual(control.mode_calls, ["QLAND"])
+
+    def test_plane_pause_fallback_prefers_qloiter_hover(self):
+        control = RecordingFlightControl()
+        control._set_mode_profile("plane")
+        control._wait_for_command_ack = lambda *args, **kwargs: None
+
+        result = control.pause_mission()
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(control.command_calls[0]["command"], 193)
+        self.assertEqual(control.command_calls[0]["param1"], 0)
+        self.assertEqual(control.mode_calls, ["QLOITER"])
 
 
 if __name__ == "__main__":
