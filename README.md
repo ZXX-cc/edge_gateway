@@ -136,10 +136,11 @@ http://Ubuntu服务器IP:8090
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
 - P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 的旧回包已通过 broker 审计定位为 `192.168.2.94` 上的旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`；停止后已在 Ubuntu 通过严格回归：`accepted=10`、全部 `ignored_*=0`。
 - 机巢模拟器已修复 UDP 注册和默认待命状态；Ubuntu 严格链路已通过 properties、device、OSD/state、CMD、DRC、Wayline 六段，其中 Wayline 输出 `accepted=11, events=12, ignored_total=0`，并实际完成 12003 命令、12004 状态、12005 回复的联调。真实 SITL 航点执行仍不在本次结论内。
+- P1-16 短周期数据保留与操作记录已通过 Ubuntu 隔离 SQLite 专项：`tools/database_retention_audit.py` 验证遥测、已结束操作、告警、已上传媒体各清理 1/2/1/1 条，运行中操作与待上传媒体均保留；`tests.test_retention_manager` 同时通过。专项不会访问运行中的 `missions.db`。
 
 下一阶段：
 
 - 关闭 P0/P1 剩余强门禁：SITL 模式/基础飞控、真实 SITL 航点执行、机巢耗时状态机和非阻塞主链路审计。
 - 继续精校客户需求涉及的 Dock3 字段、枚举、单位和错误码。
 - 保存严格 E2E 证据，并继续真实 SITL 航点、实体机巢和真实负载联调。
-- 补齐相机/云台真实 adapter、短周期数据保留专项、P2 adapter/mock/限制说明。
+- 补齐相机/云台真实 adapter、P2 adapter/mock/限制说明。
