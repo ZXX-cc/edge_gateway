@@ -2,11 +2,14 @@
 """Category smoke test for DJI Dock3 wayline / flighttask protocol."""
 
 import argparse
+import json
+import math
 import sys
 import time
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any, Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -14,6 +17,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from mqtt_test_client import MqttRequestClient, output_status
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
+
+
+DEFAULT_DRONE_SN = "DRONESIM001"
+DEFAULT_SITL_LATITUDE = -35.363262
+DEFAULT_SITL_LONGITUDE = 149.165237
 
 
 def now_ms():
@@ -40,22 +48,129 @@ def write_mock_kmz(path: Path):
         archive.writestr("wpmz/template.kml", kml)
 
 
-def write_real_sitl_waypoints(path: Path):
+def write_real_sitl_waypoints(
+    path: Path,
+    latitude: float = DEFAULT_SITL_LATITUDE,
+    longitude: float = DEFAULT_SITL_LONGITUDE,
+):
     """Build an executable ArduPilot mission for --real-sitl --execute-real.
 
     A sequence of MAV_CMD_NAV_WAYPOINT items alone can enter AUTO but remain
     on the ground in Copter SITL.  The real-execute probe therefore starts
-    with MAV_CMD_NAV_TAKEOFF (22), followed by two nearby waypoints.  Keep
-    this separate from the KMZ fixture so KMZ parsing/upload remains covered
-    by the safe --real-sitl upload-only path.
+    with MAV_CMD_NAV_TAKEOFF (22), followed by two short nearby waypoints.
+    Its origin is normally taken from the current drone OSD so a custom SITL
+    launch location cannot turn a short acceptance route into a distant
+    flight.  Keep this separate from the KMZ fixture so KMZ parsing/upload
+    remains covered by the safe --real-sitl upload-only path.
     """
+    first_latitude, first_longitude = _offset_location(latitude, longitude, north_meters=8, east_meters=8)
+    second_latitude, second_longitude = _offset_location(latitude, longitude, north_meters=16, east_meters=16)
     path.write_text(
         "QGC WPL 110\n"
-        "0\t1\t3\t22\t0\t0\t0\t0\t-35.363262\t149.165237\t30\t1\n"
-        "1\t0\t3\t16\t0\t0\t0\t0\t-35.363462\t149.165437\t40\t1\n"
-        "2\t0\t3\t16\t0\t0\t0\t0\t-35.363662\t149.165637\t50\t1\n",
+        f"0\t1\t3\t22\t0\t0\t0\t0\t{latitude:.7f}\t{longitude:.7f}\t15\t1\n"
+        f"1\t0\t3\t16\t0\t0\t0\t0\t{first_latitude:.7f}\t{first_longitude:.7f}\t20\t1\n"
+        f"2\t0\t3\t16\t0\t0\t0\t0\t{second_latitude:.7f}\t{second_longitude:.7f}\t25\t1\n",
         encoding="utf-8",
     )
+
+
+def _offset_location(latitude: float, longitude: float, *, north_meters: float, east_meters: float) -> tuple[float, float]:
+    """Return a nearby WGS84 coordinate without requiring a geo dependency."""
+    latitude = float(latitude)
+    longitude = float(longitude)
+    meters_per_degree_lon = 111320.0 * max(0.1, abs(math.cos(math.radians(latitude))))
+    return (
+        latitude + float(north_meters) / 111132.0,
+        longitude + float(east_meters) / meters_per_degree_lon,
+    )
+
+
+def _field_value(payload: Any, key: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    value = data.get(key) if isinstance(data, dict) else None
+    return value.get("value") if isinstance(value, dict) and "value" in value else value
+
+
+def _to_coordinate(value: Any, *, lower: float, upper: float) -> float | None:
+    try:
+        coordinate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(coordinate) or not lower <= coordinate <= upper:
+        return None
+    return coordinate
+
+
+def _candidate_drone_sns(primary: str) -> list[str]:
+    candidates = [primary, DEFAULT_DRONE_SN, "DRONE-SIM-001"]
+    return list(dict.fromkeys(sn for sn in candidates if sn))
+
+
+def real_sitl_osd_topics(drone_sn: str) -> list[str]:
+    return [f"thing/product/{sn}/osd" for sn in _candidate_drone_sns(drone_sn)]
+
+
+def _latest_observed(client: MqttRequestClient, topics: Iterable[str]) -> tuple[str | None, Any | None]:
+    for topic in topics:
+        messages = client.observed_by_topic.get(topic, [])
+        if messages:
+            return topic, messages[-1]
+    return None, None
+
+
+def wait_for_drone_osd(client: MqttRequestClient, topics: Iterable[str], timeout: float) -> tuple[str | None, Any | None]:
+    """Return an existing or newly observed drone OSD sample."""
+    topics = list(topics)
+    topic, payload = _latest_observed(client, topics)
+    if payload is not None:
+        return topic, payload
+
+    counts = {topic: client.observed_count(topic) for topic in topics}
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        topic, payload = _latest_observed(client, topics)
+        if topic is not None and client.observed_count(topic) > counts[topic]:
+            return topic, payload
+        remaining = deadline - time.monotonic()
+        client.observed_signal.wait(max(0.05, min(0.5, remaining)))
+        client.observed_signal.clear()
+    return _latest_observed(client, topics)
+
+
+def resolve_real_sitl_origin(client: MqttRequestClient, args) -> tuple[float, float, str]:
+    """Prefer an explicitly supplied or current OSD origin for the probe route."""
+    if args.sitl_origin_lat is not None and args.sitl_origin_lon is not None:
+        return float(args.sitl_origin_lat), float(args.sitl_origin_lon), "cli"
+
+    topic, payload = wait_for_drone_osd(client, args._real_sitl_osd_topics, args.osd_wait)
+    latitude = _to_coordinate(_field_value(payload, "latitude"), lower=-90.0, upper=90.0)
+    longitude = _to_coordinate(_field_value(payload, "longitude"), lower=-180.0, upper=180.0)
+    if latitude is not None and longitude is not None and (latitude != 0.0 or longitude != 0.0):
+        return latitude, longitude, f"osd:{topic}"
+
+    return DEFAULT_SITL_LATITUDE, DEFAULT_SITL_LONGITUDE, "fallback"
+
+
+def real_sitl_osd_snapshot(client: MqttRequestClient, args) -> dict[str, Any]:
+    """Build a compact telemetry sample for real-SITL timeout diagnostics."""
+    topic, payload = _latest_observed(client, args._real_sitl_osd_topics)
+    if payload is None:
+        return {"available": False, "topics": args._real_sitl_osd_topics}
+    return {
+        "available": True,
+        "topic": topic,
+        "latitude": _field_value(payload, "latitude"),
+        "longitude": _field_value(payload, "longitude"),
+        "height": _field_value(payload, "height"),
+        "altitude": _field_value(payload, "altitude"),
+        "horizontal_speed": _field_value(payload, "horizontal_speed"),
+        "vertical_speed": _field_value(payload, "vertical_speed"),
+        "mode_code": _field_value(payload, "mode_code"),
+        "gear": _field_value(payload, "gear"),
+        "battery": _field_value(payload, "battery"),
+    }
 
 
 def file_url(path: str) -> str:
@@ -246,6 +361,32 @@ def run_real_sitl_prepare_check(client, args):
     vehicle to AUTO or request takeoff.
     """
     flight_id = args.flight_id or f"dock3-real-sitl-{int(time.time())}"
+    if args.execute_real and not args.skip_prearm_verify:
+        rc, prearm_payload = client.request(
+            "set_flight_mode",
+            {
+                # QLAND is intentionally requested here: the gateway must map
+                # it to a mode that permits arming (normally QSTABILIZE).
+                "mode": "QLAND",
+                "arm": True,
+                "timeout": args.arm_timeout,
+                "prearm_timeout": args.prearm_timeout,
+            },
+            args.timeout,
+            [0],
+            None,
+        )
+        if rc != 0:
+            return rc
+        prearm_data = prearm_payload.get("data", {}) if isinstance(prearm_payload, dict) else {}
+        if prearm_data.get("armed") is not True:
+            print(f"real SITL pre-arm did not confirm armed=true: {prearm_payload}", file=sys.stderr)
+            return 24
+        print(
+            "real SITL pre-arm verified "
+            f"(requested=QLAND, applied={prearm_data.get('mode')}, armed={prearm_data.get('armed')})"
+        )
+
     rc, prepare_payload = client.request(
         "flighttask_prepare",
         official_prepare_payload(flight_id, args.wayline_file, simulate=False),
@@ -323,6 +464,11 @@ def run_real_sitl_prepare_check(client, args):
                 f"waypoint_index={ext.get('current_waypoint_index')}",
                 file=sys.stderr,
             )
+            print(
+                "real SITL completion telemetry: "
+                f"{json.dumps(real_sitl_osd_snapshot(client, args), ensure_ascii=False, sort_keys=True)}",
+                file=sys.stderr,
+            )
             return 23
 
     print(
@@ -379,6 +525,13 @@ def main():
         default=5.0,
         help="progress poll interval for --require-completion (default: 5)",
     )
+    parser.add_argument("--drone-sn", default=DEFAULT_DRONE_SN, help="Drone OSD SN used for real-SITL diagnostics")
+    parser.add_argument("--osd-wait", type=float, default=4.0, help="seconds to wait for initial drone OSD")
+    parser.add_argument("--sitl-origin-lat", type=float, default=None, help="override generated real-SITL route origin latitude")
+    parser.add_argument("--sitl-origin-lon", type=float, default=None, help="override generated real-SITL route origin longitude")
+    parser.add_argument("--skip-prearm-verify", action="store_true", help="skip the QLAND-to-armable-mode verification before real execution")
+    parser.add_argument("--arm-timeout", type=float, default=10.0, help="arm confirmation timeout for real-SITL pre-arm verification")
+    parser.add_argument("--prearm-timeout", type=float, default=30.0, help="pre-arm readiness wait for real-SITL verification")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
@@ -387,20 +540,26 @@ def main():
         parser.error("--execute-real requires --real-sitl")
     if args.require_completion and not args.execute_real:
         parser.error("--require-completion requires --execute-real")
+    if (args.sitl_origin_lat is None) != (args.sitl_origin_lon is None):
+        parser.error("--sitl-origin-lat and --sitl-origin-lon must be provided together")
     if args.execute_observe_seconds < 0:
         parser.error("--execute-observe-seconds must be non-negative")
     if args.completion_timeout <= 0:
         parser.error("--completion-timeout must be positive")
     if args.completion_poll_seconds <= 0:
         parser.error("--completion-poll-seconds must be positive")
+    if args.osd_wait < 0:
+        parser.error("--osd-wait must be non-negative")
+    if args.arm_timeout <= 0 or args.prearm_timeout < 0:
+        parser.error("--arm-timeout must be positive and --prearm-timeout must be non-negative")
 
     temp_dir = None
+    needs_real_sitl_fixture = False
     if not args.wayline_file:
         temp_dir = tempfile.TemporaryDirectory()
         if args.real_sitl and args.execute_real:
             mock_path = Path(temp_dir.name) / "simulated-executable-wayline.waypoints"
-            write_real_sitl_waypoints(mock_path)
-            print(f"mock executable SITL waypoints -> {mock_path}")
+            needs_real_sitl_fixture = True
         else:
             mock_path = Path(temp_dir.name) / "simulated-wayline.kmz"
             write_mock_kmz(mock_path)
@@ -416,11 +575,20 @@ def main():
             quiet_stale=args.quiet_stale,
             client_id_prefix="edge_gateway_dock3_wayline",
             subscribe_events=True,
+            observe_topics=real_sitl_osd_topics(args.drone_sn) if args.real_sitl and args.execute_real else None,
         )
         if not client.connect(args.timeout):
             print("timeout waiting for MQTT connection", file=sys.stderr)
             return 1
         try:
+            args._real_sitl_osd_topics = real_sitl_osd_topics(args.drone_sn)
+            if needs_real_sitl_fixture:
+                latitude, longitude, origin_source = resolve_real_sitl_origin(client, args)
+                write_real_sitl_waypoints(Path(args.wayline_file), latitude, longitude)
+                print(
+                    "mock executable SITL waypoints -> "
+                    f"{args.wayline_file} (origin={latitude:.7f},{longitude:.7f}, source={origin_source})"
+                )
             rc = run_real_sitl_prepare_check(client, args) if args.real_sitl else run_wayline_checks(client, args)
             if rc != 0:
                 return rc

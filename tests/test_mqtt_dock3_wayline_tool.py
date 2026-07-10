@@ -59,12 +59,17 @@ class Dock3WaylineToolTest(unittest.TestCase):
     def test_real_sitl_fixture_starts_with_takeoff_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             mission_path = Path(tmp) / "sitl.waypoints"
-            write_real_sitl_waypoints(mission_path)
+            write_real_sitl_waypoints(mission_path, 44.0474824, 125.3614503)
             summary, waypoints = parse_wayline_file({"url": mission_path.as_uri()})
 
         self.assertEqual(summary["format"], "waypoints")
         self.assertEqual([waypoint["command"] for waypoint in waypoints], [22, 16, 16])
         self.assertEqual([waypoint["seq"] for waypoint in waypoints], [0, 1, 2])
+        self.assertAlmostEqual(waypoints[0]["lat"], 44.0474824, places=6)
+        self.assertAlmostEqual(waypoints[0]["lon"], 125.3614503, places=6)
+        self.assertEqual([waypoint["alt"] for waypoint in waypoints], [15.0, 20.0, 25.0])
+        self.assertGreater(waypoints[1]["lat"], waypoints[0]["lat"])
+        self.assertGreater(waypoints[2]["lon"], waypoints[1]["lon"])
 
 
 if __name__ == "__main__":

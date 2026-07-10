@@ -1,6 +1,6 @@
 # 30 天交付验收评分卡
 
-更新时间：2026-07-09
+更新时间：2026-07-10
 
 本文档用于把“90% 功能可用、100% 功能开发完毕、P0/P1 必须可用、P2 可有少量问题”转换成可执行的**网关侧**交付判定规则。它不替代 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`，而是给第 30 天验收提供统一计分口径。
 
@@ -74,7 +74,7 @@ P2 问题影响 P0/P1 = 0 项
 | 优先级 | Usable | Partial / In Progress | Missing / Pending | 当前风险 |
 |---|---:|---:|---:|---|
 | P0 | 12 | 5 | 0 | P0-07/08/12/13/16 仍需 SITL 模式/飞控、机巢专项或非阻塞审计；P0-17 当前核心 E2E 已通过 |
-| P1 | 15 | 2 | 0 | DRC、指点飞行、KMZ 基础解析、真实 SITL 3 航点执行/进度、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 P0/P1 E2E 已形成可用证据；一键启航 Ubuntu MQTT 与机巢耗时状态机仍是主要缺口 |
+| P1 | 15 | 2 | 0 | DRC、指点飞行、KMZ 基础解析、真实 SITL 下发/起飞/第 1 航点进度、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 P0/P1 E2E 已形成可用证据；真实 HD 航线终止语义、以及一键启航 Ubuntu MQTT 与机巢耗时状态机仍需继续实跑 |
 | P2 | 0 | 0 | 10 | P2 目前只有规划口径，仍需 adapter/mock/限制说明 |
 | 合计 | 27 | 7 | 10 | 当前不能声称达到 90% 可用或 100% 开发完成 |
 
@@ -116,7 +116,7 @@ P2 问题影响 P0/P1 = 0 项
 | P1-03 | DRC 心跳和超时恢复 | Usable | `mqtt_dock3_drc_test.py --timeout 12 --quiet-stale --osd-wait 6`，含 `drc_state`、官方心跳和退出验证 |
 | P1-04 | `takeoff_to_point` 和指点飞行 | Usable | DRC 专项已验证 `takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`；真实 SITL 航点语义归 P1-06 |
 | P1-05 | KMZ/WPML 基础解析 | Usable | 扩展 `mqtt_dock3_wayline_test.py` |
-| P1-06 | 真实 SITL 航点执行 | Usable | SITL Wayline E2E |
+| P1-06 | 真实 SITL 航点执行 | Usable | 已验证非模拟 MAVLink 上传、`AUTO` 执行、解锁后第 1 航点进度；`HD.kml` 真实航线仍需按其终止语义保存完成证据 |
 | P1-07 | 媒体基础 | Usable | `mqtt_dock3_media_test.py` |
 | P1-08 | 直播基础 | Usable | `mqtt_dock3_live_test.py` |
 | P1-09 | 相机/云台基础控制 | Usable | `mqtt_dock3_payload_test.py` 严格通过；真实 Payload ACK adapter 后续精校 |
