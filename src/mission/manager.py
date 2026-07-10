@@ -9,13 +9,19 @@ import shutil
 import time
 import threading
 import asyncio
+from functools import wraps
 from typing import Any, List, Dict, Optional, Callable, Tuple
 from uuid import UUID
 from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_TIMEOUT,
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_BUSY,
+    INVALID_COMMAND_FORMAT,
+)
 from src.mavlink.flight_modes import mode_to_dji_code, normalize_flight_mode_request
 from src.cloud_api.dock3_wayline import (
     STATUS_CANCELED,
@@ -39,6 +45,15 @@ from src.database.waypoint_db import WaypointDB
 from src.database.schemas import MissionCreate, WaypointCreate
 
 logger = get_logger("mission")
+
+
+def serialize_flighttask(handler):
+    """Keep one Dock3 flighttask request from replacing another task mid-flight."""
+    @wraps(handler)
+    def wrapped(self, *args, **kwargs):
+        with self._flighttask_lock:
+            return handler(self, *args, **kwargs)
+    return wrapped
 
 
 class MissionManager:
@@ -229,6 +244,9 @@ class MissionManager:
         # 当前任务状态
         self._status = self.MISSION_IDLE
         self._current_task_id: Optional[str] = None
+        # MQTT requests can arrive from the test tool and local demo platform
+        # at nearly the same time.  A task state transition must be atomic.
+        self._flighttask_lock = threading.RLock()
         self._current_wayline: List[dict] = []
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0  # 断点航点索引（用于断点续飞）
@@ -523,7 +541,11 @@ class MissionManager:
 
     @property
     def is_busy(self) -> bool:
-        return self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING)
+        return self._status in (
+            self.MISSION_PREPARING,
+            self.MISSION_RUNNING,
+            self.MISSION_PAUSED,
+        )
 
     def _current_progress_percent(self) -> int:
         if self._status == self.MISSION_COMPLETED:
@@ -565,6 +587,33 @@ class MissionManager:
             percent=self._current_progress_percent() if percent is None else percent,
             ext=self._wayline_ext(flight_id),
             extra=extra,
+        )
+
+    def _reject_flighttask_request(self, msg: dict, requested_flight_id: str,
+                                   result: int, reason: str) -> dict:
+        """Reply without exposing the active task state as another task's data."""
+        active_flight_id = self._current_task_id or ''
+        logger.warning(
+            "Reject flighttask request: requested=%s active=%s status=%s reason=%s",
+            requested_flight_id,
+            active_flight_id,
+            self._get_task_status_name(),
+            reason,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=result,
+            data=self._wayline_reply_data(
+                STATUS_REJECTED,
+                current_step=self._current_step,
+                flight_id=active_flight_id or requested_flight_id,
+                extra={
+                    'requested_flight_id': requested_flight_id,
+                    'active_flight_id': active_flight_id,
+                    'task_status': self._get_task_status_name(),
+                },
+            ),
+            msg_str=reason,
         )
 
     def _wayline_status_name(self) -> str:
@@ -2426,6 +2475,7 @@ class MissionManager:
 
     # ---- 大疆标准FlightTask接口 ----
 
+    @serialize_flighttask
     def handle_flighttask_prepare(self, msg: dict) -> dict:
         """
         飞行任务准备 (flighttask_prepare)
@@ -2466,6 +2516,16 @@ class MissionManager:
 
         logger.info(f"Flighttask prepare: flight_id={flight_id}, type={task_type}, "
                    f"execute_time={execute_time}")
+
+        # A second producer (for example the local HD demo) must not replace
+        # the currently flying task's file, waypoints or task ID.
+        if self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING, self.MISSION_PAUSED):
+            return self._reject_flighttask_request(
+                msg,
+                flight_id,
+                DOCK_BUSY,
+                "当前航线任务正在执行，不能覆盖航线文件",
+            )
 
         # 保存任务属性
         self._current_task_id = flight_id
@@ -2593,6 +2653,7 @@ class MissionManager:
             )
         )
 
+    @serialize_flighttask
     def handle_flighttask_execute(self, msg: dict) -> dict:
         """
         飞行任务执行 (flighttask_execute)
@@ -2608,6 +2669,32 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask execute: {flight_id}")
+        if self._current_task_id != flight_id:
+            active = self._current_task_id or ''
+            result = DOCK_BUSY if self._status in (
+                self.MISSION_PREPARING,
+                self.MISSION_RUNNING,
+                self.MISSION_PAUSED,
+            ) else DEVICE_STATE_UNSUPPORTED
+            return self._reject_flighttask_request(
+                msg,
+                flight_id,
+                result,
+                f"flight_id 与已准备任务不匹配: requested={flight_id}, active={active or 'none'}",
+            )
+        if self._status != self.MISSION_IDLE:
+            result = DOCK_BUSY if self._status in (
+                self.MISSION_PREPARING,
+                self.MISSION_RUNNING,
+                self.MISSION_PAUSED,
+            ) else DEVICE_STATE_UNSUPPORTED
+            return self._reject_flighttask_request(
+                msg,
+                flight_id,
+                result,
+                f"当前任务状态不允许执行: {self._get_task_status_name()}",
+            )
+
         self._current_task_id = flight_id
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 6  # 航线执行
@@ -2772,6 +2859,7 @@ class MissionManager:
             data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=24)
         )
 
+    @serialize_flighttask
     def handle_flighttask_progress(self, msg: dict) -> dict:
         """
         飞行任务进度查询 (flighttask_progress)
@@ -2782,6 +2870,14 @@ class MissionManager:
         data = msg.get('data', {})
         task_id = data.get('flight_id', data.get('flighttask_id', self._current_task_id or ''))
         logger.info(f"Flighttask progress query: {task_id}")
+
+        if task_id and task_id != self._current_task_id:
+            return self._reject_flighttask_request(
+                msg,
+                task_id,
+                DEVICE_STATE_UNSUPPORTED,
+                "flight_id 与当前任务不匹配，拒绝返回其他任务的进度",
+            )
 
         total = len(self._current_wayline)
         progress = self._current_progress_percent()

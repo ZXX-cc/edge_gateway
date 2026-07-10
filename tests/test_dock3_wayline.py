@@ -60,7 +60,7 @@ if "src.database.schemas" not in sys.modules:
 
 from src.cloud_api.dock3_wayline import normalize_prepare_payload, parse_wayline_file
 from src.mission.manager import MissionManager
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DOCK_BUSY, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 
 
 def base_msg(method, data):
@@ -566,6 +566,7 @@ class Dock3WaylineTest(unittest.TestCase):
         manager.set_flight_control(flight_control)
         manager.start_mission_monitor = lambda: None
         manager._simulate_mission = {"is_enable": 0}
+        manager._current_task_id = "flight-001"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
@@ -580,6 +581,52 @@ class Dock3WaylineTest(unittest.TestCase):
             ("wait_for_armed", True),
             ("set_mode", "AUTO"),
         ])
+
+    def test_running_task_cannot_be_replaced_by_another_prepare_request(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-active"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._task_file_summary = {"source": "active.kmz", "waypoint_count": 3}
+        manager._status = manager.MISSION_RUNNING
+
+        prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+            "flight_id": "flight-demo",
+            "task_type": 0,
+            "execute_time": int(time.time() * 1000),
+            "file": {"url": "file:///tmp/demo.waypoints", "fingerprint": "demo"},
+            "simulate_mission": {"is_enable": 0, "latitude": -35.36, "longitude": 149.16},
+        }))
+
+        self.assertEqual(prepare["data"]["result"], DOCK_BUSY)
+        self.assertEqual(prepare["data"]["output"]["status"], "rejected")
+        self.assertEqual(prepare["data"]["active_flight_id"], "flight-active")
+        self.assertEqual(manager._current_task_id, "flight-active")
+        self.assertEqual(len(manager._current_wayline), 3)
+        self.assertEqual(manager._task_file_summary["source"], "active.kmz")
+
+    def test_execute_and_progress_reject_flight_id_not_matching_prepared_task(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-active"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._task_file_summary = {"source": "active.kmz", "waypoint_count": 3}
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 1}
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
+            "flight_id": "flight-demo",
+        }))
+        self.assertEqual(execute["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(execute["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._status, manager.MISSION_IDLE)
+
+        manager._status = manager.MISSION_RUNNING
+        progress = manager.handle_flighttask_progress(base_msg("flighttask_progress", {
+            "flight_id": "flight-demo",
+        }))
+        self.assertEqual(progress["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(progress["data"]["output"]["status"], "rejected")
+        self.assertEqual(progress["data"]["active_flight_id"], "flight-active")
+        self.assertEqual(progress["data"]["output"]["ext"]["flight_id"], "flight-active")
 
     def test_simulated_takeoff_flow_requests_nest_and_completes(self):
         events = []
