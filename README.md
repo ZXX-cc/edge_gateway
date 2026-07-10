@@ -129,16 +129,17 @@ http://Ubuntu服务器IP:8090
 已完成：
 
 - Ubuntu 服务器内 Dock3 纯模拟链路已形成当前基线，整体进度约 81%。
-- P0/P1 当前 34 项门禁中已有 24 项可用；评分卡口径见 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。
+- P0/P1 当前 34 项门禁中已有 25 项可用；评分卡口径见 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。
 - MQTT topic/reply、设备上线、组织绑定、拓扑、properties、OSD/state、错误码、request trace 已形成可重复脚本证据。
 - CMD、DRC、Wayline、Media、Live、HMS/log、firmware/config 已有专项脚本通过记录。
 - `tools/e2e_full_chain_test.py --timeout 12 --quiet-stale` 已通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段。
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
 - P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 的旧回包已通过 broker 审计定位为 `192.168.2.94` 上的旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`；停止后已在 Ubuntu 通过严格回归：`accepted=10`、全部 `ignored_*=0`。
+- 机巢模拟器已修复 UDP 注册和默认待命状态；Ubuntu 严格链路已通过 properties、device、OSD/state、CMD、DRC、Wayline 六段，其中 Wayline 输出 `accepted=11, events=12, ignored_total=0`，并实际完成 12003 命令、12004 状态、12005 回复的联调。真实 SITL 航点执行仍不在本次结论内。
 
 下一阶段：
 
-- 关闭 P0/P1 剩余强门禁：SITL 模式/基础飞控、真实 SITL 航点执行、Ubuntu 机巢 v1.3 实跑、非阻塞主链路审计。
+- 关闭 P0/P1 剩余强门禁：SITL 模式/基础飞控、真实 SITL 航点执行、机巢耗时状态机和非阻塞主链路审计。
 - 继续精校客户需求涉及的 Dock3 字段、枚举、单位和错误码。
 - 执行完整严格 `--fail-on-stale` 服务器 E2E 回归，并保存结果。
 - 补齐相机/云台真实 adapter、短周期数据保留专项、P2 adapter/mock/限制说明。
