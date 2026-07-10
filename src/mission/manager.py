@@ -1713,6 +1713,64 @@ class MissionManager:
             },
         )
 
+    def handle_flight_arm(self, msg: dict) -> dict:
+        """
+        飞控解锁。
+
+        可选先切到指定模式，默认使用 QLOITER，方便 QuadPlane/SITL 在执行真实航线前完成解锁。
+        Request:
+        - { "flight_mode": "QLOITER" }
+        - { "mode": "QLOITER" }
+        - { "mode_code": 9 }
+        """
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        if not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(reason)
+            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
+
+        mode_payload = dict(data)
+        if not any(key in mode_payload for key in ("flight_mode", "mode_name", "mode_code", "mode")):
+            mode_payload["flight_mode"] = "QLOITER"
+
+        ok, normalized, reason = normalize_flight_mode_request(mode_payload)
+        if not ok or normalized is None:
+            logger.warning(f"Invalid flight_arm mode payload: {reason}, data={data}")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        mode_result = self._flight_control.set_mode(normalized.mode_name)
+        if not mode_result.get("success"):
+            reason = mode_result.get("message") or "set pre-arm flight mode failed"
+            logger.warning(f"飞控解锁前模式切换失败: {reason}")
+            error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
+            return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
+
+        if self._flight_control.is_armed_status():
+            return MessageBuilder.build_reply(
+                msg,
+                result=0,
+                data={"armed": True, "mode": normalized.mode_name, "mode_code": normalized.mode_code},
+            )
+
+        if not self._flight_control.arm():
+            reason = "arm command send failed"
+            logger.warning(reason)
+            return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
+
+        wait_for_armed = getattr(self._flight_control, "_wait_for_armed", None)
+        if callable(wait_for_armed):
+            arm_result = wait_for_armed(target_state=True, timeout=float(data.get("timeout", 10.0)))
+            if not arm_result.get("success"):
+                reason = arm_result.get("message") or "arm timeout"
+                logger.warning(f"飞控解锁失败: {reason}")
+                return MessageBuilder.build_reply(msg, result=DEVICE_COMMAND_TIMEOUT, msg_str=reason)
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"armed": True, "mode": normalized.mode_name, "mode_code": normalized.mode_code},
+        )
+
     # ---- 进度上报 ----
 
     def report_progress(self, waypoint_idx: int, total: int, status: str = "executing"):

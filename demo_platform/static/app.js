@@ -31,7 +31,7 @@ const keyPointActions = {
 const viewMeta = {
   dashboard: ["飞行总览", "查看真实 SITL/QGC 航线、飞行器遥测和最近命令状态。"],
   dock: ["APIDock3 命令", "直接通过云端 API topic 下发 Dock3 services、property 和 DRC 命令。"],
-  mission: ["真实航线", "下发 HD 航线准备、执行、进度查询、暂停、恢复、返航和终止。"],
+  mission: ["真实航线", "先解锁 QLAN/QLOITER，再下发 HD 航线准备、执行、进度查询。"],
   drc: ["DRC 飞控", "进入控制、心跳、速度推送、退出控制。"],
   ops: ["飞行日志", "按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包。"],
   retest: ["复测留证", "只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项。"],
@@ -45,8 +45,8 @@ const retestItems = [
     title: "SITL/QGC 真实 HD 航线执行",
     status: "needs_data",
     command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "QGC 中能看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
-    evidence: "SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
+    expect: "先完成 flight_arm 解锁，再让 QGC 中看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
+    evidence: "flight_arm 回包、SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
   },
   {
     id: "cmd-advanced",
@@ -127,6 +127,7 @@ const actionGroups = {
     action("关闭补光灯", "关闭机场补光灯。", "supplement_light_close", {}),
   ],
   mission: [
+    action("解锁 QLAN 模式", "切到 QLOITER/QLAN 前置模式并发送 MAVLink arm；真实航线执行前先点这个。", "flight_arm", {flight_mode: "QLOITER", alias: "QLAN", timeout: 10}),
     action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
