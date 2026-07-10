@@ -84,7 +84,7 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
 
         self.assertEqual(telemetry["flight_mode_profile"], "copter")
         self.assertEqual(telemetry["flight_mode"], "LAND")
-        self.assertEqual(osd["mode_code"], 9)
+        self.assertEqual(osd["mode_code"], 7)
         self.assertEqual(osd["gear"], 1)
 
         apply_mavlink_message(

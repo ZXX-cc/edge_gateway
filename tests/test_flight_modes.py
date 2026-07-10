@@ -97,6 +97,45 @@ class FlightModeMappingTest(unittest.TestCase):
         self.assertEqual(mode_name_to_custom_mode("GUIDED", "copter"), 4)
         self.assertEqual(mode_name_to_custom_mode("GUIDED", "plane"), 15)
 
+    def test_person2_plane_quadplane_mode_code_table(self):
+        expected = {
+            0: ("MANUAL", 2),
+            10: ("AUTO", 4),
+            11: ("RTL", 6),
+            12: ("LOITER", 9),
+            13: ("TAKEOFF", 3),
+            15: ("GUIDED", 4),
+            20: ("QLAND", 7),
+            21: ("QRTL", 6),
+            6: ("FBWB", 2),
+            5: ("FBWA", 2),
+            17: ("QSTABILIZE", 2),
+            18: ("QHOVER", 9),
+            19: ("QLOITER", 9),
+        }
+
+        for custom_mode, (flight_mode, mode_code) in expected.items():
+            with self.subTest(custom_mode=custom_mode):
+                self.assertEqual(parse_flight_mode(custom_mode, mav_type=1), flight_mode)
+                self.assertEqual(mode_to_dji_code(flight_mode), mode_code)
+
+    def test_duplicate_mode_codes_use_stable_request_defaults(self):
+        expected = {
+            2: "MANUAL",
+            3: "TAKEOFF",
+            4: "GUIDED",
+            6: "RTL",
+            7: "QLAND",
+            9: "LOITER",
+        }
+
+        for mode_code, flight_mode in expected.items():
+            ok, normalized, reason = normalize_flight_mode_request({"mode_code": mode_code})
+            with self.subTest(mode_code=mode_code):
+                self.assertTrue(ok, reason)
+                self.assertEqual(normalized.mode_name, flight_mode)
+                self.assertEqual(normalized.mode_code, mode_code)
+
     def test_set_flight_mode_accepts_cloud_shapes_and_returns_mode(self):
         manager = MissionManager()
         flight_control = RecordingFlightControl()

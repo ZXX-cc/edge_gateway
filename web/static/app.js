@@ -4,6 +4,8 @@ const state = {
   messages: [],
   commands: [],
   heightHistory: [],
+  keyPoints: {},
+  keyInfo: [],
 };
 
 const labels = {
@@ -17,6 +19,16 @@ const labels = {
   status: "拓扑",
   other: "其他",
 };
+
+const keyStatusLabels = {
+  waiting: "待验证",
+  active: "有数据",
+  ok: "通过",
+  warn: "注意",
+  fail: "失败",
+};
+
+const stageOrder = { P0: 0, P1: 1, P2: 2 };
 
 const $ = (id) => document.getElementById(id);
 
@@ -184,6 +196,75 @@ function renderMessages() {
   });
 }
 
+function normalizeKeyPoints(points) {
+  if (!points) return [];
+  if (Array.isArray(points)) return points;
+  return Object.values(points);
+}
+
+function renderKeyPoints() {
+  const grid = $("testPointGrid");
+  const points = normalizeKeyPoints(state.keyPoints)
+    .sort((a, b) => (stageOrder[a.stage] ?? 9) - (stageOrder[b.stage] ?? 9) || String(a.title).localeCompare(String(b.title), "zh-CN"));
+  const done = points.filter((point) => ["ok", "active"].includes(point.status)).length;
+
+  $("keyPointCount").textContent = `${done}/${points.length} 已捕获`;
+  grid.innerHTML = "";
+
+  points.forEach((point) => {
+    const card = document.createElement("article");
+    const status = point.status || "waiting";
+    const latest = (point.evidence || [])[0];
+    card.className = `test-point-card is-${status}`;
+    card.innerHTML = `
+      <div class="test-point-head">
+        <span class="stage-badge">${escapeHtml(point.stage || "--")}</span>
+        <span class="key-status">${escapeHtml(keyStatusLabels[status] || status)}</span>
+      </div>
+      <strong>${escapeHtml(point.title || "--")}</strong>
+      <p>${escapeHtml(point.summary || "--")}</p>
+      <div class="test-evidence">
+        <span>${escapeHtml(latest?.source || "暂无来源")}</span>
+        <b>${escapeHtml(point.last_seen ? fmtTime(point.last_seen) : "--")}</b>
+      </div>
+      <small>${escapeHtml(latest?.detail || "等待 MQTT/OSD/事件命中该测试点")}</small>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+function renderKeyInfo() {
+  const list = $("keyInfoList");
+  const items = state.keyInfo || [];
+  $("keyInfoCount").textContent = `${items.length} 条`;
+  list.innerHTML = "";
+
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-hint">等待 MQTT、OSD、State 或服务回包。</div>';
+    return;
+  }
+
+  items.slice(0, 120).forEach((item) => {
+    const div = document.createElement("div");
+    const status = item.status || "active";
+    div.className = `key-info-item is-${status}`;
+    div.innerHTML = `
+      <div class="key-info-main">
+        <span>${escapeHtml(item.stage || "--")}</span>
+        <strong>${escapeHtml(item.title || item.point_id || "--")}</strong>
+        <em>${escapeHtml(keyStatusLabels[status] || status)}</em>
+      </div>
+      <div class="key-info-summary">${escapeHtml(item.summary || "--")}</div>
+      <div class="key-info-meta">
+        <span>${escapeHtml(item.source || "--")}</span>
+        <span>${escapeHtml(item.detail || "--")}</span>
+        <time>${fmtTime(item.timestamp)}</time>
+      </div>
+    `;
+    list.appendChild(div);
+  });
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -216,8 +297,12 @@ function applySnapshot(snapshot) {
   state.messages = snapshot.messages || [];
   state.commands = snapshot.command_log || [];
   state.heightHistory = snapshot.osd_history || [];
+  state.keyPoints = snapshot.key_points || {};
+  state.keyInfo = snapshot.key_info || [];
   updateStatus(snapshot);
   if (snapshot.latest_osd) updateTelemetry(snapshot.latest_osd);
+  renderKeyPoints();
+  renderKeyInfo();
   renderMessages();
   renderCommands();
   renderSitlLogs(snapshot.sitl?.logs || []);
@@ -321,6 +406,13 @@ function connectStream() {
         drawChart();
       }
       renderMessages();
+      return;
+    }
+    if (data.event === "key_update") {
+      state.keyPoints = data.payload.key_points || {};
+      state.keyInfo = data.payload.key_info || [];
+      renderKeyPoints();
+      renderKeyInfo();
       return;
     }
     if (data.event === "command") {

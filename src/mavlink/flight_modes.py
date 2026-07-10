@@ -74,16 +74,28 @@ PLANE_MODE_MAP = {
 }
 
 
+# 人员2确认的 Dock3 mode_code 口径：
+# MANUAL/FBWA/FBWB/QSTABILIZE 等手动或半自动状态归 2；
+# TAKEOFF=3，AUTO/GUIDED=4，RTL/QRTL=6，QLAND/LAND=7，LOITER/QHOVER/QLOITER=9。
 DJI_MODE_CODE_MAP = {
-    "STABILIZE": 0,
-    "ACRO": 1,
+    "MANUAL": 2,
+    "STABILIZE": 2,
+    "ACRO": 2,
     "ALT_HOLD": 2,
-    "AUTO": 3,
+    "FBWA": 2,
+    "FBWB": 2,
+    "QSTABILIZE": 2,
+    "TAKEOFF": 3,
+    "AUTO": 4,
     "GUIDED": 4,
-    "LOITER": 5,
     "RTL": 6,
+    "QRTL": 6,
+    "LAND": 7,
+    "QLAND": 7,
+    "LOITER": 9,
+    "QHOVER": 9,
+    "QLOITER": 9,
     "CIRCLE": 7,
-    "LAND": 9,
     "DRIFT": 11,
     "SPORT": 13,
     "FLIP": 14,
@@ -100,9 +112,37 @@ DJI_MODE_CODE_MAP = {
     "SYSTEMID": 25,
     "AUTOROTATE": 26,
     "AUTO_RTL": 27,
+    "QACRO": 2,
+    "QAUTOTUNE": 15,
+    "THERMAL": 4,
+    "LOITER_ALT_QLAND": 7,
 }
 
-DJI_CODE_MODE_MAP = {value: key for key, value in DJI_MODE_CODE_MAP.items()}
+# 多个 ArduPilot 模式会折叠到同一个 Dock3 mode_code；云端按数字下发时使用这些首选模式。
+DJI_CODE_MODE_MAP = {
+    2: "MANUAL",
+    3: "TAKEOFF",
+    4: "GUIDED",
+    6: "RTL",
+    7: "QLAND",
+    9: "LOITER",
+    11: "DRIFT",
+    13: "SPORT",
+    14: "FLIP",
+    15: "AUTOTUNE",
+    16: "POSHOLD",
+    17: "BRAKE",
+    18: "THROW",
+    19: "AVOID_ADSB",
+    20: "GUIDED_NOGPS",
+    21: "SMART_RTL",
+    22: "FLOWHOLD",
+    23: "FOLLOW",
+    24: "ZIGZAG",
+    25: "SYSTEMID",
+    26: "AUTOROTATE",
+    27: "AUTO_RTL",
+}
 
 
 @dataclass(frozen=True)

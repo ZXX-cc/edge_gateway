@@ -105,7 +105,9 @@ textarea {
 .main-panel,
 .stream-panel,
 .flight-board,
-.sitl-log-panel {
+.sitl-log-panel,
+.test-overview,
+.key-info-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -314,8 +316,191 @@ textarea:focus {
 }
 
 .flight-board,
-.sitl-log-panel {
+.sitl-log-panel,
+.test-overview,
+.key-info-panel {
   padding: 16px;
+}
+
+.test-point-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.test-point-card {
+  min-height: 168px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #121514;
+}
+
+.test-point-card.is-waiting {
+  border-left-color: var(--soft);
+}
+
+.test-point-card.is-active {
+  border-left-color: var(--cyan);
+}
+
+.test-point-card.is-ok {
+  border-left-color: var(--green);
+}
+
+.test-point-card.is-warn {
+  border-left-color: var(--amber);
+}
+
+.test-point-card.is-fail {
+  border-left-color: var(--red);
+}
+
+.test-point-head,
+.test-evidence,
+.key-info-main,
+.key-info-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stage-badge,
+.key-status,
+.key-info-main span,
+.key-info-main em {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.stage-badge,
+.key-info-main span {
+  color: #101211;
+  background: var(--cyan);
+  font-weight: 700;
+}
+
+.key-status,
+.key-info-main em {
+  color: var(--muted);
+  background: #232925;
+}
+
+.test-point-card strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.test-point-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.test-evidence {
+  color: var(--soft);
+  font-size: 11px;
+}
+
+.test-evidence b {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.test-point-card small {
+  color: #d9e1d9;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.key-info-list {
+  display: grid;
+  gap: 8px;
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.key-info-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #121514;
+}
+
+.key-info-item.is-active {
+  border-left-color: var(--cyan);
+}
+
+.key-info-item.is-ok {
+  border-left-color: var(--green);
+}
+
+.key-info-item.is-warn {
+  border-left-color: var(--amber);
+}
+
+.key-info-item.is-fail {
+  border-left-color: var(--red);
+}
+
+.key-info-main {
+  justify-content: flex-start;
+}
+
+.key-info-main strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.key-info-summary {
+  margin-top: 7px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.key-info-meta {
+  margin-top: 6px;
+  color: var(--soft);
+  font-size: 11px;
+  align-items: flex-start;
+}
+
+.key-info-meta span {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.key-info-meta span:nth-child(2) {
+  flex: 1;
+}
+
+.key-info-meta time {
+  white-space: nowrap;
+}
+
+.empty-hint {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--soft);
+  font-size: 13px;
+  text-align: center;
 }
 
 .state-grid {
@@ -495,6 +680,10 @@ textarea:focus {
   .message-list {
     max-height: 420px;
   }
+
+  .test-point-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -509,7 +698,8 @@ textarea:focus {
 
   .workspace,
   .telemetry-grid,
-  .state-grid {
+  .state-grid,
+  .test-point-grid {
     grid-template-columns: 1fr;
   }
 
