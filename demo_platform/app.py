@@ -53,6 +53,38 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 state_lock = threading.RLock()
 subscribers: set[queue.Queue[str]] = set()
 
+KEY_POINT_DEFS = [
+    ("mqtt_link", "MQTT 基础链路", "P0", "订阅/发布、topic 分类、服务回包"),
+    ("osd_state", "OSD/State 上报", "P0", "机场/飞行器 OSD、属性状态、电量/GPS/位置"),
+    ("flight_mode", "飞行模式映射", "P0", "mode_code、gear、set_flight_mode 回包"),
+    ("flight_control", "基础飞控控制", "P0", "GUIDED、起飞、返航、降落"),
+    ("wayline_resume", "航线与断点续飞", "P0", "航线进度、暂停返航、断点恢复"),
+    ("dock_v13", "机巢 v1.3 联动", "P0", "舱盖、推杆、充电、HMS、dock_operation"),
+    ("one_key_takeoff", "一键启航", "P1", "one_key_takeoff_progress 与 flighttask_progress"),
+    ("drc", "DRC 控制链路", "P1", "进入、心跳、摇杆/指点飞行、退出"),
+    ("media_live", "媒体与直播", "P1", "相机、云台、直播、文件"),
+    ("hms_log", "HMS/日志", "P1", "HMS 告警、日志列表和上传"),
+    ("topology_org", "拓扑/组织", "P2", "status、topo、organization"),
+    ("trace_nonblock", "Trace/非阻塞", "P2", "tid、异步回包、长任务不卡链路"),
+]
+
+
+def build_key_points() -> dict[str, dict[str, Any]]:
+    # 页面需要先看到完整测试清单，再用 MQTT/OSD 命中的证据逐项点亮。
+    return {
+        point_id: {
+            "id": point_id,
+            "title": title,
+            "stage": stage,
+            "status": "waiting",
+            "summary": description,
+            "last_seen": None,
+            "evidence": [],
+        }
+        for point_id, title, stage, description in KEY_POINT_DEFS
+    }
+
+
 state: dict[str, Any] = {
     "gateway_sn": GATEWAY_SN,
     "drone_sn": DRONE_SN,
@@ -71,6 +103,8 @@ state: dict[str, Any] = {
     "workflow_runs": deque(maxlen=40),
     "retest_logs": deque(maxlen=300),
     "retest_log_path": str(RETEST_LOG_PATH),
+    "key_points": build_key_points(),
+    "key_info": deque(maxlen=240),
     "started_at": int(time.time() * 1000),
 }
 
@@ -189,6 +223,141 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, list):
         return [json_safe(item) for item in value]
     return value
+
+
+def compact_value(value: Any, limit: int = 96) -> str:
+    if value is None:
+        return "--"
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
+    return text if len(text) <= limit else f"{text[:limit - 1]}..."
+
+
+def short_topic(topic: str) -> str:
+    return (
+        topic
+        .replace(f"thing/product/{GATEWAY_SN}/", "")
+        .replace(f"thing/product/{DRONE_SN}/", f"{DRONE_SN}/")
+        .replace(f"sys/product/{GATEWAY_SN}/", "sys/")
+    )
+
+
+def point_from_method(method: str, topic: str) -> str | None:
+    # method/topic 是最稳定的业务信号，用它把刷屏日志归并成测试证据。
+    name = method.lower()
+    topic_l = topic.lower()
+    if any(key in name for key in ("one_key_takeoff",)):
+        return "one_key_takeoff"
+    if any(key in name for key in ("flighttask", "wayline", "breakpoint", "return_home")):
+        return "wayline_resume"
+    if any(key in name for key in ("drc", "heart_beat", "drone_control", "fly_to_point", "takeoff_to_point")) or "/drc/" in topic_l:
+        return "drc"
+    if any(key in name for key in ("cover", "charge", "putter", "dock", "debug_mode", "silent_mode")):
+        return "dock_v13"
+    if any(key in name for key in ("hms", "log", "alarm")):
+        return "hms_log"
+    if any(key in name for key in ("live", "camera", "payload", "gimbal", "file", "media")):
+        return "media_live"
+    if any(key in name for key in ("topo", "organization", "device_info", "status")) or "status" in topic_l:
+        return "topology_org"
+    if any(key in name for key in ("set_flight_mode", "take_off", "go_home", "landing", "mode")):
+        return "flight_control"
+    return None
+
+
+def record_key_point(point_id: str, status: str, summary: str, source: str, detail: str, timestamp: int, min_interval_ms: int = 0) -> bool:
+    # 高频 OSD 只更新卡片，按间隔写证据，避免关键信息列表再次被刷屏。
+    point = state["key_points"].get(point_id)
+    if not point:
+        return False
+    previous_seen = point.get("last_seen")
+    previous_status = point.get("status")
+    should_append = (
+        min_interval_ms <= 0
+        or not previous_seen
+        or timestamp - int(previous_seen) >= min_interval_ms
+        or previous_status != status
+    )
+    point["status"] = status
+    point["summary"] = summary
+    point["last_seen"] = timestamp
+    evidence = {"timestamp": timestamp, "source": source, "detail": detail}
+    if should_append:
+        point["evidence"] = [evidence, *point.get("evidence", [])[:5]]
+        state["key_info"].appendleft({
+            "point_id": point_id,
+            "title": point["title"],
+            "stage": point["stage"],
+            "status": status,
+            "summary": summary,
+            "source": source,
+            "detail": detail,
+            "timestamp": timestamp,
+        })
+    return True
+
+
+def extract_key_info(item: dict[str, Any]) -> bool:
+    # 从 MQTT 原始 payload 提取联调人员真正要盯的字段。
+    payload = item.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    topic = str(item.get("topic", ""))
+    kind = str(item.get("type", "other"))
+    timestamp = int(item.get("timestamp") or now_ms())
+    source = short_topic(topic)
+    updated = False
+
+    if kind == "osd":
+        battery = (payload.get("battery") or {}).get("capacity_percent")
+        gps = (payload.get("position_state") or {}).get("gps_number")
+        summary = f"mode_code={compact_value(payload.get('mode_code'))}, 高度={compact_value(payload.get('height'))}m, 电量={compact_value(battery)}%, GPS={compact_value(gps)}"
+        detail = f"gear={compact_value(payload.get('gear'))}, lat={compact_value(payload.get('latitude'), 32)}, lon={compact_value(payload.get('longitude'), 32)}"
+        updated |= record_key_point("osd_state", "ok", summary, source, detail, timestamp, min_interval_ms=10000)
+        if payload.get("mode_code") is not None or payload.get("gear") is not None:
+            updated |= record_key_point("flight_mode", "active", summary, source, "OSD 携带 mode_code/gear，可核对飞行模式映射", timestamp, min_interval_ms=15000)
+        return updated
+
+    method = str(payload.get("method") or "")
+    tid = payload.get("tid") or payload.get("bid") or "--"
+    data = payload.get("data")
+    result = data.get("result") if isinstance(data, dict) else None
+
+    if kind == "state":
+        fields = ", ".join(f"{key}={compact_value(value, 48)}" for key, value in list(payload.items())[:6])
+        updated |= record_key_point("osd_state", "ok", "State 属性上报已收到", source, fields, timestamp)
+        if any(key in payload for key in ("cover_state", "putter_state", "drone_charge_state", "emergency_stop_state")):
+            updated |= record_key_point("dock_v13", "active", "State 命中机巢状态字段", source, fields, timestamp)
+        if any(key in payload for key in ("drc_state", "drc_mode_enter_time")):
+            updated |= record_key_point("drc", "active", "State 命中 DRC 状态字段", source, fields, timestamp)
+        return updated
+
+    if kind in {"services", "property", "drc", "services_reply", "property_reply", "drc_reply", "request_reply", "event", "status", "status_reply"}:
+        if kind.endswith("reply") or kind in {"services", "property", "drc"}:
+            updated |= record_key_point("mqtt_link", "ok", f"{kind} 收到 {method or '未命名方法'}", source, f"tid={compact_value(tid)}", timestamp)
+            updated |= record_key_point("trace_nonblock", "active", "tid/异步回包可追踪", source, f"method={method or '--'}, tid={compact_value(tid)}", timestamp)
+        point_id = point_from_method(method, topic)
+        if kind in {"status", "status_reply"} and not point_id:
+            point_id = "topology_org"
+        if kind == "event" and not point_id:
+            event_text = json.dumps(payload, ensure_ascii=False)
+            if "hms" in event_text.lower():
+                point_id = "hms_log"
+            elif "dock_operation" in event_text.lower():
+                point_id = "dock_v13"
+        if point_id:
+            status = "ok" if kind.endswith("reply") and result in {0, "0", True, "ok", "success"} else "active"
+            updated |= record_key_point(
+                point_id,
+                status,
+                f"{method or kind} 已捕获",
+                source,
+                f"tid={compact_value(tid)}, result={compact_value(result)}, data={compact_value(data, 140)}",
+                timestamp,
+            )
+    return updated
 
 
 def load_retest_logs() -> None:
@@ -314,10 +483,16 @@ def classify_topic(topic: str) -> str:
         return "state"
     if topic.endswith("/events"):
         return "event"
+    if topic.endswith("/services"):
+        return "services"
     if topic.endswith("/services_reply"):
         return "services_reply"
+    if topic.endswith("/property/set"):
+        return "property"
     if topic.endswith("/property/set_reply"):
         return "property_reply"
+    if topic.endswith("/drc/down"):
+        return "drc"
     if topic.endswith("/drc/up"):
         return "drc_reply"
     if topic.endswith("/status"):
@@ -343,18 +518,40 @@ def build_client() -> mqtt.Client:
 
 def on_connect(client, userdata, flags, rc):
     connected = rc == 0
+    key_payload = None
     with state_lock:
         state["mqtt"].update({"connected": connected, "rc": rc, "updated_at": now_ms()})
+        record_key_point(
+            "mqtt_link",
+            "ok" if connected else "fail",
+            "MQTT 已连接并订阅观测 topic" if connected else f"MQTT 连接失败 rc={rc}",
+            f"{MQTT_HOST}:{MQTT_PORT}",
+            "订阅范围：" + ", ".join(OBSERVE_TOPICS),
+            state["mqtt"]["updated_at"],
+        )
+        key_payload = {"key_points": state["key_points"], "key_info": state["key_info"]}
     if connected:
         for topic in OBSERVE_TOPICS:
             client.subscribe(topic, qos=1)
     broadcast("mqtt_status", state["mqtt"])
+    broadcast("key_update", key_payload)
 
 
 def on_disconnect(client, userdata, rc):
+    key_payload = None
     with state_lock:
         state["mqtt"].update({"connected": False, "rc": rc, "updated_at": now_ms()})
+        record_key_point(
+            "mqtt_link",
+            "warn",
+            f"MQTT 已断开 rc={rc}",
+            f"{MQTT_HOST}:{MQTT_PORT}",
+            "等待重连或检查 broker",
+            state["mqtt"]["updated_at"],
+        )
+        key_payload = {"key_points": state["key_points"], "key_info": state["key_info"]}
     broadcast("mqtt_status", state["mqtt"])
+    broadcast("key_update", key_payload)
 
 
 def on_message(client, userdata, msg):
@@ -368,6 +565,7 @@ def on_message(client, userdata, msg):
     item = {"topic": topic, "type": kind, "payload": payload, "timestamp": now_ms()}
     tid = payload.get("tid") if isinstance(payload, dict) else None
 
+    key_payload = None
     with state_lock:
         counts = state["topic_counts"]
         counts[kind] = counts.get(kind, 0) + 1
@@ -387,6 +585,9 @@ def on_message(client, userdata, msg):
         elif kind in {"status", "status_reply"}:
             state["latest"]["status"] = payload
 
+        if extract_key_info(item):
+            key_payload = {"key_points": state["key_points"], "key_info": state["key_info"]}
+
     waiter = pending.get(tid)
     if waiter and kind == waiter.get("reply_kind"):
         waiter["reply"] = payload
@@ -394,6 +595,8 @@ def on_message(client, userdata, msg):
         waiter["event"].set()
 
     broadcast("mqtt_message", item)
+    if key_payload is not None:
+        broadcast("key_update", key_payload)
 
 
 def start_mqtt() -> None:

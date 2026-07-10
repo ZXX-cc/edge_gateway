@@ -490,6 +490,129 @@ button:disabled {
   margin-top: 14px;
 }
 
+.key-watch-panel {
+  margin-top: 14px;
+}
+
+.key-info-title {
+  margin-top: 16px;
+}
+
+.key-point-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.key-point-card,
+.key-info-item {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.key-point-card {
+  min-height: 162px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 7px;
+  padding: 12px;
+}
+
+.key-point-card.active,
+.key-info-item.active {
+  border-left-color: var(--blue);
+}
+
+.key-point-card.ok,
+.key-info-item.ok {
+  border-left-color: var(--green);
+}
+
+.key-point-card.warn,
+.key-info-item.warn {
+  border-left-color: var(--amber);
+}
+
+.key-point-card.fail,
+.key-info-item.fail {
+  border-left-color: var(--red);
+}
+
+.key-point-head,
+.key-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.key-point-head span,
+.key-point-head b,
+.key-info-head span {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--blue-soft);
+  color: #164fa3;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.key-point-head b {
+  background: #eef2f7;
+  color: var(--muted);
+}
+
+.key-point-card strong,
+.key-info-head strong {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.key-point-card p,
+.key-info-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.key-point-card small,
+.key-point-card em,
+.key-info-item small,
+.key-info-head time {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.key-point-card em {
+  color: var(--text);
+}
+
+.key-info-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.key-info-item {
+  padding: 10px 12px;
+}
+
+.key-info-head {
+  justify-content: flex-start;
+}
+
+.key-info-head strong {
+  flex: 1;
+  min-width: 0;
+}
+
 .retest-card,
 .retest-log-item {
   border: 1px solid var(--line);
@@ -787,7 +910,8 @@ textarea {
   .action-grid,
   .workflow-strip,
   .retest-grid,
-  .retest-summary {
+  .retest-summary,
+  .key-point-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -825,6 +949,7 @@ textarea {
   .workflow-strip,
   .retest-grid,
   .retest-summary,
+  .key-point-grid,
   .form-grid {
     grid-template-columns: 1fr;
   }

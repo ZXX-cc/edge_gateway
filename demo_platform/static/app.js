@@ -6,6 +6,16 @@ let activeView = "dashboard";
 let lastCommandResult = null;
 let retestLogs = [];
 
+const keyStatusLabels = {
+  waiting: "待验证",
+  active: "有数据",
+  ok: "通过",
+  warn: "注意",
+  fail: "失败",
+};
+
+const keyStageOrder = {P0: 0, P1: 1, P2: 2};
+
 const viewMeta = {
   dashboard: ["设备总览", "查看机场、飞行器、链路和最近业务状态。"],
   dock: ["机场控制", "远程调试、舱盖、推杆、充电、补光灯和基础属性查询。"],
@@ -311,6 +321,7 @@ function updateOverview(data) {
   updateMqttStatus(data.mqtt || {});
   renderMessages(data.messages || []);
   renderTimeline(data.messages || []);
+  renderKeyWatch(data.key_points || {}, data.key_info || []);
   renderLastResult();
 }
 
@@ -525,6 +536,51 @@ function renderRetestLogs() {
       <div>${escapeHtml(statusLabel(log.status))}${log.method ? ` · ${escapeHtml(log.method)}` : ""}</div>
       ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
       ${log.evidence && Object.keys(log.evidence).length ? `<details><summary>证据</summary><pre>${escapeHtml(fmtJson(log.evidence))}</pre></details>` : ""}
+    </div>
+  `).join("");
+}
+
+function renderKeyWatch(pointsMap, infoItems) {
+  const grid = $("keyPointGrid");
+  const list = $("keyInfoList");
+  if (!grid || !list) return;
+
+  const points = Object.values(pointsMap || {})
+    .sort((a, b) => (keyStageOrder[a.stage] ?? 9) - (keyStageOrder[b.stage] ?? 9) || String(a.title).localeCompare(String(b.title), "zh-CN"));
+  const captured = points.filter((point) => ["ok", "active"].includes(point.status)).length;
+  setText("keyPointCount", `${captured}/${points.length} 已捕获`);
+  grid.innerHTML = points.map((point) => {
+    const status = point.status || "waiting";
+    const latest = (point.evidence || [])[0] || {};
+    return `
+      <article class="key-point-card ${escapeHtml(status)}">
+        <div class="key-point-head">
+          <span>${escapeHtml(point.stage || "--")}</span>
+          <b>${escapeHtml(keyStatusLabels[status] || status)}</b>
+        </div>
+        <strong>${escapeHtml(point.title || "--")}</strong>
+        <p>${escapeHtml(point.summary || "--")}</p>
+        <small>${escapeHtml(latest.source || "暂无来源")} · ${escapeHtml(point.last_seen ? shortTime(point.last_seen) : "--")}</small>
+        <em>${escapeHtml(latest.detail || "等待 MQTT/OSD/事件命中该测试点")}</em>
+      </article>
+    `;
+  }).join("");
+
+  const items = infoItems || [];
+  setText("keyInfoCount", `${items.length} 条`);
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">等待 MQTT、OSD、State、服务回包或事件。</div>';
+    return;
+  }
+  list.innerHTML = items.slice(0, 120).map((item) => `
+    <div class="key-info-item ${escapeHtml(item.status || "active")}">
+      <div class="key-info-head">
+        <span>${escapeHtml(item.stage || "--")}</span>
+        <strong>${escapeHtml(item.title || item.point_id || "--")}</strong>
+        <time>${escapeHtml(shortTime(item.timestamp))}</time>
+      </div>
+      <p>${escapeHtml(item.summary || "--")}</p>
+      <small>${escapeHtml(item.source || "--")} · ${escapeHtml(item.detail || "--")}</small>
     </div>
   `).join("");
 }
@@ -784,6 +840,10 @@ function connectStream() {
     } else if (data.event === "mqtt_status" && snapshot) {
       snapshot.mqtt = data.payload;
       updateOverview(snapshot);
+    } else if (data.event === "key_update" && snapshot) {
+      snapshot.key_points = data.payload.key_points || {};
+      snapshot.key_info = data.payload.key_info || [];
+      renderKeyWatch(snapshot.key_points, snapshot.key_info);
     } else if (data.event === "request") {
       lastCommandResult = {title: data.payload.method, method: data.payload.method, result: data.payload};
       renderLastResult();
