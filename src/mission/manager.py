@@ -1335,6 +1335,33 @@ class MissionManager:
                 msg_str="Mission not running"
             )
 
+        simulate_enabled = self._simulate_mission.get('is_enable') == 1
+        if not simulate_enabled:
+            if not self._flight_control:
+                reason = "FlightControl not available"
+                logger.warning(f"暂停航线失败: {reason}")
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_STATE_UNSUPPORTED,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
+            if hasattr(self._flight_control, "pause_mission"):
+                result = self._flight_control.pause_mission()
+            else:
+                result = self._flight_control.set_mode("LOITER")
+            if not result.get("success"):
+                reason = result.get("message") or "pause mission failed"
+                logger.warning(f"暂停航线失败: {reason}")
+                error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=error_code,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
         self._status = self.MISSION_PAUSED
         self._wayline_mission_state = 7  # 航线中断
         self.stop_mission_monitor()
@@ -1350,12 +1377,6 @@ class MissionManager:
                 args=(self._update_mission_status(self._current_task_id, 'paused'),),
                 daemon=True
             ).start()
-
-        # 发送悬停指令
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            result = self._flight_control.set_mode("LOITER")
-            if not result.get("success"):
-                logger.warning(f"暂停航线失败: {result.get('message')}")
 
         self._emit_wayline_progress(STATUS_PAUSED, current_step=23, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(
@@ -1387,6 +1408,40 @@ class MissionManager:
                 self._breakpoint_waypoint_idx,
             )
 
+        # 断点续飞：使用 WaypointManager 设置当前航点
+        if self._waypoint_manager and self._breakpoint_waypoint_idx > 0:
+            logger.info(f"Breakpoint resume: set current waypoint to {self._breakpoint_waypoint_idx}")
+            ok = self._waypoint_manager.set_current_waypoint(self._breakpoint_waypoint_idx)
+            if not ok:
+                logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
+
+        simulate_enabled = self._simulate_mission.get('is_enable') == 1
+        if not simulate_enabled:
+            if not self._flight_control:
+                reason = "FlightControl not available"
+                logger.warning(f"恢复航线失败: {reason}")
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_STATE_UNSUPPORTED,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
+            if hasattr(self._flight_control, "resume_mission"):
+                result = self._flight_control.resume_mission()
+            else:
+                result = self._flight_control.set_mode("AUTO")
+            if not result.get("success"):
+                reason = result.get("message") or "resume mission failed"
+                logger.warning(f"恢复航线失败: {reason}")
+                error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=error_code,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 8  # 航线恢复
         self._current_step = 22  # 触发执行航线
@@ -1400,20 +1455,9 @@ class MissionManager:
                 daemon=True
             ).start()
 
-        # 断点续飞：使用 WaypointManager 设置当前航点
-        if self._waypoint_manager and self._breakpoint_waypoint_idx > 0:
-            logger.info(f"Breakpoint resume: set current waypoint to {self._breakpoint_waypoint_idx}")
-            ok = self._waypoint_manager.set_current_waypoint(self._breakpoint_waypoint_idx)
-            if not ok:
-                logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
-
         # 启动监控并切换到AUTO模式
         self.start_mission_monitor()
         self._wayline_mission_state = 6  # 航线执行
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            result = self._flight_control.set_mode("AUTO")
-            if not result.get("success"):
-                logger.warning(f"恢复航线失败: {result.get('message')}")
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(

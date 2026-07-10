@@ -413,6 +413,61 @@ class FlightControl(BaseModule):
         )
         return self._send_message(msg)
 
+    def _wait_for_command_ack(self, command: int, since: float, timeout: float = 2.0) -> Optional[Dict]:
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            ack = self.last_command_ack
+            if (
+                ack
+                and ack.get("command") == command
+                and ack.get("timestamp", 0) >= since
+            ):
+                return ack
+            time.sleep(0.05)
+        return None
+
+    def _send_pause_continue(self, pause: bool) -> Dict:
+        command = mavutil.mavlink.MAV_CMD_DO_PAUSE_CONTINUE
+        action = "暂停" if pause else "继续"
+        result = {"success": False, "message": "", "action": action}
+        since = time.time()
+        if not self._send_command_long(command, param1=0 if pause else 1):
+            result["message"] = f"航线{action}命令发送失败"
+            self.log(result["message"], "ERROR")
+            return result
+
+        ack = self._wait_for_command_ack(command, since)
+        if not ack:
+            result["message"] = f"航线{action}命令未收到 ACK"
+            self.log(result["message"], "WARNING")
+            return result
+
+        if ack.get("result") not in (0, 5):
+            result["message"] = f"航线{action}被飞控拒绝: {ack.get('result_text')}"
+            self.log(result["message"], "ERROR")
+            return result
+
+        result["success"] = True
+        result["message"] = f"航线{action}命令已接受"
+        return result
+
+    def pause_mission(self) -> Dict:
+        result = self._send_pause_continue(pause=True)
+        if result.get("success"):
+            return result
+        fallback_mode = self._first_available_mode(["LOITER", "QLOITER", "QHOVER"])
+        if fallback_mode:
+            self.log(f"航线暂停命令未确认，尝试切换 {fallback_mode} 悬停")
+            return self.set_mode(fallback_mode)
+        return result
+
+    def resume_mission(self) -> Dict:
+        result = self._send_pause_continue(pause=False)
+        if result.get("success"):
+            return result
+        self.log("航线继续命令未确认，尝试切换 AUTO 恢复")
+        return self.set_mode("AUTO")
+
     # ========== 模式管理（参考ModeControl） ==========
 
     def set_mode(self, mode: str) -> Dict:

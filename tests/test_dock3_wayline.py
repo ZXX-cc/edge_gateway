@@ -17,7 +17,10 @@ if PROJECT_ROOT not in sys.path:
 if "pymavlink" not in sys.modules:
     pymavlink = types.ModuleType("pymavlink")
     pymavlink.mavutil = types.SimpleNamespace()
-    pymavlink.mavutil.mavlink = types.SimpleNamespace(MAV_CMD_DO_CHANGE_SPEED=178)
+    pymavlink.mavutil.mavlink = types.SimpleNamespace(
+        MAV_CMD_DO_CHANGE_SPEED=178,
+        MAV_CMD_DO_PAUSE_CONTINUE=193,
+    )
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
@@ -129,6 +132,14 @@ class FailingFlightControl:
     def set_mode(self, mode):
         self.calls.append(("set_mode", mode))
         return {"success": False, "message": f"模式切换超时，当前模式: MANUAL, target={mode}"}
+
+    def pause_mission(self):
+        self.calls.append(("pause_mission", None))
+        return {"success": False, "message": "暂停命令未收到 ACK"}
+
+    def resume_mission(self):
+        self.calls.append(("resume_mission", None))
+        return {"success": False, "message": "恢复命令未收到 ACK"}
 
     def one_click_return(self):
         self.calls.append(("one_click_return", None))
@@ -326,6 +337,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
             manager._current_waypoint_idx = 1
             manager._status = manager.MISSION_RUNNING
+            manager._simulate_mission = {"is_enable": 1}
             manager.stop_mission_monitor = lambda: None
             manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
 
@@ -360,6 +372,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}, {"seq": 3}]
             manager._current_waypoint_idx = 2
             manager._status = manager.MISSION_RUNNING
+            manager._simulate_mission = {"is_enable": 1}
 
             ret = manager.handle_flighttask_return(base_msg("flighttask_return", {
                 "flight_id": "flight-001",
@@ -377,6 +390,22 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(resume["data"]["result"], 0)
             self.assertEqual(manager._breakpoint_waypoint_idx, 2)
             self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
+
+    def test_real_flighttask_pause_does_not_report_success_when_fc_fails(self):
+        manager = MissionManager()
+        flight_control = FailingFlightControl()
+        manager.set_flight_control(flight_control)
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+        manager._simulate_mission = {"is_enable": 0}
+
+        pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
+
+        self.assertEqual(pause["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(pause["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+        self.assertEqual(flight_control.calls, [("pause_mission", None)])
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
