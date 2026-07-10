@@ -322,6 +322,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 日志若显示本机 `IP:port`，用输出提示中的 `lsof` 命令找出 PID 后停止该旧模拟器；若显示远端地址，则在远端主机停止对应旧模拟器。不要停止当前 `edge_gateway_EDGEGW001` 网关。确认旧客户端下线后，再执行严格 properties 测试。
 
+2026-07-10 严格 properties 环境验收已通过：broker 日志确认旧客户端位于 `192.168.2.94:55376`，停止后执行 `python tools/mqtt_dock3_properties_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 properties test ok (accepted=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。下一步是在相同干净环境执行完整严格 E2E。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：
