@@ -131,10 +131,10 @@ const actionGroups = {
     action("准备 SITL HD 航线", "上传 HD.copter-sitl.waypoints 到真实 SITL 飞控，避开 VTOL transition 空速等待。", "flighttask_prepare", realHdMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
-    action("暂停航线", "触发 flighttask_pause。", "flighttask_pause", {flight_id: "demo-flight-001"}),
-    action("恢复航线", "触发 flighttask_resume。", "flighttask_resume", {flight_id: "demo-flight-001"}),
-    action("任务返航", "触发 flighttask_return。", "flighttask_return", {flight_id: "demo-flight-001"}),
-    action("终止任务", "触发 flighttask_undo。", "flighttask_undo", {flight_id: "demo-flight-001"}),
+    action("暂停航线", "触发 flighttask_pause。", "flighttask_pause", {}),
+    action("恢复航线", "触发 flighttask_resume。", "flighttask_resume", {}),
+    action("任务返航", "触发 flighttask_return。", "flighttask_return", {flight_id: "demo-flight-001", return_type: 0}),
+    action("终止任务", "触发 flighttask_undo。", "flighttask_undo", {flight_ids: ["demo-flight-001"]}),
     action("取消返航", "触发 return_home_cancel。", "return_home_cancel", {}),
   ],
   drc: [
@@ -170,10 +170,16 @@ function realHdMissionData() {
     execute_time: Date.now(),
     task_type: 0,
     file: {
-      path: "/home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
+      url: "file:///home/fenghuolun/lxz/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints",
       fingerprint: "hd-copter-sitl-qgc-wpl",
-      name: "HD.copter-sitl.waypoints",
     },
+    ready_conditions: {},
+    executable_conditions: {
+      storage_capacity: 0,
+    },
+    rth_altitude: 80,
+    out_of_control_action: 0,
+    exit_wayline_when_rc_lost: 0,
     simulate_mission: {
       is_enable: 0,
       latitude: 44.0474824,

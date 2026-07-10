@@ -68,6 +68,13 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 logger = get_logger("main")
 
 
+def _normalize_udp_target_host(host: str) -> str:
+    """Convert wildcard bind addresses to a usable UDP destination."""
+    if host in ("0.0.0.0", "::", ""):
+        return "127.0.0.1"
+    return host
+
+
 # 这些 handler 会递归扫描日志/媒体目录或执行本地删除。必须移出 Paho MQTT
 # 网络回调线程；飞控、DRC 和机巢控制仍保持原有同步顺序，避免状态机并发。
 BACKGROUND_IO_METHODS = frozenset({
@@ -437,11 +444,25 @@ class EdgeGateway:
             if conn_type == 'serial':
                 conn_str = nest_config['port']
             elif conn_type == 'udp':
-                conn_str = f"udp:{nest_config['host']}:{nest_config['udp_port']}"
+                host = _normalize_udp_target_host(str(nest_config.get('host', '127.0.0.1')))
+                if host != nest_config.get('host'):
+                    logger.warning(
+                        "nest_mavlink.connection.host=%s is a bind/wildcard address, using %s as UDP destination",
+                        nest_config.get('host'),
+                        host,
+                    )
+                conn_str = f"udp:{host}:{nest_config['udp_port']}"
             elif conn_type == 'tcp':
                 conn_str = f"tcp:{nest_config['host']}:{nest_config['port']}"
             else:
-                conn_str = f"udp:{nest_config['host']}:{nest_config['udp_port']}"
+                host = _normalize_udp_target_host(str(nest_config.get('host', '127.0.0.1')))
+                if host != nest_config.get('host'):
+                    logger.warning(
+                        "nest_mavlink.connection.host=%s is a bind/wildcard address, using %s as UDP destination",
+                        nest_config.get('host'),
+                        host,
+                    )
+                conn_str = f"udp:{host}:{nest_config['udp_port']}"
 
             logger.info(f"Connecting to nest MAVLink: {conn_str}")
             self.nest_mavlink_conn = MAVLinkConnection(

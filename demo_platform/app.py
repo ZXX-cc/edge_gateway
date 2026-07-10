@@ -14,6 +14,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 import paho.mqtt.client as mqtt
@@ -178,6 +179,13 @@ RETEST_ACTIONS: dict[str, dict[str, Any]] = {
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def wayline_file_url(path_or_url: str) -> str:
+    parsed = urlparse(path_or_url)
+    if parsed.scheme:
+        return path_or_url
+    return Path(path_or_url).expanduser().resolve().as_uri()
 
 
 def json_safe(value: Any) -> Any:
@@ -674,9 +682,26 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
 
 def workflow_steps() -> dict[str, list[dict[str, Any]]]:
     real_hd_wayline_file = {
-        "path": REAL_HD_WAYPOINTS_PATH,
+        "url": wayline_file_url(REAL_HD_WAYPOINTS_PATH),
         "fingerprint": "hd-copter-sitl-qgc-wpl",
-        "name": "HD.copter-sitl.waypoints",
+    }
+    real_hd_prepare_data = {
+        "flight_id": "demo-flight-001",
+        "execute_time": now_ms(),
+        "task_type": 0,
+        "file": real_hd_wayline_file,
+        "ready_conditions": {},
+        "executable_conditions": {
+            "storage_capacity": 0,
+        },
+        "rth_altitude": 80,
+        "out_of_control_action": 0,
+        "exit_wayline_when_rc_lost": 0,
+        "simulate_mission": {
+            "is_enable": 0,
+            "latitude": 44.0474824,
+            "longitude": 125.3614503,
+        },
     }
     return {
         "startup_check": [
@@ -702,7 +727,7 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
         ],
         "real_hd_wayline": [
             {"label": "切 QLAN/QSTABILIZE 并解锁", "method": "set_flight_mode", "data": {"mode": "QLAN", "arm": True, "timeout": 10}},
-            {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": real_hd_wayline_file, "simulate_mission": {"is_enable": 0, "latitude": 44.0474824, "longitude": 125.3614503}}},
+            {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": real_hd_prepare_data},
             {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
             {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},
         ],
