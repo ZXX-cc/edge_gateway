@@ -330,6 +330,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
 
+2026-07-10 相机/云台严格专项已通过：`python tools/mqtt_dock3_payload_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 payload test ok (accepted=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。已验证能力查询、云台转动/模式/复位后的状态回读、拍照、录像启停及重复停止录像返回 `319999`；该结论仅覆盖 MAVLink/SITL 命令发送闭环，真实 Payload 硬件 ACK 需后续专项。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：

@@ -74,15 +74,15 @@ P2 问题影响 P0/P1 = 0 项
 | 优先级 | Usable | Partial / In Progress | Missing / Pending | 当前风险 |
 |---|---:|---:|---:|---|
 | P0 | 12 | 5 | 0 | P0-07/08/12/13/16 仍需 SITL 模式/飞控、机巢专项或非阻塞审计；P0-17 当前核心 E2E 已通过 |
-| P1 | 13 | 4 | 0 | DRC、指点飞行、KMZ 基础解析、media、live、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 P0/P1 E2E 已形成可用证据；一键启航 Ubuntu MQTT/真实 SITL、机巢状态机、真实航点和 payload adapter 仍是主要缺口 |
+| P1 | 14 | 3 | 0 | DRC、指点飞行、KMZ 基础解析、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 P0/P1 E2E 已形成可用证据；一键启航 Ubuntu MQTT/真实 SITL、机巢状态机和真实航点仍是主要缺口 |
 | P2 | 0 | 0 | 10 | P2 目前只有规划口径，仍需 adapter/mock/限制说明 |
-| 合计 | 25 | 9 | 10 | 当前不能声称达到 90% 可用或 100% 开发完成 |
+| 合计 | 26 | 8 | 10 | 当前不能声称达到 90% 可用或 100% 开发完成 |
 
 当前最重要结论：
 
 - P0 尚未 100% 可用，不能进入交付声明。
-- P1 已形成 DRC、指点飞行、Wayline mock KMZ、media、live、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 E2E 回归的局部可用闭环。
-- P0/P1 合计已有 25/34 项可用，但 P0/P1 强门禁仍未关闭，不能用“整体模拟链路约 81%”替代交付验收结论。
+- P1 已形成 DRC、指点飞行、Wayline mock KMZ、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 E2E 回归的局部可用闭环。
+- P0/P1 合计已有 26/34 项可用，但 P0/P1 强门禁仍未关闭，不能用“整体模拟链路约 81%”替代交付验收结论。
 - P2 不能空白；即使允许有问题，也必须在第 30 天前补齐入口、日志、错误码和限制说明。
 
 ## 5. P0 评分卡
@@ -119,7 +119,7 @@ P2 问题影响 P0/P1 = 0 项
 | P1-06 | 真实 SITL 航点执行 | Usable | SITL Wayline E2E |
 | P1-07 | 媒体基础 | Usable | `mqtt_dock3_media_test.py` |
 | P1-08 | 直播基础 | Usable | `mqtt_dock3_live_test.py` |
-| P1-09 | 相机/云台基础控制 | Usable | Payload 专项或 media/live 联合专项 |
+| P1-09 | 相机/云台基础控制 | Usable | `mqtt_dock3_payload_test.py` 严格通过；真实 Payload ACK adapter 后续精校 |
 | P1-10 | HMS 告警 | Usable | `mqtt_dock3_hms_log_test.py` |
 | P1-11 | 远程日志 | Usable | `mqtt_dock3_hms_log_test.py` |
 | P1-12 | 固件升级模拟 | Usable | `mqtt_dock3_firmware_config_test.py` |
