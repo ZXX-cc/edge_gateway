@@ -45,7 +45,13 @@ def file_url(path: str) -> str:
     return parsed.as_uri() if parsed.exists() else path
 
 
-def official_prepare_payload(flight_id, wayline_file):
+def official_prepare_payload(flight_id, wayline_file, *, simulate=True):
+    simulate_mission = {"is_enable": 1 if simulate else 0}
+    if simulate:
+        simulate_mission.update({
+            "latitude": -35.363262,
+            "longitude": 149.165237,
+        })
     return {
         "flight_id": flight_id,
         "task_type": 0,
@@ -61,11 +67,7 @@ def official_prepare_payload(flight_id, wayline_file):
         "rth_altitude": 80,
         "out_of_control_action": 0,
         "exit_wayline_when_rc_lost": 0,
-        "simulate_mission": {
-            "is_enable": 1,
-            "latitude": -35.363262,
-            "longitude": 149.165237,
-        },
+        "simulate_mission": simulate_mission,
     }
 
 
@@ -164,6 +166,53 @@ def run_wayline_checks(client, args):
     return 0
 
 
+def run_real_sitl_prepare_check(client, args):
+    """Verify the real MAVLink waypoint-upload path without starting a mission.
+
+    ``flighttask_prepare`` waits for the flight controller's MISSION upload
+    handshake.  Keeping execute opt-in makes this check safe for a shared SITL
+    environment: it uploads and validates the mission but does not switch the
+    vehicle to AUTO or request takeoff.
+    """
+    flight_id = args.flight_id or f"dock3-real-sitl-{int(time.time())}"
+    rc, prepare_payload = client.request(
+        "flighttask_prepare",
+        official_prepare_payload(flight_id, args.wayline_file, simulate=False),
+        args.timeout,
+        [0],
+        "sent",
+    )
+    if rc != 0:
+        return rc
+    rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
+    if rc != 0:
+        return rc
+
+    if not client.has_event("flighttask_ready"):
+        print("expected flighttask_ready event was not observed", file=sys.stderr)
+        return 17
+
+    if not args.execute_real:
+        print(
+            "real SITL waypoint upload verified "
+            f"(flight_id={flight_id}, waypoints={args.expect_waypoint_count}); "
+            "AUTO/execute was not requested"
+        )
+        return 0
+
+    rc, _ = client.request(
+        "flighttask_execute",
+        {"flight_id": flight_id},
+        args.timeout,
+        [0],
+        "in_progress",
+    )
+    if rc != 0:
+        return rc
+    print(f"real SITL execute accepted (flight_id={flight_id})")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test DJI Dock3 wayline category")
     add_config_argument(parser)
@@ -176,10 +225,22 @@ def main():
     parser.add_argument("--wayline-file", default="")
     parser.add_argument("--expect-waypoint-count", type=int, default=3)
     parser.add_argument("--step-delay", type=float, default=0.1)
+    parser.add_argument(
+        "--real-sitl",
+        action="store_true",
+        help="verify actual MAVLink waypoint upload; does not execute or take off by default",
+    )
+    parser.add_argument(
+        "--execute-real",
+        action="store_true",
+        help="with --real-sitl, also request flighttask_execute/AUTO; use only in an isolated SITL",
+    )
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    if args.execute_real and not args.real_sitl:
+        parser.error("--execute-real requires --real-sitl")
 
     temp_dir = None
     if not args.wayline_file:
@@ -203,7 +264,7 @@ def main():
             print("timeout waiting for MQTT connection", file=sys.stderr)
             return 1
         try:
-            rc = run_wayline_checks(client, args)
+            rc = run_real_sitl_prepare_check(client, args) if args.real_sitl else run_wayline_checks(client, args)
             if rc != 0:
                 return rc
             ignored_total = client.ignored_total()
@@ -211,7 +272,7 @@ def main():
                 print(f"stale replies observed: {client.stats}", file=sys.stderr)
                 return 9
             print(
-                "dock3 wayline test ok "
+                f"dock3 {'real SITL ' if args.real_sitl else ''}wayline test ok "
                 f"(accepted={client.stats['accepted']}, events={client.stats['events']}, "
                 f"ignored_mismatched={client.stats['ignored_mismatched']}, "
                 f"ignored_legacy={client.stats['ignored_legacy']}, "
