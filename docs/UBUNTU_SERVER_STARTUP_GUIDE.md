@@ -749,7 +749,7 @@ dock3 wayline test ok (accepted=11, events=8, ignored_mismatched=0, ignored_lega
 | 任务准备 | `flighttask_prepare` | 官方 `flight_id/task_type/execute_time/file/simulate_mission`，`services_reply output.status=sent` |
 | 任务执行 | `flighttask_execute` | `output.status=in_progress`，产生 `flighttask_progress` 事件 |
 | 任务进度 | `flighttask_progress` | 回包包含 `output.progress.current_step/percent` 和 `output.ext.flight_id` |
-| 暂停/恢复 | `flighttask_pause`、`flighttask_resume` | `output.status=paused/in_progress`，状态不支持返回 `314000` 和 `output.status=rejected` |
+| 暂停/恢复 | `flighttask_pause`、`flighttask_resume` | `output.status=paused/in_progress`；无效暂停/恢复状态分别返回 `258/262`，非超时飞控失败返回 `1564`、超时返回 `325004`，并带 `output.status=rejected` |
 | 返航/取消返航 | `flighttask_return`、`return_home_cancel` | 返航产生 `flighttask_progress` 和 `return_home_info` 事件 |
 | 任务取消 | `flighttask_undo` | `output.status=canceled` |
 | 参数错误 | 非法 `flighttask_prepare` | 返回 DJI 错误码 `325001` |

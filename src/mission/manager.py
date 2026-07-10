@@ -21,6 +21,9 @@ from src.utils.dji_error_codes import (
     DEVICE_STATE_UNSUPPORTED,
     DOCK_BUSY,
     INVALID_COMMAND_FORMAT,
+    WAYLINE_EXECUTION_FAILED,
+    WAYLINE_PAUSE_STATE_INVALID,
+    WAYLINE_RESUME_STATE_INVALID,
 )
 from src.mavlink.flight_modes import mode_to_dji_code, normalize_flight_mode_request
 from src.cloud_api.dock3_wayline import (
@@ -247,6 +250,10 @@ class MissionManager:
         # MQTT requests can arrive from the test tool and local demo platform
         # at nearly the same time.  A task state transition must be atomic.
         self._flighttask_lock = threading.RLock()
+        # The monitor updates waypoint progress on its own thread.  Keep a
+        # pause transition and one waypoint update mutually exclusive so a
+        # final waypoint cannot overwrite (or be overwritten by) PAUSED.
+        self._mission_state_lock = threading.RLock()
         self._current_wayline: List[dict] = []
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0  # 断点航点索引（用于断点续飞）
@@ -1413,6 +1420,7 @@ class MissionManager:
 
         return MessageBuilder.build_reply(msg, result=0)
 
+    @serialize_flighttask
     def handle_pause_wayline(self, msg: dict) -> dict:
         """
         处理任务暂停 (pause_wayline)
@@ -1420,43 +1428,60 @@ class MissionManager:
         Request: { task_id }
         Response: { result }
         """
-        if self._status != self.MISSION_RUNNING:
-            return MessageBuilder.build_reply(
-                msg,
-                result=DEVICE_STATE_UNSUPPORTED,
-                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                msg_str="Mission not running"
-            )
-
-        simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        if not simulate_enabled:
-            if not self._flight_control:
-                reason = "FlightControl not available"
-                logger.warning(f"暂停航线失败: {reason}")
+        # Hold this lock across the verified flight-mode transition.  A
+        # MISSION_CURRENT already being processed finishes first; subsequent
+        # updates wait and then observe PAUSED, preventing completion/pause
+        # state races and waypoint actions after the hold is confirmed.
+        with self._mission_state_lock:
+            if self._status != self.MISSION_RUNNING:
                 return MessageBuilder.build_reply(
                     msg,
-                    result=DEVICE_STATE_UNSUPPORTED,
+                    result=WAYLINE_PAUSE_STATE_INVALID,
                     data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                    msg_str=reason,
+                    msg_str="Mission not running"
                 )
 
-            if hasattr(self._flight_control, "pause_mission"):
-                result = self._flight_control.pause_mission()
-            else:
-                result = self._flight_control.set_mode("LOITER")
-            if not result.get("success"):
-                reason = result.get("message") or "pause mission failed"
-                logger.warning(f"暂停航线失败: {reason}")
-                error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
-                return MessageBuilder.build_reply(
-                    msg,
-                    result=error_code,
-                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                    msg_str=reason,
+            simulate_enabled = self._simulate_mission.get('is_enable') == 1
+            if not simulate_enabled:
+                if not self._flight_control:
+                    reason = "FlightControl not available"
+                    logger.warning(f"暂停航线失败: {reason}")
+                    return MessageBuilder.build_reply(
+                        msg,
+                        result=WAYLINE_EXECUTION_FAILED,
+                        data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                        msg_str=reason,
+                    )
+
+                if hasattr(self._flight_control, "pause_mission"):
+                    result = self._flight_control.pause_mission()
+                else:
+                    result = self._flight_control.set_mode("LOITER")
+                if not result.get("success"):
+                    reason = result.get("message") or "pause mission failed"
+                    logger.warning(f"暂停航线失败: {reason}")
+                    error_code = (
+                        DEVICE_COMMAND_TIMEOUT
+                        if "超时" in reason or "timeout" in reason.lower()
+                        else WAYLINE_EXECUTION_FAILED
+                    )
+                    return MessageBuilder.build_reply(
+                        msg,
+                        result=error_code,
+                        data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                        msg_str=reason,
+                    )
+
+                logger.info(
+                    "Dock3 pause control confirmed: strategy=%s, target_mode=%s, native=%s",
+                    result.get("pause_strategy", "legacy"),
+                    result.get("target_mode"),
+                    result.get("native_pause"),
                 )
 
-        self._status = self.MISSION_PAUSED
-        self._wayline_mission_state = 7  # 航线中断
+            self._status = self.MISSION_PAUSED
+            self._wayline_mission_state = 7  # 航线中断
+
         self.stop_mission_monitor()
         logger.info("Mission paused, wayline_state=7(航线中断)")
 
@@ -1478,6 +1503,7 @@ class MissionManager:
             data=self._wayline_reply_data(STATUS_PAUSED, current_step=23)
         )
 
+    @serialize_flighttask
     def handle_resume_wayline(self, msg: dict) -> dict:
         """
         处理任务恢复 (resume_wayline) - 断点续飞
@@ -1488,7 +1514,7 @@ class MissionManager:
         if self._status != self.MISSION_PAUSED:
             return MessageBuilder.build_reply(
                 msg,
-                result=DEVICE_STATE_UNSUPPORTED,
+                result=WAYLINE_RESUME_STATE_INVALID,
                 data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
                 msg_str="Mission not paused"
             )
@@ -1507,7 +1533,7 @@ class MissionManager:
             logger.warning(f"恢复航线失败: {reason}")
             return MessageBuilder.build_reply(
                 msg,
-                result=DEVICE_STATE_UNSUPPORTED,
+                result=WAYLINE_EXECUTION_FAILED,
                 data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
                 msg_str=reason,
             )
@@ -1517,7 +1543,7 @@ class MissionManager:
         if self.start_mission_monitor() is False:
             return MessageBuilder.build_reply(
                 msg,
-                result=DEVICE_STATE_UNSUPPORTED,
+                result=WAYLINE_EXECUTION_FAILED,
                 data=self._wayline_reply_data(STATUS_REJECTED, current_step=23),
                 msg_str="Mission monitor unavailable",
             )
@@ -1538,13 +1564,24 @@ class MissionManager:
                 self.stop_mission_monitor()
                 reason = result.get("message") or "resume mission failed"
                 logger.warning(f"恢复航线失败: {reason}")
-                error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
+                error_code = (
+                    DEVICE_COMMAND_TIMEOUT
+                    if "超时" in reason or "timeout" in reason.lower()
+                    else WAYLINE_EXECUTION_FAILED
+                )
                 return MessageBuilder.build_reply(
                     msg,
                     result=error_code,
                     data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
                     msg_str=reason,
                 )
+
+            logger.info(
+                "Dock3 resume control confirmed: strategy=%s, target_mode=%s, native=%s",
+                result.get("resume_strategy", "legacy"),
+                result.get("target_mode", "AUTO"),
+                result.get("native_resume"),
+            )
 
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 8  # 航线恢复
@@ -2434,7 +2471,18 @@ class MissionManager:
         stop_event: Optional[threading.Event] = None,
     ) -> bool:
         """处理已分发的航点状态；任务完成时返回 True。"""
+        with self._mission_state_lock:
+            return self._process_mission_current_locked(waypoint_index, stop_event)
+
+    def _process_mission_current_locked(
+        self,
+        waypoint_index: Any,
+        stop_event: Optional[threading.Event] = None,
+    ) -> bool:
+        """Process one waypoint while holding ``_mission_state_lock``."""
         if stop_event and stop_event.is_set():
+            return False
+        if self._status != self.MISSION_RUNNING:
             return False
 
         try:
@@ -2526,7 +2574,9 @@ class MissionManager:
                             break
                         continue
 
-                    if self._handle_battery_safety():
+                    with self._mission_state_lock:
+                        battery_safety_triggered = self._handle_battery_safety()
+                    if battery_safety_triggered:
                         stop_event.set()
                         break
 
@@ -2636,23 +2686,24 @@ class MissionManager:
 
     def complete_simulated_mission(self) -> bool:
         """Complete a prepared simulation mission for offline one-key launch E2E."""
-        if self._simulate_mission.get('is_enable') != 1:
-            logger.warning("Simulated mission completion rejected: simulate_mission disabled")
-            return False
-        if self._status != self.MISSION_RUNNING:
-            logger.warning("Simulated mission completion rejected: status=%s", self._status)
-            return False
+        with self._mission_state_lock:
+            if self._simulate_mission.get('is_enable') != 1:
+                logger.warning("Simulated mission completion rejected: simulate_mission disabled")
+                return False
+            if self._status != self.MISSION_RUNNING:
+                logger.warning("Simulated mission completion rejected: status=%s", self._status)
+                return False
 
-        if self._current_wayline:
-            self._current_waypoint_idx = len(self._current_wayline) - 1
-        self._status = self.MISSION_COMPLETED
-        self._wayline_mission_state = 9
-        self._current_step = 33
-        self._report_mission_progress(status='completed')
-        self._clear_breakpoint_file()
-        self._call_nest_action("request_landing", "simulated_mission_completed")
-        logger.info("Simulated mission completed: flight_id=%s", self._current_task_id)
-        return True
+            if self._current_wayline:
+                self._current_waypoint_idx = len(self._current_wayline) - 1
+            self._status = self.MISSION_COMPLETED
+            self._wayline_mission_state = 9
+            self._current_step = 33
+            self._report_mission_progress(status='completed')
+            self._clear_breakpoint_file()
+            self._call_nest_action("request_landing", "simulated_mission_completed")
+            logger.info("Simulated mission completed: flight_id=%s", self._current_task_id)
+            return True
 
     # ---- 大疆标准FlightTask接口 ----
 

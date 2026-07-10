@@ -55,6 +55,10 @@ class FlightControl(BaseModule):
         self.last_command_ack = None
         self._command_acks = {}
         self._command_ack_condition = Condition()
+        # PAUSE 和 CONTINUE 共用 MAV_CMD_DO_PAUSE_CONTINUE(193)，ACK 无法区分
+        # param1。必须把发送和最终 ACK 等待作为一个事务串行化，避免并发调用
+        # 互相消费同一条 ACK。
+        self._pause_continue_lock = Lock()
         self._arm_lock = Lock()
         self.mode_profile = "plane"
 
@@ -468,13 +472,22 @@ class FlightControl(BaseModule):
         )
         return self._send_message(msg)
 
-    def _wait_for_command_ack(self, command: int, since: float, timeout: float = 2.0) -> Optional[Dict]:
+    def _wait_for_command_ack(
+        self,
+        command: int,
+        since: float,
+        timeout: float = 2.0,
+        strictly_after: bool = False,
+    ) -> Optional[Dict]:
+        def has_new_ack() -> bool:
+            if command not in self._command_acks:
+                return False
+            timestamp = self._command_acks[command].get('timestamp', 0)
+            return timestamp > since if strictly_after else timestamp >= since
+
         with self._command_ack_condition:
             updated = self._command_ack_condition.wait_for(
-                lambda: (
-                    command in self._command_acks
-                    and self._command_acks[command].get('timestamp', 0) >= since
-                ),
+                has_new_ack,
                 timeout=max(0.0, timeout),
             )
             if not updated:
@@ -482,6 +495,10 @@ class FlightControl(BaseModule):
             return dict(self._command_acks[command])
 
     def _send_pause_continue(self, pause: bool) -> Dict:
+        with self._pause_continue_lock:
+            return self._send_pause_continue_locked(pause)
+
+    def _send_pause_continue_locked(self, pause: bool) -> Dict:
         command = mavutil.mavlink.MAV_CMD_DO_PAUSE_CONTINUE
         action = "暂停" if pause else "继续"
         result = {"success": False, "message": "", "action": action}
@@ -497,53 +514,191 @@ class FlightControl(BaseModule):
             self.log(result["message"], "WARNING")
             return result
 
-        if ack.get("result") not in (0, 5):
+        # MAV_RESULT_IN_PROGRESS 不是最终成功。短时继续等待同一命令更新的
+        # 最终 ACK，避免把仍在执行（甚至随后失败）的命令提前上报为成功。
+        if ack.get("result") == 5:
+            final_ack_deadline = time.monotonic() + 1.0
+            last_ack_timestamp = ack.get("timestamp", since)
+            while ack.get("result") == 5:
+                remaining = final_ack_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                next_ack = self._wait_for_command_ack(
+                    command,
+                    last_ack_timestamp,
+                    timeout=remaining,
+                    strictly_after=True,
+                )
+                if not next_ack:
+                    break
+                next_timestamp = next_ack.get("timestamp", 0)
+                if next_timestamp <= last_ack_timestamp:
+                    break
+                ack = next_ack
+                last_ack_timestamp = next_timestamp
+
+        if ack.get("result") == 5:
+            result["ack_result"] = 5
+            result["message"] = f"航线{action}命令仍在执行，未收到最终 ACK"
+            self.log(result["message"], "WARNING")
+            return result
+
+        if ack.get("result") != 0:
+            result["ack_result"] = ack.get("result")
             result["message"] = f"航线{action}被飞控拒绝: {ack.get('result_text')}"
             self.log(result["message"], "ERROR")
             return result
 
         result["success"] = True
+        result["ack_result"] = 0
         result["message"] = f"航线{action}命令已接受"
         return result
 
-    def pause_mission(self) -> Dict:
-        result = self._send_pause_continue(pause=True)
-        if result.get("success"):
-            return result
-        fallback_mode = self._first_available_mode(["QLOITER", "QHOVER", "LOITER", "GUIDED"])
-        if fallback_mode:
-            self.log(f"航线暂停命令未确认，尝试切换 {fallback_mode} 悬停")
-            mode_result = self.set_mode(fallback_mode)
+    def _pause_with_hold_modes(
+        self,
+        candidates: list[str],
+        fallback_reason: str,
+        mode_timeout: float = 8.0,
+    ) -> Dict:
+        """按优先级切入可验证的 hold 模式，提供 Dock3 暂停语义。"""
+        attempts = []
+        for mode in candidates:
+            if mode not in self.mode_mapping:
+                continue
+
+            self.log(f"航线暂停采用 hold 模式，尝试切换 {mode}")
+            mode_result = self.set_mode(mode, timeout=mode_timeout)
+            attempts.append({
+                "mode": mode,
+                "timeout": mode_timeout,
+                "success": bool(mode_result.get("success")),
+                "message": mode_result.get("message", ""),
+            })
             if mode_result.get("success"):
-                mode_result["fallback_from"] = result.get("message")
-                mode_result["action"] = "暂停"
-            return mode_result
-        return result
+                result = dict(mode_result)
+                result.update({
+                    "action": "暂停",
+                    "pause_strategy": "hold_mode",
+                    "target_mode": mode,
+                    "native_pause": False,
+                    "fallback_reason": fallback_reason,
+                    # 保留旧字段，兼容已有调用方和日志解析。
+                    "fallback_from": fallback_reason,
+                    "hold_attempts": attempts,
+                })
+                return result
+
+        attempted_modes = ", ".join(item["mode"] for item in attempts) or "none"
+        failure_details = "; ".join(
+            f"{item['mode']}: {item['message'] or 'failed'}" for item in attempts
+        )
+        message = f"航线暂停 hold 模式均失败（尝试: {attempted_modes}）"
+        if failure_details:
+            message = f"{message}: {failure_details}"
+        self.log(message, "ERROR")
+        return {
+            "success": False,
+            "message": message,
+            "action": "暂停",
+            "pause_strategy": "hold_mode",
+            "target_mode": None,
+            "native_pause": False,
+            "fallback_reason": fallback_reason,
+            "fallback_from": fallback_reason,
+            "hold_attempts": attempts,
+        }
+
+    def pause_mission(self) -> Dict:
+        if self.mode_profile == "plane":
+            # 当前 ArduPlane/QuadPlane 对 MAV_CMD_DO_PAUSE_CONTINUE 会明确返回
+            # UNSUPPORTED。直接切入可由 HEARTBEAT 确认的 hold 模式，避免把
+            # 模式暂停伪装成原生 mission pause。
+            return self._pause_with_hold_modes(
+                ["QLOITER", "LOITER"],
+                "plane profile 使用受控 hold 模式，不发送原生暂停命令",
+            )
+
+        native_result = self._send_pause_continue(pause=True)
+        if native_result.get("success"):
+            result = dict(native_result)
+            result.update({
+                "pause_strategy": "native_command",
+                "target_mode": None,
+                "native_pause": True,
+                "fallback_reason": "",
+                "fallback_from": "",
+            })
+            return result
+
+        return self._pause_with_hold_modes(
+            ["LOITER", "BRAKE", "POSHOLD"],
+            native_result.get("message") or "原生暂停命令失败",
+        )
 
     def resume_mission(self) -> Dict:
-        result = self._send_pause_continue(pause=False)
-        if result.get("success"):
+        if self.mode_profile == "plane":
+            self.log("航线恢复采用 AUTO 模式，不发送原生继续命令")
+            mode_result = self.set_mode("AUTO")
+            result = dict(mode_result)
+            result.update({
+                "action": "继续",
+                "resume_strategy": "auto_mode",
+                "target_mode": "AUTO",
+                "native_resume": False,
+                "fallback_reason": "plane profile 使用 AUTO 模式恢复，不发送原生继续命令",
+                "fallback_from": "plane profile 使用 AUTO 模式恢复，不发送原生继续命令",
+            })
             return result
+
+        native_result = self._send_pause_continue(pause=False)
+        if native_result.get("success"):
+            result = dict(native_result)
+            result.update({
+                "resume_strategy": "native_command",
+                "target_mode": None,
+                "native_resume": True,
+                "fallback_reason": "",
+                "fallback_from": "",
+            })
+            return result
+
         self.log("航线继续命令未确认，尝试切换 AUTO 恢复")
         mode_result = self.set_mode("AUTO")
-        if mode_result.get("success"):
-            mode_result["fallback_from"] = result.get("message")
-            mode_result["action"] = "继续"
-        return mode_result
+        result = dict(mode_result)
+        fallback_reason = native_result.get("message") or "原生继续命令失败"
+        result.update({
+            "action": "继续",
+            "resume_strategy": "auto_mode",
+            "target_mode": "AUTO",
+            "native_resume": False,
+            "fallback_reason": fallback_reason,
+            "fallback_from": fallback_reason,
+        })
+        return result
 
     # ========== 模式管理（参考ModeControl） ==========
 
-    def set_mode(self, mode: str) -> Dict:
+    def set_mode(self, mode: str, timeout: float = 10.0) -> Dict:
         """
         设置飞行模式（支持ArduPlane所有模式）
 
         Args:
             mode: 模式名称（如 "AUTO", "RTL", "FBWA"）或模式ID（如 "10", "11"）
+            timeout: 等待 HEARTBEAT 确认模式切换的最长秒数
 
         Returns:
             dict: 执行结果
         """
         result = {"success": False, "message": "", "mode": mode}
+
+        try:
+            mode_timeout = float(timeout)
+        except (TypeError, ValueError):
+            mode_timeout = 0.0
+        if not math.isfinite(mode_timeout) or mode_timeout <= 0:
+            result["message"] = f"无效模式切换超时: {timeout}"
+            self.log(result["message"], "ERROR")
+            return result
 
         mode_text = str(mode).strip()
 
@@ -577,7 +732,7 @@ class FlightControl(BaseModule):
             return result
 
         # 等待模式切换完成
-        mode_result = self._wait_for_mode(modenum, timeout=10.0)
+        mode_result = self._wait_for_mode(modenum, timeout=mode_timeout)
         if not mode_result["success"]:
             result["message"] = mode_result["message"]
             return result

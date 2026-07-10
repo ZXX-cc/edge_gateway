@@ -393,16 +393,27 @@ function renderLastResult() {
     setText("lastResultStatus", "--");
     return;
   }
-  const result = lastCommandResult.result || lastCommandResult;
-  const status = result.status || lastCommandResult.status || "unknown";
-  const method = result.method || result.request?.method || lastCommandResult.method || "-";
+  const payload = lastCommandResult.result || lastCommandResult;
+  const result = payload.record || payload;
   const reply = result.reply || {};
-  const code = reply?.data?.result ?? reply?.result ?? "-";
+  const replyData = reply.data || {};
+  const output = replyData.output || {};
+  const transportStatus = result.status || "unknown";
+  const businessStatus = result.business_status ?? output.status ?? replyData.status;
+  const status = businessStatus || (
+    transportStatus === "replied"
+      ? (result.business_success ? "success" : "failed")
+      : transportStatus
+  );
+  const method = result.method || result.request?.method || lastCommandResult.method || "-";
+  const code = result.business_result ?? replyData.result ?? reply.result ?? "-";
+  const message = result.business_message || reply.msg || replyData.msg || payload.error || "-";
   setText("lastResultStatus", status);
   box.innerHTML = `
     <strong>${escapeHtml(lastCommandResult.title || method)}</strong><br>
     method: ${escapeHtml(method)}<br>
-    状态: ${escapeHtml(status)}，结果码: ${escapeHtml(code)}<br>
+    业务状态: ${escapeHtml(status)}，传输状态: ${escapeHtml(transportStatus)}<br>
+    结果码: ${escapeHtml(code)}，消息: ${escapeHtml(message)}<br>
     时间: ${escapeHtml(shortTime(result.timestamp || Date.now()))}
     <details>
       <summary>查看完整结果</summary>
@@ -797,6 +808,18 @@ async function loadWorkflows() {
   renderWorkflows();
 }
 
+function commandTimeoutSeconds(method) {
+  const missionModeCommands = new Set([
+    "flighttask_pause",
+    "flighttask_resume",
+    "pause_wayline",
+    "resume_wayline",
+    "wayline_task_pause",
+    "wayline_task_resume",
+  ]);
+  return missionModeCommands.has(method) ? 30 : 10;
+}
+
 async function sendCommandPayload(channel, method, data, title) {
   const buttons = [...document.querySelectorAll("button")];
   buttons.forEach((button) => {
@@ -806,11 +829,12 @@ async function sendCommandPayload(channel, method, data, title) {
     const res = await fetch("/api/command", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({channel, method, data, timeout: 10}),
+      body: JSON.stringify({channel, method, data, timeout: commandTimeoutSeconds(method)}),
     });
-    const result = await res.json();
-    lastCommandResult = {title, method, result};
-    $("commandResult").textContent = fmtJson(result);
+    const payload = await res.json();
+    const record = payload.record || payload;
+    lastCommandResult = {title, method, status: payload.ok ? "success" : "failed", result: record};
+    $("commandResult").textContent = fmtJson(payload);
     renderLastResult();
   } catch (err) {
     lastCommandResult = {title, method, status: "error", result: {error: err.message}};

@@ -317,8 +317,8 @@ P1 阶段只覆盖服务器纯模拟链路，不下载真实 KMZ，不要求真�
 | `flighttask_prepare` | `flight_id`、`task_type`、`execute_time`、`file`、`simulate_mission` 等 | `output.status=sent`，事件 `flighttask_progress` | 接受旧别名 `flighttask_id`，新测试使用官方 `flight_id` |
 | `flighttask_execute` | `{"flight_id":"..."}` | `output.status=in_progress`，事件 `flighttask_progress` | 纯模拟时不强制真实飞控切 AUTO |
 | `flighttask_progress` | `{"flight_id":"..."}` | 当前 `output.status/progress/ext` | 查询当前任务状态 |
-| `flighttask_pause` | `{}` | `output.status=paused`，事件 `flighttask_progress` | 非运行状态返回 `314000` 和 `output.status=rejected` |
-| `flighttask_resume` / `flighttask_recovery` | `{}` | `output.status=in_progress`，事件 `flighttask_progress` | 从暂停状态恢复 |
+| `flighttask_pause` | `{}` | `output.status=paused`，事件 `flighttask_progress` | 非运行状态返回 Dock3 航线码 `258` 和 `output.status=rejected` |
+| `flighttask_resume` / `flighttask_recovery` | `{}` | `output.status=in_progress`，事件 `flighttask_progress` | 非暂停状态返回 Dock3 航线码 `262`；非超时飞控失败返回 `1564`，超时返回 `325004` |
 | `flighttask_return` | `{"flight_id":"...","return_type":0/1}` | `output.status=in_progress`，事件 `flighttask_progress` 和 `return_home_info` | `return_type=0` 返航，`1` 降落 |
 | `return_home_cancel` | `{}` | `output.status=paused`，事件 `flighttask_progress` | 当前先模拟悬停状态 |
 | `flighttask_undo` | `{"flight_ids":["..."]}` | `output.status=canceled`，事件 `flighttask_progress` | 支持单任务取消 |
@@ -777,6 +777,9 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | 设备端请求超时 | `-1` in timeout context | `325004` | 设备端命令请求已超时，请重试 | 后续超时处理 |
 | 属性设置失败 | `-1/-2` in property context | `327000` | 参数设置失败，请稍后重试 | `property/set_reply` |
 | 当前忙碌/限流 | `-2` in generic context | `514116` | 无法执行当前操作，机场正在执行其他控制指令，请稍后重试 | DRC/任务限流类回包 |
+| 航线暂停状态无效 | - | `258` | 当前航线状态不允许暂停 | `flighttask_pause` |
+| 航线恢复状态无效 | - | `262` | 当前航线状态不允许恢复 | `flighttask_resume/recovery` |
+| 航线控制执行失败 | - | `1564` | 航线执行失败 | 暂停/恢复的非超时飞控失败 |
 
 `property/set_reply` 的逐属性 `state.result` 可以保留 Dock3 允许的 `0/1/2`，但不得返回负数；需要精确表达失败原因时使用官方错误码。
 

@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import time
 import types
 import unittest
@@ -60,7 +61,14 @@ if "src.database.schemas" not in sys.modules:
 
 from src.cloud_api.dock3_wayline import normalize_prepare_payload, parse_wayline_file
 from src.mission.manager import MissionManager
-from src.utils.dji_error_codes import DOCK_BUSY, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_BUSY,
+    INVALID_COMMAND_FORMAT,
+    WAYLINE_EXECUTION_FAILED,
+    WAYLINE_PAUSE_STATE_INVALID,
+    WAYLINE_RESUME_STATE_INVALID,
+)
 
 
 def base_msg(method, data):
@@ -447,10 +455,121 @@ class Dock3WaylineTest(unittest.TestCase):
 
         pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
 
-        self.assertEqual(pause["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(pause["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(pause["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
         self.assertEqual(flight_control.calls, [("pause_mission", None)])
+
+    def test_pause_does_not_overwrite_completion_already_being_processed(self):
+        class SuccessfulPauseFlightControl:
+            def __init__(self):
+                self.calls = []
+
+            def pause_mission(self):
+                self.calls.append("pause")
+                return {"success": True, "message": "paused"}
+
+        manager = MissionManager()
+        flight_control = SuccessfulPauseFlightControl()
+        manager.set_flight_control(flight_control)
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+        manager._simulate_mission = {"is_enable": 0}
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._clear_breakpoint_file = lambda: None
+        manager._report_mission_progress = lambda status="executing": None
+        manager._call_nest_action = lambda action, context: None
+        manager.stop_mission_monitor = lambda: True
+
+        action_started = threading.Event()
+        release_action = threading.Event()
+
+        def blocking_action(_waypoint_index):
+            action_started.set()
+            release_action.wait(1.0)
+
+        manager._execute_waypoint_actions = blocking_action
+        completion_thread = threading.Thread(
+            target=manager._process_mission_current,
+            args=(1,),
+        )
+        completion_thread.start()
+        self.assertTrue(action_started.wait(1.0))
+
+        pause_reply = {}
+
+        def pause_task():
+            pause_reply.update(manager.handle_flighttask_pause(
+                base_msg("flighttask_pause", {}),
+            ))
+
+        pause_thread = threading.Thread(target=pause_task)
+        pause_thread.start()
+        time.sleep(0.05)
+        self.assertEqual(flight_control.calls, [])
+
+        release_action.set()
+        completion_thread.join(1.0)
+        pause_thread.join(1.0)
+
+        self.assertFalse(completion_thread.is_alive())
+        self.assertFalse(pause_thread.is_alive())
+        self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+        self.assertEqual(pause_reply["data"]["result"], WAYLINE_PAUSE_STATE_INVALID)
+        self.assertEqual(flight_control.calls, [])
+
+    def test_waypoint_update_waiting_on_pause_cannot_run_actions_after_hold(self):
+        pause_started = threading.Event()
+        release_pause = threading.Event()
+
+        class BlockingPauseFlightControl:
+            def pause_mission(self):
+                pause_started.set()
+                release_pause.wait(1.0)
+                return {
+                    "success": True,
+                    "message": "paused",
+                    "pause_strategy": "hold_mode",
+                    "target_mode": "QLOITER",
+                    "native_pause": False,
+                }
+
+        manager = MissionManager()
+        manager.set_flight_control(BlockingPauseFlightControl())
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._status = manager.MISSION_RUNNING
+        manager._simulate_mission = {"is_enable": 0}
+        manager.stop_mission_monitor = lambda: True
+        manager._record_breakpoint = lambda reason: None
+        manager._emit_wayline_progress = lambda *args, **kwargs: None
+
+        pause_reply = {}
+        pause_thread = threading.Thread(
+            target=lambda: pause_reply.update(
+                manager.handle_pause_wayline(base_msg("flighttask_pause", {}))
+            )
+        )
+        pause_thread.start()
+        self.assertTrue(pause_started.wait(1.0))
+
+        actions = []
+        manager._execute_waypoint_actions = actions.append
+        waypoint_thread = threading.Thread(
+            target=manager._process_mission_current,
+            args=(1,),
+        )
+        waypoint_thread.start()
+        time.sleep(0.05)
+        self.assertTrue(waypoint_thread.is_alive())
+
+        release_pause.set()
+        pause_thread.join(1.0)
+        waypoint_thread.join(1.0)
+
+        self.assertEqual(pause_reply["data"]["result"], 0)
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertEqual(actions, [])
+        self.assertEqual(manager._current_waypoint_idx, 0)
 
     def test_real_flighttask_execute_reports_auto_stage_and_skips_nest_when_fc_fails(self):
         manager = MissionManager()
@@ -537,7 +656,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
         resume = manager.handle_resume_wayline(base_msg("resume_wayline", {}))
 
-        self.assertEqual(resume["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(resume["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(resume["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._status, manager.MISSION_PAUSED)
         self.assertEqual(flight_control.calls, [])
@@ -797,7 +916,10 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(bad_prepare["data"]["result"], INVALID_COMMAND_FORMAT)
 
         bad_pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
-        self.assertEqual(bad_pause["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(bad_pause["data"]["result"], WAYLINE_PAUSE_STATE_INVALID)
+
+        bad_resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))
+        self.assertEqual(bad_resume["data"]["result"], WAYLINE_RESUME_STATE_INVALID)
 
 
 if __name__ == "__main__":

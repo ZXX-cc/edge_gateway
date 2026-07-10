@@ -109,6 +109,8 @@ state: dict[str, Any] = {
 pending: dict[str, dict[str, Any]] = {}
 mqtt_client: mqtt.Client | None = None
 
+BUSINESS_FAILURE_STATUSES = {"rejected", "failed"}
+
 MQTT_SCRIPT_ARGS = ["--host", MQTT_HOST, "--port", str(MQTT_PORT), "--sn", GATEWAY_SN]
 PERSON2_SCRIPT_ARGS = [*MQTT_SCRIPT_ARGS, "--drone-sn", DRONE_SN, "--timeout", "12", "--quiet-stale"]
 
@@ -627,6 +629,38 @@ def build_message(method: str, data: Any, need_reply: int = 1, tid: str | None =
     return message
 
 
+def command_business_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """Extract the command result separately from MQTT transport delivery.
+
+    A ``services_reply`` only proves that the request reached the gateway.  The
+    command itself succeeds only when its Dock3 result is zero and the output
+    status does not explicitly report a rejection or failure.
+    """
+    reply = record.get("reply")
+    reply = reply if isinstance(reply, dict) else {}
+    data = reply.get("data")
+    data = data if isinstance(data, dict) else {}
+    output = data.get("output")
+    output = output if isinstance(output, dict) else {}
+
+    result = data.get("result")
+    business_status = output.get("status", data.get("status"))
+    normalized_status = str(business_status or "").strip().lower()
+    message = reply.get("msg", data.get("msg", ""))
+    success = (
+        record.get("status") == "replied"
+        and type(result) is int
+        and result == 0
+        and normalized_status not in BUSINESS_FAILURE_STATUSES
+    )
+    return {
+        "business_success": success,
+        "business_result": result,
+        "business_status": business_status,
+        "business_message": str(message or ""),
+    }
+
+
 def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, need_reply: int = 1) -> dict[str, Any]:
     if mqtt_client is None:
         raise RuntimeError("MQTT client is not initialized")
@@ -670,6 +704,9 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
     else:
         record["status"] = "sent_no_reply"
 
+    business = command_business_summary(record)
+    record.update(business)
+
     with state_lock:
         state["requests"].appendleft(record)
     broadcast("request", record)
@@ -677,13 +714,20 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
         "source": "command",
         "category": "页面命令",
         "title": method,
-        "status": "pass" if record["status"] == "replied" else "fail",
+        "status": "pass" if business["business_success"] else "fail",
         "method": method,
-        "note": f"channel={channel}, request_status={record['status']}",
+        "note": (
+            f"channel={channel}, request_status={record['status']}, "
+            f"business_status={business['business_status']}, "
+            f"result={business['business_result']}, "
+            f"msg={business['business_message']}"
+        ),
         "evidence": {
             "tid": record["tid"],
             "reply_topic": record.get("reply_observed_topic", ""),
-            "result": (record.get("reply") or {}).get("data", {}).get("result"),
+            "result": business["business_result"],
+            "status": business["business_status"],
+            "msg": business["business_message"],
         },
     })
     return record
@@ -786,6 +830,9 @@ def run_workflow(workflow_id: str, timeout: float = 8.0) -> dict[str, Any]:
         if result["status"] == "timeout":
             run["status"] = "timeout"
             break
+        if not result.get("business_success", False):
+            run["status"] = "failed"
+            break
     else:
         run["status"] = "ok"
 
@@ -881,7 +928,9 @@ def api_command():
     channel = str(body.get("channel", "services")).strip()
     try:
         record = publish_command(method, body.get("data", {}), channel, timeout=float(body.get("timeout", 8.0)))
-        return jsonify({"ok": record["status"] == "replied", "record": record})
+        business = command_business_summary(record)
+        record.update(business)
+        return jsonify({"ok": business["business_success"], "record": record})
     except Exception as exc:
         append_retest_log({
             "source": "command",

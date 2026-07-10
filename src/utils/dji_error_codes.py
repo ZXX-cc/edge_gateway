@@ -21,6 +21,12 @@ DEVICE_COMMAND_TIMEOUT = 325004
 PARAMETER_SET_FAILED = 327000
 DOCK_BUSY = 514116
 
+# Dock3 wayline task result codes. Keep these distinct from generic device
+# errors so callers can identify invalid pause/recovery state precisely.
+WAYLINE_PAUSE_STATE_INVALID = 258
+WAYLINE_RESUME_STATE_INVALID = 262
+WAYLINE_EXECUTION_FAILED = 1564
+
 
 ERROR_DESCRIPTIONS: Dict[int, str] = {
     SUCCESS: "成功",
@@ -31,6 +37,9 @@ ERROR_DESCRIPTIONS: Dict[int, str] = {
     DEVICE_COMMAND_TIMEOUT: "设备端命令请求已超时，请重试",
     PARAMETER_SET_FAILED: "参数设置失败，请稍后重试",
     DOCK_BUSY: "无法执行当前操作，机场正在执行其他控制指令，请稍后重试",
+    WAYLINE_PAUSE_STATE_INVALID: "当前航线状态不允许暂停",
+    WAYLINE_RESUME_STATE_INVALID: "当前航线状态不允许恢复",
+    WAYLINE_EXECUTION_FAILED: "航线执行失败",
 }
 
 
