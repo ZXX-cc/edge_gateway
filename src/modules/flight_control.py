@@ -470,7 +470,11 @@ class FlightControl(BaseModule):
         if result.get("success"):
             return result
         self.log("航线继续命令未确认，尝试切换 AUTO 恢复")
-        return self.set_mode("AUTO")
+        mode_result = self.set_mode("AUTO")
+        if mode_result.get("success"):
+            mode_result["fallback_from"] = result.get("message")
+            mode_result["action"] = "继续"
+        return mode_result
 
     # ========== 模式管理（参考ModeControl） ==========
 

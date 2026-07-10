@@ -126,6 +126,18 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertEqual(control.command_calls[0]["param1"], 0)
         self.assertEqual(control.mode_calls, ["QLOITER"])
 
+    def test_resume_fallback_switches_back_to_auto(self):
+        control = RecordingFlightControl()
+        control._set_mode_profile("plane")
+        control._wait_for_command_ack = lambda *args, **kwargs: None
+
+        result = control.resume_mission()
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(control.command_calls[0]["command"], 193)
+        self.assertEqual(control.command_calls[0]["param1"], 1)
+        self.assertEqual(control.mode_calls, ["AUTO"])
+
 
 if __name__ == "__main__":
     unittest.main()
