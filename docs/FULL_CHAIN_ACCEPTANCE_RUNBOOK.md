@@ -326,6 +326,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 2026-07-10 机巢 strict 联调已通过：被动 UDP 模拟器以网关首包心跳注册回传地址，并以健康待命 `boolstate1=0x0C47`、`boolstate2=0x0020` 上报 12004 状态。`python tools/e2e_full_chain_test.py --only wayline --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 wayline test ok (accepted=11, events=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；验证 12003 命令、12004 状态、12005 回复以及 Wayline 状态机。接下来可直接执行完整 strict E2E。
 
+2026-07-10 完整 strict E2E 已通过：`python tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 e2e full-chain test ok (steps=11, elapsed=26.7s)`。全部 11 段均为 `exit=0`；最后 firmware/config 输出 `accepted=8, events=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0`。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：
