@@ -291,6 +291,16 @@ python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale --fail-on-stale
 
 严格模式中，`osd-state` 会把旧版 value-wrapper OSD、旧 `reason=property_changed` state、无关 state 和旧 reply 一起计入 stale。properties 严格失败会输出 `stale_samples`，其中包含 `retain/dup/mid/qos`：`retain=true` 优先清理 broker retained 消息，`dup=true` 优先排查 QoS 重投；两者均为 false 时优先排查第二个旧网关/模拟器进程。出现任何 stale 都应先清理环境，再重新执行。
 
+2026-07-10 严格 properties 复测已确认 9 条重复 `property/set_reply` 都是 `method=null`、`retain=false`、`dup=false`，当前 Dock3 回包本身均正确。这不是网关代码的 QoS 重投，也不是 retained 消息；必须先定位并停止第二个旧网关或旧模拟器。停止前先在 Ubuntu 执行只读排查并保留输出：
+
+```bash
+pgrep -af 'src/main.py|web/app.py|demo_platform/app.py|mqtt_cloud_simulator.py|nest_simulator.py|mosquitto|nanomq'
+ps -eo pid,ppid,etimes,args | grep -E 'src/main.py|web/app.py|demo_platform/app.py|mqtt_cloud_simulator.py|nest_simulator.py' | grep -v grep
+ss -tnp | grep ':1883' || true
+```
+
+确认旧进程 PID 后，只停止已确认的旧服务并保留当前 `src/main.py` 实例；重启当前网关后，先重跑 properties 严格命令，成功后再跑完整 E2E。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：
