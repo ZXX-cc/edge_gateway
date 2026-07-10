@@ -164,10 +164,9 @@ class CameraController:
         if not success:
             success, _ = self._send_mapped_camera_command('camera_photo_take', data)
 
-        self._photo_count += 1
-
         # 异步写入媒体文件元数据到数据库
         if success:
+            self._photo_count += 1
             self._save_media_metadata_sync('photo')
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
@@ -213,8 +212,6 @@ class CameraController:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Already recording")
 
         logger.info(f"Start record: camera={camera_idx}, resolution={resolution}")
-        self._is_recording = True
-        self._recording_start_time = time.time()
 
         success = False
 
@@ -229,6 +226,10 @@ class CameraController:
         if not success:
             success, _ = self._send_mapped_camera_command('start_record', data)
 
+        if success:
+            self._is_recording = True
+            self._recording_start_time = time.time()
+
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_stop_record(self, msg: dict) -> dict:
@@ -236,9 +237,9 @@ class CameraController:
         if not self._is_recording:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Not recording")
 
+        data = msg.get('data', {})
         logger.info("Stop record")
-        self._is_recording = False
-        self._recording_time = int(time.time() - self._recording_start_time)
+        recording_time = max(0, int(time.time() - self._recording_start_time))
 
         success = False
 
@@ -255,9 +256,14 @@ class CameraController:
 
         # 异步写入媒体文件元数据到数据库
         if success:
-            self._save_media_metadata_sync('video', duration=self._recording_time)
+            self._is_recording = False
+            self._recording_time = recording_time
+            self._save_media_metadata_sync('video', duration=recording_time)
 
-        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={'record_time': self._recording_time})
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+            'record_time': recording_time,
+            'recording': self._is_recording,
+        })
 
     # ---- 参数设置API ----
 

@@ -161,12 +161,9 @@ class GimbalController:
         roll_speed = data.get('roll_speed')
         yaw_speed = data.get('yaw_speed')
 
-        if pitch is not None:
-            self._pitch = max(-90, min(30, pitch))
-        if roll is not None:
-            self._roll = roll
-        if yaw is not None:
-            self._yaw = yaw
+        target_pitch = self._pitch if pitch is None else max(-90, min(30, pitch))
+        target_roll = self._roll if roll is None else roll
+        target_yaw = self._yaw if yaw is None else yaw
 
         logger.info(f"Gimbal rotate: pitch={pitch}, roll={roll}, yaw={yaw}")
         if pitch_speed is not None:
@@ -178,10 +175,10 @@ class GimbalController:
         if self._gimbal_control and self._gimbal_control.is_connected():
             if pitch is not None or yaw is not None:
                 logger.info("ViewLink mapped: %s", build_viewlink_call("turn_to", {
-                    "yaw": self._yaw,
-                    "pitch": self._pitch,
+                    "yaw": target_yaw,
+                    "pitch": target_pitch,
                 }))
-                result = self._gimbal_control.turn_to(self._yaw, self._pitch)
+                result = self._gimbal_control.turn_to(target_yaw, target_pitch)
                 success = result.get('success', False)
                 logger.info(f"ViewLink turn_to: {result}")
             elif pitch_speed is not None or yaw_speed is not None:
@@ -198,10 +195,15 @@ class GimbalController:
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success and (pitch is not None or yaw is not None or roll is not None):
             mapped_data = dict(data)
-            mapped_data["pitch"] = self._pitch
-            mapped_data["roll"] = self._roll
-            mapped_data["yaw"] = self._yaw
+            mapped_data["pitch"] = target_pitch
+            mapped_data["roll"] = target_roll
+            mapped_data["yaw"] = target_yaw
             success, _ = self._send_mapped_gimbal_command('gimbalRotate', mapped_data)
+
+        if success:
+            self._pitch = target_pitch
+            self._roll = target_roll
+            self._yaw = target_yaw
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -237,18 +239,22 @@ class GimbalController:
             'FPV': self.MODE_FPV,
             'RESET': self.MODE_RESET
         }
-        self._mode = mode_map.get(mode_str, self.MODE_FOLLOW)
+        target_mode = mode_map.get(mode_str, self.MODE_FOLLOW)
 
         logger.info(f"Gimbal mode: {mode_str}")
 
         success, _ = self._send_mapped_gimbal_command('set_gimbal_mode', data)
 
         # RESET模式下自动回中
-        if self._mode == self.MODE_RESET:
-            self._pitch = 0
-            self._roll = 0
-            self._yaw = 0
+        if success and target_mode == self.MODE_RESET:
             success, _ = self._send_mapped_gimbal_command('gimbal_reset', data)
+
+        if success:
+            self._mode = target_mode
+            if target_mode == self.MODE_RESET:
+                self._pitch = 0
+                self._roll = 0
+                self._yaw = 0
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -257,9 +263,6 @@ class GimbalController:
     def handle_gimbal_reset(self, msg: dict) -> dict:
         """云台回中"""
         logger.info("Gimbal reset")
-        self._pitch = 0
-        self._roll = 0
-        self._yaw = 0
 
         success = False
 
@@ -273,6 +276,11 @@ class GimbalController:
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
             success, _ = self._send_mapped_gimbal_command('gimbal_reset', msg.get('data', {}))
+
+        if success:
+            self._pitch = 0
+            self._roll = 0
+            self._yaw = 0
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
