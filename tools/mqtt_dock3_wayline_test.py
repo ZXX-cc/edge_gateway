@@ -112,6 +112,59 @@ def assert_wayline_file_parsed(payload, min_waypoints):
     return 0
 
 
+def validate_real_sitl_progress(progress, flight_id, expected_file):
+    """Verify that a progress reply still belongs to the prepared SITL mission."""
+    progress_status = output_status(progress)
+    if progress_status not in {"in_progress", "ok"}:
+        break_point = progress.get("data", {}).get("output", {}).get("ext", {}).get("break_point", {})
+        if progress_status == "failed" and isinstance(break_point, dict):
+            print(
+                "real SITL mission failed: "
+                f"reason={break_point.get('reason')}, break_reason={break_point.get('break_reason')}",
+                file=sys.stderr,
+            )
+        print(f"unexpected real SITL progress status: {progress_status}, payload={progress}", file=sys.stderr)
+        return 18, progress_status, {}
+
+    ext = progress.get("data", {}).get("output", {}).get("ext", {})
+    if not isinstance(ext, dict) or ext.get("flight_id") != flight_id:
+        print(
+            "real SITL progress flight_id changed: "
+            f"expected={flight_id}, actual={ext.get('flight_id') if isinstance(ext, dict) else None}",
+            file=sys.stderr,
+        )
+        return 19, progress_status, ext if isinstance(ext, dict) else {}
+
+    expected_waypoint_count = expected_file.get("waypoint_count")
+    current_file = ext.get("file") if isinstance(ext.get("file"), dict) else {}
+    waypoint_count = ext.get("waypoint_count")
+    if waypoint_count != expected_waypoint_count or current_file.get("source") != expected_file.get("source"):
+        print(
+            "real SITL progress task file changed: "
+            f"expected_file={expected_file}, actual_file={current_file}, "
+            f"expected_waypoint_count={expected_waypoint_count}, actual_waypoint_count={waypoint_count}",
+            file=sys.stderr,
+        )
+        return 20, progress_status, ext
+
+    waypoint_index = ext.get("current_waypoint_index")
+    if not isinstance(waypoint_index, int) or not isinstance(waypoint_count, int) or not (0 <= waypoint_index < waypoint_count):
+        print(
+            "real SITL progress contains invalid waypoint index: "
+            f"index={waypoint_index}, waypoint_count={waypoint_count}, payload={progress}",
+            file=sys.stderr,
+        )
+        return 21, progress_status, ext
+    if progress_status == "ok" and waypoint_index != waypoint_count - 1:
+        print(
+            "completed real SITL mission did not finish at final waypoint: "
+            f"index={waypoint_index}, waypoint_count={waypoint_count}",
+            file=sys.stderr,
+        )
+        return 22, progress_status, ext
+    return 0, progress_status, ext
+
+
 def run_wayline_checks(client, args):
     flight_id = args.flight_id or f"dock3-wayline-{int(time.time())}"
     rc, prepare_payload = client.request(
@@ -187,6 +240,7 @@ def run_real_sitl_prepare_check(client, args):
     rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
     if rc != 0:
         return rc
+    expected_file = wayline_file_summary(prepare_payload)
 
     if not client.has_event("flighttask_ready"):
         print("expected flighttask_ready event was not observed", file=sys.stderr)
@@ -219,38 +273,44 @@ def run_real_sitl_prepare_check(client, args):
     )
     if rc != 0:
         return rc
-    progress_status = output_status(progress)
-    if progress_status not in {"in_progress", "ok"}:
-        break_point = progress.get("data", {}).get("output", {}).get("ext", {}).get("break_point", {})
-        if progress_status == "failed" and isinstance(break_point, dict):
+    rc, progress_status, ext = validate_real_sitl_progress(progress, flight_id, expected_file)
+    if rc != 0:
+        return rc
+
+    if args.require_completion:
+        deadline = time.monotonic() + args.completion_timeout
+        while progress_status != "ok" and time.monotonic() < deadline:
+            time.sleep(min(args.completion_poll_seconds, max(0.0, deadline - time.monotonic())))
+            rc, progress = client.request(
+                "flighttask_progress",
+                {"flight_id": flight_id},
+                args.timeout,
+                [0],
+                None,
+            )
+            if rc != 0:
+                return rc
+            rc, progress_status, ext = validate_real_sitl_progress(progress, flight_id, expected_file)
+            if rc != 0:
+                return rc
             print(
-                "real SITL mission failed: "
-                f"reason={break_point.get('reason')}, break_reason={break_point.get('break_reason')}",
+                "real SITL completion observation "
+                f"(status={progress_status}, waypoint_index={ext.get('current_waypoint_index')}, "
+                f"mission_state={ext.get('wayline_mission_state')})"
+            )
+        if progress_status != "ok":
+            print(
+                "real SITL completion timeout: "
+                f"timeout={args.completion_timeout}s, status={progress_status}, "
+                f"waypoint_index={ext.get('current_waypoint_index')}",
                 file=sys.stderr,
             )
-        print(f"unexpected real SITL progress status: {progress_status}, payload={progress}", file=sys.stderr)
-        return 18
-    ext = progress.get("data", {}).get("output", {}).get("ext", {})
-    waypoint_count = ext.get("waypoint_count", args.expect_waypoint_count)
-    waypoint_index = ext.get("current_waypoint_index")
-    if not isinstance(waypoint_index, int) or not isinstance(waypoint_count, int) or not (0 <= waypoint_index < waypoint_count):
-        print(
-            "real SITL progress contains invalid waypoint index: "
-            f"index={waypoint_index}, waypoint_count={waypoint_count}, payload={progress}",
-            file=sys.stderr,
-        )
-        return 19
-    if progress_status == "ok" and waypoint_index != waypoint_count - 1:
-        print(
-            "completed real SITL mission did not finish at final waypoint: "
-            f"index={waypoint_index}, waypoint_count={waypoint_count}",
-            file=sys.stderr,
-        )
-        return 20
+            return 23
+
     print(
         "real SITL execute/progress verified "
         f"(flight_id={flight_id}, observe_seconds={args.execute_observe_seconds}, "
-        f"status={progress_status}, waypoint_index={waypoint_index}, "
+        f"status={progress_status}, waypoint_index={ext.get('current_waypoint_index')}, "
         f"mission_state={ext.get('wayline_mission_state')})"
     )
     return 0
@@ -284,14 +344,37 @@ def main():
         default=8.0,
         help="seconds to wait before reading flighttask_progress after --execute-real",
     )
+    parser.add_argument(
+        "--require-completion",
+        action="store_true",
+        help="with --execute-real, keep polling until the isolated SITL mission completes",
+    )
+    parser.add_argument(
+        "--completion-timeout",
+        type=float,
+        default=90.0,
+        help="maximum seconds to wait for --require-completion (default: 90)",
+    )
+    parser.add_argument(
+        "--completion-poll-seconds",
+        type=float,
+        default=5.0,
+        help="progress poll interval for --require-completion (default: 5)",
+    )
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     if args.execute_real and not args.real_sitl:
         parser.error("--execute-real requires --real-sitl")
+    if args.require_completion and not args.execute_real:
+        parser.error("--require-completion requires --execute-real")
     if args.execute_observe_seconds < 0:
         parser.error("--execute-observe-seconds must be non-negative")
+    if args.completion_timeout <= 0:
+        parser.error("--completion-timeout must be positive")
+    if args.completion_poll_seconds <= 0:
+        parser.error("--completion-poll-seconds must be positive")
 
     temp_dir = None
     if not args.wayline_file:
