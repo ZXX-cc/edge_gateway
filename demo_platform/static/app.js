@@ -16,6 +16,21 @@ const keyStatusLabels = {
 
 const keyStageOrder = {P0: 0, P1: 1, P2: 2};
 
+const keyPointActions = {
+  mqtt_link: {label: "跑基础查询", type: "action", ref: "dock:0"},
+  osd_state: {label: "查看原始报文", type: "view", view: "raw"},
+  flight_mode: {label: "运行模式复测", type: "retest", item: "flight-mode-sitl"},
+  flight_control: {label: "运行飞控复测", type: "retest", item: "basic-flight-sitl"},
+  wayline_resume: {label: "运行航线复测", type: "retest", item: "sitl-wayline"},
+  dock_v13: {label: "运行机巢复测", type: "retest", item: "nest-gateway-live"},
+  one_key_takeoff: {label: "运行一键启航", type: "retest", item: "one-key-mqtt"},
+  drc: {label: "运行 DRC 复测", type: "retest", item: "drc-mavlink-sitl"},
+  media_live: {label: "运行负载复测", type: "retest", item: "payload-camera-gimbal"},
+  hms_log: {label: "运行日志复测", type: "retest", item: "retention-records"},
+  topology_org: {label: "运行拓扑复测", type: "retest", item: "multi-device-offline"},
+  trace_nonblock: {label: "运行非阻塞探针", type: "retest", item: "non-blocking-person2"},
+};
+
 const viewMeta = {
   dashboard: ["设备总览", "查看机场、飞行器、链路和最近业务状态。"],
   dock: ["机场控制", "远程调试、舱盖、推杆、充电、补光灯和基础属性查询。"],
@@ -552,6 +567,7 @@ function renderKeyWatch(pointsMap, infoItems) {
   grid.innerHTML = points.map((point) => {
     const status = point.status || "waiting";
     const latest = (point.evidence || [])[0] || {};
+    const action = keyPointActions[point.id] || {label: "打开复测清单", type: "view", view: "retest"};
     return `
       <article class="key-point-card ${escapeHtml(status)}">
         <div class="key-point-head">
@@ -562,9 +578,15 @@ function renderKeyWatch(pointsMap, infoItems) {
         <p>${escapeHtml(point.summary || "--")}</p>
         <small>${escapeHtml(latest.source || "暂无来源")} · ${escapeHtml(point.last_seen ? shortTime(point.last_seen) : "--")}</small>
         <em>${escapeHtml(latest.detail || "等待 MQTT/OSD/事件命中该测试点")}</em>
+        <div class="key-point-actions">
+          <button data-key-point="${escapeHtml(point.id)}">${escapeHtml(action.label)}</button>
+        </div>
       </article>
     `;
   }).join("");
+  document.querySelectorAll("[data-key-point]").forEach((button) => {
+    button.addEventListener("click", () => runKeyPointAction(button.dataset.keyPoint, button));
+  });
 
   const items = infoItems || [];
   setText("keyInfoCount", `${items.length} 条`);
@@ -583,6 +605,32 @@ function renderKeyWatch(pointsMap, infoItems) {
       <small>${escapeHtml(item.source || "--")} · ${escapeHtml(item.detail || "--")}</small>
     </div>
   `).join("");
+}
+
+async function runKeyPointAction(pointId, button) {
+  const action = keyPointActions[pointId] || {type: "view", view: "retest"};
+  if (action.type === "view") {
+    switchView(action.view);
+    return;
+  }
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "运行中...";
+  }
+  try {
+    if (action.type === "retest") {
+      await runRetestItem(action.item);
+      switchView("retest");
+    } else if (action.type === "action") {
+      await runActionRef(action.ref);
+    }
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 async function loadRetestLogs() {
