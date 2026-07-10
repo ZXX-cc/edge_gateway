@@ -127,6 +127,38 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertTrue(telemetry["battery_available"])
         self.assertEqual(build_osd_data(telemetry)["battery"]["voltage"], 16600)
 
+    def test_zero_battery_without_electrical_measurement_stays_unavailable(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(
+                msg_type="SYS_STATUS",
+                voltage_battery=0,
+                current_battery=0,
+                battery_remaining=0,
+            ),
+            telemetry,
+        )
+
+        self.assertFalse(telemetry["battery_available"])
+        self.assertEqual(telemetry["batteryRemaining"], 0)
+
+    def test_zero_battery_with_valid_voltage_is_available_for_safety(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(
+                msg_type="SYS_STATUS",
+                voltage_battery=14500,
+                current_battery=0,
+                battery_remaining=0,
+            ),
+            telemetry,
+        )
+
+        self.assertTrue(telemetry["battery_available"])
+        self.assertEqual(telemetry["batteryRemaining"], 0)
+
     def test_mount_status_maps_legacy_gimbal_angles(self):
         telemetry = new_telemetry_state()
 

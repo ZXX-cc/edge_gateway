@@ -187,13 +187,19 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         voltage_battery = getattr(msg, "voltage_battery", 65535)
         current_battery = getattr(msg, "current_battery", -1)
         battery_remaining = getattr(msg, "battery_remaining", -1)
+        voltage_known = voltage_battery not in (0, 65535)
+        current_known = current_battery not in (-1, 0)
         if voltage_battery != 65535:
             data["voltage"] = round(voltage_battery / 1000.0, 2)
             updated = True
         if current_battery != -1:
             data["current"] = round(current_battery / 100.0, 2)
             updated = True
-        if battery_remaining != -1:
+        # ArduPilot SITL without a configured battery monitor commonly emits
+        # ``0/0/0``.  That is an unavailable measurement, not a real 0%
+        # battery.  Preserve a previous valid reading (if any) in this case.
+        battery_measurement_known = battery_remaining > 0 or voltage_known or current_known
+        if battery_remaining != -1 and battery_measurement_known:
             data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
             data["battery_available"] = True
             updated = True
@@ -209,7 +215,9 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         if current_battery != -1:
             data["current"] = round(current_battery / 100.0, 2)
             updated = True
-        if battery_remaining != -1:
+        current_known = current_battery not in (-1, 0)
+        battery_measurement_known = battery_remaining > 0 or bool(valid_voltages) or current_known
+        if battery_remaining != -1 and battery_measurement_known:
             data["batteryRemaining"] = max(0, min(100, int(battery_remaining)))
             data["battery_available"] = True
             updated = True
