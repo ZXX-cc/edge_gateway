@@ -451,14 +451,10 @@ class MissionManager:
                     for mission in pending_missions:
                         logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
                         if mission.status in ('running', 'paused'):
-                            self._current_task_id = mission.name
-                            self._status = self.MISSION_PAUSED
-                            self._wayline_mission_state = 7
-
                             waypoints = await WaypointDB.get_waypoints_by_mission(session, UUID(mission.id))
-                            self._current_wayline = []
+                            restored_wayline = []
                             for wp in waypoints:
-                                self._current_wayline.append({
+                                restored_wayline.append({
                                     'seq': wp.sequence,
                                     'latitude': wp.latitude,
                                     'longitude': wp.longitude,
@@ -473,6 +469,13 @@ class MissionManager:
                                     'action_type': wp.action_type,
                                     'speed': wp.flight_speed,
                                 })
+
+                            if not self._install_recovered_mission_context(
+                                mission.name,
+                                restored_wayline,
+                            ):
+                                return
+
                             saved_breakpoint = self._load_breakpoint_file()
                             breakpoint_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
                             if breakpoint_task_id and breakpoint_task_id != mission.name:
@@ -514,6 +517,21 @@ class MissionManager:
                                 self._event_callback(event)
         except Exception as e:
             logger.error(f"Recover pending missions failed: {e}")
+
+    def _install_recovered_mission_context(self, task_id: str, wayline: List[dict]) -> bool:
+        """Install persisted state only when MQTT has not started a live task."""
+        with self._flighttask_lock:
+            if self._current_task_id is not None:
+                logger.info(
+                    "Skip persisted mission recovery: active task already exists: %s",
+                    self._current_task_id,
+                )
+                return False
+            self._current_task_id = task_id
+            self._status = self.MISSION_PAUSED
+            self._wayline_mission_state = 7
+            self._current_wayline = list(wayline)
+            return True
 
     def recover_missions(self):
         """启动时恢复任务"""

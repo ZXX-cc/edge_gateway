@@ -333,6 +333,22 @@ class MissionProgressBoundsTest(unittest.TestCase):
 
         self.assertEqual(manager._status, manager.MISSION_COMPLETED)
 
+    def test_persisted_recovery_never_replaces_active_mqtt_task(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-live"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+
+        installed = manager._install_recovered_mission_context(
+            "flight-persisted",
+            [{"seq": 0}],
+        )
+
+        self.assertFalse(installed)
+        self.assertEqual(manager._current_task_id, "flight-live")
+        self.assertEqual(len(manager._current_wayline), 2)
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
 
 if __name__ == "__main__":
     unittest.main()
