@@ -65,6 +65,48 @@ REJECT_PLC_TIMEOUT = 2
 REJECT_DRONE_TIMEOUT = 3
 REJECT_MULTIPLE_TAKEOFF = 4
 
+_REJECT_REASON_LABELS = {
+    0: "无",
+    REJECT_COMMAND_CONFLICT: "普通命令与起降命令冲突",
+    REJECT_PLC_TIMEOUT: "PLC/机巢状态不允许执行",
+    REJECT_DRONE_TIMEOUT: "飞机/起降状态不允许执行",
+    REJECT_MULTIPLE_TAKEOFF: "未知或重复起降命令",
+}
+_GATE_STATE_LABELS = {
+    0: "未知",
+    1: "舱门打开",
+    2: "舱门关闭",
+    3: "舱门异常",
+}
+_CLAMP_STATE_LABELS = {
+    0: "未知",
+    1: "夹紧释放",
+    2: "夹紧",
+    3: "夹紧异常",
+}
+_LIGHT_STATE_LABELS = {
+    0: "未知",
+    1: "打开",
+    2: "关闭",
+}
+_BOOLSTATE1_BITS = {
+    1: "飞机上电",
+    BIT_ESTOP: "急停",
+    BIT_CHARGING: "充电中",
+    BIT_READY: "系统就绪",
+    BIT_BUSY: "系统忙",
+    BIT_FAULT: "故障",
+    BIT_R_AXIS_ZERO: "R轴归零",
+    11: "大灯关闭",
+}
+_BOOLSTATE2_BITS = {
+    BIT_TAKEOFF_IN_PROGRESS: "起飞中",
+    BIT_LANDING_IN_PROGRESS: "降落中",
+    BIT_TAKEOFF_ABORT_PROGRESS: "起飞终止中",
+    BIT_LANDING_ABORT_PROGRESS: "降落终止中",
+    BIT_ALLOW_TAKEOFF: "允许起飞",
+}
+
 
 class NestSimulator:
     def __init__(
@@ -204,6 +246,96 @@ class NestSimulator:
     def _reply_status(ordinary_response, takeoff_land_response):
         return "成功" if ordinary_response == 0 and takeoff_land_response == 0 else "失败/拒绝"
 
+    @staticmethod
+    def _active_bits(mask, labels):
+        active = [label for bit, label in labels.items() if mask & (1 << bit)]
+        return "、".join(active) if active else "无"
+
+    @staticmethod
+    def _decode_order_response(raw, response_type):
+        if raw == 0:
+            return {
+                "raw": "0x00000000",
+                "status": "成功",
+                "reason": "无",
+                "command_code": "0x00",
+                "device_code": "0x00",
+            }
+
+        reply_status = raw & 0xFF
+        reason_code = (raw >> 8) & 0xFF
+        command_code = (raw >> 16) & 0xFF
+        device_code = (raw >> 24) & 0xFF
+        if response_type == "ordinary":
+            command_label = _ORDINARY_COMMAND_LABELS.get(command_code, f"UNKNOWN 0x{command_code:02X}")
+        else:
+            command_label = _TAKEOFF_LAND_COMMAND_LABELS.get(command_code, f"UNKNOWN 0x{command_code:02X}")
+        return {
+            "raw": f"0x{raw:08X}",
+            "status": "拒绝" if reply_status else "成功",
+            "reason": _REJECT_REASON_LABELS.get(reason_code, f"未知原因 {reason_code}"),
+            "reason_code": reason_code,
+            "command_code": f"0x{command_code:02X}",
+            "command_label": command_label,
+            "device_code": f"0x{device_code:02X}",
+        }
+
+    def _state_lines(self):
+        boolstate1 = self.env_data.get("boolstate1", 0)
+        boolstate2 = self.env_data.get("boolstate2", 0)
+        gate_state = self.env_data.get("gate_state", 0)
+        clamp_state = self.env_data.get("clamp_state", 0)
+        light_state = self.env_data.get("landing_light_state", 0)
+        return [
+            (
+                "机构",
+                "舱门={gate}({gate_raw})，夹紧={clamp}({clamp_raw})，大灯={light}({light_raw})".format(
+                    gate=_GATE_STATE_LABELS.get(gate_state, f"未知 {gate_state}"),
+                    gate_raw=gate_state,
+                    clamp=_CLAMP_STATE_LABELS.get(clamp_state, f"未知 {clamp_state}"),
+                    clamp_raw=clamp_state,
+                    light=_LIGHT_STATE_LABELS.get(light_state, f"未知 {light_state}"),
+                    light_raw=light_state,
+                ),
+            ),
+            (
+                "电源",
+                "充电电压={volt:.1f}V，充电电流={current:.1f}A".format(
+                    volt=self.env_data.get("charge_volt", 0) / 10,
+                    current=self.env_data.get("charge_current", 0) / 10,
+                ),
+            ),
+            (
+                "环境",
+                "舱内={nest:.1f}C，外部={env:.1f}C，空调={ac:.1f}C，风向={wind_dir:.1f}deg，风速={wind_speed:.1f}m/s，雨量={rain}".format(
+                    nest=self.env_data.get("nest_temperature", 0) / 10,
+                    env=self.env_data.get("env_temperature", 0) / 10,
+                    ac=self.env_data.get("ac_temp", 0) / 10,
+                    wind_dir=self.env_data.get("wind_direction", 0) / 10,
+                    wind_speed=self.env_data.get("wind_speed", 0) / 10,
+                    rain=self.env_data.get("rainfall", 0),
+                ),
+            ),
+            (
+                "状态位1",
+                f"0x{boolstate1:04X} [{self._active_bits(boolstate1, _BOOLSTATE1_BITS)}]",
+            ),
+            (
+                "状态位2",
+                f"0x{boolstate2:04X} [{self._active_bits(boolstate2, _BOOLSTATE2_BITS)}]",
+            ),
+            (
+                "故障",
+                f"error_code={self.env_data.get('error_code', 0)}，气压={self.env_data.get('atmospheric_pressure', 0)}hPa",
+            ),
+        ]
+
+    @staticmethod
+    def _print_block(title, rows):
+        print(f"\n{title}")
+        for key, value in rows:
+            print(f"  {key}: {value}")
+
     def _trace_command(self, event, **fields):
         if not self.command_log:
             return
@@ -280,7 +412,7 @@ class NestSimulator:
         )
         # 关键：直接调用 self.mav 的 pack 方法，不要用 self.mav.mav
         self._send_raw(msg.pack(self.mav))
-        print("已发送 DRONE_NEST_RESPONSE")
+        self._print_block("已发送 DRONE_NEST_RESPONSE 状态上报", self._state_lines())
 
     def _send_order_response(
         self,
@@ -294,7 +426,23 @@ class NestSimulator:
             takeoff_land_order_response=takeoff_land_response
         )
         self._send_raw(msg.pack(self.mav))
-        print(f"已发送 DRONE_NEST_ORDER_RESPONSE: ordinary=0x{ordinary_response:08X}")
+        ordinary_detail = self._decode_order_response(ordinary_response, "ordinary")
+        takeoff_detail = self._decode_order_response(takeoff_land_response, "takeoff_land")
+        self._print_block("已发送 DRONE_NEST_ORDER_RESPONSE 指令回复", [
+            ("命令", command),
+            (
+                "普通指令回复",
+                "{raw}，状态={status}，原因={reason}，命令码={command_code}，设备={device_code}".format(
+                    **ordinary_detail
+                ),
+            ),
+            (
+                "起降指令回复",
+                "{raw}，状态={status}，原因={reason}，命令码={command_code}，设备={device_code}".format(
+                    **takeoff_detail
+                ),
+            ),
+        ])
         if triggered_by_command or ordinary_response or takeoff_land_response:
             self._trace_command(
                 "simulator_order_response_sent",
@@ -370,16 +518,22 @@ class NestSimulator:
             takeoff_land = getattr(msg, 'takeoff_land_order', 0)
             has_command = bool(ordinary or takeoff_land)
             command = self._command_label(ordinary, takeoff_land)
-            print(f"收到机巢命令: ordinary=0x{ordinary:04X}, takeoff_land=0x{takeoff_land:02X}")
+            self._print_block("收到 DRONE_NEST_COMMAND 机巢命令", [
+                ("来源", f"system={msg.get_srcSystem()} component={msg.get_srcComponent()}"),
+                ("普通指令", f"0x{ordinary:04X} {self._ordinary_command_label(ordinary)}"),
+                ("起降指令", f"0x{takeoff_land:02X} {self._takeoff_land_command_label(takeoff_land)}"),
+                ("解析动作", command if has_command else "无动作/空命令"),
+            ])
             ordinary_response, takeoff_response = self._evaluate_command_response(ordinary, takeoff_land)
             if ordinary_response == 0 and takeoff_response == 0:
                 self._update_state_from_command(ordinary, takeoff_land)
             else:
-                print(
-                    "模拟器：拒绝命令 "
-                    f"ordinary_response=0x{ordinary_response:08X}, "
-                    f"takeoff_response=0x{takeoff_response:08X}"
-                )
+                ordinary_detail = self._decode_order_response(ordinary_response, "ordinary")
+                takeoff_detail = self._decode_order_response(takeoff_response, "takeoff_land")
+                self._print_block("模拟器拒绝命令", [
+                    ("普通指令", f"{ordinary_detail['raw']}，原因={ordinary_detail['reason']}"),
+                    ("起降指令", f"{takeoff_detail['raw']}，原因={takeoff_detail['reason']}"),
+                ])
             if has_command:
                 self._trace_command(
                     "simulator_command_received",

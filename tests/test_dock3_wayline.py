@@ -144,6 +144,7 @@ class RecordingWaypointManager:
         self.clear_calls = 0
         self.added = []
         self.upload_calls = []
+        self.current_waypoints = []
 
     def clear_waypoints(self):
         self.clear_calls += 1
@@ -154,6 +155,10 @@ class RecordingWaypointManager:
     def upload_mission(self, timeout=15.0):
         self.upload_calls.append(timeout)
         return False
+
+    def set_current_waypoint(self, wp_num: int, reset: bool = False):
+        self.current_waypoints.append((wp_num, reset))
+        return True
 
 
 class RecordingCamera:
@@ -339,6 +344,39 @@ class Dock3WaylineTest(unittest.TestCase):
             }))
             self.assertEqual(undo["data"]["result"], 0)
             self.assertFalse(breakpoint_path.exists())
+
+    def test_flighttask_return_saves_breakpoint_for_later_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            breakpoint_path = Path(tmp) / "breakpoint.json"
+            manager = MissionManager()
+            waypoint_manager = RecordingWaypointManager()
+            manager.set_waypoint_manager(waypoint_manager)
+            manager._breakpoint_file_path = lambda: str(breakpoint_path)
+            manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+            manager.stop_mission_monitor = lambda: None
+            manager.start_mission_monitor = lambda: None
+
+            manager._current_task_id = "flight-001"
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}, {"seq": 3}]
+            manager._current_waypoint_idx = 2
+            manager._status = manager.MISSION_RUNNING
+
+            ret = manager.handle_flighttask_return(base_msg("flighttask_return", {
+                "flight_id": "flight-001",
+                "return_type": 0,
+            }))
+
+            self.assertEqual(ret["data"]["result"], 0)
+            self.assertEqual(manager._status, manager.MISSION_PAUSED)
+            self.assertEqual(manager._breakpoint_waypoint_idx, 2)
+            self.assertTrue(breakpoint_path.exists())
+
+            manager._breakpoint_waypoint_idx = 0
+            resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))
+
+            self.assertEqual(resume["data"]["result"], 0)
+            self.assertEqual(manager._breakpoint_waypoint_idx, 2)
+            self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({

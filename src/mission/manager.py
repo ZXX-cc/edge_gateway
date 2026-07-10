@@ -429,7 +429,7 @@ class MissionManager:
                     logger.info(f"Found {len(pending_missions)} pending missions for recovery")
                     for mission in pending_missions:
                         logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
-                        if mission.status == 'running':
+                        if mission.status in ('running', 'paused'):
                             self._current_task_id = mission.name
                             self._status = self.MISSION_PAUSED
                             self._wayline_mission_state = 7
@@ -452,8 +452,17 @@ class MissionManager:
                                     'action_type': wp.action_type,
                                     'speed': wp.flight_speed,
                                 })
-                            self._current_waypoint_idx = 0
-                            self._breakpoint_waypoint_idx = 0
+                            saved_breakpoint = self._load_breakpoint_file()
+                            breakpoint_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
+                            if breakpoint_task_id and breakpoint_task_id != mission.name:
+                                logger.warning(
+                                    "Ignore breakpoint for different mission: breakpoint=%s mission=%s",
+                                    breakpoint_task_id,
+                                    mission.name,
+                                )
+                                self._breakpoint_waypoint_idx = 0
+                                self._break_point = {}
+                            self._current_waypoint_idx = self._breakpoint_waypoint_idx
 
                             logger.info(f"Mission {mission.name} recovered with {len(self._current_wayline)} waypoints")
 
@@ -466,16 +475,16 @@ class MissionManager:
                                             'status': 'paused',
                                             'progress': {
                                                 'current_step': 33,
-                                                'percent': 0
+                                                'percent': self._current_progress_percent()
                                             },
                                             'ext': {
                                                 'flight_id': mission.name,
-                                                'current_waypoint_index': 0,
+                                                'current_waypoint_index': self._current_waypoint_idx,
                                                 'wayline_mission_state': 7,
                                                 'media_count': 0,
                                                 'track_id': '',
                                                 'wayline_id': 0,
-                                                'break_point': {}
+                                                'break_point': self._break_point or {}
                                             }
                                         }
                                     },
@@ -756,7 +765,23 @@ class MissionManager:
         return None
 
     def _breakpoint_file_path(self) -> str:
-        return str(Config.get('mission.breakpoint_path', '/tmp/breakpoint.json'))
+        return str(Config.get('mission.breakpoint_path', './data/mission_breakpoint.json'))
+
+    def _record_breakpoint(self, reason: str, break_reason: int = 0):
+        """记录当前航点断点，确保返航或重启后可以从断点继续执行。"""
+        self._breakpoint_waypoint_idx = self._current_waypoint_idx
+        self._break_point = {
+            **(self._break_point or {}),
+            'index': self._breakpoint_waypoint_idx,
+            'total_waypoints': len(self._current_wayline),
+            'progress': (
+                self._breakpoint_waypoint_idx / len(self._current_wayline)
+                if self._current_wayline else 0
+            ),
+            'break_reason': break_reason,
+            'reason': reason,
+        }
+        self._save_breakpoint_file(reason)
 
     def _save_breakpoint_file(self, reason: str = ""):
         if not self._current_task_id:
@@ -1316,15 +1341,7 @@ class MissionManager:
         logger.info("Mission paused, wayline_state=7(航线中断)")
 
         # 记录断点
-        self._breakpoint_waypoint_idx = self._current_waypoint_idx
-        self._break_point = {
-            **(self._break_point or {}),
-            'index': self._breakpoint_waypoint_idx,
-            'total_waypoints': len(self._current_wayline),
-            'break_reason': 0,
-            'reason': '用户暂停航线',
-        }
-        self._save_breakpoint_file("用户暂停航线")
+        self._record_breakpoint("用户暂停航线")
 
         # 更新数据库状态
         if self._current_task_id:
@@ -1977,7 +1994,19 @@ class MissionManager:
     def handle_go_home(self, msg: dict) -> dict:
         """返航"""
         logger.info("Go home")
-        self._wayline_mission_state = 9  # 航线停止
+        if self._status in (self.MISSION_RUNNING, self.MISSION_PAUSED):
+            self.stop_mission_monitor()
+            self._status = self.MISSION_PAUSED
+            self._record_breakpoint("一键返航前保存断点", break_reason=1283)
+
+            if self._current_task_id:
+                threading.Thread(
+                    target=self._run_db_coroutine,
+                    args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                    daemon=True
+                ).start()
+
+        self._wayline_mission_state = 7  # 航线中断，返航后允许断点恢复
         self._current_step = 24  # 进入返航的检查准备工作
         if self._flight_control:
             result = self._flight_control.one_click_return()
@@ -2458,7 +2487,19 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask return: {task_id}, type={return_type}")
-        self._wayline_mission_state = 9  # 航线停止
+        if self._status in (self.MISSION_RUNNING, self.MISSION_PAUSED):
+            self.stop_mission_monitor()
+            self._status = self.MISSION_PAUSED
+            self._record_breakpoint("航线返航前保存断点", break_reason=1283)
+
+            if self._current_task_id:
+                threading.Thread(
+                    target=self._run_db_coroutine,
+                    args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                    daemon=True
+                ).start()
+
+        self._wayline_mission_state = 7  # 航线中断，返航后允许断点恢复
         self._current_step = 24  # 进入返航的检查准备工作
         if self._flight_control and self._simulate_mission.get('is_enable') != 1:
             if return_type == 0:
