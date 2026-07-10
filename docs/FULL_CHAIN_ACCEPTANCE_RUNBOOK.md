@@ -332,6 +332,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 2026-07-10 相机/云台严格专项已通过：`python tools/mqtt_dock3_payload_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 payload test ok (accepted=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。已验证能力查询、云台转动/模式/复位后的状态回读、拍照、录像启停及重复停止录像返回 `319999`；该结论仅覆盖 MAVLink/SITL 命令发送闭环，真实 Payload 硬件 ACK 需后续专项。
 
+2026-07-10 真实 SITL 航点上传已通过：`python tools/mqtt_dock3_wayline_test.py --real-sitl --timeout 30 --quiet-stale --fail-on-stale` 输出 `dock3 real SITL wayline test ok (accepted=1, events=2, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。`flighttask_prepare` 以 `simulate_mission.is_enable=0` 执行，KMZ 解析出 3 个航点并完成飞控上传握手；该安全模式未请求 AUTO/执行或起飞，真实执行需显式附加 `--execute-real`。
+
 ## 7. P2 验收边界
 
 P2 不要求 30 天内完全无问题，但必须满足：

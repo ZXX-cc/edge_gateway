@@ -138,6 +138,7 @@ http://Ubuntu服务器IP:8090
 - 机巢模拟器已修复 UDP 注册和默认待命状态；Ubuntu 严格链路已通过 properties、device、OSD/state、CMD、DRC、Wayline 六段，其中 Wayline 输出 `accepted=11, events=12, ignored_total=0`，并实际完成 12003 命令、12004 状态、12005 回复的联调。真实 SITL 航点执行仍不在本次结论内。
 - P1-16 短周期数据保留与操作记录已通过 Ubuntu 隔离 SQLite 专项：`tools/database_retention_audit.py` 验证遥测、已结束操作、告警、已上传媒体各清理 1/2/1/1 条，运行中操作与待上传媒体均保留；`tests.test_retention_manager` 同时通过。专项不会访问运行中的 `missions.db`。
 - P1-09 相机/云台已通过 Ubuntu 严格 MQTT 专项：能力查询、云台转动/模式/复位状态回读、拍照、录像启停和重复停止录像失败码均正确，输出 `accepted=12`、全部 `ignored_*=0`。该证据覆盖 MAVLink/SITL 控制链路；真实 Payload 硬件 ACK 仍需后续适配验收。
+- P1-06 已完成真实 SITL 航点上传阶段：`--real-sitl` 模式在 Ubuntu 将 KMZ 解析为 3 个航点并完成飞控上传握手，`flighttask_prepare result=0`、`accepted=1`、全部 `ignored_*=0`；尚未请求 AUTO/执行，下一步单列验证真实执行与进度。
 
 下一阶段：
 
