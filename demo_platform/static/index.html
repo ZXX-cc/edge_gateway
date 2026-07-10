@@ -16,13 +16,12 @@
         </div>
       </div>
       <nav class="nav">
-        <button class="nav-item active" data-view="dashboard">设备总览</button>
-        <button class="nav-item" data-view="dock">机场控制</button>
-        <button class="nav-item" data-view="mission">飞行任务</button>
+        <button class="nav-item active" data-view="dashboard">飞行总览</button>
+        <button class="nav-item" data-view="dock">APIDock3 命令</button>
+        <button class="nav-item" data-view="mission">真实航线</button>
         <button class="nav-item" data-view="drc">DRC 飞控</button>
-        <button class="nav-item" data-view="media">直播媒体</button>
-        <button class="nav-item" data-view="ops">运维日志</button>
-        <button class="nav-item" data-view="retest">复测清单</button>
+        <button class="nav-item" data-view="ops">飞行日志</button>
+        <button class="nav-item" data-view="retest">复测留证</button>
         <button class="nav-item" data-view="raw">原始报文</button>
       </nav>
       <div class="side-status">
@@ -35,12 +34,12 @@
     <main class="shell">
       <header class="topbar">
         <div>
-          <h1 id="viewTitle">设备总览</h1>
-          <p id="viewSubtitle">查看机场、飞行器、链路和最近业务状态。</p>
+          <h1 id="viewTitle">飞行总览</h1>
+          <p id="viewSubtitle">查看真实 SITL/QGC 航线、飞行器遥测和最近命令状态。</p>
         </div>
         <div class="top-actions">
           <button id="refreshBtn">刷新</button>
-          <button id="openManualBtn">单条 Method</button>
+          <button id="openManualBtn">APIDock3 单条命令</button>
         </div>
       </header>
 
@@ -89,6 +88,21 @@
           </article>
         </div>
 
+        <section class="panel telemetry-panel">
+          <div class="section-title">
+            <h2>飞行过程遥测</h2>
+            <span id="telemetryUpdated">等待 OSD</span>
+          </div>
+          <div class="telemetry-grid">
+            <div><span>电量</span><strong id="telemetryBattery">--</strong></div>
+            <div><span>高度</span><strong id="telemetryHeight">--</strong></div>
+            <div><span>经度</span><strong id="telemetryLng">--</strong></div>
+            <div><span>纬度</span><strong id="telemetryLat">--</strong></div>
+            <div><span>模式/档位</span><strong id="telemetryMode">--</strong></div>
+            <div><span>GPS</span><strong id="telemetryGps">--</strong></div>
+          </div>
+        </section>
+
         <section class="panel key-watch-panel">
           <div class="section-title">
             <h2>关键测试点 / 点击卡片按钮运行</h2>
@@ -122,16 +136,16 @@
 
       <section class="view" id="view-dock">
         <div class="module-head">
-          <h2>机场控制</h2>
-          <p>远程调试、舱盖、推杆、充电、补光灯和基础属性查询。</p>
+          <h2>APIDock3 命令</h2>
+          <p>直接通过云端 API topic 下发 Dock3 services、property 和 DRC 命令。</p>
         </div>
         <div class="action-grid" data-actions="dock"></div>
       </section>
 
       <section class="view" id="view-mission">
         <div class="module-head">
-          <h2>飞行任务 / 航线</h2>
-          <p>模拟 Dock Demo 的航线准备、执行、暂停、恢复、返航和终止入口。</p>
+          <h2>真实航线 / SITL</h2>
+          <p>下发 HD 航线准备、执行、暂停、恢复、返航和终止入口；以 QGC 可见真实航线执行为准。</p>
         </div>
         <div class="workflow-strip" id="workflowList"></div>
         <div class="action-grid" data-actions="mission"></div>
@@ -145,20 +159,19 @@
         <div class="action-grid" data-actions="drc"></div>
       </section>
 
-      <section class="view" id="view-media">
-        <div class="module-head">
-          <h2>直播媒体</h2>
-          <p>直播能力、开始/停止直播、切换镜头、画质、媒体文件查询。</p>
-        </div>
-        <div class="action-grid" data-actions="media"></div>
-      </section>
-
       <section class="view" id="view-ops">
         <div class="module-head">
-          <h2>运维日志</h2>
-          <p>设备拓扑、状态、HMS、日志和配置类联调入口。</p>
+          <h2>飞行日志</h2>
+          <p>按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包。</p>
         </div>
         <div class="action-grid" data-actions="ops"></div>
+        <section class="panel timeline-panel">
+          <div class="section-title">
+            <h2>遥测时间线</h2>
+            <span id="telemetryCount">0 条</span>
+          </div>
+          <div id="telemetryTimeline" class="telemetry-timeline"></div>
+        </section>
         <section class="panel timeline-panel">
           <div class="section-title">
             <h2>事件时间线</h2>
@@ -170,8 +183,8 @@
 
       <section class="view" id="view-retest">
         <div class="module-head">
-          <h2>复测清单 / 真实数据</h2>
-          <p>把仍需复测、真实 SITL、真实机巢和真实数据的点逐项标记；记录会保存到后端日志。</p>
+          <h2>复测留证 / 真实数据</h2>
+          <p>只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项；记录会保存到后端日志。</p>
         </div>
         <div class="retest-summary" id="retestSummary"></div>
         <div class="retest-grid" id="retestList"></div>
@@ -207,7 +220,7 @@
       <div class="drawer-backdrop" id="closeManualBackdrop"></div>
       <div class="drawer-panel">
         <div class="section-title">
-          <h2>单条 Method</h2>
+          <h2>APIDock3 单条命令</h2>
           <button id="closeManualBtn">关闭</button>
         </div>
         <div class="form-grid">

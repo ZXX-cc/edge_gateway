@@ -355,6 +355,38 @@ button:disabled {
   margin-top: 16px;
 }
 
+.telemetry-panel {
+  margin-top: 16px;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.telemetry-grid div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.telemetry-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.telemetry-grid strong {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 17px;
+}
+
 .panel {
   padding: 16px;
 }
@@ -765,6 +797,40 @@ button:disabled {
   overflow: auto;
 }
 
+.telemetry-timeline {
+  display: grid;
+  gap: 8px;
+  max-height: 440px;
+  overflow: auto;
+}
+
+.telemetry-row {
+  display: grid;
+  grid-template-columns: 78px repeat(6, minmax(92px, 1fr));
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.telemetry-row time,
+.telemetry-row span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.telemetry-row b {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
 .timeline-item {
   display: grid;
   grid-template-columns: 78px minmax(0, 1fr);
@@ -852,6 +918,15 @@ summary {
   font-weight: 700;
 }
 
+.empty-state {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--muted);
+  background: #fbfdff;
+  font-size: 13px;
+}
+
 .drawer {
   display: none;
   position: fixed;
@@ -930,7 +1005,8 @@ textarea {
   .workflow-strip,
   .retest-grid,
   .retest-summary,
-  .key-point-grid {
+  .key-point-grid,
+  .telemetry-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -969,7 +1045,12 @@ textarea {
   .retest-grid,
   .retest-summary,
   .key-point-grid,
+  .telemetry-grid,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .telemetry-row {
+    grid-template-columns: 1fr 1fr;
   }
 }

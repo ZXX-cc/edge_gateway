@@ -55,16 +55,13 @@ subscribers: set[queue.Queue[str]] = set()
 
 KEY_POINT_DEFS = [
     ("mqtt_link", "MQTT 基础链路", "P0", "订阅/发布、topic 分类、服务回包"),
-    ("osd_state", "OSD/State 上报", "P0", "机场/飞行器 OSD、属性状态、电量/GPS/位置"),
-    ("flight_mode", "飞行模式映射", "P0", "mode_code、gear、set_flight_mode 回包"),
+    ("apidock3_cmd", "APIDock3 命令下发", "P0", "services/property/drc 直接下发和回包"),
+    ("sitl_osd", "SITL 飞行遥测", "P0", "飞行器电量、高度、经纬度、GPS、模式"),
+    ("real_wayline", "真实航线执行", "P0", "QGC 可见真实航线、flighttask_prepare/execute/progress"),
     ("flight_control", "基础飞控控制", "P0", "GUIDED、起飞、返航、降落"),
-    ("wayline_resume", "航线与断点续飞", "P0", "航线进度、暂停返航、断点恢复"),
-    ("dock_v13", "机巢 v1.3 联动", "P0", "舱盖、推杆、充电、HMS、dock_operation"),
-    ("one_key_takeoff", "一键启航", "P1", "one_key_takeoff_progress 与 flighttask_progress"),
+    ("dock_v13", "机场机构联动", "P1", "舱盖、推杆、充电、HMS、dock_operation"),
     ("drc", "DRC 控制链路", "P1", "进入、心跳、摇杆/指点飞行、退出"),
-    ("media_live", "媒体与直播", "P1", "相机、云台、直播、文件"),
-    ("hms_log", "HMS/日志", "P1", "HMS 告警、日志列表和上传"),
-    ("topology_org", "拓扑/组织", "P2", "status、topo、organization"),
+    ("hms_log", "HMS/运维日志", "P1", "HMS 告警、日志列表和上传"),
     ("trace_nonblock", "Trace/非阻塞", "P2", "tid、异步回包、长任务不卡链路"),
 ]
 
@@ -115,25 +112,12 @@ MQTT_SCRIPT_ARGS = ["--host", MQTT_HOST, "--port", str(MQTT_PORT), "--sn", GATEW
 PERSON2_SCRIPT_ARGS = [*MQTT_SCRIPT_ARGS, "--drone-sn", DRONE_SN, "--timeout", "12", "--quiet-stale"]
 
 RETEST_ACTIONS: dict[str, dict[str, Any]] = {
-    "one-key-mqtt": {
-        "title": "一键启航 MQTT 实跑",
-        "category": "一键启航",
-        "command": [sys.executable, "tools/mqtt_one_key_takeoff_flow_test.py", *MQTT_SCRIPT_ARGS, "--simulate", "--timeout", "60", "--quiet-stale"],
-        "timeout": 90,
-    },
-    "sitl-wayline": {
-        "title": "Wayline/SITL 航线复测入口",
+    "real-hd-wayline": {
+        "title": "SITL/QGC 真实 HD 航线",
         "category": "SITL",
         "command": [sys.executable, "tools/mqtt_dock3_wayline_test.py", *MQTT_SCRIPT_ARGS, "--timeout", "20", "--quiet-stale"],
         "timeout": 60,
-        "note": "该按钮跑 Wayline MQTT 专项；若环境仍是 simulate_mission，需要另补真实 SITL 航点日志。",
-    },
-    "nest-v13-live": {
-        "title": "机巢 v1.3 协议复测",
-        "category": "机巢",
-        "command": [sys.executable, "tools/nest_v13_protocol_test.py", "--verbose"],
-        "timeout": 30,
-        "note": "该按钮跑离线协议专项；真实网关 + 机巢模拟器联调日志仍需另存。",
+        "note": "以真实 SITL/QGC 航线执行为准，重点留存 flighttask_progress 与飞行器 OSD 经纬度/高度变化。",
     },
     "flight-mode-sitl": {
         "title": "SITL 飞行模式真实复测",
@@ -169,23 +153,9 @@ RETEST_ACTIONS: dict[str, dict[str, Any]] = {
         "timeout": 90,
         "note": "该按钮连续探测 property_get 延迟，并要求压测期间仍能收到飞行器 OSD。",
     },
-    "payload-camera-gimbal": {
-        "title": "相机/云台基础控制",
-        "category": "负载",
-        "command": [sys.executable, "tools/person2_gap_test.py", "--phase", "payload", *PERSON2_SCRIPT_ARGS],
-        "timeout": 90,
-        "note": "该按钮验证相机/云台基础 method 回包；无真实负载时只能证明 adapter/mock 入口可用。",
-    },
-    "multi-device-offline": {
-        "title": "设备/组织基础复测",
-        "category": "设备",
-        "command": [sys.executable, "tools/mqtt_dock3_device_test.py", *MQTT_SCRIPT_ARGS, "--timeout", "20", "--quiet-stale"],
-        "timeout": 80,
-        "note": "该按钮先跑 device/topology 专项；多子设备、解绑、离线、重连仍需扩展脚本或真实日志。",
-    },
     "cmd-advanced": {
-        "title": "CMD 远程调试复测",
-        "category": "CMD",
+        "title": "APIDock3/CMD 远程调试",
+        "category": "APIDock3",
         "command": [sys.executable, "tools/mqtt_dock3_cmd_test.py", *MQTT_SCRIPT_ARGS, "--timeout", "20", "--quiet-stale"],
         "timeout": 80,
     },
@@ -202,11 +172,6 @@ RETEST_ACTIONS: dict[str, dict[str, Any]] = {
         "command": [sys.executable, "tools/person2_gap_test.py", "--phase", "nest-gateway", *PERSON2_SCRIPT_ARGS],
         "timeout": 120,
         "note": "该按钮下发机巢/CMD 动作并要求 dock_operation 或 HMS 事件；无机巢模拟器实跑会失败。",
-    },
-    "real-adapters": {
-        "title": "真实 OTA/OSS/直播 Adapter",
-        "category": "真实 Adapter",
-        "manual_note": "真实 OTA、OSS、直播推流依赖外部服务和凭证；页面先记录待测，不能用本地 mock 判定通过。",
     },
 }
 
@@ -235,6 +200,26 @@ def compact_value(value: Any, limit: int = 96) -> str:
     return text if len(text) <= limit else f"{text[:limit - 1]}..."
 
 
+def unwrap_value(value: Any) -> Any:
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
+def pick_field(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        current: Any = payload
+        for part in key.split("."):
+            current = unwrap_value(current)
+            if not isinstance(current, dict) or part not in current:
+                current = None
+                break
+            current = current.get(part)
+        if current is not None:
+            return unwrap_value(current)
+    return None
+
+
 def short_topic(topic: str) -> str:
     return (
         topic
@@ -248,22 +233,18 @@ def point_from_method(method: str, topic: str) -> str | None:
     # method/topic 是最稳定的业务信号，用它把刷屏日志归并成测试证据。
     name = method.lower()
     topic_l = topic.lower()
-    if any(key in name for key in ("one_key_takeoff",)):
-        return "one_key_takeoff"
     if any(key in name for key in ("flighttask", "wayline", "breakpoint", "return_home")):
-        return "wayline_resume"
+        return "real_wayline"
     if any(key in name for key in ("drc", "heart_beat", "drone_control", "fly_to_point", "takeoff_to_point")) or "/drc/" in topic_l:
         return "drc"
     if any(key in name for key in ("cover", "charge", "putter", "dock", "debug_mode", "silent_mode")):
         return "dock_v13"
     if any(key in name for key in ("hms", "log", "alarm")):
         return "hms_log"
-    if any(key in name for key in ("live", "camera", "payload", "gimbal", "file", "media")):
-        return "media_live"
-    if any(key in name for key in ("topo", "organization", "device_info", "status")) or "status" in topic_l:
-        return "topology_org"
     if any(key in name for key in ("set_flight_mode", "take_off", "go_home", "landing", "mode")):
         return "flight_control"
+    if name:
+        return "apidock3_cmd"
     return None
 
 
@@ -311,13 +292,18 @@ def extract_key_info(item: dict[str, Any]) -> bool:
     updated = False
 
     if kind == "osd":
-        battery = (payload.get("battery") or {}).get("capacity_percent")
-        gps = (payload.get("position_state") or {}).get("gps_number")
-        summary = f"mode_code={compact_value(payload.get('mode_code'))}, 高度={compact_value(payload.get('height'))}m, 电量={compact_value(battery)}%, GPS={compact_value(gps)}"
-        detail = f"gear={compact_value(payload.get('gear'))}, lat={compact_value(payload.get('latitude'), 32)}, lon={compact_value(payload.get('longitude'), 32)}"
-        updated |= record_key_point("osd_state", "ok", summary, source, detail, timestamp, min_interval_ms=10000)
-        if payload.get("mode_code") is not None or payload.get("gear") is not None:
-            updated |= record_key_point("flight_mode", "active", summary, source, "OSD 携带 mode_code/gear，可核对飞行模式映射", timestamp, min_interval_ms=15000)
+        battery = pick_field(payload, "battery.capacity_percent", "battery.remain_percent", "capacity_percent", "battery_percent")
+        gps = pick_field(payload, "position_state.gps_number", "gps_number", "satellites_visible")
+        height = pick_field(payload, "height", "altitude", "relative_altitude")
+        latitude = pick_field(payload, "latitude", "lat", "position.latitude")
+        longitude = pick_field(payload, "longitude", "lng", "lon", "position.longitude")
+        mode = pick_field(payload, "mode_code", "flight_mode")
+        gear = pick_field(payload, "gear")
+        summary = f"mode={compact_value(mode)}, 高度={compact_value(height)}m, 电量={compact_value(battery)}%, GPS={compact_value(gps)}"
+        detail = f"gear={compact_value(gear)}, lat={compact_value(latitude, 32)}, lon={compact_value(longitude, 32)}"
+        updated |= record_key_point("sitl_osd", "ok", summary, source, detail, timestamp, min_interval_ms=5000)
+        if mode is not None or gear is not None:
+            updated |= record_key_point("flight_control", "active", summary, source, "OSD 携带 mode/gear，可核对飞控状态", timestamp, min_interval_ms=15000)
         return updated
 
     method = str(payload.get("method") or "")
@@ -327,7 +313,7 @@ def extract_key_info(item: dict[str, Any]) -> bool:
 
     if kind == "state":
         fields = ", ".join(f"{key}={compact_value(value, 48)}" for key, value in list(payload.items())[:6])
-        updated |= record_key_point("osd_state", "ok", "State 属性上报已收到", source, fields, timestamp)
+        updated |= record_key_point("apidock3_cmd", "active", "State 属性上报已收到", source, fields, timestamp)
         if any(key in payload for key in ("cover_state", "putter_state", "drone_charge_state", "emergency_stop_state")):
             updated |= record_key_point("dock_v13", "active", "State 命中机巢状态字段", source, fields, timestamp)
         if any(key in payload for key in ("drc_state", "drc_mode_enter_time")):
@@ -337,10 +323,11 @@ def extract_key_info(item: dict[str, Any]) -> bool:
     if kind in {"services", "property", "drc", "services_reply", "property_reply", "drc_reply", "request_reply", "event", "status", "status_reply"}:
         if kind.endswith("reply") or kind in {"services", "property", "drc"}:
             updated |= record_key_point("mqtt_link", "ok", f"{kind} 收到 {method or '未命名方法'}", source, f"tid={compact_value(tid)}", timestamp)
+            updated |= record_key_point("apidock3_cmd", "ok" if kind.endswith("reply") else "active", f"APIDock3 {method or kind} 已下发/回包", source, f"tid={compact_value(tid)}, result={compact_value(result)}", timestamp)
             updated |= record_key_point("trace_nonblock", "active", "tid/异步回包可追踪", source, f"method={method or '--'}, tid={compact_value(tid)}", timestamp)
         point_id = point_from_method(method, topic)
         if kind in {"status", "status_reply"} and not point_id:
-            point_id = "topology_org"
+            point_id = "apidock3_cmd"
         if kind == "event" and not point_id:
             event_text = json.dumps(payload, ensure_ascii=False)
             if "hms" in event_text.lower():
@@ -686,15 +673,6 @@ def publish_command(method: str, data: Any, channel: str, timeout: float = 8.0, 
 
 
 def workflow_steps() -> dict[str, list[dict[str, Any]]]:
-    wayline_file = {
-        "url": "",
-        "fingerprint": "demo",
-        "name": "demo.wpml",
-        "waypoints": [
-            {"latitude": 39.9042, "longitude": 116.3970, "altitude": 50.0},
-            {"latitude": 39.9045, "longitude": 116.3974, "altitude": 55.0},
-        ],
-    }
     real_hd_wayline_file = {
         "path": REAL_HD_WAYPOINTS_PATH,
         "fingerprint": "hd-original-qgc-wpl",
@@ -722,27 +700,10 @@ def workflow_steps() -> dict[str, list[dict[str, Any]]]:
             {"label": "速度控制", "method": "drc_speed_push", "channel": "drc", "data": {"vx": 0.5, "vy": 0, "vz": 0, "yaw_rate": 0}},
             {"label": "退出 DRC", "method": "drc_mode_exit", "data": {"restore_mission": False}},
         ],
-        "wayline_demo": [
-            {"label": "任务准备", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": wayline_file, "simulate_mission": {"is_enable": 1, "latitude": 39.9042, "longitude": 116.3970}}},
-            {"label": "任务执行", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
-            {"label": "进度查询", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},
-            {"label": "暂停", "method": "flighttask_pause", "data": {}},
-            {"label": "恢复", "method": "flighttask_resume", "data": {}},
-            {"label": "返航", "method": "flighttask_return", "data": {"flight_id": "demo-flight-001", "return_type": 0}},
-            {"label": "取消任务", "method": "flighttask_undo", "data": {"flight_ids": ["demo-flight-001"]}},
-        ],
         "real_hd_wayline": [
             {"label": "准备真实 HD 航线", "method": "flighttask_prepare", "data": {"flight_id": "demo-flight-001", "execute_time": now_ms(), "task_type": 0, "file": real_hd_wayline_file, "simulate_mission": {"is_enable": 0, "latitude": 44.0474824, "longitude": 125.3614503}}},
             {"label": "执行真实 HD 航线", "method": "flighttask_execute", "data": {"flight_id": "demo-flight-001"}},
             {"label": "查询真实任务进度", "method": "flighttask_progress", "data": {"flight_id": "demo-flight-001"}},
-        ],
-        "takeoff_flow_demo": [
-            {"label": "断开充电", "method": "charge_close", "data": {}},
-            {"label": "开舱盖", "method": "cover_open", "data": {}},
-            {"label": "释放夹紧/推出", "method": "putter_open", "data": {}},
-            {"label": "准备航线任务", "method": "flighttask_prepare", "data": {"flight_id": "demo-takeoff-001", "execute_time": now_ms(), "task_type": 0, "file": wayline_file, "simulate_mission": {"is_enable": 1, "latitude": 39.9042, "longitude": 116.3970}}},
-            {"label": "执行航线任务", "method": "flighttask_execute", "data": {"flight_id": "demo-takeoff-001"}},
-            {"label": "查询进度", "method": "flighttask_progress", "data": {"flight_id": "demo-takeoff-001"}},
         ],
     }
 
@@ -830,11 +791,9 @@ def api_run_retest(item_id: str):
 def api_workflows():
     meta = {
         "startup_check": "基础上线巡检",
-        "dock_cmd": "机巢/CMD 动作",
+        "dock_cmd": "APIDock3/CMD 动作",
         "drc_link": "DRC 链路",
-        "wayline_demo": "Wayline 模拟任务",
         "real_hd_wayline": "真实 HD 航线",
-        "takeoff_flow_demo": "一键启航演示",
     }
     return jsonify({"workflows": [{"id": key, "name": name, "steps": workflow_steps()[key]} for key, name in meta.items()]})
 

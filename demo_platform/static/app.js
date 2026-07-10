@@ -17,67 +17,45 @@ const keyStatusLabels = {
 const keyStageOrder = {P0: 0, P1: 1, P2: 2};
 
 const keyPointActions = {
-  mqtt_link: {label: "跑基础查询", type: "action", ref: "dock:0"},
-  osd_state: {label: "查看原始报文", type: "view", view: "raw"},
-  flight_mode: {label: "运行模式复测", type: "retest", item: "flight-mode-sitl"},
+  mqtt_link: {label: "查核心属性", type: "action", ref: "dock:0"},
+  apidock3_cmd: {label: "打开命令台", type: "view", view: "dock"},
+  sitl_osd: {label: "看飞行日志", type: "view", view: "ops"},
+  real_wayline: {label: "运行航线复测", type: "retest", item: "real-hd-wayline"},
   flight_control: {label: "运行飞控复测", type: "retest", item: "basic-flight-sitl"},
-  wayline_resume: {label: "运行航线复测", type: "retest", item: "sitl-wayline"},
   dock_v13: {label: "运行机巢复测", type: "retest", item: "nest-gateway-live"},
-  one_key_takeoff: {label: "运行一键启航", type: "retest", item: "one-key-mqtt"},
   drc: {label: "运行 DRC 复测", type: "retest", item: "drc-mavlink-sitl"},
-  media_live: {label: "运行负载复测", type: "retest", item: "payload-camera-gimbal"},
   hms_log: {label: "运行日志复测", type: "retest", item: "retention-records"},
-  topology_org: {label: "运行拓扑复测", type: "retest", item: "multi-device-offline"},
   trace_nonblock: {label: "运行非阻塞探针", type: "retest", item: "non-blocking-person2"},
 };
 
 const viewMeta = {
-  dashboard: ["设备总览", "查看机场、飞行器、链路和最近业务状态。"],
-  dock: ["机场控制", "远程调试、舱盖、推杆、充电、补光灯和基础属性查询。"],
-  mission: ["飞行任务", "航线准备、执行、暂停、恢复、返航和终止入口。"],
+  dashboard: ["飞行总览", "查看真实 SITL/QGC 航线、飞行器遥测和最近命令状态。"],
+  dock: ["APIDock3 命令", "直接通过云端 API topic 下发 Dock3 services、property 和 DRC 命令。"],
+  mission: ["真实航线", "下发 HD 航线准备、执行、进度查询、暂停、恢复、返航和终止。"],
   drc: ["DRC 飞控", "进入控制、心跳、速度推送、退出控制。"],
-  media: ["直播媒体", "直播能力、开始/停止直播、切换镜头、画质、媒体文件查询。"],
-  ops: ["运维日志", "设备拓扑、状态、HMS、日志和配置类联调入口。"],
-  retest: ["复测清单", "记录需要复测、需要真实 SITL/机巢/数据的点。"],
-  raw: ["原始报文", "排障时查看完整 MQTT payload。"],
+  ops: ["飞行日志", "按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包。"],
+  retest: ["复测留证", "只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项。"],
+  raw: ["原始报文", "需要排障时查看完整 MQTT payload。"],
 };
 
 const retestItems = [
   {
-    id: "one-key-mqtt",
-    category: "一键启航",
-    title: "一键启航 MQTT 实跑",
-    status: "needs_data",
-    command: "python tools/mqtt_one_key_takeoff_flow_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --simulate --timeout 60 --quiet-stale",
-    expect: "one_key_takeoff_flow 返回 ok，出现 one_key_takeoff_progress 和 flighttask_progress。",
-    evidence: "保存终端输出、services_reply、events 和对应 tid。",
-  },
-  {
-    id: "sitl-wayline",
+    id: "real-hd-wayline",
     category: "SITL",
-    title: "真实 SITL 航点执行",
+    title: "SITL/QGC 真实 HD 航线执行",
     status: "needs_data",
     command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "真实 MAVLink Mission 上传后进入 AUTO/航线执行，progress 随航点或距离变化。",
-    evidence: "SITL 日志、MQTT flighttask_progress、OSD 经纬度/高度变化。",
+    expect: "QGC 中能看到真实航线任务，flighttask_prepare/execute 成功，OSD 经纬度/高度随航线变化。",
+    evidence: "SITL 日志、MQTT flighttask_progress、飞行器 OSD 电量/高度/经纬度。",
   },
   {
-    id: "nest-v13-live",
-    category: "机巢",
-    title: "机巢 v1.3 离线协议专项",
+    id: "cmd-advanced",
+    category: "APIDock3",
+    title: "APIDock3/CMD 远程调试",
     status: "needs_data",
-    command: "python tools/nest_v13_protocol_test.py --verbose",
-    expect: "12003/12004/12005、命令字、状态位和基础拒绝条件离线解析正确。",
-    evidence: "脚本输出 nest v1.3 protocol test ok；这是协议基础，不等于网关实跑。",
-  },
-  {
-    id: "nest-gateway-live",
-    category: "机巢",
-    title: "机巢 v1.3 网关联动",
-    status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
-    expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 dock_operation 或 HMS 事件。",
-    evidence: "网关日志、机巢模拟器日志、HMS 事件、dock_operation 事件。",
+    command: "python tools/mqtt_dock3_cmd_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
+    expect: "可直接从页面或脚本通过 Dock3 topic 下发命令，并看到 result、tid、进度事件。",
+    evidence: "services_reply、progress event、operation record、拒绝原因。",
   },
   {
     id: "flight-mode-sitl",
@@ -103,17 +81,26 @@ const retestItems = [
     title: "DRC 到 MAVLink 语义复测",
     status: "needs_data",
     command: "python tools/person2_gap_test.py --phase drc-sitl --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
-    expect: "DRC enter/heartbeat/速度/云台/takeoff_to_point/stop 都可用，并产生指点飞行进度事件。",
+    expect: "DRC enter/heartbeat/速度/takeoff_to_point/stop 都可用，并产生指点飞行进度事件。",
     evidence: "drc/up、services_reply、takeoff_to_point_progress 或 fly_to_point_progress、SITL OSD。",
   },
   {
-    id: "non-blocking",
-    category: "稳定性",
-    title: "非阻塞主链路压测",
+    id: "nest-gateway-live",
+    category: "机场",
+    title: "机场机构网关联动",
     status: "needs_data",
-    command: "python tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 12 --quiet-stale",
-    expect: "MQTT 回调、MAVLink 接收、任务状态机不被 DB、文件、上传、日志、固件任务卡住。",
-    evidence: "压测输出、request trace 耗时、无 heartbeat/OSD 长时间断流。",
+    command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 dock_operation 或 HMS 事件。",
+    evidence: "网关日志、机巢模拟器日志、HMS 事件、dock_operation 事件。",
+  },
+  {
+    id: "retention-records",
+    category: "日志",
+    title: "飞行过程日志留证",
+    status: "needs_data",
+    command: "python tools/person2_gap_test.py --phase retention --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    expect: "HMS/log/任务进度入口可查，页面时间线能清楚展示电量、高度、经纬度和回包。",
+    evidence: "数据库记录、request trace、HMS/log 事件、清理前后计数。",
   },
   {
     id: "non-blocking-person2",
@@ -124,57 +111,12 @@ const retestItems = [
     expect: "连续 property_get 延迟不超过阈值，期间飞行器 OSD 不断流。",
     evidence: "每轮 elapsed_ms、OSD 观察、request trace 耗时。",
   },
-  {
-    id: "payload-camera-gimbal",
-    category: "负载",
-    title: "相机/云台基础控制",
-    status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase payload --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
-    expect: "相机能力、拍照、录像、云台状态、云台转动 method 有回包；无真实负载时记录 adapter/mock 边界。",
-    evidence: "payload/camera/gimbal reply、云台角度状态、媒体文件或 mock adapter 日志。",
-  },
-  {
-    id: "multi-device-offline",
-    category: "设备",
-    title: "多设备/解绑/离线/重连",
-    status: "needs_data",
-    command: "python tools/mqtt_dock3_device_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "多子设备拓扑、解绑、离线、重连不破坏 update_topo 和 binding 状态。",
-    evidence: "status_reply、update_topo、organization requests_reply、设备状态日志。",
-  },
-  {
-    id: "cmd-advanced",
-    category: "CMD",
-    title: "远程调试进阶失败码",
-    status: "needs_data",
-    command: "python tools/mqtt_dock3_cmd_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
-    expect: "真实耗时、失败码、安全拒绝、任务进度更贴近 Dock3。",
-    evidence: "cmd reply、progress event、operation record、拒绝原因。",
-  },
-  {
-    id: "retention-records",
-    category: "运维",
-    title: "操作记录和短周期数据保留",
-    status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase retention --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
-    expect: "HMS/log/任务进度入口可查，操作或日志事件可留证；DB 深度保留需要再查数据库。",
-    evidence: "数据库记录、request trace、HMS/log 事件、清理前后计数。",
-  },
-  {
-    id: "real-adapters",
-    category: "真实 Adapter",
-    title: "真实 OTA/OSS/直播推流 Adapter",
-    status: "needs_data",
-    command: "firmware/media/live 真实外部服务联调",
-    expect: "真实 OTA 下载校验、OSS 上传、RTMP/WebRTC/GB28181 推流不只停留在 mock。",
-    evidence: "外部服务 URL、上传/推流状态、失败重试和取消日志。",
-  },
 ];
 
 const actionGroups = {
   dock: [
-    action("基础属性查询", "读取舱盖、推杆、充电、调试模式等关键状态。", "property_get", {properties: ["mode_code", "drc_state", "cover_state", "putter_state", "charging_state", "supplement_light_state"]}),
-    action("进入远程调试", "打开调试模式，后续可执行机巢机构动作。", "debug_mode_open", {}),
+    action("核心属性查询", "读取飞行模式、DRC、舱盖、推杆、充电和补光灯状态。", "property_get", {properties: ["mode_code", "gear", "drc_state", "cover_state", "putter_state", "charging_state", "supplement_light_state"]}),
+    action("进入远程调试", "通过 APIDock3 services 打开远程调试。", "debug_mode_open", {}),
     action("退出远程调试", "关闭调试模式，恢复普通业务状态。", "debug_mode_close", {}),
     action("打开舱盖", "下发 cover_open。", "cover_open", {}),
     action("关闭舱盖", "下发 cover_close。", "cover_close", {}),
@@ -186,7 +128,6 @@ const actionGroups = {
   ],
   mission: [
     action("准备真实 HD 航线", "上传 HD.original.waypoints 到真实 SITL 飞控；需要网关已连接 127.0.0.1:14550。", "flighttask_prepare", realHdMissionData()),
-    action("准备模拟航线", "准备一条 demo wayline，默认不依赖真实 KMZ。", "flighttask_prepare", demoMissionData()),
     action("执行航线", "触发 flighttask_execute。", "flighttask_execute", {flight_id: "demo-flight-001"}),
     action("查询任务进度", "查询当前 flighttask_progress。", "flighttask_progress", {flight_id: "demo-flight-001"}),
     action("暂停航线", "触发 flighttask_pause。", "flighttask_pause", {flight_id: "demo-flight-001"}),
@@ -201,24 +142,11 @@ const actionGroups = {
     action("速度推送", "发送一帧低速杆量/速度数据。", "drc_speed_push", {x: 0, y: 0, z: 0, yaw: 0}, "drc"),
     action("退出 DRC", "释放控制权。", "drc_mode_exit", {}),
   ],
-  media: [
-    action("直播能力查询", "查询设备可用直播能力。", "live_capability_query", {}),
-    action("开始直播", "以 mock 地址启动直播链路。", "live_start", {url: "mock://edge-gateway/live/main", video_id: "EDGEGW001/0/normal", quality: 1}),
-    action("切换广角", "切换直播镜头到 wide。", "live_lens_change", {video_id: "EDGEGW001/0/normal", lens: "wide"}),
-    action("设置流畅画质", "切换直播清晰度/码率。", "live_set_quality", {video_id: "EDGEGW001/0/normal", quality: 1}),
-    action("停止直播", "停止当前直播。", "live_stop", {video_id: "EDGEGW001/0/normal"}),
-    action("媒体文件列表", "查询本地媒体文件列表。", "file_list_get", {module: 0, offset: 0, limit: 20}),
-    action("最高优先级媒体", "查询最高优先级上传任务媒体。", "highest_priority_upload_flighttask_media", {}),
-  ],
   ops: [
-    action("设备拓扑状态", "触发 status/topology 相关链路观察。", "airport_bind_status", {}),
-    action("工作区查询", "查询 workspace_get。", "workspace_get", {}),
-    action("能力查询", "查询设备能力集。", "device_capability_query", {}),
     action("HMS 查询", "查询 HMS 告警/健康状态。", "hms_get", {page: 1, page_size: 20}),
     action("清空 HMS", "清空当前模拟 HMS 告警。", "hms_clear", {}),
     action("日志列表", "查询可上传日志文件。", "device_log_list_get", {page: 1, page_size: 20}),
-    action("日志上传", "触发一条模拟日志上传任务。", "device_log_upload", {logs: [{module: 0, log_id: "demo-log"}]}),
-    action("固件属性", "读取 firmware_version / firmware_upgrade_status。", "property_get", {properties: ["firmware_version", "firmware_upgrade_status"]}),
+    action("飞行状态属性", "读取 mode_code、gear、drc_state 等飞行过程关键状态。", "property_get", {properties: ["mode_code", "gear", "drc_state", "home_distance", "height"]}),
   ],
 };
 
@@ -228,29 +156,11 @@ const quickActionRefs = [
   ["mission", 0],
   ["mission", 1],
   ["drc", 0],
-  ["media", 1],
+  ["ops", 0],
 ];
 
 function action(title, desc, method, data, channel = "services") {
   return {title, desc, method, data, channel};
-}
-
-function demoMissionData() {
-  return {
-    flight_id: "demo-flight-001",
-    execute_time: Date.now(),
-    task_type: 0,
-    file: {
-      url: "",
-      fingerprint: "demo",
-      name: "demo-wayline.kmz",
-    },
-    simulate_mission: {
-      is_enable: 1,
-      latitude: 39.9042,
-      longitude: 116.397,
-    },
-  };
 }
 
 function realHdMissionData() {
@@ -298,6 +208,37 @@ function valueOfField(obj, key) {
   return item;
 }
 
+function pickValue(obj, paths) {
+  for (const path of paths) {
+    let current = obj;
+    for (const part of path.split(".")) {
+      current = valueOfField(current, part);
+      if (current === undefined || current === null || current === "") break;
+    }
+    if (current !== undefined && current !== null && current !== "") return current;
+  }
+  return undefined;
+}
+
+function numberText(value, digits = 6) {
+  if (value === undefined || value === null || value === "") return "--";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return number.toFixed(digits);
+}
+
+function telemetryFromOsd(osd) {
+  const battery = pickValue(osd, ["battery.capacity_percent", "battery.remain_percent", "capacity_percent", "battery_percent"]);
+  const height = pickValue(osd, ["height", "altitude", "relative_altitude"]);
+  const lat = pickValue(osd, ["latitude", "lat", "position.latitude"]);
+  const lng = pickValue(osd, ["longitude", "lng", "lon", "position.longitude"]);
+  const mode = pickValue(osd, ["mode_code", "flight_mode"]);
+  const gear = pickValue(osd, ["gear"]);
+  const gps = pickValue(osd, ["position_state.gps_number", "gps_number", "satellites_visible"]);
+  const quality = pickValue(osd, ["position_state.quality", "gps_quality"]);
+  return {battery, height, lat, lng, mode, gear, gps, quality};
+}
+
 function setText(id, text) {
   const el = $(id);
   if (el) el.textContent = text;
@@ -328,29 +269,29 @@ function updateOverview(data) {
   setText("putterState", stateText(valueOfField(dock, "putter_state"), {"0": "关闭", "1": "打开"}));
   setText("chargingState", stateText(valueOfField(dock, "charging_state"), {"0": "未充电", "1": "充电中"}));
   setText("dockWind", withUnit(valueOfField(dock, "wind_speed"), "m/s"));
-  setText("battery", withUnit(valueOfField(valueOfField(drone, "battery"), "capacity_percent"), "%"));
-  setText("height", withUnit(valueOfField(drone, "height"), "m"));
-  setText("modeCode", stateText(valueOfField(drone, "mode_code"), {"0": "空闲", "17": "起飞", "26": "航线"}));
+  const telemetry = telemetryFromOsd(drone);
+  setText("battery", withUnit(telemetry.battery, "%"));
+  setText("height", withUnit(telemetry.height, "m"));
+  setText("modeCode", stateText(telemetry.mode, {"0": "空闲", "17": "起飞", "26": "航线"}));
   setText("gpsQuality", gpsLine(drone));
+  renderTelemetrySummary(drone, data.messages || []);
 
   updateMqttStatus(data.mqtt || {});
   renderMessages(data.messages || []);
   renderTimeline(data.messages || []);
+  renderTelemetryTimeline(data.messages || []);
   renderKeyWatch(data.key_points || {}, data.key_info || []);
   renderLastResult();
 }
 
 function coordLine(drone) {
-  const lat = valueOfField(drone, "latitude");
-  const lng = valueOfField(drone, "longitude");
+  const {lat, lng} = telemetryFromOsd(drone);
   if (lat === undefined || lng === undefined) return "飞行器在线，OSD 持续上报";
   return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
 }
 
 function gpsLine(drone) {
-  const pos = valueOfField(drone, "position_state") || {};
-  const quality = valueOfField(pos, "quality");
-  const gps = valueOfField(pos, "gps_number");
+  const {quality, gps} = telemetryFromOsd(drone);
   if (quality === undefined && gps === undefined) return "--";
   return `Q${quality ?? "-"} / ${gps ?? "-"}星`;
 }
@@ -358,6 +299,18 @@ function gpsLine(drone) {
 function withUnit(value, unit) {
   if (value === undefined || value === null || value === "") return "--";
   return `${value}${unit}`;
+}
+
+function renderTelemetrySummary(drone, messages) {
+  const telemetry = telemetryFromOsd(drone);
+  const latestOsd = messages.find((item) => item.type === "osd" && item.topic?.includes(`/${snapshot?.drone_sn}/`));
+  setText("telemetryUpdated", latestOsd ? `更新 ${shortTime(latestOsd.timestamp)}` : "等待 OSD");
+  setText("telemetryBattery", withUnit(telemetry.battery, "%"));
+  setText("telemetryHeight", withUnit(telemetry.height, "m"));
+  setText("telemetryLng", numberText(telemetry.lng, 7));
+  setText("telemetryLat", numberText(telemetry.lat, 7));
+  setText("telemetryMode", `${stateText(telemetry.mode, {"0": "空闲", "17": "起飞", "26": "航线"})} / ${telemetry.gear ?? "--"}`);
+  setText("telemetryGps", gpsLine(drone));
 }
 
 function updateMqttStatus(mqtt) {
@@ -789,6 +742,34 @@ function renderTimeline(messages) {
     `;
     timeline.appendChild(div);
   });
+}
+
+function renderTelemetryTimeline(messages) {
+  const list = $("telemetryTimeline");
+  if (!list) return;
+  const droneSn = snapshot?.drone_sn || "";
+  const rows = messages
+    .filter((item) => item.type === "osd" && (!droneSn || item.topic?.includes(`/${droneSn}/`)))
+    .slice(0, 80);
+  setText("telemetryCount", `${rows.length} 条`);
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty-state">等待飞行器 OSD。真实航线执行时这里会持续刷新电量、高度和经纬度。</div>';
+    return;
+  }
+  list.innerHTML = rows.map((item) => {
+    const telemetry = telemetryFromOsd(item.payload || {});
+    return `
+      <div class="telemetry-row">
+        <time>${escapeHtml(shortTime(item.timestamp))}</time>
+        <span>电量 <b>${escapeHtml(withUnit(telemetry.battery, "%"))}</b></span>
+        <span>高度 <b>${escapeHtml(withUnit(telemetry.height, "m"))}</b></span>
+        <span>纬度 <b>${escapeHtml(numberText(telemetry.lat, 7))}</b></span>
+        <span>经度 <b>${escapeHtml(numberText(telemetry.lng, 7))}</b></span>
+        <span>模式 <b>${escapeHtml(String(telemetry.mode ?? "--"))}</b></span>
+        <span>GPS <b>${escapeHtml(gpsLine(item.payload || {}))}</b></span>
+      </div>
+    `;
+  }).join("");
 }
 
 function matchRawFilter(item, filter) {

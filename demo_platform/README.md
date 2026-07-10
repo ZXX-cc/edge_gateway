@@ -1,14 +1,14 @@
 # Edge Gateway Demo Platform
 
-本项目是一个本地演示/验收平台，目标是模拟 Dock Demo 平台的核心体验：
+本项目是一个本地演示/验收平台，目标是围绕当前 Edge Gateway + Dock3 Cloud API + SITL/QGC 联调主线做可视化验收：
 
-- 设备总览：机场/飞行器在线、舱盖、推杆、充电、电量、高度、GPS/RTK 等摘要状态
-- 机场控制：远程调试、舱盖、充电、推杆、补光灯和属性查询
-- 飞行任务：航线准备、执行、进度、暂停、恢复、返航、终止
+- 飞行总览：机场/飞行器在线、SITL 遥测、电量、高度、经纬度、GPS/RTK、最近命令结果
+- APIDock3 命令：直接通过云端 API topic 下发 services、property、DRC 命令
+- 真实航线：下发真实 HD 航线准备、执行、进度、暂停、恢复、返航、终止
 - DRC 飞控：进入控制、心跳、速度推送、退出控制
-- 直播媒体：直播能力、开始/停止直播、镜头/画质、媒体文件列表
-- 运维日志：绑定状态、工作区、能力、HMS、日志、固件属性
-- 原始报文：排障时查看 `osd`、`state`、`events`、`services_reply`、`drc/up`、`status`
+- 飞行日志：按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包
+- 复测留证：只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项
+- 原始报文：排障时查看完整 `osd`、`state`、`events`、`services_reply`、`drc/up`、`status`
 
 它不替代 `src/main.py` 网关，也不启动 broker。使用前需要先启动 MQTT broker、Edge Gateway 和机巢模拟器。
 
@@ -54,9 +54,8 @@ http://192.168.2.188:8095
 ## 内置工作流
 
 - `基础上线巡检`：读取关键属性，观察 OSD/state/status。
-- `机巢/CMD 动作`：调试模式、舱盖、充电、推杆、补光灯。
+- `APIDock3/CMD 动作`：调试模式、舱盖、充电、推杆、补光灯。
 - `DRC 链路`：进入 DRC、心跳、杆量/速度、退出。
-- `Wayline 模拟任务`：`flighttask_prepare/execute/progress/pause/resume/return/undo`。
-- `一键启航演示`：断充、开盖、释放、准备任务、执行任务。
+- `真实 HD 航线`：使用 `HD.original.waypoints` 执行真实 SITL/QGC 航线准备、执行和进度查询。
 
-这些工作流优先验证云端协议和网关业务链路；真实飞控/真实机巢动作仍需要配合 SITL 或 v1.3 机巢模拟器/实机。
+页面不再把模拟航线、直播媒体、真实 Adapter 等未进入当前主线的项目放在主导航中。真实航线是否通过，以 QGC 中可见航线任务执行、`flighttask_progress` 和飞行器 OSD 电量/高度/经纬度变化共同留证。
