@@ -20,6 +20,7 @@ from src.utils.config import Config
 from src.utils.message import MessageBuilder, TopicBuilder
 
 logger = get_logger("telemetry")
+alarm_logger = get_logger("alarm")
 
 MAX_CACHE_SIZE = 100
 MAX_CACHE_TIME = 300  # 缓存最大时间（秒）
@@ -292,6 +293,12 @@ class TelemetryReporter:
             alarm_level: 0=提示 1=一般 2=严重 3=紧急
             alarm_content: 告警内容
         """
+        alarm_logger.info(
+            "HMS alarm publish: alarm_id=%s level=%s content=%s",
+            alarm_id,
+            alarm_level,
+            alarm_content,
+        )
         self.report_event('hms_push', {
             'alarm_id': alarm_id,
             'alarm_level': alarm_level,

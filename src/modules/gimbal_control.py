@@ -17,6 +17,10 @@ import time
 import threading
 from typing import Optional, Callable
 from enum import IntEnum
+from src.utils.logger import get_logger
+
+
+logger = get_logger("payload.gimbal_control")
 
 
 # ===== 枚举定义 =====
@@ -159,13 +163,12 @@ class GimbalControl:
 
     def log(self, message: str, level: str = "INFO"):
         """日志输出"""
-        prefix = {
-            "INFO": "[GimbalControl]",
-            "WARN": "[GimbalControl] ⚠️",
-            "ERROR": "[GimbalControl] ❌",
-            "OK": "[GimbalControl] ✅"
-        }.get(level, "[GimbalControl]")
-        print(f"{prefix} {message}")
+        level_method = {
+            "WARN": logger.warning,
+            "WARNING": logger.warning,
+            "ERROR": logger.error,
+        }.get(str(level).upper(), logger.info)
+        level_method("[GimbalControl] %s", message)
 
     # ==================== SDK 生命周期 ====================
 

@@ -2,8 +2,9 @@
 日志模块 - 统一日志管理
 
 日志落盘规则：
-- logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log
-- 每天一个独立文件，每月一个独立目录
+- logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log 保存网关总日志
+- logs/<分类>/YYYY-MM/<分类>_YYYY-MM-DD.log 保存七类专用日志
+- 每天一个独立文件，每月一个独立目录，共八类运行日志
 - 控制台、文件、stdout/stderr 捕获共用同一套格式
 """
 import logging
@@ -15,7 +16,7 @@ import threading
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 
 _BASE_LOGGER_NAME = "edge_gateway"
@@ -23,6 +24,57 @@ _ORIGINAL_STDOUT = sys.__stdout__
 _ORIGINAL_STDERR = sys.__stderr__
 _configured = False
 _listener: Optional[QueueListener] = None
+
+
+_CATEGORY_DEFAULTS = {
+    "mqtt": {
+        "prefixes": (
+            "edge_gateway.mqtt",
+            "edge_gateway.router",
+            "edge_gateway.cloud_conn",
+        ),
+    },
+    "mavlink_raw": {
+        "prefixes": ("edge_gateway.mavlink.raw",),
+    },
+    "mission": {
+        "prefixes": (
+            "edge_gateway.mission",
+            "edge_gateway.waypoint",
+            "edge_gateway.command_trace",
+        ),
+    },
+    "alarm": {
+        "prefixes": ("edge_gateway.alarm", "edge_gateway.hms"),
+    },
+    "nest_plc": {
+        "prefixes": (
+            "edge_gateway.nest_plc",
+            "edge_gateway.nest",
+            "src.generated_nest",
+            "src.generated_dialect",
+        ),
+    },
+    "flight_control": {
+        "prefixes": (
+            "edge_gateway.flight_control",
+            "edge_gateway.telemetry",
+            "edge_gateway.mavlink",
+            "edge_gateway.drc",
+            "edge_gateway.rtk",
+        ),
+        "exclude_prefixes": ("edge_gateway.mavlink.raw",),
+    },
+    "payload": {
+        "prefixes": (
+            "edge_gateway.payload",
+            "edge_gateway.camera",
+            "edge_gateway.gimbal",
+            "edge_gateway.third_party",
+            "edge_gateway.media",
+        ),
+    },
+}
 
 
 class DailyMonthlyFileHandler(logging.Handler):
@@ -72,6 +124,25 @@ class DailyMonthlyFileHandler(logging.Handler):
                 self._stream.close()
                 self._stream = None
         super().close()
+
+
+class LoggerNameFilter(logging.Filter):
+    """按 logger 命名空间把记录路由到独立业务日志。"""
+
+    def __init__(self, prefixes: Iterable[str], exclude_prefixes: Iterable[str] = ()):
+        super().__init__()
+        self.prefixes = tuple(str(item) for item in prefixes if item)
+        self.exclude_prefixes = tuple(str(item) for item in exclude_prefixes if item)
+
+    @staticmethod
+    def _matches(name: str, prefix: str) -> bool:
+        return name == prefix or name.startswith(f"{prefix}.")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = record.name
+        if any(self._matches(name, prefix) for prefix in self.exclude_prefixes):
+            return False
+        return any(self._matches(name, prefix) for prefix in self.prefixes)
 
 
 class StreamToLogger:
@@ -145,7 +216,21 @@ def _resolve_log_dir(config: dict) -> tuple[str, str]:
     return str(base_dir), filename_prefix
 
 
-def _build_handlers(config: dict, level: int) -> list[logging.Handler]:
+def _parse_level(value, default: int) -> int:
+    return getattr(logging, str(value).upper(), default)
+
+
+def _resolve_category_dir(base_dir: str, category: str, category_config: dict) -> str:
+    configured = category_config.get("dir")
+    if not configured:
+        return str(Path(base_dir) / category)
+    configured_path = Path(str(configured))
+    if configured_path.is_absolute():
+        return str(configured_path)
+    return str(Path(base_dir) / configured_path)
+
+
+def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], list[str]]:
     formatter = logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] "
         "[%(threadName)s] %(message)s",
@@ -165,7 +250,27 @@ def _build_handlers(config: dict, level: int) -> list[logging.Handler]:
     file_handler.setFormatter(formatter)
     handlers.append(file_handler)
 
-    return handlers
+    enabled_categories = []
+    category_configs = config.get("categories", {}) or {}
+    for category, defaults in _CATEGORY_DEFAULTS.items():
+        category_config = category_configs.get(category, {}) or {}
+        if not _parse_bool(category_config.get("enabled"), True):
+            continue
+
+        category_level = _parse_level(category_config.get("level", config.get("level", "INFO")), level)
+        category_dir = _resolve_category_dir(base_dir, category, category_config)
+        category_prefix = category_config.get("filename_prefix", category)
+        category_handler = DailyMonthlyFileHandler(category_dir, category_prefix)
+        category_handler.setLevel(category_level)
+        category_handler.setFormatter(formatter)
+        category_handler.addFilter(LoggerNameFilter(
+            category_config.get("prefixes", defaults.get("prefixes", ())),
+            category_config.get("exclude_prefixes", defaults.get("exclude_prefixes", ())),
+        ))
+        handlers.append(category_handler)
+        enabled_categories.append(category)
+
+    return handlers, enabled_categories
 
 
 def _replace_handlers(logger: logging.Logger, handlers: list[logging.Handler], level: int):
@@ -223,7 +328,7 @@ def init_logger(config):
 
     config = config or {}
     level = getattr(logging, str(config.get("level", "INFO")).upper(), logging.INFO)
-    output_handlers = _build_handlers(config, level)
+    output_handlers, enabled_categories = _build_handlers(config, level)
     log_queue: queue.Queue = queue.Queue(-1)
     queue_handler = QueueHandler(log_queue)
     queue_handler.setLevel(level)
@@ -248,11 +353,19 @@ def init_logger(config):
     _configured = True
     base_dir, filename_prefix = _resolve_log_dir(config)
     edge_logger.info(
-        "Logger initialized: dir=%s, prefix=%s, level=%s, daily_files=true, monthly_dirs=true",
+        "Logger initialized: dir=%s, prefix=%s, level=%s, daily_files=true, monthly_dirs=true, categories=%s",
         base_dir,
         filename_prefix,
-        logging.getLevelName(level)
+        logging.getLevelName(level),
+        ",".join(enabled_categories),
     )
+    # 主进程启动即创建当天八类日志，避免无告警/无负载操作时目录缺失。
+    for category in enabled_categories:
+        category_logger_name = _CATEGORY_DEFAULTS[category]["prefixes"][0]
+        logging.getLogger(category_logger_name).info(
+            "Category logger initialized: category=%s",
+            category,
+        )
     return edge_logger
 
 

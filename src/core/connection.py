@@ -11,6 +11,11 @@ from pymavlink import mavutil
 from threading import Lock
 from queue import Queue
 
+from src.utils.logger import get_logger
+
+
+mavlink_raw_logger = get_logger("mavlink.raw")
+
 
 class ConnectionStatus:
     """连接状态枚举"""
@@ -62,6 +67,43 @@ def build_mavlink_v1_heartbeat(source_system: int, source_component: int, sequen
 def send_udp_bootstrap_heartbeat(sock, target: tuple[str, int], source_system: int, source_component: int) -> None:
     """Register a UDP peer so a passive nest simulator can return its status."""
     sock.sendto(build_mavlink_v1_heartbeat(source_system, source_component), target)
+
+
+def _raw_frame_hex(msg) -> str:
+    """提取 pymavlink 消息的完整帧；无法提取时保留可诊断文本。"""
+    try:
+        frame = msg.get_msgbuf() if hasattr(msg, "get_msgbuf") else b""
+        if frame:
+            return bytes(frame).hex()
+    except Exception:
+        pass
+    return "unavailable"
+
+
+def _log_raw_mavlink(direction: str, connection_string: str, msg) -> None:
+    """记录 MAVLink 原始收发帧，供协议级故障回放。"""
+    try:
+        msg_type = msg.get_type() if hasattr(msg, "get_type") else type(msg).__name__
+        msg_id = _extract_msg_id(msg)
+        sysid = msg.get_srcSystem() if hasattr(msg, "get_srcSystem") else None
+        compid = msg.get_srcComponent() if hasattr(msg, "get_srcComponent") else None
+        mavlink_raw_logger.info(
+            "direction=%s connection=%s type=%s id=%s sysid=%s compid=%s raw_hex=%s",
+            direction,
+            connection_string,
+            msg_type,
+            msg_id,
+            sysid,
+            compid,
+            _raw_frame_hex(msg),
+        )
+    except Exception as exc:
+        mavlink_raw_logger.warning(
+            "direction=%s connection=%s raw_log_error=%s",
+            direction,
+            connection_string,
+            exc,
+        )
 
 
 class MAVLinkConnection:
@@ -459,7 +501,10 @@ class MAVLinkConnection:
             return None
 
         try:
-            return self.master.recv_match(blocking=True, timeout=timeout)
+            msg = self.master.recv_match(blocking=True, timeout=timeout)
+            if msg is not None:
+                _log_raw_mavlink("RX", self.connection_string, msg)
+            return msg
         except Exception as e:
             # 静默处理超时，只记录真正的错误
             if "timeout" not in str(e).lower():
@@ -477,6 +522,7 @@ class MAVLinkConnection:
             if self.master and self.status == ConnectionStatus.CONNECTED:
                 try:
                     self.master.mav.send(msg)
+                    _log_raw_mavlink("TX", self.connection_string, msg)
                 except Exception as e:
                     print(f"[Connection] 发送消息错误: {e}")
 

@@ -58,6 +58,13 @@
 
 ```text
 ~/lxz/edge_gateway/logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/mqtt/YYYY-MM/mqtt_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/mavlink_raw/YYYY-MM/mavlink_raw_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/mission/YYYY-MM/mission_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/alarm/YYYY-MM/alarm_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/nest_plc/YYYY-MM/nest_plc_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/flight_control/YYYY-MM/flight_control_YYYY-MM-DD.log
+~/lxz/edge_gateway/logs/payload/YYYY-MM/payload_YYYY-MM-DD.log
 ```
 
 示例：
@@ -77,6 +84,14 @@ logging:
   capture_print: true
   daily_files: true
   monthly_dirs: true
+  categories:
+    mqtt: {enabled: true, dir: "mqtt", filename_prefix: "mqtt"}
+    mavlink_raw: {enabled: true, dir: "mavlink_raw", filename_prefix: "mavlink_raw"}
+    mission: {enabled: true, dir: "mission", filename_prefix: "mission"}
+    alarm: {enabled: true, dir: "alarm", filename_prefix: "alarm"}
+    nest_plc: {enabled: true, dir: "nest_plc", filename_prefix: "nest_plc"}
+    flight_control: {enabled: true, dir: "flight_control", filename_prefix: "flight_control"}
+    payload: {enabled: true, dir: "payload", filename_prefix: "payload"}
 ```
 
 日志实现要求：
@@ -85,12 +100,15 @@ logging:
 |---|---|
 | 月份目录 | 自动按 `YYYY-MM` 创建 |
 | 每日日志 | 每天一个 `edge_gateway_YYYY-MM-DD.log` |
+| 八类日志 | 网关总日志 + MQTT + MAVLink 原始帧 + 任务 + 告警 + 机巢 PLC + 飞控 + 相机/负载 |
 | 终端输出 | 保留 |
 | 文件落盘 | 保留 |
 | 旧模块 `print` | 自动捕获到日志 |
 | 写文件方式 | 后台日志队列写入，避免 MQTT/MAVLink 热路径直接刷盘 |
 | 异常记录 | 未捕获异常、线程异常、handler 异常会带 traceback |
 | 字段标注 | 关键 MQTT payload/reply/state/event 会输出 `字段名(中文名)` |
+
+`mavlink_raw` 会逐帧保存 RX/TX 十六进制内容，真实飞控长时间运行时文件增长速度明显高于其他分类；部署侧应把 `logs/mavlink_raw` 纳入磁盘容量和归档策略。
 
 常用查看命令：
 
@@ -102,6 +120,15 @@ ls -lh logs/$(date +%Y-%m)/
 
 # 实时跟踪当天日志
 tail -f logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+
+# 分窗口观察七类专用日志
+tail -F logs/mqtt/$(date +%Y-%m)/mqtt_$(date +%F).log
+tail -F logs/mavlink_raw/$(date +%Y-%m)/mavlink_raw_$(date +%F).log
+tail -F logs/mission/$(date +%Y-%m)/mission_$(date +%F).log
+tail -F logs/alarm/$(date +%Y-%m)/alarm_$(date +%F).log
+tail -F logs/nest_plc/$(date +%Y-%m)/nest_plc_$(date +%F).log
+tail -F logs/flight_control/$(date +%Y-%m)/flight_control_$(date +%F).log
+tail -F logs/payload/$(date +%Y-%m)/payload_$(date +%F).log
 
 # 只看错误和警告
 grep -E 'ERROR|WARNING|CRITICAL' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
@@ -115,6 +142,23 @@ python tools/request_trace_query.py --method property_set --summary
 
 # 查找带中文标注的关键字段
 grep -E 'drc_state\\(DRC链路状态\\)|capacity_percent\\(电量百分比\\)|longitude\\(经度\\)' logs/$(date +%Y-%m)/edge_gateway_$(date +%F).log
+```
+
+八类日志隔离验收（结果保存在 `test_logs`，可直接打包或复制回传）：
+
+```bash
+cd ~/lxz/edge_gateway
+source .venv/bin/activate
+mkdir -p test_logs/log-category-audit
+python tools/log_category_audit.py \
+  --output-dir test_logs/log-category-audit \
+  2>&1 | tee test_logs/$(date +%Y%m%d_%H%M%S)_log-category-audit.log
+```
+
+成功标志：
+
+```text
+log category audit ok (gateway + mqtt + mavlink_raw + mission + alarm + nest_plc + flight_control + payload)
 ```
 
 重点应能在日志中看到：

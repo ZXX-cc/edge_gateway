@@ -87,6 +87,8 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from web.mavlink.properties.mapping import build_properties_from_osd, merge_properties
 
 logger = get_logger("device")
+alarm_logger = get_logger("alarm")
+nest_plc_logger = get_logger("nest_plc")
 
 NEST_COMMAND_TARGET_HOLD_SECONDS = 5.0
 
@@ -861,6 +863,15 @@ class DeviceManager:
         由 main.py 在 DroneNestModule 收到 DRONE_NEST_RESPONSE 后调用
         """
         updates = build_dock3_properties_from_nest(nest_data)
+        nest_plc_logger.info(
+            "Nest PLC state received: heartbeat=%s plc_heartbeat=%s drone_heartbeat=%s "
+            "gate_state=%s error_code=%s",
+            nest_data.get("nest_heartbeat"),
+            nest_data.get("plc_heartbeat"),
+            nest_data.get("drone_heartbeat"),
+            nest_data.get("gate_state"),
+            nest_data.get("error_code"),
+        )
         updates = self._merge_updates_with_current(updates)
         updates = self._filter_pending_nest_command_targets(updates)
         state_updates = self._extract_nest_state_updates(updates)
@@ -973,7 +984,7 @@ class DeviceManager:
         self._last_nest_hms_signature = signature
 
         self._notify_event('hms', hms_event_data(self._hms_alarms))
-        logger.info(
+        alarm_logger.info(
             "Nest HMS synchronized: active=%s, removed=%s",
             len(nest_alarms),
             len(removed_alarm_ids),
@@ -2774,7 +2785,7 @@ class DeviceManager:
         normalized = normalize_hms_alarms(alarms, self.gateway_sn)
         self._hms_alarms = normalized
         self._notify_event('hms', hms_event_data(normalized))
-        logger.info(f"HMS reported: {len(normalized)} alarms")
+        alarm_logger.info("HMS reported: count=%s alarms=%s", len(normalized), normalized)
 
         for alarm in normalized:
             self._schedule_async(self._save_alarm_to_db(
@@ -2801,7 +2812,7 @@ class DeviceManager:
         total = len(self._hms_alarms)
         alarms = paginate_hms_log(self._hms_alarms, page, page_size)
 
-        logger.info(f"HMS get: total={total}, page={page}")
+        alarm_logger.info("HMS get: total=%s page=%s", total, page)
         return MessageBuilder.build_reply(
             msg,
             result=0,
@@ -2812,7 +2823,7 @@ class DeviceManager:
         """清除HMS告警（services 模式，云端下发）"""
         data = msg.get('data', {})
         alarm_ids = normalize_alarm_ids(data)
-        logger.info(f"HMS clear: {len(alarm_ids)} alarms")
+        alarm_logger.info("HMS clear: count=%s alarm_ids=%s", len(alarm_ids), alarm_ids)
 
         before_count = len(self._hms_alarms)
         if alarm_ids:

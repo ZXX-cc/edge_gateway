@@ -3,6 +3,18 @@
 """
 from abc import ABC
 from src.core.observer import MessageObserver
+from src.utils.logger import get_logger
+
+
+_MODULE_LOG_CATEGORIES = {
+    "drone_nest_module": "nest_plc",
+    "flight_control": "flight_control",
+    "mode_control": "flight_control",
+    "telemetry_module": "flight_control",
+    "rtkmodule": "flight_control",
+    "waypoint_manager": "mission",
+    "gimbal_control": "payload",
+}
 
 
 class BaseModule(MessageObserver):
@@ -26,6 +38,8 @@ class BaseModule(MessageObserver):
         super().__init__(name)
         self.config = config or {}
         self._initialized = False
+        logger_name = _MODULE_LOG_CATEGORIES.get(name.lower(), name.lower())
+        self.logger = get_logger(logger_name)
 
     def on_message(self, message):
         """
@@ -48,12 +62,12 @@ class BaseModule(MessageObserver):
         if not self._initialized:
             self.initialize()
             self._initialized = True
-        print(f"[{self.name}] 模块已启动")
+        self.logger.info("[%s] 模块已启动", self.name)
 
     def on_stop(self):
         """模块停止时调用"""
         self.cleanup()
-        print(f"[{self.name}] 模块已停止")
+        self.logger.info("[%s] 模块已停止", self.name)
 
     def initialize(self):
         """初始化方法 - 子类可重写"""
@@ -71,4 +85,5 @@ class BaseModule(MessageObserver):
             message: 日志消息
             level: 日志级别
         """
-        print(f"[{self.name}][{level}] {message}")
+        log_method = getattr(self.logger, str(level).lower(), self.logger.info)
+        log_method("[%s] %s", self.name, message)

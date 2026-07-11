@@ -144,6 +144,7 @@ src/core/connection.py
 | `src/database/alarm_db.py` | 告警记录 |
 | `src/database/device_db.py` | 设备绑定和设备信息 |
 | `src/utils/request_trace.py` | 非阻塞 request trace 记录器，写入 `logs/request_trace/YYYY-MM/request_trace_YYYY-MM-DD.jsonl` |
+| `src/utils/logger.py` | 保存网关总日志，并把 MQTT、MAVLink 原始帧、任务、告警、机巢 PLC、飞控、相机/负载路由到七个独立日志 |
 | `tools/request_trace_query.py` | request trace 查询工具，可按 `tid`、`bid`、`method`、`event`、`result` 过滤 |
 | `src/database/device_state_db.py` | 设备状态 |
 | `src/database/cloud_sync_manager.py` | 云端同步任务 |
@@ -199,6 +200,7 @@ src/core/connection.py
 | `tools/mqtt_dock3_media_test.py` | Dock3 media 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Dock3 live 开始/停止、质量、镜头、状态事件 |
 | `tools/mqtt_dock3_hms_log_test.py` | Dock3 HMS 告警和远程日志 |
+| `tools/log_category_audit.py` | 八类日志落盘与隔离审计，可用 `--output-dir` 保存验收证据 |
 | `tools/mqtt_dock3_firmware_config_test.py` | Dock3 固件升级模拟和配置更新 |
 | `tools/e2e_takeoff_flow_test.py` | 一键启航主流程 |
 | `tools/e2e_full_chain_test.py` | P0/P1 全链路回归 |

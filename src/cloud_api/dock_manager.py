@@ -22,6 +22,7 @@ from src.database.operation_db import OperationDB
 from src.generated_dialect.gcs_order_protocol import GCSCommand
 
 logger = get_logger("dock")
+alarm_logger = get_logger("alarm")
 
 
 class DockManager:
@@ -149,6 +150,7 @@ class DockManager:
         alarm['id'] = alarm.get('id', str(int(time.time() * 1000)))
         alarm['create_time'] = alarm.get('create_time', int(time.time() * 1000))
         self._alarms.append(alarm)
+        alarm_logger.warning("Dock alarm added: %s", alarm)
 
         if self._event_callback:
             event = MessageBuilder.build_event(
@@ -160,6 +162,7 @@ class DockManager:
 
     def clear_alarms(self, alarm_ids: list = None):
         """清除告警"""
+        alarm_logger.info("Dock alarms clear: alarm_ids=%s", alarm_ids or "all")
         if alarm_ids:
             self._alarms = [a for a in self._alarms if a.get('id') not in alarm_ids]
         else:
