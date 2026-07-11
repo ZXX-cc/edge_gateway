@@ -11,11 +11,13 @@ import struct
 import argparse
 from datetime import datetime
 from pathlib import Path
-from pymavlink.dialects.v20 import ardupilotmega
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIALECT_DIR = PROJECT_ROOT / 'src' / 'generated_dialect'
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(GENERATED_DIALECT_DIR))
+from pymavlink.dialects.v20 import ardupilotmega
+from src.cloud_api.dock3_wayline import parse_wayline_file
 import drone_nest
 
 
@@ -135,6 +137,8 @@ class NestSimulator:
         drone_host=None,
         drone_port=None,
         drone_status_log='logs/nest_simulator/drone_status.log',
+        mission_file='/home/fenghuolun/zwz/HD.kml',
+        mission_upload_timeout=30.0,
     ):
         self.host = host
         self.port = port
@@ -142,6 +146,8 @@ class NestSimulator:
         self.component_id = component_id
         self.command_log = Path(command_log) if command_log else None
         self.drone_status_log = Path(drone_status_log) if drone_status_log else None
+        self.mission_file = mission_file
+        self.mission_upload_timeout = float(mission_upload_timeout)
         self.sock = None
         self.drone_sock = None
         self.drone_bind_addr = (drone_host, int(drone_port)) if drone_host and drone_port else None
@@ -159,6 +165,10 @@ class NestSimulator:
         self.drone_battery_remaining = None
         self.drone_connected = False
         self.last_drone_status_print_at = 0.0
+        self.pending_mission_items = []
+        self.mission_upload_event = threading.Event()
+        self.mission_upload_active = False
+        self.mission_upload_lock = threading.Lock()
 
         # 模拟环境数据（单位与 drone_nest.xml 一致）
         self.env_data = {
@@ -471,6 +481,174 @@ class NestSimulator:
         except Exception as e:
             print(f"发送到飞机失败: {e}")
 
+    def _send_drone_message(self, msg):
+        if not self.drone_mav:
+            return False
+        self._send_to_drone(msg.pack(self.drone_mav))
+        return True
+
+    def _target_system_component(self):
+        return self.drone_system_id or 1, self.drone_component_id or 1
+
+    @staticmethod
+    def _coord_to_mission_int(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0
+        if abs(number) > 180:
+            return int(round(number))
+        return int(round(number * 1e7))
+
+    @staticmethod
+    def _mavlink_message(message_cls, *args):
+        try:
+            return message_cls(*args)
+        except TypeError:
+            # pymavlink 2.4.x dialects differ on whether MAVLink2 extension
+            # fields such as mission_type are present in constructors.
+            return message_cls(*args[:-1])
+
+    def _load_mission_items(self):
+        summary, waypoints = parse_wayline_file({"path": self.mission_file})
+        if not waypoints:
+            warnings = "; ".join(summary.get("warnings", [])) or "no waypoints parsed"
+            raise ValueError(f"航线文件无法解析: {summary.get('source') or self.mission_file}: {warnings}")
+
+        items = []
+        for index, waypoint in enumerate(waypoints):
+            command = int(waypoint.get("command", 16) or 16)
+            frame = int(waypoint.get("frame", 3) or 3)
+            items.append({
+                "seq": index,
+                "frame": frame,
+                "command": command,
+                "current": 1 if index == 0 else 0,
+                "autocontinue": int(waypoint.get("autocontinue", 1) or 1),
+                "param1": float(waypoint.get("param1", 0.0) or 0.0),
+                "param2": float(waypoint.get("param2", 0.0) or 0.0),
+                "param3": float(waypoint.get("param3", 0.0) or 0.0),
+                "param4": float(waypoint.get("param4", 0.0) or 0.0),
+                "x": self._coord_to_mission_int(waypoint.get("latitude", 0.0)),
+                "y": self._coord_to_mission_int(waypoint.get("longitude", 0.0)),
+                "z": float(waypoint.get("altitude", 50.0) or 50.0),
+            })
+
+        takeoff_commands = {
+            ardupilotmega.MAV_CMD_NAV_TAKEOFF,
+            ardupilotmega.MAV_CMD_NAV_VTOL_TAKEOFF,
+        }
+        if items and items[0]["command"] not in takeoff_commands:
+            first = dict(items[0])
+            takeoff_alt = max(10.0, float(first.get("z") or 50.0))
+            takeoff = dict(first)
+            takeoff.update({
+                "seq": 0,
+                "command": ardupilotmega.MAV_CMD_NAV_TAKEOFF,
+                "current": 1,
+                "param1": 0.0,
+                "param2": 0.0,
+                "param3": 0.0,
+                "param4": 0.0,
+                "z": takeoff_alt,
+            })
+            items.insert(0, takeoff)
+            for seq, item in enumerate(items):
+                item["seq"] = seq
+                item["current"] = 1 if seq == 0 else 0
+
+        print(f"[SITL] 已加载航线: {summary.get('source')}，航点={len(items)}")
+        return items
+
+    def _send_mission_count(self):
+        target_system, target_component = self._target_system_component()
+        mission_type = getattr(ardupilotmega, "MAV_MISSION_TYPE_MISSION", 0)
+        msg = self._mavlink_message(
+            ardupilotmega.MAVLink_mission_count_message,
+            target_system,
+            target_component,
+            len(self.pending_mission_items),
+            mission_type,
+        )
+        return self._send_drone_message(msg)
+
+    def _send_mission_item(self, seq):
+        if seq < 0 or seq >= len(self.pending_mission_items):
+            print(f"[SITL] 忽略越界航点请求: seq={seq}")
+            return False
+        target_system, target_component = self._target_system_component()
+        mission_type = getattr(ardupilotmega, "MAV_MISSION_TYPE_MISSION", 0)
+        item = self.pending_mission_items[seq]
+        msg = self._mavlink_message(
+            ardupilotmega.MAVLink_mission_item_int_message,
+            target_system,
+            target_component,
+            int(item["seq"]),
+            int(item["frame"]),
+            int(item["command"]),
+            int(item["current"]),
+            int(item["autocontinue"]),
+            float(item["param1"]),
+            float(item["param2"]),
+            float(item["param3"]),
+            float(item["param4"]),
+            int(item["x"]),
+            int(item["y"]),
+            float(item["z"]),
+            mission_type,
+        )
+        print(f"[SITL] 下发航点 {seq + 1}/{len(self.pending_mission_items)} command={item['command']}")
+        return self._send_drone_message(msg)
+
+    def _send_command_long(self, command, *params):
+        target_system, target_component = self._target_system_component()
+        values = list(params[:7]) + [0.0] * (7 - len(params))
+        msg = ardupilotmega.MAVLink_command_long_message(
+            target_system,
+            target_component,
+            command,
+            0,
+            *values,
+        )
+        return self._send_drone_message(msg)
+
+    def _send_set_mode_auto(self):
+        target_system, _target_component = self._target_system_component()
+        base_mode = ardupilotmega.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+        # ArduCopter AUTO custom_mode is 3.
+        msg = ardupilotmega.MAVLink_set_mode_message(target_system, base_mode, 3)
+        return self._send_drone_message(msg)
+
+    def _start_sitl_mission_async(self):
+        if not self.drone_sock or not self.drone_peer_addr:
+            print("[SITL] 未连接，无法由机巢模拟器下发航线任务")
+            return
+        with self.mission_upload_lock:
+            if self.mission_upload_active:
+                print("[SITL] 航线任务正在下发，忽略重复触发")
+                return
+            self.mission_upload_active = True
+            self.mission_upload_event.clear()
+        try:
+            self.pending_mission_items = self._load_mission_items()
+            print(f"[SITL] 开始由机巢模拟器上传航线: {len(self.pending_mission_items)} 个航点")
+            self._send_mission_count()
+            if not self.mission_upload_event.wait(timeout=self.mission_upload_timeout):
+                print(f"[SITL] 航线上传超时: {self.mission_upload_timeout:.1f}s")
+                return
+            print("[SITL] 航线上传完成，发送解锁和 AUTO")
+            self._send_command_long(ardupilotmega.MAV_CMD_COMPONENT_ARM_DISARM, 1, 0, 0, 0, 0, 0, 0)
+            time.sleep(1.0)
+            self._send_set_mode_auto()
+        except Exception as e:
+            print(f"[SITL] 机巢模拟器下发航线失败: {e}")
+        finally:
+            with self.mission_upload_lock:
+                self.mission_upload_active = False
+
+    def _start_sitl_mission(self):
+        threading.Thread(target=self._start_sitl_mission_async, daemon=True).start()
+
     # 手动构造标准心跳 (无需 dialect)
     def _send_heartbeat(self):
         payload = struct.pack('<BBBBBB', 1, 3, 0, 0, 0, 3)  # type=1 GCS, autopilot=3 ArduPilot
@@ -641,6 +819,8 @@ class NestSimulator:
             ordinary_response, takeoff_response = self._evaluate_command_response(ordinary, takeoff_land)
             if ordinary_response == 0 and takeoff_response == 0:
                 self._update_state_from_command(ordinary, takeoff_land)
+                if takeoff_land == 0x01:
+                    self._start_sitl_mission()
             else:
                 ordinary_detail = self._decode_order_response(ordinary_response, "ordinary")
                 takeoff_detail = self._decode_order_response(takeoff_response, "takeoff_land")
@@ -697,6 +877,18 @@ class NestSimulator:
             if remaining >= 0:
                 self.env_data['batteryRemaining'] = remaining
                 self.drone_battery_remaining = remaining
+        elif msg_type in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
+            seq = int(getattr(msg, 'seq', -1) or -1)
+            if self.mission_upload_active:
+                self._send_mission_item(seq)
+        elif msg_type == 'MISSION_ACK':
+            ack_type = int(getattr(msg, 'type', -1) or -1)
+            if self.mission_upload_active:
+                if ack_type == 0:
+                    self.mission_upload_event.set()
+                    print("[SITL] 收到 MISSION_ACK: ACCEPTED")
+                else:
+                    print(f"[SITL] 收到 MISSION_ACK: type={ack_type}")
 
         airborne = self.drone_armed and self.drone_relative_alt_m > 1.0
         self._set_boolstate2_bit(BIT_TAKEOFF_IN_PROGRESS, airborne)
@@ -831,6 +1023,17 @@ if __name__ == '__main__':
         default="logs/nest_simulator/drone_status.log",
         help="SITL 飞机连接和状态日志文件；设为空字符串可关闭",
     )
+    parser.add_argument(
+        "--mission-file",
+        default="/home/fenghuolun/zwz/HD.kml",
+        help="机巢模拟器下发给 SITL 的真实航线文件，支持 KML/KMZ/WPML/waypoints",
+    )
+    parser.add_argument(
+        "--mission-upload-timeout",
+        type=float,
+        default=30.0,
+        help="等待 SITL 完成航线上传的超时时间(秒)",
+    )
     args = parser.parse_args()
 
     sim = NestSimulator(
@@ -840,6 +1043,8 @@ if __name__ == '__main__':
         drone_host=args.drone_host,
         drone_port=args.drone_port,
         drone_status_log=args.drone_status_log,
+        mission_file=args.mission_file,
+        mission_upload_timeout=args.mission_upload_timeout,
     )
     try:
         sim.start()

@@ -6,7 +6,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 ARDUPILOT_DIR="${ARDUPILOT_DIR:-${HOME}/lxz/ardupilot}"
 SITL_PYTHON="${SITL_PYTHON:-/usr/bin/python3}"
 SITL_VEHICLE="${SITL_VEHICLE:-ArduCopter}"
-MAVLINK_PORT="${MAVLINK_PORT:-$(mavlink_port)}"
+MAVLINK_PORT="${MAVLINK_PORT:-14552}"
 SIM_VEHICLE="${ARDUPILOT_DIR}/Tools/autotest/sim_vehicle.py"
 
 if [[ ! -f "${SIM_VEHICLE}" ]]; then
