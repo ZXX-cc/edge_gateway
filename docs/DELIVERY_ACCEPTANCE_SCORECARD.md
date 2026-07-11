@@ -116,7 +116,7 @@ P2 问题影响 P0/P1 = 0 项
 | P1-03 | DRC 心跳和超时恢复 | Usable | `mqtt_dock3_drc_test.py --timeout 12 --quiet-stale --osd-wait 6`，含 `drc_state`、官方心跳和退出验证 |
 | P1-04 | `takeoff_to_point` 和指点飞行 | Usable | DRC 专项已验证 `takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`；真实 SITL 航点语义归 P1-06 |
 | P1-05 | KMZ/WPML 基础解析 | Usable | 扩展 `mqtt_dock3_wayline_test.py` |
-| P1-06 | 真实 SITL 航点执行 | Usable | 已验证非模拟 MAVLink 上传、`AUTO` 执行、解锁后第 1 航点进度；`HD.kml` 真实航线仍需按其终止语义保存完成证据 |
+| P1-06 | 真实 SITL 航点执行 | Usable | 已验证非模拟 MAVLink 上传、`AUTO` 执行、解锁后真实 `HD.kml` 推进至第 2/10 航点（20%）；未完成任务会精确 `undo` 清理。仍需按其终止语义保存完成/返航证据 |
 | P1-07 | 媒体基础 | Usable | `mqtt_dock3_media_test.py` |
 | P1-08 | 直播基础 | Usable | `mqtt_dock3_live_test.py` |
 | P1-09 | 相机/云台基础控制 | Usable | `mqtt_dock3_payload_test.py` 严格通过；真实 Payload ACK adapter 后续精校 |
