@@ -11,6 +11,7 @@ import struct
 import argparse
 from datetime import datetime
 from pathlib import Path
+from pymavlink.dialects.v20 import ardupilotmega
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIALECT_DIR = PROJECT_ROOT / 'src' / 'generated_dialect'
@@ -131,6 +132,8 @@ class NestSimulator:
         system_id=101,
         component_id=1,
         command_log='logs/nest_simulator/command_trace.log',
+        drone_host=None,
+        drone_port=None,
     ):
         self.host = host
         self.port = port
@@ -138,9 +141,19 @@ class NestSimulator:
         self.component_id = component_id
         self.command_log = Path(command_log) if command_log else None
         self.sock = None
+        self.drone_sock = None
+        self.drone_bind_addr = (drone_host, int(drone_port)) if drone_host and drone_port else None
+        self.drone_peer_addr = None
         self.client_addr = None
         self.running = False
         self.mav = None
+        self.drone_mav = None
+        self.drone_last_seen_at = 0.0
+        self.drone_system_id = None
+        self.drone_component_id = None
+        self.drone_armed = False
+        self.drone_relative_alt_m = 0.0
+        self.drone_current_waypoint = -1
 
         # 模拟环境数据（单位与 drone_nest.xml 一致）
         self.env_data = {
@@ -398,6 +411,14 @@ class NestSimulator:
             except Exception as e:
                 print(f"发送失败: {e}")
 
+    def _send_to_drone(self, data):
+        if not self.drone_peer_addr or not self.drone_sock:
+            return
+        try:
+            self.drone_sock.sendto(data, self.drone_peer_addr)
+        except Exception as e:
+            print(f"发送到飞机失败: {e}")
+
     # 手动构造标准心跳 (无需 dialect)
     def _send_heartbeat(self):
         payload = struct.pack('<BBBBBB', 1, 3, 0, 0, 0, 3)  # type=1 GCS, autopilot=3 ArduPilot
@@ -408,6 +429,30 @@ class NestSimulator:
                 + payload + struct.pack('<H', crc)
         self._send_raw(frame)
         print("已发送 HEARTBEAT")
+
+    def _send_drone_heartbeat(self):
+        payload = struct.pack('<BBBBBB', 1, 3, 0, 0, 0, 3)  # type=1 GCS, autopilot=3 ArduPilot
+        msg_id = 0
+        crc_extra = 50
+        crc = self.crc16(payload, extra=crc_extra)
+        frame = struct.pack('<BBBBBB', 0xFE, len(payload), 0, self.system_id, self.component_id, msg_id) \
+                + payload + struct.pack('<H', crc)
+        self._send_to_drone(frame)
+
+    def _send_drone_status_text(self):
+        if not self.drone_peer_addr or not self.drone_mav:
+            return
+        text = (
+            f"NEST hb={int(bool(self.env_data['boolstate1'] & 1))} "
+            f"takeoff={int(bool(self.env_data['boolstate2'] & 1))} "
+            f"gate={self.env_data['gate_state']}"
+        )
+        try:
+            msg = ardupilotmega.MAVLink_statustext_message(6, text.encode("utf-8")[:50])
+            self._send_to_drone(msg.pack(self.drone_mav))
+            print(f"已向飞机发送机巢状态: {text}")
+        except Exception as e:
+            print(f"发送机巢状态到飞机失败: {e}")
 
     # 使用自定义 dialect 发送 DRONE_NEST_RESPONSE
     def _send_nest_response(self):
@@ -567,11 +612,79 @@ class NestSimulator:
                 triggered_by_command=has_command,
             )
 
+    def _set_boolstate1_bit(self, bit, enabled):
+        if enabled:
+            self.env_data['boolstate1'] |= (1 << bit)
+        else:
+            self.env_data['boolstate1'] &= ~(1 << bit)
+
+    def _set_boolstate2_bit(self, bit, enabled):
+        if enabled:
+            self.env_data['boolstate2'] |= (1 << bit)
+        else:
+            self.env_data['boolstate2'] &= ~(1 << bit)
+
+    def _handle_drone_message(self, msg):
+        msg_type = msg.get_type()
+        self.drone_last_seen_at = time.time()
+        self.drone_system_id = msg.get_srcSystem()
+        self.drone_component_id = msg.get_srcComponent()
+        self._set_boolstate1_bit(BIT_DRONE_HEARTBEAT, True)
+
+        if msg_type == 'HEARTBEAT':
+            base_mode = int(getattr(msg, 'base_mode', 0) or 0)
+            self.drone_armed = bool(base_mode & ardupilotmega.MAV_MODE_FLAG_SAFETY_ARMED)
+            self._set_boolstate1_bit(BIT_READY, True)
+        elif msg_type == 'GLOBAL_POSITION_INT':
+            self.drone_relative_alt_m = float(getattr(msg, 'relative_alt', 0) or 0) / 1000.0
+        elif msg_type == 'MISSION_CURRENT':
+            self.drone_current_waypoint = int(getattr(msg, 'seq', -1) or -1)
+        elif msg_type == 'SYS_STATUS':
+            remaining = int(getattr(msg, 'battery_remaining', -1) or -1)
+            if remaining >= 0:
+                self.env_data['batteryRemaining'] = remaining
+
+        airborne = self.drone_armed and self.drone_relative_alt_m > 1.0
+        self._set_boolstate2_bit(BIT_TAKEOFF_IN_PROGRESS, airborne)
+        if airborne:
+            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, False)
+            self.env_data['charge_current'] = 0
+            self._set_boolstate1_bit(BIT_CHARGING, False)
+        elif self.drone_armed:
+            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, True)
+
+    def _drone_receive_loop(self):
+        if not self.drone_sock or not self.drone_mav:
+            return
+        print("机巢模拟器等待 SITL MAVLink 消息...")
+        while self.running:
+            try:
+                data, addr = self.drone_sock.recvfrom(4096)
+                if not data:
+                    continue
+                if self.drone_peer_addr != addr:
+                    self.drone_peer_addr = addr
+                    print(f"已注册 SITL 地址: {addr}")
+                for byte in data:
+                    msg = self.drone_mav.parse_char(bytes([byte]))
+                    if msg:
+                        self._handle_drone_message(msg)
+            except socket.timeout:
+                if self.drone_last_seen_at and time.time() - self.drone_last_seen_at > 5:
+                    self._set_boolstate1_bit(BIT_DRONE_HEARTBEAT, False)
+                continue
+            except Exception as e:
+                print(f"SITL 接收错误: {e}")
+                time.sleep(0.1)
+
     def _status_loop(self):
         """每2秒主动发送环境状态"""
         while self.running:
             if self.client_addr:
                 self._send_nest_response()
+            if self.drone_bind_addr:
+                self._send_drone_heartbeat()
+                self._send_drone_status_text()
             time.sleep(2)
 
     def _receive_loop(self):
@@ -601,6 +714,12 @@ class NestSimulator:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.host, self.port))
         self.sock.settimeout(0.5)
+        if self.drone_bind_addr:
+            self.drone_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.drone_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.drone_sock.bind(self.drone_bind_addr)
+            self.drone_sock.settimeout(0.5)
+            print(f"已启用机巢模拟器 SITL 监听: {self.drone_bind_addr[0]}:{self.drone_bind_addr[1]}")
         self.running = True
 
         # 创建自定义 MAVLink 实例（用于打包）
@@ -608,6 +727,13 @@ class NestSimulator:
             def write(self, data):
                 pass
         self.mav = drone_nest.MAVLink(DummyFile(), srcSystem=self.system_id, srcComponent=self.component_id)
+        if self.drone_sock:
+            self.drone_mav = ardupilotmega.MAVLink(
+                DummyFile(),
+                srcSystem=self.system_id,
+                srcComponent=self.component_id,
+            )
+            threading.Thread(target=self._drone_receive_loop, daemon=True).start()
 
         # 启动状态报告线程
         threading.Thread(target=self._status_loop, daemon=True).start()
@@ -625,6 +751,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="MAVLink drone nest simulator")
     parser.add_argument("--host", default="0.0.0.0", help="UDP bind host")
     parser.add_argument("--port", type=int, default=14550, help="UDP bind port")
+    parser.add_argument("--drone-host", default=None, help="SITL MAVLink UDP 本地监听 host；不填则不监听飞机")
+    parser.add_argument("--drone-port", type=int, default=None, help="SITL MAVLink UDP 本地监听 port；不填则不监听飞机")
     parser.add_argument(
         "--command-log",
         default="logs/nest_simulator/command_trace.log",
@@ -632,7 +760,13 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    sim = NestSimulator(host=args.host, port=args.port, command_log=args.command_log)
+    sim = NestSimulator(
+        host=args.host,
+        port=args.port,
+        command_log=args.command_log,
+        drone_host=args.drone_host,
+        drone_port=args.drone_port,
+    )
     try:
         sim.start()
     except KeyboardInterrupt:

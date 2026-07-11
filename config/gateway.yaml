@@ -49,6 +49,7 @@ cloud:
 
 # --- MAVLink配置 ---
 mavlink:
+  enabled: false # 当前链路中网关不直连飞机；SITL 由机巢模拟器代理
   connection:
     # type: "serial"               # serial/udp/udpin/udpout/tcp
     # port: "/dev/ttyACM0"         # 串口设备

@@ -74,6 +74,7 @@ class Config:
     def get_mavlink_config(cls):
         """获取MAVLink配置"""
         return {
+            'enabled': cls.get('mavlink.enabled', True),
             'connection_type': cls.get('mavlink.connection.type', 'serial'),
             'port': cls.get('mavlink.connection.port', '/dev/ttyACM0'),
             'baudrate': cls.get('mavlink.connection.baudrate', 921600),

@@ -5,11 +5,22 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 NEST_HOST="${NEST_HOST:-0.0.0.0}"
 NEST_PORT="${NEST_PORT:-$(nest_port)}"
+DRONE_HOST="${DRONE_HOST:-127.0.0.1}"
+DRONE_PORT="${DRONE_PORT:-14552}"
 
 echo "[INFO] MAVLink nest simulator"
 echo "[INFO] bind=${NEST_HOST}:${NEST_PORT}"
+echo "[INFO] sitl=${DRONE_HOST}:${DRONE_PORT} (set DRONE_PORT=0 to disable)"
 echo "[INFO] NEST_HOST is the simulator bind address; gateway nest_mavlink.connection.host must be a reachable target such as 127.0.0.1 or the simulator host IP, not 0.0.0.0"
-echo "[INFO] if SITL also uses 14550, keep nest on 14551 and config nest_mavlink.connection.port aligned"
+echo "[INFO] keep gateway<->nest on ${NEST_PORT}; send SITL --out to ${DRONE_HOST}:${DRONE_PORT}"
 
 cd "${PROJECT_ROOT}"
-exec "${PROJECT_PYTHON}" "${PROJECT_ROOT}/src/nest_simulator.py" --host "${NEST_HOST}" --port "${NEST_PORT}"
+if [[ "${DRONE_PORT}" == "0" ]]; then
+  exec "${PROJECT_PYTHON}" "${PROJECT_ROOT}/src/nest_simulator.py" --host "${NEST_HOST}" --port "${NEST_PORT}"
+fi
+
+exec "${PROJECT_PYTHON}" "${PROJECT_ROOT}/src/nest_simulator.py" \
+  --host "${NEST_HOST}" \
+  --port "${NEST_PORT}" \
+  --drone-host "${DRONE_HOST}" \
+  --drone-port "${DRONE_PORT}"

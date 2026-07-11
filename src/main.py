@@ -263,9 +263,21 @@ class EdgeGateway:
             mavlink_config = Config.get_mavlink_config()
             nest_mavlink_config = Config.get_nest_mavlink_config()
             use_separate_nest_mavlink = bool(nest_mavlink_config.get('enabled'))
+            use_main_mavlink = bool(mavlink_config.get('enabled', True))
             conn_type = mavlink_config['connection_type']
 
-            if conn_type == 'serial':
+            if not use_main_mavlink:
+                logger.info("Main MAVLink disabled; using nest MAVLink as the device-side link")
+                self.nest_module = DroneNestModule()
+                if self.mission:
+                    self.mission.set_nest_module(self.nest_module)
+                self._wire_nest_module_to_business()
+                if use_separate_nest_mavlink:
+                    self._start_nest_mavlink(nest_mavlink_config)
+                else:
+                    logger.warning("Main MAVLink disabled but nest_mavlink.enabled is false")
+
+            elif conn_type == 'serial':
                 conn_str = mavlink_config['port']
             elif conn_type in ('udp', 'udpin'):
                 conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
@@ -273,17 +285,18 @@ class EdgeGateway:
                 conn_str = f"udpout:{mavlink_config['host']}:{mavlink_config['udp_port']}"
             elif conn_type == 'tcp':
                 conn_str = f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
-            else:
+            elif use_main_mavlink:
                 conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
 
-            self.mavlink_conn = MAVLinkConnection(
-                connection_string=conn_str,
-                source_system=mavlink_config['system_id'],
-                source_component=mavlink_config['component_id'],
-                baudrate=mavlink_config['baudrate']
-            )
+            if use_main_mavlink:
+                self.mavlink_conn = MAVLinkConnection(
+                    connection_string=conn_str,
+                    source_system=mavlink_config['system_id'],
+                    source_component=mavlink_config['component_id'],
+                    baudrate=mavlink_config['baudrate']
+                )
 
-            if self.mavlink_conn.connect():
+            if use_main_mavlink and self.mavlink_conn.connect():
                 # 创建消息分发器
                 self.dispatcher = MessageDispatcher(self.mavlink_conn)
 
@@ -379,7 +392,7 @@ class EdgeGateway:
                 # 启动分发器
                 self.dispatcher.start()
                 logger.info("MAVLink dispatcher started")
-            else:
+            elif use_main_mavlink:
                 logger.warning("Failed to connect to MAVLink, retrying...")
                 # 主飞控 MAVLink 连接失败不阻塞机巢链路测试。
                 if use_separate_nest_mavlink:
@@ -419,6 +432,8 @@ class EdgeGateway:
             self.device.set_nest_module(self.nest_module)
         if self.dock:
             self.dock.set_nest_module(self.nest_module)
+        if self.mission:
+            self.mission.set_nest_module(self.nest_module)
 
         def nest_env_cb(nest_data):
             if self.device:
