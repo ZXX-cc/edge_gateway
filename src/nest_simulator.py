@@ -527,6 +527,16 @@ class NestSimulator:
             # fields such as mission_type are present in constructors.
             return message_cls(*args[:-1])
 
+    @staticmethod
+    def _message_int_attr(msg, name, default=-1):
+        value = getattr(msg, name, default)
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     def _load_mission_items(self):
         summary, waypoints = parse_wayline_file({"path": self.mission_file})
         if not waypoints:
@@ -920,19 +930,19 @@ class NestSimulator:
         elif msg_type == 'GLOBAL_POSITION_INT':
             self.drone_relative_alt_m = float(getattr(msg, 'relative_alt', 0) or 0) / 1000.0
         elif msg_type == 'MISSION_CURRENT':
-            self.drone_current_waypoint = int(getattr(msg, 'seq', -1) or -1)
+            self.drone_current_waypoint = self._message_int_attr(msg, 'seq', -1)
         elif msg_type == 'SYS_STATUS':
-            remaining = int(getattr(msg, 'battery_remaining', -1) or -1)
+            remaining = self._message_int_attr(msg, 'battery_remaining', -1)
             if remaining >= 0:
                 self.env_data['batteryRemaining'] = remaining
                 self.drone_battery_remaining = remaining
         elif msg_type in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
-            seq = int(getattr(msg, 'seq', -1) or -1)
+            seq = self._message_int_attr(msg, 'seq', -1)
             self._trace_drone_event("mission_request_received", msg_type=msg_type, seq=seq)
             if self.mission_upload_active:
                 self._send_mission_item(seq)
         elif msg_type == 'MISSION_ACK':
-            ack_type = int(getattr(msg, 'type', -1) or -1)
+            ack_type = self._message_int_attr(msg, 'type', -1)
             self._trace_drone_event("mission_ack_received", ack_type=ack_type)
             if self.mission_upload_active:
                 if ack_type == 0:

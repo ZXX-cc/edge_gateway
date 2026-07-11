@@ -35,6 +35,14 @@ class NestSimulatorDefaultStateTest(unittest.TestCase):
 
         self.assertEqual((ordinary, takeoff), (0, 0))
 
+    def test_zero_mavlink_fields_are_preserved(self):
+        class Message:
+            seq = 0
+            type = 0
+
+        self.assertEqual(NestSimulator._message_int_attr(Message(), "seq", -1), 0)
+        self.assertEqual(NestSimulator._message_int_attr(Message(), "type", -1), 0)
+
     def test_gateway_link_filter_rejects_sitl_mirror_heartbeat(self):
         class Message:
             def __init__(self, message_type, component):
