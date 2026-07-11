@@ -279,12 +279,43 @@ class EdgeGateway:
 
             if not use_main_mavlink:
                 logger.info("Main MAVLink disabled; using nest MAVLink as the device-side link")
+                self.flight_control = FlightControl()
+                self.mode_control = ModeControl()
+                self.telemetry_module = TelemetryModule(mode="real")
+                self.waypoint_manager = WaypointManager()
+                rtk_config = Config.get('rtk', {})
+                self.rtk_module = RTKModule(ntrip_config=rtk_config, telemetry_module=self.telemetry_module)
                 self.nest_module = DroneNestModule()
                 if self.mission:
+                    self.mission.set_flight_control(self.flight_control)
+                    self.mission.set_mode_control(self.mode_control)
+                    self.mission.set_waypoint_manager(self.waypoint_manager)
                     self.mission.set_nest_module(self.nest_module)
+                    self.mission.set_gimbal_control(self.gimbal)
+                    self.mission.set_camera_controller(self.camera)
+                    self.mission.set_telemetry_module(self.telemetry_module)
+                    self.mission.set_telemetry_reporter(self.telemetry_reporter)
+                if self.telemetry_module and self.telemetry:
+                    self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
+                if self.drc:
+                    self.drc.set_flight_control(self.flight_control)
+                    self.drc.set_mode_control(self.mode_control)
+                    self.drc.set_mission_manager(self.mission)
+                    self.drc.set_telemetry_module(self.telemetry_module)
+                if self.device:
+                    self.device.set_telemetry_processor(self.telemetry)
+                    self.device.set_dock_manager(self.dock)
                 self._wire_nest_module_to_business()
                 if use_separate_nest_mavlink:
-                    self._start_nest_mavlink(nest_mavlink_config)
+                    if self._start_nest_mavlink(nest_mavlink_config):
+                        if self.mission:
+                            self.mission.set_mavlink_connection(self.nest_mavlink_conn)
+                        if self.camera:
+                            self.camera.set_mavlink_connection(self.nest_mavlink_conn)
+                        if self.gimbal:
+                            self.gimbal.set_mavlink_connection(self.nest_mavlink_conn)
+                        if self.third_party:
+                            self.third_party.set_mavlink_connection(self.nest_mavlink_conn)
                 else:
                     logger.warning("Main MAVLink disabled but nest_mavlink.enabled is false")
 
@@ -504,6 +535,17 @@ class EdgeGateway:
                 return False
 
             self.nest_dispatcher = MessageDispatcher(self.nest_mavlink_conn)
+            device_side_modules = [] if self.mavlink_conn else [
+                self.flight_control,
+                self.mode_control,
+                self.telemetry_module,
+                self.waypoint_manager,
+                self.rtk_module,
+            ]
+            for module in device_side_modules:
+                if module:
+                    self.nest_dispatcher.add_module(module)
+                    self.nest_dispatcher.register_hook('*', module)
             self.nest_dispatcher.add_module(self.nest_module)
             self.nest_dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
             self.nest_dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)

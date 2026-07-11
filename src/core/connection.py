@@ -161,6 +161,7 @@ class MAVLinkConnection:
                 import socket
                 import threading
                 from src.generated_dialect import drone_nest
+                from pymavlink.dialects.v20 import ardupilotmega
                 valid_message_ids = set(self._custom_valid_message_ids)
 
                 parts = self.connection_string.replace('udp:', '').split(':')
@@ -180,8 +181,9 @@ class MAVLinkConnection:
                         self._sock.sendto(data, self._target)
 
                 class CustomUDPMAVLinkWrapper:
-                    def __init__(self, mav_instance, sock_obj, valid_ids):
+                    def __init__(self, mav_instance, standard_mav_instance, sock_obj, valid_ids):
                         self.mav = mav_instance
+                        self.standard_mav = standard_mav_instance
                         self._sock = sock_obj
                         self._valid_ids = valid_ids
                         self.target_system = 0
@@ -200,18 +202,27 @@ class MAVLinkConnection:
                             try:
                                 data, _ = self._sock.recvfrom(4096)
                                 for byte in data:
+                                    chunk = bytes([byte])
                                     try:
-                                        msg = self.mav.parse_char(bytes([byte]))
+                                        msg = self.mav.parse_char(chunk)
                                         if msg:
                                             msg_id = _extract_msg_id(msg)
                                             if msg_id in self._valid_ids:
                                                 self._message_queue.append(msg)
-                                            else:
-                                                print(f"[Connection] 丢弃非法机巢消息ID: {msg_id}")
                                     except Exception as e:
                                         error_str = str(e).lower()
                                         if 'invalid' not in error_str and 'prefix' not in error_str:
                                             print(f"[Connection] UDP解析异常: {e}")
+                                    try:
+                                        standard_msg = self.standard_mav.parse_char(chunk)
+                                        if standard_msg:
+                                            msg_id = _extract_msg_id(standard_msg)
+                                            if msg_id not in self._valid_ids:
+                                                self._message_queue.append(standard_msg)
+                                    except Exception as e:
+                                        error_str = str(e).lower()
+                                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                                            print(f"[Connection] UDP标准MAVLink解析异常: {e}")
                             except socket.timeout:
                                 continue
                             except Exception as e:
@@ -243,7 +254,12 @@ class MAVLinkConnection:
                     srcSystem=self.source_system,
                     srcComponent=self.source_component
                 )
-                self.master = CustomUDPMAVLinkWrapper(mav_instance, sock, valid_message_ids)
+                standard_mav_instance = ardupilotmega.MAVLink(
+                    None,
+                    srcSystem=self.source_system,
+                    srcComponent=self.source_component,
+                )
+                self.master = CustomUDPMAVLinkWrapper(mav_instance, standard_mav_instance, sock, valid_message_ids)
 
                 # The nest simulator is intentionally passive: it learns the
                 # gateway's ephemeral UDP address from the first packet, then
@@ -262,6 +278,7 @@ class MAVLinkConnection:
             if self.use_custom_dialect and self.connection_string.startswith('tcp:'):
                 import socket
                 from src.generated_dialect import drone_nest
+                from pymavlink.dialects.v20 import ardupilotmega
                 valid_message_ids = set(self._custom_valid_message_ids)
 
                 # 解析连接字符串
@@ -281,8 +298,9 @@ class MAVLinkConnection:
                 # 在 connect() 方法中，找到 CustomMAVLinkWrapper 类定义，替换为：
 
                 class CustomMAVLinkWrapper:
-                    def __init__(self, mav_instance, file_obj, sock_obj, valid_ids):
+                    def __init__(self, mav_instance, standard_mav_instance, file_obj, sock_obj, valid_ids):
                         self.mav = mav_instance
+                        self.standard_mav = standard_mav_instance
                         self.file = file_obj
                         self._sock = sock_obj
                         self._sock.settimeout(1.0)
@@ -313,19 +331,27 @@ class MAVLinkConnection:
                                     break
 
                                 for byte in data:
+                                    chunk = bytes([byte])
                                     try:
-                                        msg = self.mav.parse_char(bytes([byte]))
+                                        msg = self.mav.parse_char(chunk)
                                         if msg:
                                             msg_id = _extract_msg_id(msg)
                                             if msg_id in self._valid_ids:
                                                 self._message_queue.append(msg)
-                                            else:
-                                                print(f"[Connection] 丢弃非法机巢消息ID: {msg_id}")
                                     except Exception as e:
                                         error_str = str(e).lower()
                                         if 'invalid' not in error_str and 'prefix' not in error_str:
                                             print(f"[Connection] 解析异常: {e}")
-                                        continue
+                                    try:
+                                        standard_msg = self.standard_mav.parse_char(chunk)
+                                        if standard_msg:
+                                            msg_id = _extract_msg_id(standard_msg)
+                                            if msg_id not in self._valid_ids:
+                                                self._message_queue.append(standard_msg)
+                                    except Exception as e:
+                                        error_str = str(e).lower()
+                                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                                            print(f"[Connection] 标准MAVLink解析异常: {e}")
                             except socket.timeout:
                                 continue
                             except Exception as e:
@@ -366,8 +392,13 @@ class MAVLinkConnection:
                     srcSystem=self.source_system,
                     srcComponent=self.source_component
                 )
+                standard_mav_instance = ardupilotmega.MAVLink(
+                    None,
+                    srcSystem=self.source_system,
+                    srcComponent=self.source_component,
+                )
 
-                self.master = CustomMAVLinkWrapper(mav_instance, file, sock, valid_message_ids)
+                self.master = CustomMAVLinkWrapper(mav_instance, standard_mav_instance, file, sock, valid_message_ids)
 
                 print(f"[Connection] ✅ 使用自定义dialect包装连接")
                 self.status = ConnectionStatus.CONNECTED

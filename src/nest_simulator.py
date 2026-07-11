@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(GENERATED_DIALECT_DIR))
 from pymavlink.dialects.v20 import ardupilotmega
 from src.cloud_api.dock3_wayline import parse_wayline_file
+from src.mavlink.flight_modes import flight_mode_profile, mode_name_to_custom_mode
 import drone_nest
 
 
@@ -159,6 +160,7 @@ class NestSimulator:
         self.drone_last_seen_at = 0.0
         self.drone_system_id = None
         self.drone_component_id = None
+        self.drone_mav_type = None
         self.drone_armed = False
         self.drone_relative_alt_m = 0.0
         self.drone_current_waypoint = -1
@@ -664,9 +666,22 @@ class NestSimulator:
     def _send_set_mode_auto(self):
         target_system, _target_component = self._target_system_component()
         base_mode = ardupilotmega.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-        # ArduCopter AUTO custom_mode is 3.
-        msg = ardupilotmega.MAVLink_set_mode_message(target_system, base_mode, 3)
-        return self._send_drone_message(msg)
+        profile = flight_mode_profile(self.drone_mav_type)
+        if profile == "unknown":
+            profile = "copter"
+        custom_mode = mode_name_to_custom_mode("AUTO", profile)
+        if custom_mode is None:
+            custom_mode = 3
+        msg = ardupilotmega.MAVLink_set_mode_message(target_system, base_mode, custom_mode)
+        sent = self._send_drone_message(msg)
+        self._trace_drone_event(
+            "auto_mode_request_sent",
+            sent=int(sent),
+            mav_type=self.drone_mav_type,
+            profile=profile,
+            custom_mode=custom_mode,
+        )
+        return sent
 
     def _start_sitl_mission_async(self):
         self._trace_drone_event("mission_start_requested", mission_file=self.mission_file)
@@ -925,6 +940,7 @@ class NestSimulator:
 
         if msg_type == 'HEARTBEAT':
             base_mode = int(getattr(msg, 'base_mode', 0) or 0)
+            self.drone_mav_type = self._message_int_attr(msg, 'type', None)
             self.drone_armed = bool(base_mode & ardupilotmega.MAV_MODE_FLAG_SAFETY_ARMED)
             self._set_boolstate1_bit(BIT_READY, True)
         elif msg_type == 'GLOBAL_POSITION_INT':
@@ -976,6 +992,8 @@ class NestSimulator:
                 if self.drone_peer_addr != addr:
                     self.drone_peer_addr = addr
                     print(f"已注册 SITL 地址: {addr}")
+                if self.client_addr:
+                    self._send_raw(data)
                 for byte in data:
                     msg = self.drone_mav.parse_char(bytes([byte]))
                     if msg:
