@@ -4,7 +4,13 @@ from typing import Dict, Optional, List, Callable
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .connection import get_async_session_local, init_database_async
+from .connection import (
+    get_async_session_local,
+    init_database_async,
+    is_mongo_session,
+    mongo_expired_filter,
+    mongo_model_from_document,
+)
 from .models import OperationRecord, Alarm, MediaFile
 from .time_utils import expired_timestamp_condition
 
@@ -64,6 +70,17 @@ class CloudSyncManager:
         """同步操作记录到云端"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
+            if is_mongo_session(session):
+                query = {
+                    'status': {'$in': ['completed', 'failed']},
+                    'end_time': {'$ne': None},
+                    **mongo_expired_filter('end_time', 3 * 24 * 3600),
+                }
+                await self._sync_mongo_collection(
+                    session, 'operation_record', query, OperationRecord,
+                    self._report_operation_to_cloud,
+                )
+                return
             result = await session.execute(
                 select(OperationRecord)
                 .filter(OperationRecord.end_time.isnot(None))
@@ -84,6 +101,15 @@ class CloudSyncManager:
         """同步告警记录到云端"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
+            if is_mongo_session(session):
+                query = {
+                    'is_read': {'$in': [1, True]},
+                    **mongo_expired_filter('create_time', 24 * 3600),
+                }
+                await self._sync_mongo_collection(
+                    session, 'alarms', query, Alarm, self._report_alarm_to_cloud,
+                )
+                return
             result = await session.execute(
                 select(Alarm)
                 .filter(expired_timestamp_condition(Alarm.create_time, 24 * 3600))
@@ -103,6 +129,16 @@ class CloudSyncManager:
         """同步媒体文件元数据到云端（上传完成后）"""
         AsyncSessionLocal = get_async_session_local()
         async with AsyncSessionLocal() as session:
+            if is_mongo_session(session):
+                query = {
+                    'upload_status': 'completed',
+                    **mongo_expired_filter('created_at', 7 * 24 * 3600),
+                }
+                await self._sync_mongo_collection(
+                    session, 'media_files', query, MediaFile,
+                    self._report_media_to_cloud,
+                )
+                return
             result = await session.execute(
                 select(MediaFile)
                 .filter(expired_timestamp_condition(MediaFile.created_at, 7 * 24 * 3600))
@@ -117,6 +153,24 @@ class CloudSyncManager:
 
                 await session.commit()
                 logger.info(f"Synchronized {len(media_files)} media metadata to cloud")
+
+    async def _sync_mongo_collection(self, session, collection_name, query,
+                                     model_class, reporter):
+        documents = await session.run(
+            lambda database: list(database[collection_name].find(query))
+        )
+        if not documents or not self._mqtt_client:
+            return
+        for document in documents:
+            await reporter(mongo_model_from_document(model_class, document))
+        document_ids = [document['_id'] for document in documents]
+        await session.run(
+            lambda database: database[collection_name].delete_many(
+                {'_id': {'$in': document_ids}}
+            )
+        )
+        await session.commit()
+        logger.info("Synchronized %s %s records to cloud", len(documents), collection_name)
 
     async def _report_operation_to_cloud(self, record: OperationRecord):
         """上报操作记录到云端"""

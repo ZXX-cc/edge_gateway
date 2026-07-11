@@ -112,15 +112,15 @@ ss -tlnp | grep ':1883' || true
 
 NanoMQ 官方 deb 在当前 Ubuntu 22.04 实测出现 `GLIBC_2.36/2.38 not found`，不要手动升级 glibc。后续如必须使用 NanoMQ，优先选择 Ubuntu 24.04、兼容旧 glibc 的 NanoMQ 包，或源码编译。
 
-ArduPilot SITL 参考官方文档完成依赖与源码准备后，优先启动 Copter。实际端口要和 `config/gateway.yaml` 的 `mavlink.connection.port` 保持一致。
+ArduPilot SITL 参考官方文档完成依赖与源码准备后，当前统一启动 ArduPlane QuadPlane。SITL 不再直连网关的旧 `mavlink.connection.port=14550`，而是输出到 `nest_mavlink.sitl.port=14552`，由机巢模拟器解析飞机状态；网关只连接机巢自定义链路 `nest_mavlink.connection.port=14551`。
 
 ## 联调拓扑与端口策略
 
 | 模式 | 目的 | 端口建议 | 注意事项 |
 |---|---|---|---|
-| UAV-only | 先验证飞控/无人机遥测和基础命令 | SITL 输出到 `127.0.0.1:14550`，网关连接 `14550` | 第一阶段推荐 |
-| Dock-only | 先验证机巢自定义 MAVLink 消息 | `src/nest_simulator.py` 监听 `14550`，网关连接 `14550` | 不与 SITL 同时占用同一 UDP 端口 |
-| Combined | 同时联调无人机和机巢 | 使用 MAVLink Router 或后续扩展多 MAVLink 连接 | 当前项目配置只有一个 MAVLink 连接入口，直接同时跑 SITL 和机巢模拟器会有端口冲突 |
+| UAV-only | 单独观察飞控/无人机遥测 | SITL 输出到机巢模拟器 `127.0.0.1:14552` | 使用机巢模拟器的 `drone_status.log` 观察 |
+| Dock-only | 单独验证机巢自定义 MAVLink | 机巢模拟器监听 `14551`，网关连接 `14551` | 可把 `DRONE_PORT=0` 关闭 SITL 监听 |
+| Combined | 当前默认全链路 | SITL `14552` -> 机巢模拟器 -> 网关/机巢 `14551` | 飞机标准 MAVLink 与机巢自定义 MAVLink 分端口解析 |
 
 ## 启动与冒烟验证
 
@@ -130,11 +130,15 @@ ArduPilot SITL 参考官方文档完成依赖与源码准备后，优先启动 C
 # 1. 启动本地 MQTT broker（Ubuntu 22.04 当前使用 Mosquitto）
 sudo systemctl restart mosquitto
 
-# 2. 启动 ArduCopter SITL
-cd ~/lxz/ardupilot/ArduCopter
-sim_vehicle.py -v ArduCopter --out=127.0.0.1:14550
+# 2. 启动机巢模拟器（14551 网关链路 + 14552 SITL 输入）
+cd ~/lxz/edge_gateway
+scripts/start_nest_simulator.sh
 
-# 3. 启动网关
+# 3. 另开终端，启动 ArduPlane QuadPlane SITL
+cd ~/lxz/edge_gateway
+scripts/start_arduplane_sitl.sh
+
+# 4. 启动网关
 cd ~/lxz/edge_gateway
 source .venv/bin/activate
 python src/main.py -c config/gateway.yaml

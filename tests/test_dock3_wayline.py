@@ -708,6 +708,22 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(waypoint_manager.current_waypoints, [])
         self.assertEqual(db_updates, [])
 
+    def test_simulated_resume_does_not_require_mission_monitor(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_PAUSED
+        manager._simulate_mission = {"is_enable": 1}
+        manager._load_breakpoint_file = lambda: None
+        manager.start_mission_monitor = lambda: False
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        resume = manager.handle_resume_wayline(base_msg("resume_wayline", {}))
+
+        self.assertEqual(resume["data"]["result"], 0)
+        self.assertEqual(resume["data"]["output"]["status"], "in_progress")
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
             "flight_id": "flight-001",

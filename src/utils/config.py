@@ -85,6 +85,11 @@ class Config:
         }
 
     @classmethod
+    def get_database_config(cls):
+        """获取运行时数据库配置。"""
+        return cls.get('database', {}) or {}
+
+    @classmethod
     def get_nest_mavlink_config(cls):
         """获取机巢MAVLink配置"""
         return {

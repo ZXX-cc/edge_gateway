@@ -21,7 +21,15 @@ import asyncio
 from typing import Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
-from src.database.connection import get_async_session_local, async_engine, DATABASE_URL, init_database_async
+from src.database.connection import (
+    DATABASE_URL,
+    async_engine,
+    get_async_session_local,
+    get_database_backend,
+    init_database_async,
+    is_mongo_session,
+    mongo_expired_filter,
+)
 from src.database.time_utils import expired_timestamp_condition
 
 logger = get_logger("retention")
@@ -55,6 +63,8 @@ class DataRetentionManager:
         self._db_file_path = self._extract_db_path()
 
     def _extract_db_path(self) -> str:
+        if get_database_backend() == "mongodb":
+            return ""
         if DATABASE_URL.startswith("sqlite:///"):
             return DATABASE_URL.replace("sqlite:///", "")
         return "./missions.db"
@@ -121,6 +131,18 @@ class DataRetentionManager:
     async def _check_db_size(self):
         """异步检查数据库文件大小"""
         try:
+            if get_database_backend() == "mongodb":
+                AsyncSessionLocal = get_async_session_local()
+                async with AsyncSessionLocal() as session:
+                    stats = await session.run(lambda database: database.command("dbStats"))
+                file_size_mb = float(stats.get("storageSize", 0)) / (1024 * 1024)
+                if file_size_mb > self._max_db_size_mb:
+                    logger.warning(
+                        "MongoDB storage size %.1fMB exceeds threshold %sMB",
+                        file_size_mb,
+                        self._max_db_size_mb,
+                    )
+                return
             if os.path.exists(self._db_file_path):
                 file_size_mb = os.path.getsize(self._db_file_path) / (1024 * 1024)
                 if file_size_mb > self._max_db_size_mb:
@@ -150,39 +172,34 @@ class DataRetentionManager:
                 'media_uploaded': 0,
             }
 
-            if self._telemetry_hours > 0:
-                from src.database.models import TelemetryData
-                result = await session.execute(
-                    delete(TelemetryData)
-                    .where(expired_timestamp_condition(TelemetryData.timestamp, self._telemetry_hours * 3600))
-                )
-                deleted_counts['telemetry'] = result.rowcount if hasattr(result, 'rowcount') else 0
+            if is_mongo_session(session):
+                def cleanup(database):
+                    counts = dict(deleted_counts)
+                    if self._telemetry_hours > 0:
+                        counts['telemetry'] = database['telemetry_data'].delete_many(
+                            mongo_expired_filter('timestamp', self._telemetry_hours * 3600)
+                        ).deleted_count
+                    if self._operation_days > 0:
+                        query = {
+                            'end_time': {'$ne': None},
+                            **mongo_expired_filter('end_time', self._operation_days * 86400),
+                        }
+                        counts['operation'] = database['operation_record'].delete_many(query).deleted_count
+                    if self._alarm_days > 0:
+                        counts['alarm'] = database['alarms'].delete_many(
+                            mongo_expired_filter('create_time', self._alarm_days * 86400)
+                        ).deleted_count
+                    if self._media_uploaded_days > 0:
+                        query = {
+                            'upload_status': 'completed',
+                            **mongo_expired_filter('created_at', self._media_uploaded_days * 86400),
+                        }
+                        counts['media_uploaded'] = database['media_files'].delete_many(query).deleted_count
+                    return counts
 
-            if self._operation_days > 0:
-                from src.database.models import OperationRecord
-                result = await session.execute(
-                    delete(OperationRecord)
-                    .where(OperationRecord.end_time.isnot(None))
-                    .where(expired_timestamp_condition(OperationRecord.end_time, self._operation_days * 24 * 3600))
-                )
-                deleted_counts['operation'] = result.rowcount if hasattr(result, 'rowcount') else 0
-
-            if self._alarm_days > 0:
-                from src.database.models import Alarm
-                result = await session.execute(
-                    delete(Alarm)
-                    .where(expired_timestamp_condition(Alarm.create_time, self._alarm_days * 24 * 3600))
-                )
-                deleted_counts['alarm'] = result.rowcount if hasattr(result, 'rowcount') else 0
-
-            if self._media_uploaded_days > 0:
-                from src.database.models import MediaFile
-                result = await session.execute(
-                    delete(MediaFile)
-                    .where(MediaFile.upload_status == 'completed')
-                    .where(expired_timestamp_condition(MediaFile.created_at, self._media_uploaded_days * 24 * 3600))
-                )
-                deleted_counts['media_uploaded'] = result.rowcount if hasattr(result, 'rowcount') else 0
+                deleted_counts = await session.run(cleanup)
+            else:
+                await self._clean_expired_sqlalchemy(session, deleted_counts)
 
             await session.commit()
 
@@ -194,8 +211,50 @@ class DataRetentionManager:
 
             return deleted_counts
 
+    async def _clean_expired_sqlalchemy(self, session, deleted_counts):
+        """保留 SQLite 回退模式原有的 SQLAlchemy 清理逻辑。"""
+        from sqlalchemy import delete
+
+        if self._telemetry_hours > 0:
+            from src.database.models import TelemetryData
+            result = await session.execute(
+                delete(TelemetryData)
+                .where(expired_timestamp_condition(TelemetryData.timestamp, self._telemetry_hours * 3600))
+            )
+            deleted_counts['telemetry'] = result.rowcount if hasattr(result, 'rowcount') else 0
+
+        if self._operation_days > 0:
+            from src.database.models import OperationRecord
+            result = await session.execute(
+                delete(OperationRecord)
+                .where(OperationRecord.end_time.isnot(None))
+                .where(expired_timestamp_condition(OperationRecord.end_time, self._operation_days * 24 * 3600))
+            )
+            deleted_counts['operation'] = result.rowcount if hasattr(result, 'rowcount') else 0
+
+        if self._alarm_days > 0:
+            from src.database.models import Alarm
+            result = await session.execute(
+                delete(Alarm)
+                .where(expired_timestamp_condition(Alarm.create_time, self._alarm_days * 24 * 3600))
+            )
+            deleted_counts['alarm'] = result.rowcount if hasattr(result, 'rowcount') else 0
+
+        if self._media_uploaded_days > 0:
+            from src.database.models import MediaFile
+            result = await session.execute(
+                delete(MediaFile)
+                .where(MediaFile.upload_status == 'completed')
+                .where(expired_timestamp_condition(MediaFile.created_at, self._media_uploaded_days * 24 * 3600))
+            )
+            deleted_counts['media_uploaded'] = result.rowcount if hasattr(result, 'rowcount') else 0
+
     async def _run_vacuum(self):
         """异步执行 SQLite VACUUM 操作"""
+        if get_database_backend() == "mongodb":
+            self._last_vacuum_time = time.time()
+            logger.debug("MongoDB backend does not require SQLite VACUUM")
+            return
         start_time = time.time()
         try:
             from sqlalchemy import text
@@ -227,5 +286,6 @@ class DataRetentionManager:
             'last_cleanup_time': self._last_cleanup_time,
             'last_cleanup_counts': dict(self._last_cleanup_counts),
             'last_vacuum_time': self._last_vacuum_time,
-            'db_file_path': self._db_file_path
+            'db_file_path': self._db_file_path,
+            'backend': get_database_backend(),
         }

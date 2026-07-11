@@ -8,6 +8,18 @@ gateway:
   name: "EdgeGateway-01" # 网关名称
   product_type: "edge-gateway" # 产品类型
 
+# --- 运行时数据库（Ubuntu 本机 MongoDB） ---
+database:
+  backend: "mongodb"
+  mongodb:
+    host: "127.0.0.1"
+    port: 27017
+    database: "edge_gateway"
+    username: "admin"
+    password: "admin123"
+    auth_source: "admin"
+    connect_timeout_ms: 5000
+
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
@@ -54,7 +66,7 @@ mavlink:
     # type: "serial"               # serial/udp/udpin/udpout/tcp
     # port: "/dev/ttyACM0"         # 串口设备
     # baudrate: 921600
-    # udp/udpin 表示监听 MAVProxy --out 过来的 UDP 遥测:
+    # 主飞控直连已关闭；以下端口仅保留兼容，当前 SITL 不再直接输出到这里。
     type: "udp"
     host: "127.0.0.1"
     port: 14550
@@ -71,13 +83,16 @@ mavlink:
     attitude: 10
     battery: 1
 
-# --- 机巢MAVLink配置（可选，开启后与飞控MAVLink分离） ---
+# --- 机巢MAVLink配置（当前设备侧主链路） ---
 nest_mavlink:
-  enabled: true # true 时 DroneNestModule 使用独立连接
+  enabled: true # 网关通过 14551 与机巢模拟器交换自定义机巢 MAVLink
   connection:
     type: "udp"
     host: "127.0.0.1"
-    port: 14551 # 与主飞控 MAVLink 14550 分离，避免端口/协议冲突
+    port: 14551 # 网关 <-> 机巢模拟器；不是 SITL 标准遥测监听端口
+  sitl:
+    host: "127.0.0.1"
+    port: 14552 # SITL -> 机巢模拟器；飞机状态由机巢模拟器解析后提供给网关
   system_id: 1
   component_id: 190
 

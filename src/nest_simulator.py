@@ -944,25 +944,39 @@ class NestSimulator:
             time.sleep(2)
 
     def _receive_loop(self):
-        print("模拟器等待 MAVLink 消息...")
+        print("模拟器等待网关机巢 MAVLink 消息...")
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
                 if not data:
                     continue
-                if self.client_addr != addr:
-                    self.client_addr = addr
-                    print(f"已注册客户端地址: {addr}")
-                    self._send_heartbeat()   # 立即回复心跳
                 for byte in data:
                     msg = self.mav.parse_char(bytes([byte]))
                     if msg:
+                        # ArduPlane 启动命令会按联调要求把一份 SITL 数据镜像到
+                        # 14551。该端口的业务客户端只能是网关（component=190）
+                        # 或明确的机巢命令，防止高频 SITL 心跳抢占 client_addr，
+                        # 导致 12004/12005 被错误回发给 MAVProxy。
+                        if not self._is_gateway_link_message(msg):
+                            continue
+                        if self.client_addr != addr:
+                            self.client_addr = addr
+                            print(f"已注册网关地址: {addr}")
+                            self._send_heartbeat()   # 立即回复心跳
                         self._handle_message(msg)
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"接收错误: {e}")
                 time.sleep(0.1)
+
+    @staticmethod
+    def _is_gateway_link_message(msg):
+        """区分 14551 上的网关自定义链路与 SITL 标准消息镜像。"""
+        return (
+            msg.get_srcComponent() == 190
+            or msg.get_type() == 'DRONE_NEST_COMMAND'
+        )
 
     def start(self):
         print(f"启动 MAVLink 机巢模拟器 (UDP)，监听 {self.host}:{self.port}")

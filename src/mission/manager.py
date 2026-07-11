@@ -1538,9 +1538,10 @@ class MissionManager:
                 msg_str=reason,
             )
 
-        # 必须先预留监控线程，再向飞控发送断点/AUTO 指令。监控线程在任务仍为
-        # PAUSED 时只等待，不消费航点；这样启动失败不会留下无监控的 AUTO 飞行。
-        if self.start_mission_monitor() is False:
+        # 真实飞控任务必须先预留监控线程，再向飞控发送断点/AUTO 指令。监控线程
+        # 在任务仍为 PAUSED 时只等待，不消费航点；这样启动失败不会留下无监控
+        # 的 AUTO 飞行。模拟任务只验证 Dock3 状态机，不依赖网关侧航点监控。
+        if not simulate_enabled and self.start_mission_monitor() is False:
             return MessageBuilder.build_reply(
                 msg,
                 result=WAYLINE_EXECUTION_FAILED,

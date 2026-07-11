@@ -146,6 +146,6 @@
 | 注意项 | 要求 |
 |---|---|
 | 类型一致性 | 当前 XML 中 `DRONE_NEST_RESPONSE` 温度字段是 `uint16_t`，历史生成文件或其他分支可能存在 `int16_t` 差异，联调前必须以目标硬件协议为准 |
-| 端口占用 | `src/nest_simulator.py` 默认监听 `0.0.0.0:14550`，不能和 SITL 同时绑定同一个 UDP 端口 |
+| 端口占用 | 当前脚本把网关/机巢自定义链路固定为 `14551`，SITL 标准 MAVLink 输入固定为 `14552`；两类 dialect 分 socket 解析 |
 | 业务状态落地 | 机巢状态进入 `DroneNestModule` 后，需要同步到 `DeviceManager`、MQTT state/event 和 operation record |
 | 解析异常 | 自定义 MAVLink 消息解析失败时，应记录消息 ID、原始长度、来源 sysid/compid 和异常原因 |

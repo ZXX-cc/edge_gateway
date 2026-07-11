@@ -23,8 +23,8 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | 运行方式 | Ubuntu 服务器内纯模拟 |
 | 云端通信 | MQTT topic/method/payload/reply 对齐 Dock3 |
 | 设备侧通信 | MAVLink + ArduPilot SITL + 机巢模拟器 |
-| 数据存储现状 | SQLite + SQLAlchemy/aiosqlite |
-| 数据存储目标 | MongoDB 服务型 NoSQL，后续通过异步数据访问层接入 |
+| 数据存储现状 | Ubuntu 本机 MongoDB；SQLite 仅作为历史迁移来源和显式回退模式 |
+| 数据存储实现 | 同步/异步仓储接口统一适配 MongoDB，覆盖任务、航点、设备、遥测、操作、告警、媒体、保留策略和云同步 |
 | 客户需求口径 | 客户文档定义业务能力全集，旧 Dock/Dock1/Dock2 表述只做业务意图和差异对照 |
 | 最终协议口径 | 客户需求涉及的上云能力必须按 DJI Dock 3 官方 Cloud API 定义 MQTT topic、method、payload、reply、字段、枚举和验收 |
 | 迁移边界 | 客户暂未提及、当前业务未用到的 Dock3 官方能力可以延期迁移，但必须在 method 台账或 P2 风险中标明 Deferred/Adapter 状态 |
@@ -107,7 +107,7 @@ http://Ubuntu服务器IP:8090
 | `src/media/` | 媒体文件、直播、上传队列和存储配置 |
 | `src/drc/` | 指令飞行和 DRC 实时控制 |
 | `src/payload/` | 相机、云台和第三方负载接口 |
-| `src/database/` | 当前 SQLite/SQLAlchemy 数据层，后续迁移到 MongoDB 目标抽象 |
+| `src/database/` | MongoDB 默认运行时数据层；保留 SQLite/SQLAlchemy 回退与历史迁移兼容 |
 | `src/nest_simulator.py` | MAVLink 机巢模拟器 |
 | `tools/` | Ubuntu 预检、MQTT 冒烟测试、Dock3 P0/DRC/organization 批量验收工具 |
 | `web/` | 独立 Web 调试台，不嵌入主网关 |

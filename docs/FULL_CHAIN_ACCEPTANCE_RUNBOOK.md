@@ -95,7 +95,7 @@ cd ~/lxz/edge_gateway
 git status --short --branch
 bash tools/ubuntu_preflight.sh
 
-ss -tlnp | egrep ':1883|:8083|:6789|:18083|:14550|:14551' || true
+ss -tlnp | egrep ':1883|:8083|:6789|:18083|:14550|:14551|:14552' || true
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
 ```
 
@@ -147,10 +147,14 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t 'sys/product/EDGEGW001/#' -v
 ### 4.3 ArduPilot SITL
 
 ```bash
-export PATH=$PATH:$HOME/.local/bin:$HOME/lxz/ardupilot/Tools/autotest
-cd ~/lxz/ardupilot/ArduCopter
-sim_vehicle.py -v ArduCopter --out=127.0.0.1:14550
+cd ~/lxz/edge_gateway
+scripts/start_nest_simulator.sh
+
+# 另开终端；默认启动 ArduPlane quadplane / Changchun_HD
+scripts/start_arduplane_sitl.sh
 ```
+
+ArduPlane 脚本默认生成三路输出：`udp:127.0.0.1:14552` 作为机巢模拟器的 SITL 标准 MAVLink 主入口，`udp:127.0.0.1:14551` 保留本机联调镜像，`udp:192.168.2.59:14551` 提供内网观察。机巢模拟器只把 component `190` 或 `DRONE_NEST_COMMAND` 注册为 14551 网关客户端，防止 SITL 镜像抢占 12004/12005 回包地址。
 
 通过标准：
 
@@ -331,6 +335,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 2026-07-10 完整 strict E2E 已通过：`python tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 e2e full-chain test ok (steps=11, elapsed=26.7s)`。全部 11 段均为 `exit=0`；最后 firmware/config 输出 `accepted=8, events=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0`。
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
+
+2026-07-11 数据库默认运行时已切换为 Ubuntu 本机 MongoDB。切换前必须停止网关并保留 `missions.db` 文件副本，再执行 `python tools/migrate_sqlite_to_mongodb.py migrate-and-verify --sqlite missions.db --config config/gateway.yaml`；脚本只读 SQLite，按表 upsert 到同名 MongoDB 集合，清理已从 SQLite 删除的旧迁移副本，并只对带 `_sqlite_migration` 标记的迁移文档做数量和内容校验。迁移通过后执行 `python tools/mongodb_runtime_audit.py --config config/gateway.yaml --write-check`，必须输出 `MONGODB_CONNECTION_OK`、`MONGODB_INDEX_OK`、`MONGODB_RUNTIME_WRITE_READ_OK domains=8` 和 `MONGODB_RUNTIME_AUDIT_OK`，随后再启动网关运行完整 strict E2E。MongoDB 审计数据带隔离标识并在结束时自动清理。
 
 2026-07-10 相机/云台严格专项已通过：`python tools/mqtt_dock3_payload_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 payload test ok (accepted=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。已验证能力查询、云台转动/模式/复位后的状态回读、拍照、录像启停及重复停止录像返回 `319999`；该结论仅覆盖 MAVLink/SITL 命令发送闭环，真实 Payload 硬件 ACK 需后续专项。
 
