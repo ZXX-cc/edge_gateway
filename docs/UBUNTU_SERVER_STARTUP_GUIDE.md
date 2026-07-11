@@ -836,6 +836,17 @@ python tools/mqtt_drc_batch_test.py --timeout 12 --quiet-stale --fail-on-stale
 python tools/e2e_full_chain_test.py --timeout 12 --quiet-stale --fail-on-stale
 ```
 
+上述 OSD/state 命令验证协议结构。需要证明 SITL/飞控实时遥测而非全零
+占位数据时，追加动态门禁：
+
+```bash
+python tools/mqtt_dock3_osd_state_test.py \
+  --timeout 30 --quiet-stale --fail-on-stale --require-live-drone
+```
+
+门禁会继续等待全零 aircraft OSD，直到出现非零经纬度、有效电池电压、
+非零 GPS 卫星数和 `position_state.is_fixed=2`。
+
 如果 `--fail-on-stale` 失败，先排查是否还有旧进程或 broker 规则在抢答：
 
 ```bash

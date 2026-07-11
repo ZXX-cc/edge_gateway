@@ -161,6 +161,35 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     return errors
 
 
+def live_drone_osd_errors(payload: Dict[str, Any]) -> List[str]:
+    """判断 aircraft OSD 是否已包含真实 SITL/飞控动态遥测。"""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return ["drone OSD data must be object"]
+
+    errors = []
+    latitude = data.get("latitude", 0)
+    longitude = data.get("longitude", 0)
+    if not is_number(latitude) or not is_number(longitude) or (
+        abs(float(latitude)) < 1e-7 and abs(float(longitude)) < 1e-7
+    ):
+        errors.append("latitude/longitude are still zero placeholders")
+
+    battery = data.get("battery")
+    voltage = battery.get("voltage", 0) if isinstance(battery, dict) else 0
+    if not is_number(voltage) or float(voltage) <= 0:
+        errors.append("battery.voltage is not live")
+
+    position = data.get("position_state")
+    gps_number = position.get("gps_number", 0) if isinstance(position, dict) else 0
+    fixed_state = position.get("is_fixed", 0) if isinstance(position, dict) else 0
+    if not isinstance(gps_number, int) or gps_number <= 0:
+        errors.append("position_state.gps_number is not live")
+    if fixed_state != 2:
+        errors.append(f"position_state.is_fixed expected live fix=2, actual={fixed_state}")
+    return errors
+
+
 def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: str) -> List[str]:
     errors = envelope_errors(payload, gateway_sn)
     data = payload.get("data")
@@ -279,10 +308,12 @@ class Dock3OsdStateClient(MqttRequestClient):
         qos: int,
         expected_state_property: str,
         quiet_stale: bool = False,
+        require_live_drone: bool = False,
         mqtt_module=None,
     ):
         self.drone_sn = drone_sn
         self.expected_state_property = expected_state_property
+        self.require_live_drone = require_live_drone
         self.changed = Event()
         self.lock = Lock()
         self.dock_osd_topic = f"thing/product/{sn}/osd"
@@ -294,6 +325,7 @@ class Dock3OsdStateClient(MqttRequestClient):
         self.expected_state: List[Dict[str, Any]] = []
         self.invalid_samples: List[str] = []
         self.ignored_legacy_samples: List[Dict[str, Any]] = []
+        self.placeholder_drone_samples: List[Dict[str, Any]] = []
         super().__init__(
             host,
             port,
@@ -372,8 +404,18 @@ class Dock3OsdStateClient(MqttRequestClient):
                 elif errors:
                     self._record_invalid(topic, errors, payload)
                 else:
-                    self.valid_drone_osd.append(payload)
-                    print(f"valid drone osd <- {topic}, count={len(self.valid_drone_osd)}")
+                    live_errors = live_drone_osd_errors(payload) if self.require_live_drone else []
+                    if live_errors:
+                        self.placeholder_drone_samples.append({
+                            "topic": topic,
+                            "errors": live_errors,
+                            "data": payload.get("data", {}),
+                        })
+                        if not self.quiet_stale:
+                            print(f"waiting live drone osd <- {topic}: {'; '.join(live_errors)}")
+                    else:
+                        self.valid_drone_osd.append(payload)
+                        print(f"valid drone osd <- {topic}, count={len(self.valid_drone_osd)}")
 
             elif topic == self.state_topic:
                 errors = validate_state(payload, self.sn, self.expected_state_property)
@@ -429,7 +471,8 @@ class Dock3OsdStateClient(MqttRequestClient):
         dock_count, drone_count, state_count = self.counts()
         print(
             f"dock_osd={dock_count}, drone_osd={drone_count}, state={state_count}, "
-            f"invalid={len(self.invalid_samples)}, ignored_legacy={self.stats.get('ignored_observed_legacy', 0)}"
+            f"invalid={len(self.invalid_samples)}, ignored_legacy={self.stats.get('ignored_observed_legacy', 0)}, "
+            f"drone_placeholders={len(self.placeholder_drone_samples)}"
         )
         if self.valid_dock_osd:
             data = self.valid_dock_osd[-1].get("data", {})
@@ -494,6 +537,11 @@ def main() -> int:
     parser.add_argument("--drone-samples", type=int, default=1)
     parser.add_argument("--skip-topo", action="store_true", help="Do not publish update_topo before waiting for drone OSD.")
     parser.add_argument("--skip-drone", action="store_true")
+    parser.add_argument(
+        "--require-live-drone",
+        action="store_true",
+        help="Require non-zero coordinates, battery voltage and fixed GPS in aircraft OSD.",
+    )
     parser.add_argument("--skip-state", action="store_true")
     parser.add_argument("--no-trigger-state", action="store_true", help="Only listen for state messages; do not publish property_set.")
     parser.add_argument("--state-property", default="silent_mode")
@@ -524,6 +572,7 @@ def main() -> int:
         args.qos,
         expected_state_property,
         quiet_stale=args.quiet_stale,
+        require_live_drone=args.require_live_drone,
     )
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)
@@ -551,6 +600,12 @@ def main() -> int:
             )
             for sample in client.invalid_samples[:5]:
                 print(f"invalid sample: {sample}", file=sys.stderr)
+            if client.placeholder_drone_samples:
+                print(
+                    "latest drone placeholder="
+                    + json.dumps(client.placeholder_drone_samples[-1], ensure_ascii=False)[:1000],
+                    file=sys.stderr,
+                )
             return 4
 
         if client.invalid_samples and not args.allow_invalid:

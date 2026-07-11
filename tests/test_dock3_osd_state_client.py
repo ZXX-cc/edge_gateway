@@ -154,6 +154,34 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(len(self.client.invalid_samples), 1)
         self.assertIn("dock OSD must use Dock3 dock properties", self.client.invalid_samples[0])
 
+    def test_live_drone_gate_waits_past_placeholder_until_dynamic_osd(self):
+        client = Dock3OsdStateClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            "DRONESIM001",
+            1,
+            "silent_mode",
+            quiet_stale=True,
+            require_live_drone=True,
+            mqtt_module=FakeMqttModule,
+        )
+        placeholder = valid_drone_osd()
+        live = valid_drone_osd()
+        live["data"]["latitude"] = 43.817
+        live["data"]["longitude"] = 125.3235
+        live["data"]["battery"]["voltage"] = 24000
+        live["data"]["position_state"].update({"gps_number": 15, "is_fixed": 2})
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            client._on_message(None, None, mqtt_message(client.drone_osd_topic, placeholder))
+            self.assertEqual(client.counts()[1], 0)
+            client._on_message(None, None, mqtt_message(client.drone_osd_topic, live))
+
+        self.assertEqual(client.counts()[1], 1)
+        self.assertEqual(len(client.placeholder_drone_samples), 1)
+        self.assertEqual(client.invalid_samples, [])
+
     def test_non_object_observed_payload_is_recorded(self):
         self.client._on_message(None, None, mqtt_message(self.client.dock_osd_topic, ["not-object"]))
 
