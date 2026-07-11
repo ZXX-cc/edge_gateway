@@ -611,10 +611,10 @@ class FlightControl(BaseModule):
     def pause_mission(self) -> Dict:
         if self.mode_profile == "plane":
             # 当前 ArduPlane/QuadPlane 对 MAV_CMD_DO_PAUSE_CONTINUE 会明确返回
-            # UNSUPPORTED。直接切入可由 HEARTBEAT 确认的 hold 模式，避免把
-            # 模式暂停伪装成原生 mission pause。
+            # UNSUPPORTED。真实 SITL 中 QLOITER 可能无法保高，暂停航线时
+            # 改用固定翼 LOITER 作为可由 HEARTBEAT 确认的 hold 模式。
             return self._pause_with_hold_modes(
-                ["QLOITER", "LOITER"],
+                ["LOITER"],
                 "plane profile 使用受控 hold 模式，不发送原生暂停命令",
             )
 

@@ -336,6 +336,56 @@ def wait_for_wayline_progress(client: MqttRequestClient, args, flight_id: str) -
     }
 
 
+def pause_wayline(client: MqttRequestClient, args, flight_id: str) -> tuple[bool, dict[str, Any]]:
+    before = client.event_count("flighttask_progress")
+    rc, reply = client.request(
+        "flighttask_pause",
+        {},
+        args.timeout,
+        channel="services",
+        allowed_results={0},
+        expected_status="paused",
+    )
+    if rc != 0:
+        return False, {
+            "reason": "flighttask_pause request failed",
+            "rc": rc,
+            "result": result_code(reply),
+            "status": output_status(reply),
+            "msg": reply.get("msg") if isinstance(reply, dict) else None,
+        }
+
+    rc, progress = client.request(
+        "flighttask_progress",
+        {"flight_id": flight_id},
+        args.timeout,
+        channel="services",
+        allowed_results={0},
+        expected_status="paused",
+    )
+    if rc != 0:
+        return False, {
+            "reason": "flighttask_progress did not report paused",
+            "rc": rc,
+            "result": result_code(progress),
+            "status": output_status(progress),
+        }
+
+    event_rc, event = client.wait_event(
+        "flighttask_progress",
+        before,
+        args.event_timeout,
+        expected_status="paused",
+    )
+    return True, {
+        "reply_status": output_status(reply),
+        "progress_status": output_status(progress),
+        "event_observed": event_rc == 0,
+        "event_status": output_status(event),
+        "ext": output_ext(progress),
+    }
+
+
 def prime_guided_mode(client: MqttRequestClient, args) -> int:
     if args.skip_guided_prime:
         return 0
@@ -355,40 +405,6 @@ def prime_guided_mode(client: MqttRequestClient, args) -> int:
         "msg": reply.get("msg") if isinstance(reply, dict) else None,
     })
     return rc
-
-
-def cleanup(client: MqttRequestClient, args, flight_id: str) -> int:
-    if args.leave_running:
-        print(f"cleanup skipped by request (flight_id={flight_id})")
-        return 0
-
-    failures = 0
-    rc, reply = client.request(
-        "flighttask_undo",
-        {"flight_ids": [flight_id]},
-        args.timeout,
-        channel="services",
-        allowed_results={0},
-        expected_status="canceled",
-    )
-    print_probe("解除一键启航任务状态", rc == 0, {"result": result_code(reply), "status": output_status(reply)})
-    if rc != 0:
-        failures += 1
-
-    if not args.skip_landing:
-        rc, reply = client.request(
-            "landing",
-            {},
-            args.timeout,
-            channel="services",
-            allowed_results={0},
-            expected_status=None,
-        )
-        print_probe("发送降落清理指令", rc == 0, {"result": result_code(reply)})
-        if rc != 0:
-            failures += 1
-
-    return 0 if failures == 0 else 30
 
 
 def run(args) -> int:
@@ -524,10 +540,17 @@ def run(args) -> int:
         print_probe("真实 SITL 航线执行", progressed, progress_detail)
         if not progressed:
             return 16
+        if progress_detail.get("reason") == "mission completed":
+            print_probe("暂停航线验证", False, {
+                "reason": "mission completed before pause could be tested",
+                "detail": progress_detail,
+            })
+            return 17
 
-        cleanup_rc = cleanup(client, args, flight_id)
-        if cleanup_rc != 0:
-            return cleanup_rc
+        paused, pause_detail = pause_wayline(client, args, flight_id)
+        print_probe("暂停航线验证", paused, pause_detail)
+        if not paused:
+            return 18
 
         ignored_total = client.stale_total()
         if args.fail_on_stale and ignored_total:
@@ -568,8 +591,6 @@ def main() -> int:
     parser.add_argument("--mission-poll-seconds", type=float, default=5.0)
     parser.add_argument("--max-start-height", type=float, default=5.0)
     parser.add_argument("--allow-airborne-start", action="store_true")
-    parser.add_argument("--leave-running", action="store_true")
-    parser.add_argument("--skip-landing", action="store_true")
     parser.add_argument("--skip-topo", action="store_true")
     parser.add_argument("--skip-guided-prime", action="store_true")
     parser.add_argument("--gateway-domain", default="3")

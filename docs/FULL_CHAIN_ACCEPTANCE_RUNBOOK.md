@@ -73,7 +73,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
 | 已通过 `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：mock KMZ、机巢 `request_takeoff`、任务完成事件 | P1 |
 | `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
-| `tools/mqtt_one_key_takeoff_sitl_test.py` | 一键启航真实 SITL 航线验收：默认准备服务器 `/home/fenghuolun/zwz/HD.kml`，`one_key_takeoff_flow` 起飞后切 AUTO，并用 QGC/SITL OSD 与航点进度证明真实执行；默认测试后取消任务并降落 | P1 |
+| `tools/mqtt_one_key_takeoff_sitl_test.py` | 一键启航真实 SITL 航线验收：默认准备服务器 `/home/fenghuolun/zwz/HD.kml`，`one_key_takeoff_flow` 起飞后切 AUTO，并用 QGC/SITL OSD、航点进度和 `flighttask_pause` 证明真实执行与暂停；测试结束后停在 paused，不发送取消任务或降落清理指令 | P1 |
 | 已通过 `tools/e2e_full_chain_test.py` | 11 段 P0/P1 全链路；清理旧进程后继续用 `--fail-on-stale` 做严格验收 | P1 |
 
 P0-16 本地回归命令：

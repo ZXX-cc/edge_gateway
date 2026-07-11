@@ -141,7 +141,7 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertEqual(result["mode"], "QLAND")
         self.assertEqual(control.mode_calls, ["QLAND"])
 
-    def test_plane_pause_uses_qloiter_without_native_command(self):
+    def test_plane_pause_uses_loiter_without_native_command(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
 
@@ -149,22 +149,20 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["QLOITER"])
+        self.assertEqual(control.mode_calls, ["LOITER"])
         self.assertEqual(result["pause_strategy"], "hold_mode")
-        self.assertEqual(result["target_mode"], "QLOITER")
+        self.assertEqual(result["target_mode"], "LOITER")
         self.assertFalse(result["native_pause"])
         self.assertIn("不发送原生暂停命令", result["fallback_reason"])
 
-    def test_plane_pause_tries_each_hold_mode_until_confirmed(self):
+    def test_plane_pause_uses_single_loiter_hold_mode(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
 
         def set_mode(mode, timeout=10.0):
             control.mode_calls.append(mode)
             control.mode_timeouts.append(timeout)
-            if mode == "LOITER":
-                return {"success": True, "message": "loiter confirmed"}
-            return {"success": False, "message": f"{mode} unavailable"}
+            return {"success": True, "message": "loiter confirmed"}
 
         control.set_mode = set_mode
 
@@ -172,12 +170,12 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["QLOITER", "LOITER"])
-        self.assertEqual(control.mode_timeouts, [8.0, 8.0])
+        self.assertEqual(control.mode_calls, ["LOITER"])
+        self.assertEqual(control.mode_timeouts, [8.0])
         self.assertEqual(result["target_mode"], "LOITER")
         self.assertEqual(
             [attempt["success"] for attempt in result["hold_attempts"]],
-            [False, True],
+            [True],
         )
 
     def test_plane_pause_fails_when_no_hold_mode_is_confirmed(self):
@@ -195,11 +193,11 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertFalse(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["QLOITER", "LOITER"])
-        self.assertEqual(control.mode_timeouts, [8.0, 8.0])
+        self.assertEqual(control.mode_calls, ["LOITER"])
+        self.assertEqual(control.mode_timeouts, [8.0])
         self.assertIsNone(result["target_mode"])
         self.assertFalse(result["native_pause"])
-        self.assertEqual(len(result["hold_attempts"]), 2)
+        self.assertEqual(len(result["hold_attempts"]), 1)
 
     def test_set_mode_uses_caller_timeout_for_heartbeat_confirmation(self):
         control = FlightControl()
