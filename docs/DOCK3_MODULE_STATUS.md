@@ -37,7 +37,7 @@
 |---|---|
 | 已做到 | MQTT topic/reply 边界、设备上线/心跳、组织绑定、`update_topo` 设备拓扑、properties、OSD/state、错误码、request trace、CMD 基础控制、DRC 基础链路和心跳、Wayline mock KMZ 基础闭环、一键启航离线闭环、Media 基础、Live mock、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config 专项、短周期数据保留与操作记录、P0/P1 核心 E2E |
 | 部分做到 | 飞控真实 SITL 行为、机巢 v1.3 状态机、一键启航真实机巢联动、真实航点执行、多设备/解绑/离线、相机/云台真实硬件控制 |
-| 未做到/待迁移 | 真实 OTA、真实 OSS 上传、真实直播推流、真实 PSDK/ESDK、MongoDB/NoSQL 目标架构、生产 TLS/鉴权 |
+| 未做到/待迁移 | 真实 OTA、真实 OSS 上传、真实直播推流、真实 PSDK/ESDK、生产 TLS/鉴权；MongoDB 运行时代码已完成，等待 Ubuntu 切换验收 |
 | 不属于本网关项目 | 航线库编辑、前端页面、用户权限、业务工单、多设备批量调度、全量历史统计、长期数据仓库、媒体资源库、告警通知推送 |
 
 ## 30 天目标口径
@@ -68,8 +68,8 @@
 | MQTT topic/reply 边界 | 已通过 | 92% | `services/services_reply`、`property/set_reply`、`requests/requests_reply`、`status/status_reply`、`drc/up` 基础分流已验证；人员1验收脚本已统一收敛到共享 MQTT 客户端，按 `tid + method + topic + Dock3格式` 过滤旧回包；OSD/state 已支持把旧 OSD/state 样本计入 `--fail-on-stale`；DRC 专项已输出 `stale_samples` 便于定位旧回包来源 | broker 中仍可能观察到旧进程产生的重复回包，需要清理环境后做严格验证 | 清理旧回包源，执行全链路 `--fail-on-stale` 严格验收 | 人员1 |
 | DJI 错误码边界 | 已通过 | 90% | MQTT 对外回包不再返回内部 `-1/-2/-3`，统一映射 DJI 官方错误码；本地单测通过 | 各业务分支的精确错误码仍需随官方字段细化 | 每迁移一个大类补充错误码矩阵 | 人员1 |
 | 日志与可观测性 | 已通过 | 90% | 日志按 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log` 落盘，MQTT 关键字段支持中文字段名；非阻塞 request trace JSONL 已通过 Ubuntu 复测；命令链 `command_trace` 已补 Dock3 properties/device/CMD/DRC/Wayline/media/live/HMS/log/firmware/config 中文动作映射，未知 method 会明确打印“未注册业务处理器”；11 段 E2E 已能输出分段耗时和最终汇总 | 压缩策略、真实 OSS 上传和 E2E 证据自动归档未完整实现 | 接入全链路证据归档 | 人员1/人员3 |
-| 非阻塞与容错基础 | 部分完成 | 67% | 已修复若干 coroutine 未 await warning，停止流程可正常 await；数据保留和云同步已统一秒级/毫秒级时间戳过期判断，`manual_cleanup()` 已回传分类删除数并记录状态；`fileupload_list`、设备日志列表/上传、媒体列表/删除和上传优先级等文件 IO handler 已改为受控后台执行。Ubuntu 已通过回调回归 2/2、HMS/日志专项 `accepted=8, events=5`、媒体专项 `accepted=6, events=2` 和隔离 DB 数据保留专项，异步 reply 正确返回，控制类 handler 保持同步顺序 | MongoDB/NoSQL 目标未实现，固件和媒体上传仍需全面后台化审计；真实生产 DB 容量与并发压测未完成 | 扩展后台任务审计，补操作队列、生产 DB 容量与超时注入验收 | 人员1/人员2 |
-| 短周期数据保留与操作记录 | 已通过 | 78% | `tools/database_retention_audit.py` 在 Ubuntu 独立临时 SQLite 库中验证：秒/毫秒过期时间可清理，遥测、已结束操作、告警和已上传媒体删除统计为 `1/2/1/1`；运行中操作、待上传媒体与新记录均被保留，`tests.test_retention_manager` 通过。脚本拒绝已有库和项目 `missions.db` | 生产库容量、长期归档和真实云同步策略仍需后续压测/精校 | 生产部署阶段补容量告警、归档与云同步审计 | 人员1 |
+| 非阻塞与容错基础 | 部分完成 | 72% | 已修复若干 coroutine 未 await warning，停止流程可正常 await；MongoDB 同步写通过短时会话，异步仓储操作通过线程卸载避免阻塞事件循环；任务、航点、遥测、操作、告警、媒体、设备绑定、保留策略和云同步均已接 MongoDB。Ubuntu 已通过既有 SQLite 保留专项和各业务 MQTT 回归 | MongoDB 运行时切换尚需 Ubuntu 实库审计与全链路回归；固件和媒体上传仍需全面后台化审计；生产 DB 容量与并发压测未完成 | 先执行 MongoDB 迁移/读写审计，再跑完整 strict E2E | 人员1/人员2 |
+| 短周期数据保留与操作记录 | 已通过 | 82% | SQLite 隔离专项已验证四类保留清理；MongoDB 运行时实现复用秒/毫秒时间戳边界，并通过 `dbStats` 检查容量，MongoDB 无需执行 SQLite `VACUUM`。新增实库审计工具会隔离验证八个数据域并自动清理 | MongoDB 实库保留清理、长期归档和真实云同步策略仍需 Ubuntu 压测/精校 | 执行 `mongodb_runtime_audit.py --write-check` 后补 MongoDB 保留清理专项 | 人员1 |
 | 相机/云台基础控制 | 已通过 | 72% | `tools/mqtt_dock3_payload_test.py --timeout 20 --quiet-stale --fail-on-stale` 已在 Ubuntu 通过：相机/云台能力查询、云台转动/模式/复位状态回读、拍照、录像启停和重复停止录像失败码共 `accepted=12`、`ignored_total=0`。失败发送不会污染录像状态、媒体计数或云台缓存 | 当前为 MAVLink/SITL 命令发送闭环，未得到真实 Payload SDK/硬件 ACK | 接真实 Payload 后补 ACK、能力枚举和媒体文件实体证据 | 人员1 |
 | Properties / OSD / State | 已通过 | 80% | 官方 `rw` 属性 `silent_mode`、`air_transfer_enable`、`user_experience_improvement` 已通过专项复测；11 段 E2E 的 OSD/state 阶段已在服务器通过，输出 `dock_osd=1, drone_osd=1, state=1, invalid=0`；脚本已忽略旧版 `reason=property_changed` state 和旧 helper 的部分 value-wrapper OSD 残留，当前有效样本仍按 Dock3 必填字段严格校验 | 客户需求涉及的单位、枚举、Dock3 真实设备字段仍需精校 | 补字段矩阵和真实 SITL 动态值验证 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 85% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；服务器多设备专项已验证 `DRONE-SIM-001,DRONE-SIM-002` 上线、离线空拓扑、重连恢复和非法拓扑拒绝；organization 多设备绑定服务器复测已验证 `sub_devices=2` 和 `status_reply result=0`；服务器 device 解绑专项已验证 `device_unbinding events ok: count=3`、空 `update_topo`、`unbind=True`；E2E device 单段已通过 | `domain/type/sub_type` 官方产品枚举、真实云端字段差异未精校 | 精校设备类型枚举和真实云端字段 | 人员1/人员3 |

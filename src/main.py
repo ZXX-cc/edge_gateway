@@ -61,7 +61,13 @@ from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
 from src.database.retention_manager import DataRetentionManager
 from src.database.cloud_sync_manager import CloudSyncManager
-from src.database.connection import SessionLocal, init_database
+from src.database.connection import (
+    SessionLocal,
+    close_database,
+    configure_database,
+    get_database_backend,
+    init_database,
+)
 from src.database.telemetry_db import TelemetryDB
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
@@ -164,6 +170,10 @@ class EdgeGateway:
             logger.info("Loading configuration...")
             self.config = load_config(config_path)
 
+            # 数据库必须在业务模块初始化前完成后端选择；SessionLocal 是稳定代理，
+            # 后续同步/异步调用都会落到这里选定的 MongoDB 或 SQLite。
+            configure_database(Config.get_database_config())
+
             # 2. 初始化日志
             log_config = Config.get('logging', {})
             init_logger(log_config)
@@ -203,6 +213,7 @@ class EdgeGateway:
             # 6.2 初始化云端同步管理器（混合存储架构）
             self.cloud_sync_manager = CloudSyncManager()
             init_database()
+            logger.info("Database backend initialized: %s", get_database_backend())
 
             # 7. 初始化RTK模块（延迟到start中，因为需要telemetry_module）
 
@@ -538,6 +549,8 @@ class EdgeGateway:
         if self.cloud_sync_manager:
             self.cloud_sync_manager.stop_sync()
 
+        close_database()
+
         logger.info("Edge Gateway stopped")
 
     def request_stop(self, reason: str = ""):
@@ -590,6 +603,8 @@ class EdgeGateway:
             await self.retention_manager.stop()
         if self.cloud_sync_manager:
             await self.cloud_sync_manager.stop()
+
+        close_database()
 
         logger.info("Edge Gateway stopped (async)")
 

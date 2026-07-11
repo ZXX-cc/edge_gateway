@@ -8,6 +8,18 @@ gateway:
   name: "EdgeGateway-01" # 网关名称
   product_type: "edge-gateway" # 产品类型
 
+# --- 运行时数据库（Ubuntu 本机 MongoDB） ---
+database:
+  backend: "mongodb"
+  mongodb:
+    host: "127.0.0.1"
+    port: 27017
+    database: "edge_gateway"
+    username: "admin"
+    password: "admin123"
+    auth_source: "admin"
+    connect_timeout_ms: 5000
+
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true

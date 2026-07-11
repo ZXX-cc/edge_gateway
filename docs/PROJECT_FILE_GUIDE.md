@@ -134,7 +134,7 @@ src/core/connection.py
 
 | 路径 | 职责 |
 |---|---|
-| `src/database/connection.py` | 当前 SQLite/SQLAlchemy 同步和异步连接 |
+| `src/database/connection.py` | MongoDB/SQLite 后端选择、同步/异步会话代理、MongoDB 索引和连接生命周期 |
 | `src/database/models.py` | ORM 模型：mission、waypoint、device_state、alarm、binding、telemetry、operation、media |
 | `src/database/mission_db.py` | 航线任务 CRUD |
 | `src/database/waypoint_db.py` | 航点 CRUD |
@@ -147,9 +147,11 @@ src/core/connection.py
 | `tools/request_trace_query.py` | request trace 查询工具，可按 `tid`、`bid`、`method`、`event`、`result` 过滤 |
 | `src/database/device_state_db.py` | 设备状态 |
 | `src/database/cloud_sync_manager.py` | 云端同步任务 |
-| `src/database/retention_manager.py` | 数据清理、VACUUM 和保留策略 |
+| `src/database/retention_manager.py` | MongoDB/SQLite 短周期数据清理、容量检查和保留策略 |
+| `tools/migrate_sqlite_to_mongodb.py` | 历史 SQLite 全量迁移到 MongoDB并逐行校验 |
+| `tools/mongodb_runtime_audit.py` | Ubuntu MongoDB 连接、索引和八个运行时数据域读写审计 |
 
-当前实现是 SQLite，不是 NoSQL。目标架构采用 MongoDB 服务型 NoSQL，后续应先建立数据访问抽象，再迁移持久化实现。
+当前默认运行时后端为 Ubuntu 本机 MongoDB。现有业务模块仍调用统一的 DB 仓储接口；连接层根据 `database.backend` 返回 MongoDB 或 SQLite 会话。SQLite 只用于迁移历史 `missions.db`、隔离专项和显式回退，不再是生产默认存储。
 
 ## 8. 自定义 MAVLink 协议
 

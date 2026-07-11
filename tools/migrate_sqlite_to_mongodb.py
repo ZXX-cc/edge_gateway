@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate SQLite tables to MongoDB and verify every migrated row.
-
-This utility preserves the SQLite table layout as one MongoDB collection per
-table. It is a data migration tool only; it does not switch the gateway's
-runtime persistence implementation from SQLAlchemy to MongoDB.
-"""
+"""把历史 SQLite 全量迁移到网关运行时 MongoDB，并逐行校验。"""
 
 from __future__ import annotations
 
@@ -16,6 +11,9 @@ import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from urllib.parse import quote_plus
+
+import yaml
 
 try:
     from bson.binary import Binary
@@ -136,8 +134,10 @@ def migrate(
             mongo_database.create_collection(table)
         collection = mongo_database[table]
         operations = []
+        migrated_ids: List[str] = []
         table_total = 0
         for document in iter_documents(sqlite_connection, table):
+            migrated_ids.append(document["_id"])
             operations.append(
                 ReplaceOne({"_id": document["_id"]}, document, upsert=True)
             )
@@ -147,7 +147,15 @@ def migrate(
             table_total += 1
         if operations:
             collection.bulk_write(operations, ordered=False)
+        stale_query: Dict[str, Any] = {
+            f"{MIGRATION_META_FIELD}.source_table": table,
+        }
+        if migrated_ids:
+            stale_query["_id"] = {"$nin": migrated_ids}
+        stale_deleted = collection.delete_many(stale_query).deleted_count
         print(f"MIGRATED table={table} rows={table_total}")
+        if stale_deleted:
+            print(f"REMOVED_STALE table={table} rows={stale_deleted}")
         total += table_total
     print(f"MIGRATION_OK tables={len(user_tables(sqlite_connection))} rows={total}")
     return total
@@ -173,7 +181,9 @@ def verify(sqlite_connection: sqlite3.Connection, mongo_database: Any) -> bool:
             document["_id"]: document for document in iter_documents(sqlite_connection, table)
         }
         collection = mongo_database[table]
-        mongo_count = collection.count_documents({})
+        mongo_count = collection.count_documents(
+            {f"{MIGRATION_META_FIELD}.source_table": table}
+        )
         if mongo_count != len(expected_documents):
             failures.append(
                 f"{table}: count differs sqlite={len(expected_documents)} mongo={mongo_count}"
@@ -210,13 +220,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("action", choices=("migrate", "verify", "migrate-and-verify"))
     parser.add_argument("--sqlite", required=True, type=Path, help="SQLite database file")
     parser.add_argument(
-        "--mongo-uri",
-        default=os.getenv("MONGO_URI"),
-        help="MongoDB connection URI; defaults to the MONGO_URI environment variable",
+        "--config",
+        type=Path,
+        default=Path("config/gateway.yaml"),
+        help="Gateway YAML used for MongoDB defaults",
     )
-    parser.add_argument("--mongo-db", default="edge_gateway", help="MongoDB database name")
+    parser.add_argument(
+        "--mongo-uri",
+        default=os.getenv("MONGODB_URI") or os.getenv("MONGO_URI"),
+        help="MongoDB URI; overrides config and MONGODB_URI/MONGO_URI",
+    )
+    parser.add_argument("--mongo-db", help="MongoDB database name; defaults to gateway config")
     parser.add_argument("--batch-size", type=int, default=1000)
     return parser.parse_args()
+
+
+def resolve_mongo_settings(args: argparse.Namespace) -> Tuple[str, str]:
+    config: Dict[str, Any] = {}
+    if args.config.is_file():
+        config = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
+    mongo = (config.get("database") or {}).get("mongodb") or {}
+    database_name = args.mongo_db or os.getenv("MONGODB_DATABASE") or mongo.get("database", "edge_gateway")
+    if args.mongo_uri:
+        return args.mongo_uri, str(database_name)
+
+    host = os.getenv("MONGODB_HOST", str(mongo.get("host", "127.0.0.1")))
+    port = int(os.getenv("MONGODB_PORT", str(mongo.get("port", 27017))))
+    username = os.getenv("MONGODB_USERNAME", str(mongo.get("username", "")))
+    password = os.getenv("MONGODB_PASSWORD", str(mongo.get("password", "")))
+    auth_source = os.getenv("MONGODB_AUTH_SOURCE", str(mongo.get("auth_source", "admin")))
+    credentials = ""
+    if username:
+        credentials = f"{quote_plus(username)}:{quote_plus(password)}@"
+    uri = f"mongodb://{credentials}{host}:{port}/?authSource={quote_plus(auth_source)}"
+    return uri, str(database_name)
 
 
 def main() -> int:
@@ -224,9 +261,7 @@ def main() -> int:
     if MongoClient is None:
         print("pymongo is required: python -m pip install pymongo", file=sys.stderr)
         return 2
-    if not args.mongo_uri:
-        print("MongoDB URI is required via --mongo-uri or MONGO_URI", file=sys.stderr)
-        return 2
+    mongo_uri, mongo_database_name = resolve_mongo_settings(args)
     if not args.sqlite.is_file():
         print(f"SQLite database not found: {args.sqlite}", file=sys.stderr)
         return 2
@@ -236,10 +271,10 @@ def main() -> int:
 
     sqlite_connection = sqlite3.connect(f"file:{args.sqlite}?mode=ro", uri=True)
     sqlite_connection.row_factory = sqlite3.Row
-    mongo_client = MongoClient(args.mongo_uri, serverSelectionTimeoutMS=5000)
+    mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
     try:
         mongo_client.admin.command("ping")
-        database = mongo_client[args.mongo_db]
+        database = mongo_client[mongo_database_name]
         if args.action in ("migrate", "migrate-and-verify"):
             migrate(sqlite_connection, database, args.batch_size)
         if args.action in ("verify", "migrate-and-verify"):
