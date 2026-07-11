@@ -246,8 +246,6 @@ class NestSimulator:
                 takeoff_reason = REJECT_PLC_TIMEOUT
             elif takeoff_land_order == 0x01 and (busy or takeoff_busy or landing_busy or not ready or not allow_takeoff):
                 takeoff_reason = REJECT_DRONE_TIMEOUT
-            elif takeoff_land_order == 0x04 and not landing_busy:
-                takeoff_reason = REJECT_DRONE_TIMEOUT
 
         ordinary_response = self._order_response_raw(ordinary_reason, ordinary_order & 0xFF)
         takeoff_response = self._order_response_raw(takeoff_reason, takeoff_land_order & 0xFF)
