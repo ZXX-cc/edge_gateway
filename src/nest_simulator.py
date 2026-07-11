@@ -134,12 +134,14 @@ class NestSimulator:
         command_log='logs/nest_simulator/command_trace.log',
         drone_host=None,
         drone_port=None,
+        drone_status_log='logs/nest_simulator/drone_status.log',
     ):
         self.host = host
         self.port = port
         self.system_id = system_id
         self.component_id = component_id
         self.command_log = Path(command_log) if command_log else None
+        self.drone_status_log = Path(drone_status_log) if drone_status_log else None
         self.sock = None
         self.drone_sock = None
         self.drone_bind_addr = (drone_host, int(drone_port)) if drone_host and drone_port else None
@@ -154,6 +156,9 @@ class NestSimulator:
         self.drone_armed = False
         self.drone_relative_alt_m = 0.0
         self.drone_current_waypoint = -1
+        self.drone_battery_remaining = None
+        self.drone_connected = False
+        self.last_drone_status_print_at = 0.0
 
         # 模拟环境数据（单位与 drone_nest.xml 一致）
         self.env_data = {
@@ -404,6 +409,53 @@ class NestSimulator:
         except Exception:
             pass
 
+    def _drone_status_snapshot(self):
+        now = time.time()
+        connected = bool(self.drone_last_seen_at and now - self.drone_last_seen_at <= 5)
+        age = now - self.drone_last_seen_at if self.drone_last_seen_at else None
+        return {
+            "connected": connected,
+            "peer": self.drone_peer_addr,
+            "system": self.drone_system_id,
+            "component": self.drone_component_id,
+            "armed": self.drone_armed,
+            "relative_alt_m": self.drone_relative_alt_m,
+            "current_waypoint": self.drone_current_waypoint,
+            "battery_remaining": self.drone_battery_remaining,
+            "last_seen_age_s": age,
+        }
+
+    def _format_drone_status(self):
+        status = self._drone_status_snapshot()
+        connected = "已连接" if status["connected"] else "未连接"
+        age = "-" if status["last_seen_age_s"] is None else f"{status['last_seen_age_s']:.1f}s"
+        battery = "-" if status["battery_remaining"] is None else f"{status['battery_remaining']}%"
+        waypoint = "-" if status["current_waypoint"] < 0 else status["current_waypoint"]
+        return (
+            f"SITL={connected} peer={status['peer'] or '-'} "
+            f"sys/comp={status['system'] or '-'}/{status['component'] or '-'} "
+            f"armed={int(status['armed'])} alt={status['relative_alt_m']:.1f}m "
+            f"wp={waypoint} battery={battery} last_seen={age}"
+        )
+
+    def _trace_drone_status(self, event="status"):
+        if not self.drone_status_log:
+            return
+        try:
+            self.drone_status_log.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
+            with self.drone_status_log.open("a", encoding="utf-8") as file:
+                file.write(f"{timestamp} {event} {self._format_drone_status()}\n")
+        except Exception:
+            pass
+
+    def _print_drone_status_summary(self, force=False):
+        now = time.time()
+        if not force and now - self.last_drone_status_print_at < 10:
+            return
+        self.last_drone_status_print_at = now
+        print(f"[SITL] {self._format_drone_status()}")
+
     def _send_raw(self, data):
         if self.client_addr:
             try:
@@ -428,7 +480,6 @@ class NestSimulator:
         frame = struct.pack('<BBBBBB', 0xFE, len(payload), 0, self.system_id, self.component_id, msg_id) \
                 + payload + struct.pack('<H', crc)
         self._send_raw(frame)
-        print("已发送 HEARTBEAT")
 
     def _send_drone_heartbeat(self):
         payload = struct.pack('<BBBBBB', 1, 3, 0, 0, 0, 3)  # type=1 GCS, autopilot=3 ArduPilot
@@ -450,7 +501,6 @@ class NestSimulator:
         try:
             msg = ardupilotmega.MAVLink_statustext_message(6, text.encode("utf-8")[:50])
             self._send_to_drone(msg.pack(self.drone_mav))
-            print(f"已向飞机发送机巢状态: {text}")
         except Exception as e:
             print(f"发送机巢状态到飞机失败: {e}")
 
@@ -573,7 +623,8 @@ class NestSimulator:
                 self._send_heartbeat()
             return
 
-        print(f"收到消息: {msg_type}")
+        if msg_type != 'HEARTBEAT':
+            print(f"收到消息: {msg_type}")
         if msg_type == 'HEARTBEAT':
             self._send_heartbeat()
         elif msg_type == 'DRONE_NEST_COMMAND':
@@ -626,9 +677,11 @@ class NestSimulator:
 
     def _handle_drone_message(self, msg):
         msg_type = msg.get_type()
+        was_connected = self.drone_connected
         self.drone_last_seen_at = time.time()
         self.drone_system_id = msg.get_srcSystem()
         self.drone_component_id = msg.get_srcComponent()
+        self.drone_connected = True
         self._set_boolstate1_bit(BIT_DRONE_HEARTBEAT, True)
 
         if msg_type == 'HEARTBEAT':
@@ -643,6 +696,7 @@ class NestSimulator:
             remaining = int(getattr(msg, 'battery_remaining', -1) or -1)
             if remaining >= 0:
                 self.env_data['batteryRemaining'] = remaining
+                self.drone_battery_remaining = remaining
 
         airborne = self.drone_armed and self.drone_relative_alt_m > 1.0
         self._set_boolstate2_bit(BIT_TAKEOFF_IN_PROGRESS, airborne)
@@ -652,6 +706,10 @@ class NestSimulator:
             self._set_boolstate1_bit(BIT_CHARGING, False)
         elif self.drone_armed:
             self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, True)
+
+        if not was_connected:
+            self._trace_drone_status("connected")
+            self._print_drone_status_summary(force=True)
 
     def _drone_receive_loop(self):
         if not self.drone_sock or not self.drone_mav:
@@ -671,6 +729,10 @@ class NestSimulator:
                         self._handle_drone_message(msg)
             except socket.timeout:
                 if self.drone_last_seen_at and time.time() - self.drone_last_seen_at > 5:
+                    if self.drone_connected:
+                        self.drone_connected = False
+                        self._trace_drone_status("disconnected")
+                        self._print_drone_status_summary(force=True)
                     self._set_boolstate1_bit(BIT_DRONE_HEARTBEAT, False)
                 continue
             except Exception as e:
@@ -685,6 +747,8 @@ class NestSimulator:
             if self.drone_bind_addr:
                 self._send_drone_heartbeat()
                 self._send_drone_status_text()
+                self._trace_drone_status()
+                self._print_drone_status_summary()
             time.sleep(2)
 
     def _receive_loop(self):
@@ -720,6 +784,8 @@ class NestSimulator:
             self.drone_sock.bind(self.drone_bind_addr)
             self.drone_sock.settimeout(0.5)
             print(f"已启用机巢模拟器 SITL 监听: {self.drone_bind_addr[0]}:{self.drone_bind_addr[1]}")
+            if self.drone_status_log:
+                print(f"飞机状态日志: {self.drone_status_log}")
         self.running = True
 
         # 创建自定义 MAVLink 实例（用于打包）
@@ -744,6 +810,8 @@ class NestSimulator:
         self.running = False
         if self.sock:
             self.sock.close()
+        if self.drone_sock:
+            self.drone_sock.close()
         print("模拟器已停止")
 
 
@@ -758,6 +826,11 @@ if __name__ == '__main__':
         default="logs/nest_simulator/command_trace.log",
         help="只记录非心跳命令的机巢模拟器日志文件；设为空字符串可关闭",
     )
+    parser.add_argument(
+        "--drone-status-log",
+        default="logs/nest_simulator/drone_status.log",
+        help="SITL 飞机连接和状态日志文件；设为空字符串可关闭",
+    )
     args = parser.parse_args()
 
     sim = NestSimulator(
@@ -766,6 +839,7 @@ if __name__ == '__main__':
         command_log=args.command_log,
         drone_host=args.drone_host,
         drone_port=args.drone_port,
+        drone_status_log=args.drone_status_log,
     )
     try:
         sim.start()
