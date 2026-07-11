@@ -21,12 +21,12 @@
 | 范围 | 进度 | 说明 |
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 93% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，服务器已通过 11 段 P0/P1 E2E；当前默认 E2E 已接入一键启航离线闭环；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 Mosquitto 重复 listener 后外围组件启动成功 |
-| Dock3 P0 协议链路 | 97% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令、错误码边界已通过批量、专项和 E2E 编排验证，剩旧回包噪声清理和字段精校 |
+| Dock3 P0 协议链路 | 98% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令和错误码边界已形成测试入口；OSD/state 已完成协议级字段矩阵、单一映射入口、枚举和值域门禁，剩 Ubuntu 复测、旧回包噪声清理和真机字段对接 |
 | 客户需求相关 method/字段迁移 | 81% | properties 官方可写/只读边界、OSD/state、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization 基础链路、organization 多子设备绑定、CMD/远程调试 60 条模拟验收、Wayline P1 基础闭环、一键启航离线闭环、Media 基础链路、Live 基础链路、HMS/log 基础链路、firmware/config 基础闭环已通过专项、本地单测或服务器 MQTT 验证；11 段 E2E 已通过服务器验证；DRC 真实指点飞行已通过 `simulated=false` 复测 |
 | 非阻塞、日志、容错基础 | 67% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已通过 Ubuntu 专项复测；数据保留和云同步已补秒级/毫秒级混合时间戳清理工具及单测；NoSQL/MongoDB 仍待迁移 |
 | 模拟器和测试工具 | 99% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/Firmware-config/P0 批量测试工具可用，`mqtt_organization_test.py` 已支持 `--bind-sub-devices` 多 SN 绑定和 paired 校验，`e2e_full_chain_test.py` 已扩展到 11 段 P0/P1 域并接入 `takeoff-flow`；11 段全量 E2E 已通过服务器复测，OSD/state 已支持严格 stale 统计，DRC 专项已输出 `stale_samples` 旧回包样例 |
 
-综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 81%。该百分比不是验收承诺，后续每完成一个客户需求相关网关分组再调整。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 82%。该百分比不是验收承诺。OSD/state 当前只能标记为“协议级已精校，真机字段待对接”；后续获得真实 Dock3、飞行器、负载和生产云 MQTT 样本后，按 `docs/DOCK3_OSD_STATE_FIELD_MATRIX.md` 回填实机结论。
 
 ## 0. 客户三文档后的当前状态
 

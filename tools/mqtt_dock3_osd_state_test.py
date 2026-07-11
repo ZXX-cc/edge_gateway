@@ -99,21 +99,22 @@ def validate_dock_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     if not isinstance(data, dict):
         return errors
 
-    check_field(data, "mode_code", int, errors, min_value=0)
+    check_field(data, "mode_code", int, errors, allowed={0, 1, 2, 3, 4, 5})
     check_field(data, "flighttask_step_code", int, errors, min_value=0)
-    check_field(data, "cover_state", int, errors, min_value=0)
-    check_field(data, "putter_state", int, errors, min_value=0)
+    check_field(data, "cover_state", int, errors, allowed={0, 1, 2, 3})
+    check_field(data, "putter_state", int, errors, allowed={0, 1, 2, 3})
     check_field(data, "drone_in_dock", int, errors, allowed={0, 1})
-    check_field(data, "network_state.type", int, errors, min_value=0)
-    check_field(data, "network_state.quality", "number", errors, min_value=0)
+    check_field(data, "network_state.type", int, errors, allowed={1, 2})
+    check_field(data, "network_state.quality", int, errors, min_value=0, max_value=5)
     check_field(data, "network_state.rate", "number", errors, min_value=0)
     check_field(data, "drone_charge_state.capacity_percent", "number", errors, min_value=0, max_value=100)
-    check_field(data, "drone_charge_state.state", int, errors, min_value=0)
-    check_field(data, "position_state.is_fixed", int, errors, min_value=0)
+    check_field(data, "drone_charge_state.state", int, errors, allowed={0, 1})
+    check_field(data, "position_state.is_fixed", int, errors, allowed={0, 1, 2, 3})
+    check_field(data, "position_state.quality", int, errors, min_value=0, max_value=5)
     check_field(data, "position_state.gps_number", int, errors, min_value=0)
     check_field(data, "electricity", "number", errors, min_value=0, max_value=100)
     check_field(data, "wind_speed", "number", errors, min_value=0)
-    check_field(data, "drc_state", int, errors, min_value=0)
+    check_field(data, "drc_state", int, errors, allowed={0, 1, 2})
     check_field(data, "maintain_status.maintain_status_array", list, errors)
 
     if "battery" in data:
@@ -141,12 +142,17 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     ):
         check_field(data, field, "number", errors)
 
+    check_field(data, "latitude", "number", errors, min_value=-90, max_value=90)
+    check_field(data, "longitude", "number", errors, min_value=-180, max_value=180)
+    check_field(data, "horizontal_speed", "number", errors, min_value=0)
+
     check_field(data, "battery.capacity_percent", "number", errors, min_value=0, max_value=100)
     check_field(data, "battery.voltage", "number", errors, min_value=0)
     check_field(data, "position_state.gps_number", int, errors, min_value=0)
-    check_field(data, "position_state.is_fixed", int, errors, min_value=0)
+    check_field(data, "position_state.is_fixed", int, errors, allowed={0, 1, 2, 3})
+    check_field(data, "position_state.quality", int, errors, min_value=0, max_value=5)
     check_field(data, "mode_code", int, errors, min_value=0)
-    check_field(data, "gear", int, errors, min_value=0)
+    check_field(data, "gear", int, errors, allowed={0, 1})
     check_field(data, "flight_time", int, errors, min_value=0)
     check_field(data, "timestamp", int, errors, min_value=0)
 
@@ -165,6 +171,23 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
     if isinstance(properties, dict):
         if not properties:
             errors.append("state data.property must not be empty")
+        internal_fields = {
+            "flight_mode",
+            "armed",
+            "connection_status",
+            "battery",
+            "gps_fixed",
+            "mode_code",
+            "flighttask_step_code",
+            "cover_state",
+            "putter_state",
+            "drone_in_dock",
+            "position_state",
+            "drc_state",
+        }
+        leaked = sorted(internal_fields.intersection(properties))
+        if leaked:
+            errors.append(f"state contains internal telemetry fields: {leaked}")
         return errors
 
     if "sub_device" not in data:

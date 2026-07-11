@@ -131,8 +131,10 @@ class DockManager:
                 self._dock_status[key] = value
                 changed[key] = value
 
-        if changed and self._state_callback:
-            self._state_callback({'dock': changed})
+        # 这里是 dock_status_query 的内部聚合缓存。正式 Dock3 state 由
+        # DeviceManager 按 properties.pushMode=1 发布，禁止输出内部 dock 包装。
+        if changed:
+            logger.debug("Dock query cache updated: %s", changed)
 
     def update_drone_status(self, updates: Dict[str, Any]):
         """更新无人机状态"""
@@ -142,8 +144,9 @@ class DockManager:
                 self._drone_status[key] = value
                 changed[key] = value
 
-        if changed and self._state_callback:
-            self._state_callback({'drone': changed})
+        # aircraft 飞行状态属于子设备 OSD，不输出内部 drone 包装到 gateway state。
+        if changed:
+            logger.debug("Drone query cache updated: %s", changed)
 
     def add_alarm(self, alarm: Dict[str, Any]):
         """添加告警"""

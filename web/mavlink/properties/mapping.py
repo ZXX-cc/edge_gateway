@@ -13,7 +13,7 @@ import copy
 from typing import Any, Dict, Optional
 
 from ..nest.property_mapping import build_dock3_properties_from_nest
-from ..telemetry.mapping import build_dock3_properties_from_telemetry, gps_fixed_to_dock3_state
+from ..telemetry.mapping import build_dock3_properties_from_telemetry
 
 
 PROPERTY_SOURCE_MAP: Dict[str, Dict[str, Any]] = {
@@ -47,9 +47,9 @@ PROPERTY_SOURCE_MAP: Dict[str, Dict[str, Any]] = {
     # 4.4 内部维护属性
     "firmware_version": {"source": "internal.firmware.version", "pushMode": 1},
     "firmware_upgrade_status": {"source": "internal.ota.status", "pushMode": 1},
-    "flighttask_step_code": {"source": "internal.mission.step_code", "pushMode": 1},
+    "flighttask_step_code": {"source": "internal.mission.step_code", "pushMode": 0},
     "job_number": {"source": "internal.database.job_number", "pushMode": 0},
-    "drc_state": {"source": "internal.drc.state", "pushMode": 1},
+    "drc_state": {"source": "internal.drc.state", "pushMode": 0},
     "acc_time": {"source": "internal.runtime.acc_time", "pushMode": 0},
 }
 
@@ -106,25 +106,27 @@ def build_properties_from_osd(osd_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     properties: Dict[str, Any] = {}
 
+    # 以下机场位置字段暂时复用 aircraft 遥测，仅保障无真机阶段的 DRC/SITL
+    # 联调。真机接入后必须替换为机场固定坐标、RTK 状态和椭球高度。
     if "longitude" in osd_data:
         properties["longitude"] = osd_data["longitude"]
     if "latitude" in osd_data:
         properties["latitude"] = osd_data["latitude"]
     if "height" in osd_data:
         properties["height"] = osd_data["height"]
-    if "mode_code" in osd_data:
-        properties["mode_code"] = osd_data["mode_code"]
+    # aircraft mode_code 是飞行状态枚举，不能覆盖 gateway Dock3
+    # mode_code(0..5)。机场作业状态只由 mission/device 状态机维护。
     if "battery" in osd_data:
         capacity_percent = osd_data["battery"].get("capacity_percent", 0)
         properties["electricity"] = capacity_percent
         properties["drone_charge_state"] = {"capacity_percent": capacity_percent}
     if "position_state" in osd_data:
         position = osd_data["position_state"]
-        gps_fixed = position.get("is_fixed", 0)
+        fixed_state = int(position.get("is_fixed", 0) or 0)
         properties["position_state"] = {
-            "is_calibration": 1 if gps_fixed else 0,
-            "is_fixed": gps_fixed_to_dock3_state(gps_fixed),
-            "quality": _gps_quality_from_satellites(position.get("gps_number", 0), gps_fixed),
+            "is_calibration": 1 if fixed_state == 2 else 0,
+            "is_fixed": fixed_state if fixed_state in {0, 1, 2, 3} else 0,
+            "quality": max(0, min(5, int(position.get("quality", 0) or 0))),
             "gps_number": position.get("gps_number", 0),
             "rtk_number": position.get("rtk_number", 0),
         }
@@ -163,15 +165,3 @@ def _first_present(data: Dict[str, Any], aliases: tuple[str, ...]) -> Any:
         if key in data:
             return data[key]
     return None
-
-
-def _gps_quality_from_satellites(satellites: int, gps_fixed: int) -> int:
-    if gps_fixed and satellites >= 20:
-        return 5
-    if gps_fixed and satellites >= 16:
-        return 4
-    if gps_fixed and satellites >= 12:
-        return 3
-    if gps_fixed and satellites >= 8:
-        return 2
-    return 1

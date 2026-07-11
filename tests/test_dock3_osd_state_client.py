@@ -70,9 +70,9 @@ def valid_dock_osd(sn="EDGEGW001"):
             "cover_state": 0,
             "putter_state": 0,
             "drone_in_dock": 1,
-            "network_state": {"type": 2, "quality": 100, "rate": 10},
+            "network_state": {"type": 2, "quality": 5, "rate": 10},
             "drone_charge_state": {"capacity_percent": 80, "state": 0},
-            "position_state": {"is_fixed": 0, "gps_number": 0},
+            "position_state": {"is_fixed": 0, "quality": 0, "gps_number": 0},
             "electricity": 90,
             "wind_speed": 0,
             "drc_state": 0,
@@ -95,7 +95,7 @@ def valid_drone_osd(sn="EDGEGW001"):
             "attitude_roll": 0.0,
             "attitude_head": 0.0,
             "battery": {"capacity_percent": 80, "voltage": 24000},
-            "position_state": {"gps_number": 0, "is_fixed": 0},
+            "position_state": {"gps_number": 0, "is_fixed": 0, "quality": 0},
             "wind_speed": 0.0,
             "mode_code": 0,
             "gear": 0,
@@ -180,7 +180,7 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.ignored_legacy_samples[0]["message_reason"], "property_changed")
 
     def test_unrelated_current_property_state_is_not_stale(self):
-        payload = envelope("EDGEGW001", {"property": {"mode_code": 7}})
+        payload = envelope("EDGEGW001", {"property": {"firmware_version": "1.2.3"}})
 
         with contextlib.redirect_stdout(io.StringIO()):
             self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))
@@ -189,6 +189,16 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(len(self.client.valid_state), 1)
         self.assertEqual(self.client.invalid_samples, [])
         self.assertEqual(self.client.stale_total(), 0)
+
+    def test_pushmode_zero_property_is_rejected_on_state(self):
+        payload = envelope("EDGEGW001", {"property": {"mode_code": 4}})
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))
+
+        self.assertEqual(self.client.counts(), (0, 0, 0))
+        self.assertEqual(len(self.client.invalid_samples), 1)
+        self.assertIn("state contains internal telemetry fields", self.client.invalid_samples[0])
 
     def test_legacy_partial_value_wrapped_dock_osd_is_ignored(self):
         payload = envelope(

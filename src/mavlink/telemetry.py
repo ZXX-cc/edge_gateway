@@ -18,6 +18,8 @@ from typing import Dict, Callable, Optional
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.mavlink.flight_modes import mode_to_dji_code
+from src.cloud_api.dock3_properties import get_property_spec
+from web.mavlink.telemetry.mapping import build_osd_data as build_dock3_drone_osd
 
 logger = get_logger("telemetry")
 
@@ -107,7 +109,8 @@ class TelemetryProcessor:
         # 更新飞行时间
         self._update_flight_time()
 
-        # 检测状态变更
+        # 仅维护变更缓存。飞控模式、电量、定位等是 Dock3 定频 OSD 字段，
+        # 不再把内部字段名直接发布到 gateway state。
         self._check_all_state_changes()
 
     def _update_flight_time(self):
@@ -164,83 +167,17 @@ class TelemetryProcessor:
             if isinstance(last, (int, float)) and isinstance(current, (int, float)):
                 if abs(current - last) >= threshold:
                     self._last_state[category] = current
-                    if self._state_callback:
-                        self._state_callback(self.build_state_data({category: current}))
             elif last != current:
                 self._last_state[category] = current
-                if self._state_callback:
-                    self._state_callback(self.build_state_data({category: current}))
         else:
             if last != current:
                 self._last_state[category] = current
-                if self._state_callback:
-                    self._state_callback(self.build_state_data({category: current}))
 
     # ---- 数据转换 ----
 
     def build_osd_data(self) -> dict:
-        """构建OSD定频数据（对齐DJI Cloud API规范）"""
-        osd = {}
-        data = self._telemetry_data
-
-        # 位置
-        osd['latitude'] = data.get('latitude', 0.0)
-        osd['longitude'] = data.get('longitude', 0.0)
-        osd['height'] = data.get('altitudeRelative', 0.0)
-        osd['altitude'] = data.get('altitude', 0.0)
-
-        # 速度
-        ground_speed = data.get('groundSpeed', 0.0)
-        climb_rate = data.get('climbRate', 0.0)
-        osd['horizontal_speed'] = ground_speed
-        osd['vertical_speed'] = climb_rate
-        osd['course'] = data.get('course', 0.0)
-
-        # 姿态
-        osd['attitude_pitch'] = data.get('pitch', 0.0)
-        osd['attitude_roll'] = data.get('roll', 0.0)
-        osd['attitude_head'] = data.get('yaw', 0.0)
-
-        # 电量
-        voltage = data.get('voltage', 0.0)
-        current = data.get('current', 0.0)
-        battery_remaining = data.get('batteryRemaining', 0)
-
-        osd['battery'] = {
-            'capacity_percent': battery_remaining,
-            'voltage': int(voltage * 1000),
-        }
-        if current > 0:
-            osd['battery']['current'] = int(current * 1000)
-
-        # GPS/定位状态
-        osd['position_state'] = {
-            'gps_number': data.get('satelliteNumber', 0),
-            'is_fixed': data.get('gps_fixed', 0),
-            'quality': data.get('gps_signal_level', 0),
-            'rtk_number': data.get('rtkNumber', 0),
-            'rtk_flag': data.get('rtk_flag', 0),
-        }
-
-        # 风速
-        osd['wind_speed'] = data.get('windSpeed', 0.0)
-        osd['wind_direction'] = data.get('windDirection', 0.0)
-
-        # 负载/安全感知
-        osd['gimbal_pitch'] = data.get('gimbal_pitch', 0.0)
-        osd['gimbal_roll'] = data.get('gimbal_roll', 0.0)
-        osd['gimbal_yaw'] = data.get('gimbal_yaw', 0.0)
-        osd['obstacle_state'] = data.get('obstacle_state', {})
-
-        # 飞行模式和状态
-        flight_mode = data.get('flight_mode', 'UNKNOWN')
-        osd['mode_code'] = mode_to_dji_code(flight_mode)
-        osd['gear'] = 1 if data.get('armed', False) else 0
-
-        # 飞行时间
-        osd['flight_time'] = data.get('flight_time', 0)
-
-        return osd
+        """通过唯一映射入口构建 Dock3 aircraft OSD。"""
+        return build_dock3_drone_osd(self._telemetry_data)
 
     @staticmethod
     def _mode_to_code(mode: str) -> int:
@@ -249,9 +186,12 @@ class TelemetryProcessor:
 
     def build_state_data(self, changed_fields: dict) -> dict:
         """构建符合 Dock3 state topic 的属性变更数据。"""
-        # ``TelemetryReporter.report_state`` 会补齐 tid/bid/gateway/timestamp
-        # 外层信封；此处只提供 Dock3 规定的 data.property 内容。
-        return {"property": dict(changed_fields)}
+        properties = {}
+        for key, value in changed_fields.items():
+            spec = get_property_spec(key)
+            if spec and spec.push_mode == 1:
+                properties[key] = value
+        return {"property": properties}
 
     def get_current_data(self) -> Dict[str, any]:
         """获取当前遥测数据"""

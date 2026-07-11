@@ -80,7 +80,7 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.manager._state_callback = self.state_events.append
         self.manager._event_callback = self.events.append
 
-    def test_nest_status_change_reports_state_hms_and_operation(self):
+    def test_nest_status_change_updates_osd_properties_hms_and_operation(self):
         with (
             patch.object(self.manager, "_save_alarm_to_db", new=lambda *args, **kwargs: None),
             patch.object(self.manager, "_clear_alarms_from_db", new=lambda *args, **kwargs: None),
@@ -88,11 +88,10 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         ):
             self.manager.update_from_nest(nest_snapshot())
 
-            self.assertTrue(self.state_events)
-            first_state = self.state_events[-1]["property"]
-            self.assertEqual(first_state["cover_state"], 1)
-            self.assertEqual(first_state["charging_state"], 1)
-            self.assertEqual(first_state["drone_charge_state"]["state"], 1)
+            self.assertEqual(self.state_events, [])
+            self.assertEqual(self.manager.get_property("cover_state"), 1)
+            self.assertEqual(self.manager.get_property("charging_state"), 1)
+            self.assertEqual(self.manager.get_property("drone_charge_state")["state"], 1)
             self.assertFalse([event for event in self.events if event["method"] == "hms"])
 
             self.manager.update_from_nest(nest_snapshot(

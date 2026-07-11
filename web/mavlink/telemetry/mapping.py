@@ -1,6 +1,6 @@
 """标准 MAVLink 遥测字段映射工具。
 
-这里的代码只服务 web/mavlink 调试链路，不修改主网关运行时模块。
+这里是主网关与 web/mavlink 调试链路共用的唯一 MAVLink 遥测映射入口。
 输入可以是真实 pymavlink 消息，也可以是带同名字段的测试对象。
 
 字段目标同时兼顾：
@@ -280,36 +280,38 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
 
 
 def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
-    """把统一遥测状态转换成 OSD 定频上报结构。"""
-    voltage = telemetry.get("voltage", 0.0)
-    current = telemetry.get("current", 0.0)
+    """把统一遥测状态转换成 Dock3 aircraft OSD 定频上报结构。"""
+    voltage = max(0.0, _finite_number(telemetry.get("voltage"), 0.0))
+    current = _finite_number(telemetry.get("current"), 0.0)
+    capacity_percent = _bounded_int(telemetry.get("batteryRemaining"), 0, 100)
+    gps_fixed = gps_fixed_to_dock3_state(telemetry.get("gps_fixed", 0))
     osd = {
-        "latitude": telemetry.get("latitude", 0.0),
-        "longitude": telemetry.get("longitude", 0.0),
-        "height": telemetry.get("altitudeRelative", 0.0),
-        "altitude": telemetry.get("altitude", 0.0),
-        "horizontal_speed": telemetry.get("groundSpeed", 0.0),
-        "vertical_speed": telemetry.get("climbRate", 0.0),
-        "course": telemetry.get("course", 0.0),
-        "attitude_pitch": telemetry.get("pitch", 0.0),
-        "attitude_roll": telemetry.get("roll", 0.0),
-        "attitude_head": telemetry.get("yaw", 0.0),
+        "latitude": max(-90.0, min(90.0, _finite_number(telemetry.get("latitude"), 0.0))),
+        "longitude": max(-180.0, min(180.0, _finite_number(telemetry.get("longitude"), 0.0))),
+        "height": _finite_number(telemetry.get("altitudeRelative"), 0.0),
+        "altitude": _finite_number(telemetry.get("altitude"), 0.0),
+        "horizontal_speed": max(0.0, _finite_number(telemetry.get("groundSpeed"), 0.0)),
+        "vertical_speed": _finite_number(telemetry.get("climbRate"), 0.0),
+        "course": _finite_number(telemetry.get("course"), 0.0) % 360.0,
+        "attitude_pitch": _finite_number(telemetry.get("pitch"), 0.0),
+        "attitude_roll": _finite_number(telemetry.get("roll"), 0.0),
+        "attitude_head": _finite_number(telemetry.get("yaw"), 0.0) % 360.0,
         "battery": {
-            "capacity_percent": telemetry.get("batteryRemaining", 0),
+            "capacity_percent": capacity_percent,
             "voltage": int(voltage * 1000),
         },
         "position_state": {
-            "gps_number": telemetry.get("satelliteNumber", 0),
-            "is_fixed": telemetry.get("gps_fixed", 0),
-            "quality": telemetry.get("gps_signal_level", 0),
-            "rtk_number": telemetry.get("rtkNumber", 0),
-            "rtk_flag": telemetry.get("rtk_flag", 0),
+            "gps_number": _bounded_int(telemetry.get("satelliteNumber"), 0),
+            "is_fixed": gps_fixed,
+            "quality": _bounded_int(telemetry.get("gps_signal_level"), 0, 5),
+            "rtk_number": _bounded_int(telemetry.get("rtkNumber"), 0),
+            "rtk_flag": 1 if telemetry.get("rtk_flag") else 0,
         },
-        "wind_speed": telemetry.get("windSpeed", 0.0),
-        "wind_direction": telemetry.get("windDirection", 0.0),
-        "gimbal_pitch": telemetry.get("gimbal_pitch", 0.0),
-        "gimbal_roll": telemetry.get("gimbal_roll", 0.0),
-        "gimbal_yaw": telemetry.get("gimbal_yaw", 0.0),
+        "wind_speed": max(0.0, _finite_number(telemetry.get("windSpeed"), 0.0)),
+        "wind_direction": _finite_number(telemetry.get("windDirection"), 0.0) % 360.0,
+        "gimbal_pitch": _finite_number(telemetry.get("gimbal_pitch"), 0.0),
+        "gimbal_roll": _finite_number(telemetry.get("gimbal_roll"), 0.0),
+        "gimbal_yaw": _finite_number(telemetry.get("gimbal_yaw"), 0.0) % 360.0,
         "obstacle_state": telemetry.get("obstacle_state", {}),
         "mode_code": mode_to_dji_code(telemetry.get("flight_mode", "UNKNOWN")),
         "gear": 1 if telemetry.get("armed", False) else 0,
@@ -321,12 +323,27 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     return osd
 
 
+def _finite_number(value: Any, default: float) -> float:
+    """拒绝 NaN/Inf，避免无效浮点数进入 JSON OSD。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _bounded_int(value: Any, minimum: int, maximum: Optional[int] = None, default: int = 0) -> int:
+    number = int(_finite_number(value, float(default)))
+    number = max(minimum, number)
+    return min(maximum, number) if maximum is not None else number
+
+
 def build_dock3_properties_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     """把标准飞控遥测转换成 DJI Dock3 properties 字段。
 
     说明：
-    - 官方 Dock3 `height` 是机场椭球高度字段；本地映射文档当前要求
-      使用 `altitudeRelative` 驱动 `height`，这里按本地文档执行。
+    - 当前兼容层使用 `altitudeRelative` 驱动机场 `height`，仅用于无真机
+      的模拟联调；真实机场必须改接固定坐标和椭球高度。
     - 官方 Dock3 `position_state.is_fixed` 是 0/1/2/3 枚举，本地遥测只
       有 `gps_fixed` 0/1，因此 1 映射为 2（收敛成功）。
     """

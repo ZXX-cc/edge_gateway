@@ -62,6 +62,7 @@ DOCK3_PROPERTY_SPECS: Dict[str, PropertySpec] = {
     "height": PropertySpec("height", "椭球高度", "double", "r", 0),
     "firmware_version": PropertySpec("firmware_version", "固件版本", "text", "r", 1),
     "firmware_upgrade_status": PropertySpec("firmware_upgrade_status", "固件升级状态", "enum_int", "r", 1, enum_values={0, 1}),
+    "compatible_status": PropertySpec("compatible_status", "固件一致性状态", "enum_int", "r", 1, enum_values={0, 1}),
     "mode_code": PropertySpec("mode_code", "机场状态", "enum_int", "r", 0, enum_values={0, 1, 2, 3, 4, 5}),
     "flighttask_step_code": PropertySpec("flighttask_step_code", "机场任务状态", "enum_int", "r", 0),
     "sub_device": PropertySpec("sub_device", "子设备状态", "struct", "r", 0),

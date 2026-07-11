@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from web.mavlink.telemetry.mapping import apply_mavlink_message, build_osd_data, new_telemetry_state  # noqa: E402
+from web.mavlink.properties.mapping import build_properties_from_osd  # noqa: E402
 
 
 class MavlinkTelemetryMappingTest(unittest.TestCase):
@@ -68,6 +69,7 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         osd = build_osd_data(telemetry)
         self.assertEqual(telemetry["gps_signal_level"], 4)
         self.assertEqual(osd["position_state"]["quality"], 4)
+        self.assertEqual(osd["position_state"]["is_fixed"], 2)
         self.assertEqual(osd["course"], 87)
         self.assertAlmostEqual(osd["gimbal_yaw"], 90.0)
         self.assertEqual(osd["obstacle_state"]["0"]["distance"], 3.5)
@@ -158,6 +160,44 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
 
         self.assertTrue(telemetry["battery_available"])
         self.assertEqual(telemetry["batteryRemaining"], 0)
+
+    def test_osd_clamps_protocol_ranges_and_rejects_non_finite_values(self):
+        telemetry = new_telemetry_state()
+        telemetry.update({
+            "latitude": 100.0,
+            "longitude": -200.0,
+            "yaw": float("nan"),
+            "course": 725.0,
+            "groundSpeed": -1.0,
+            "batteryRemaining": 120,
+            "gps_signal_level": 9,
+        })
+
+        osd = build_osd_data(telemetry)
+
+        self.assertEqual(osd["latitude"], 90.0)
+        self.assertEqual(osd["longitude"], -180.0)
+        self.assertEqual(osd["attitude_head"], 0.0)
+        self.assertEqual(osd["course"], 5.0)
+        self.assertEqual(osd["horizontal_speed"], 0.0)
+        self.assertEqual(osd["battery"]["capacity_percent"], 100)
+        self.assertEqual(osd["position_state"]["quality"], 5)
+
+    def test_aircraft_mode_does_not_override_dock_mode(self):
+        properties = build_properties_from_osd({
+            "mode_code": 9,
+            "battery": {"capacity_percent": 80},
+            "position_state": {
+                "is_fixed": 2,
+                "quality": 4,
+                "gps_number": 16,
+                "rtk_number": 12,
+            },
+        })
+
+        self.assertNotIn("mode_code", properties)
+        self.assertEqual(properties["position_state"]["is_fixed"], 2)
+        self.assertEqual(properties["position_state"]["quality"], 4)
 
     def test_mount_status_maps_legacy_gimbal_angles(self):
         telemetry = new_telemetry_state()

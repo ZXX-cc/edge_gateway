@@ -67,6 +67,14 @@ class DeviceManagerTopologyTest(unittest.TestCase):
     def update_topo_events(self):
         return [event for event in self.events if event.get("method") == "update_topo"]
 
+    def test_state_callback_only_receives_pushmode_one_properties(self):
+        self.assertTrue(self.manager.set_property("silent_mode", 1))
+        self.assertEqual(self.states[-1], {"property": {"silent_mode": 1}})
+
+        before = len(self.states)
+        self.manager.update_properties({"mode_code": 4}, notify=True)
+        self.assertEqual(len(self.states), before)
+
     def test_empty_topology_marks_known_sub_devices_offline_without_dropping_cache(self):
         online_payload = build_update_topo_payload(
             device_secret="gw-secret",
@@ -97,7 +105,8 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(set(devices), {"DRONE-A", "DRONE-B"})
         self.assertFalse(any(device.online for device in devices.values()))
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"], [])
-        sub_device_state = self.states[-1]["property"]["sub_device"]
+        self.assertEqual(self.states, [])
+        sub_device_state = self.manager.get_property("sub_device")
         self.assertIn(sub_device_state["device_sn"], {"DRONE-A", "DRONE-B"})
         self.assertEqual(sub_device_state["device_online_status"], 0)
 

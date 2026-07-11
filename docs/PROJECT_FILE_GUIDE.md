@@ -27,6 +27,7 @@
 | `docs/30_DAY_MILESTONE_PLAN.md` | 30 天里程碑计划，定义阶段节奏和 P0/P1/P2 出口 |
 | `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板，定义日级任务、人员分工、缺失脚本顺序和证据目录 |
 | `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡，定义 44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
+| `docs/DOCK3_OSD_STATE_FIELD_MATRIX.md` | OSD/state 单位、枚举、来源、缺省策略和真机待对接字段矩阵 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 runbook，定义启动顺序、验收命令、P2 边界和证据归档 |
 | `docs/DJI_DOCK3_MIGRATION_GUIDE.md` | Dock3 迁移方法、官方文档索引和粗粒度迁移顺序 |
 | `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 客户需求迁移台账和当前验证证据 |

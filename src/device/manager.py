@@ -32,6 +32,7 @@ from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
+    get_property_spec,
     validate_property_set,
     writable_property_names,
 )
@@ -835,8 +836,21 @@ class DeviceManager:
 
     def _notify_state(self, changed: dict):
         """触发状态变更上报 (Topic: thing/product/{sn}/state)"""
-        if self._state_callback:
-            self._state_callback(changed)
+        properties = changed.get("property") if isinstance(changed, dict) else None
+        if not isinstance(properties, dict):
+            logger.debug("Skip non-property Dock3 state payload: %s", changed)
+            return
+
+        state_properties = {}
+        for name, value in properties.items():
+            spec = get_property_spec(name)
+            if spec and spec.push_mode == 1:
+                state_properties[name] = value
+            else:
+                logger.debug("Keep pushMode=0 property on OSD only: %s", name)
+
+        if state_properties and self._state_callback:
+            self._state_callback({"property": state_properties})
 
     def _notify_event(self, method: str, data: dict):
         """触发事件上报 (Topic: thing/product/{sn}/events)"""

@@ -14,12 +14,20 @@ from src.mavlink.telemetry import TelemetryProcessor  # noqa: E402
 
 
 class MavlinkTelemetryStateTest(unittest.TestCase):
-    def test_state_data_uses_dock3_property_container(self):
+    def test_osd_only_internal_fields_are_not_published_as_state(self):
         telemetry = TelemetryProcessor()
 
         self.assertEqual(
             telemetry.build_state_data({"flight_mode": "GUIDED"}),
-            {"property": {"flight_mode": "GUIDED"}},
+            {"property": {}},
+        )
+
+    def test_official_state_property_container_is_preserved(self):
+        telemetry = TelemetryProcessor()
+
+        self.assertEqual(
+            telemetry.build_state_data({"firmware_version": "1.2.3"}),
+            {"property": {"firmware_version": "1.2.3"}},
         )
 
 
