@@ -28,6 +28,13 @@ class NestSimulatorDefaultStateTest(unittest.TestCase):
         ordinary, takeoff = simulator._evaluate_command_response(0, GCSCommand.TAKEOFF_START.value)
         self.assertEqual((ordinary, takeoff), (0, 0))
 
+    def test_landing_abort_is_idempotent_when_not_landing(self):
+        simulator = NestSimulator(command_log="")
+
+        ordinary, takeoff = simulator._evaluate_command_response(0, 0x04)
+
+        self.assertEqual((ordinary, takeoff), (0, 0))
+
     def test_gateway_link_filter_rejects_sitl_mirror_heartbeat(self):
         class Message:
             def __init__(self, message_type, component):

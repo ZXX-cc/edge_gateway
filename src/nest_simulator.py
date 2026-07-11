@@ -457,6 +457,18 @@ class NestSimulator:
         except Exception:
             pass
 
+    def _trace_drone_event(self, event, **fields):
+        if not self.drone_status_log:
+            return
+        try:
+            self.drone_status_log.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
+            details = " ".join(f"{key}={value}" for key, value in fields.items())
+            with self.drone_status_log.open("a", encoding="utf-8") as file:
+                file.write(f"{timestamp} {event} {details} {self._format_drone_status()}\n")
+        except Exception:
+            pass
+
     def _print_drone_status_summary(self, force=False):
         now = time.time()
         if not force and now - self.last_drone_status_print_at < 10:
@@ -473,17 +485,25 @@ class NestSimulator:
 
     def _send_to_drone(self, data):
         if not self.drone_peer_addr or not self.drone_sock:
+            self._trace_drone_event(
+                "send_to_drone_skipped",
+                reason="no_peer_or_socket",
+                bytes=len(data) if data else 0,
+            )
             return
         try:
             self.drone_sock.sendto(data, self.drone_peer_addr)
         except Exception as e:
             print(f"发送到飞机失败: {e}")
+            self._trace_drone_event("send_to_drone_failed", error=e)
 
     def _send_drone_message(self, msg):
         if not self.drone_mav:
+            self._trace_drone_event("send_drone_message_skipped", reason="drone_mav_not_ready")
             return False
-        self._send_to_drone(msg.pack(self.drone_mav))
-        return True
+        data = msg.pack(self.drone_mav)
+        self._send_to_drone(data)
+        return bool(self.drone_peer_addr and self.drone_sock)
 
     def _target_system_component(self):
         return self.drone_system_id or 1, self.drone_component_id or 1
@@ -556,6 +576,12 @@ class NestSimulator:
                 item["current"] = 1 if seq == 0 else 0
 
         print(f"[SITL] 已加载航线: {summary.get('source')}，航点={len(items)}")
+        self._trace_drone_event(
+            "mission_file_loaded",
+            source=summary.get("source"),
+            format=summary.get("format"),
+            waypoints=len(items),
+        )
         return items
 
     def _send_mission_count(self):
@@ -568,7 +594,14 @@ class NestSimulator:
             len(self.pending_mission_items),
             mission_type,
         )
-        return self._send_drone_message(msg)
+        sent = self._send_drone_message(msg)
+        self._trace_drone_event(
+            "mission_count_sent",
+            target=f"{target_system}/{target_component}",
+            count=len(self.pending_mission_items),
+            sent=int(sent),
+        )
+        return sent
 
     def _send_mission_item(self, seq):
         if seq < 0 or seq >= len(self.pending_mission_items):
@@ -596,7 +629,15 @@ class NestSimulator:
             mission_type,
         )
         print(f"[SITL] 下发航点 {seq + 1}/{len(self.pending_mission_items)} command={item['command']}")
-        return self._send_drone_message(msg)
+        sent = self._send_drone_message(msg)
+        self._trace_drone_event(
+            "mission_item_sent",
+            seq=seq,
+            total=len(self.pending_mission_items),
+            command=item["command"],
+            sent=int(sent),
+        )
+        return sent
 
     def _send_command_long(self, command, *params):
         target_system, target_component = self._target_system_component()
@@ -618,28 +659,37 @@ class NestSimulator:
         return self._send_drone_message(msg)
 
     def _start_sitl_mission_async(self):
+        self._trace_drone_event("mission_start_requested", mission_file=self.mission_file)
         if not self.drone_sock or not self.drone_peer_addr:
             print("[SITL] 未连接，无法由机巢模拟器下发航线任务")
+            self._trace_drone_event("mission_start_rejected", reason="sitl_not_connected")
             return
         with self.mission_upload_lock:
             if self.mission_upload_active:
                 print("[SITL] 航线任务正在下发，忽略重复触发")
+                self._trace_drone_event("mission_start_rejected", reason="upload_already_active")
                 return
             self.mission_upload_active = True
             self.mission_upload_event.clear()
         try:
             self.pending_mission_items = self._load_mission_items()
             print(f"[SITL] 开始由机巢模拟器上传航线: {len(self.pending_mission_items)} 个航点")
-            self._send_mission_count()
+            if not self._send_mission_count():
+                self._trace_drone_event("mission_upload_failed", reason="mission_count_send_failed")
+                return
             if not self.mission_upload_event.wait(timeout=self.mission_upload_timeout):
                 print(f"[SITL] 航线上传超时: {self.mission_upload_timeout:.1f}s")
+                self._trace_drone_event("mission_upload_timeout", timeout=self.mission_upload_timeout)
                 return
             print("[SITL] 航线上传完成，发送解锁和 AUTO")
-            self._send_command_long(ardupilotmega.MAV_CMD_COMPONENT_ARM_DISARM, 1, 0, 0, 0, 0, 0, 0)
+            arm_sent = self._send_command_long(ardupilotmega.MAV_CMD_COMPONENT_ARM_DISARM, 1, 0, 0, 0, 0, 0, 0)
+            self._trace_drone_event("arm_command_sent", sent=int(arm_sent))
             time.sleep(1.0)
-            self._send_set_mode_auto()
+            auto_sent = self._send_set_mode_auto()
+            self._trace_drone_event("auto_mode_sent", sent=int(auto_sent))
         except Exception as e:
             print(f"[SITL] 机巢模拟器下发航线失败: {e}")
+            self._trace_drone_event("mission_upload_exception", error=e)
         finally:
             with self.mission_upload_lock:
                 self.mission_upload_active = False
@@ -818,6 +868,7 @@ class NestSimulator:
             if ordinary_response == 0 and takeoff_response == 0:
                 self._update_state_from_command(ordinary, takeoff_land)
                 if takeoff_land == 0x01:
+                    self._trace_drone_event("takeoff_start_triggers_mission_upload")
                     self._start_sitl_mission()
             else:
                 ordinary_detail = self._decode_order_response(ordinary_response, "ordinary")
@@ -877,10 +928,12 @@ class NestSimulator:
                 self.drone_battery_remaining = remaining
         elif msg_type in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
             seq = int(getattr(msg, 'seq', -1) or -1)
+            self._trace_drone_event("mission_request_received", msg_type=msg_type, seq=seq)
             if self.mission_upload_active:
                 self._send_mission_item(seq)
         elif msg_type == 'MISSION_ACK':
             ack_type = int(getattr(msg, 'type', -1) or -1)
+            self._trace_drone_event("mission_ack_received", ack_type=ack_type)
             if self.mission_upload_active:
                 if ack_type == 0:
                     self.mission_upload_event.set()

@@ -560,7 +560,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertFalse(completion_thread.is_alive())
         self.assertFalse(pause_thread.is_alive())
         self.assertEqual(manager._status, manager.MISSION_COMPLETED)
-        self.assertEqual(pause_reply["data"]["result"], WAYLINE_PAUSE_STATE_INVALID)
+        self.assertEqual(pause_reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertEqual(flight_control.calls, [])
 
     def test_waypoint_update_waiting_on_pause_cannot_run_actions_after_hold(self):
@@ -977,7 +977,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(bad_prepare["data"]["result"], INVALID_COMMAND_FORMAT)
 
         bad_pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
-        self.assertEqual(bad_pause["data"]["result"], WAYLINE_PAUSE_STATE_INVALID)
+        self.assertEqual(bad_pause["data"]["result"], DEVICE_STATE_UNSUPPORTED)
 
         bad_resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))
         self.assertEqual(bad_resume["data"]["result"], WAYLINE_RESUME_STATE_INVALID)

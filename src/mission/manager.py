@@ -3238,7 +3238,13 @@ class MissionManager:
         Response: { result }
         """
         logger.info("Flighttask pause")
-        return self.handle_pause_wayline(msg)
+        reply = self.handle_pause_wayline(msg)
+        try:
+            if reply.get("data", {}).get("result") == WAYLINE_PAUSE_STATE_INVALID:
+                reply["data"]["result"] = DEVICE_STATE_UNSUPPORTED
+        except AttributeError:
+            pass
+        return reply
 
     def handle_flighttask_resume(self, msg: dict) -> dict:
         """
