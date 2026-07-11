@@ -8,7 +8,12 @@ SITL_PYTHON="${SITL_PYTHON:-/usr/bin/python3}"
 SITL_VEHICLE="${SITL_VEHICLE:-ArduPlane}"
 SITL_FRAME="${SITL_FRAME:-quadplane}"
 SITL_LOCATION="${SITL_LOCATION:-Changchun_HD}"
-MAVLINK_PORT="${MAVLINK_PORT:-$(mavlink_port)}"
+SITL_NEST_HOST="${SITL_NEST_HOST:-$(nest_sitl_host)}"
+SITL_NEST_PORT="${SITL_NEST_PORT:-$(nest_sitl_port)}"
+NEST_LINK_HOST="${NEST_LINK_HOST:-127.0.0.1}"
+NEST_LINK_PORT="${NEST_LINK_PORT:-$(nest_port)}"
+SITL_LOCAL_NEST_OUT="${SITL_LOCAL_NEST_OUT:-1}"
+SITL_EXTRA_OUT_PORT="${SITL_EXTRA_OUT_PORT:-${NEST_LINK_PORT}}"
 SIM_VEHICLE="${ARDUPILOT_DIR}/Tools/autotest/sim_vehicle.py"
 
 if [[ ! -f "${SIM_VEHICLE}" ]]; then
@@ -51,25 +56,13 @@ is_ipv4() {
 }
 
 EXTRA_OUT_IPS=()
-if [[ -n "${SITL_EXTRA_OUT_IPS:-}" ]]; then
-  IFS=',' read -r -a EXTRA_OUT_IPS <<<"${SITL_EXTRA_OUT_IPS}"
-elif [[ -t 0 ]]; then
-  while true; do
-    read -r -p "是否添加内部测试 IP 输出? 输入 IP 后回车添加，输入 n 直接启动: " ip
-    case "${ip}" in
-      n|N|no|NO|No|"")
-        break
-        ;;
-    esac
-
-    if ! is_ipv4 "${ip}"; then
-      echo "[WARN] IP 格式不正确，已忽略: ${ip}"
-      continue
-    fi
-
-    EXTRA_OUT_IPS+=("${ip}")
-    echo "[INFO] 已添加输出: udp:${ip}:${MAVLINK_PORT}"
-  done
+if [[ -v SITL_EXTRA_OUT_IPS ]]; then
+  if [[ -n "${SITL_EXTRA_OUT_IPS}" ]]; then
+    IFS=',' read -r -a EXTRA_OUT_IPS <<<"${SITL_EXTRA_OUT_IPS}"
+  fi
+else
+  # 当前 Ubuntu 联调机的固定观察端；可用 SITL_EXTRA_OUT_IPS="" 关闭。
+  EXTRA_OUT_IPS=("192.168.2.59")
 fi
 
 CMD=(
@@ -79,12 +72,18 @@ CMD=(
   -L "${SITL_LOCATION}"
   --no-rebuild
   --no-extra-ports
-  "--out=127.0.0.1:${MAVLINK_PORT}"
+  "--out=udp:${SITL_NEST_HOST}:${SITL_NEST_PORT}"
 )
+
+# 按当前联调命令保留 14551 本机镜像；14552 才是机巢模拟器解析
+# SITL 标准 MAVLink 的主入口。可设 SITL_LOCAL_NEST_OUT=0 关闭镜像。
+if [[ "${SITL_LOCAL_NEST_OUT}" == "1" || "${SITL_LOCAL_NEST_OUT}" == "true" ]]; then
+  CMD+=("--out=udp:${NEST_LINK_HOST}:${NEST_LINK_PORT}")
+fi
 
 for ip in "${EXTRA_OUT_IPS[@]}"; do
   if is_ipv4 "${ip}"; then
-    CMD+=("--out=udp:${ip}:${MAVLINK_PORT}")
+    CMD+=("--out=udp:${ip}:${SITL_EXTRA_OUT_PORT}")
   else
     echo "[WARN] IP 格式不正确，已忽略: ${ip}"
   fi
@@ -92,11 +91,14 @@ done
 
 echo "[INFO] ArduPilot SITL"
 echo "[INFO] vehicle=${SITL_VEHICLE}, frame=${SITL_FRAME}, location=${SITL_LOCATION}"
-echo "[INFO] local out=127.0.0.1:${MAVLINK_PORT}"
+echo "[INFO] SITL -> nest simulator=udp:${SITL_NEST_HOST}:${SITL_NEST_PORT}"
+if [[ "${SITL_LOCAL_NEST_OUT}" == "1" || "${SITL_LOCAL_NEST_OUT}" == "true" ]]; then
+  echo "[INFO] local nest-link mirror=udp:${NEST_LINK_HOST}:${NEST_LINK_PORT}"
+fi
 if ((${#EXTRA_OUT_IPS[@]} > 0)); then
   for ip in "${EXTRA_OUT_IPS[@]}"; do
     if is_ipv4 "${ip}"; then
-      echo "[INFO] extra out=udp:${ip}:${MAVLINK_PORT}"
+      echo "[INFO] extra out=udp:${ip}:${SITL_EXTRA_OUT_PORT}"
     fi
   done
 fi

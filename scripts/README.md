@@ -2,7 +2,7 @@
 
 这些脚本只启动网关外围组件，不启动 `src/main.py`，也不管理 Docker 启动的飞控/云平台。
 
-默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`nanomq.host/port`、`mavlink.connection.port`、`nest_mavlink.connection.port`。
+默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`nanomq.host/port`、`nest_mavlink.connection.port` 和 `nest_mavlink.sitl.host/port`。当前端口流向为：SITL 标准 MAVLink 输出到 `14552`，机巢模拟器解析飞机状态，网关通过 `14551` 获取机巢链路数据；`mavlink.connection.port=14550` 只保留关闭状态下的兼容配置。
 
 ## 单独启动
 
@@ -23,6 +23,9 @@ scripts/start_web_console.sh
 
 # 机巢模拟器，默认使用 config 中的 nest_mavlink.connection.port，当前通常是 14551
 scripts/start_nest_simulator.sh
+
+# ArduPlane QuadPlane SITL：默认 Changchun_HD，主输出 14552 给机巢模拟器
+scripts/start_arduplane_sitl.sh
 
 # 可选：不用 Docker 飞控平台时，启动 ArduCopter SITL
 scripts/start_arducopter_sitl.sh
@@ -58,7 +61,7 @@ START_NEST=0 scripts/start_support_stack.sh
 START_WEB=1 scripts/start_support_stack.sh
 ```
 
-如果不用 Docker 飞控平台，想额外拉起 ArduCopter SITL：
+如果想由一键脚本额外拉起当前 ArduPlane QuadPlane SITL：
 
 ```bash
 START_SITL=1 scripts/start_support_stack.sh
@@ -78,6 +81,13 @@ GATEWAY_SN=EDGEGW001 MQTT_HOST=127.0.0.1 MQTT_PORT=1883 scripts/start_mqtt_obser
 BIND_STATUS=unbound scripts/start_cloud_simulator.sh
 
 NEST_PORT=14551 scripts/start_nest_simulator.sh
+
+# 默认输出 udp:127.0.0.1:14552、udp:127.0.0.1:14551、udp:192.168.2.59:14551；
+# 机巢模拟器会忽略 14551 上的非网关标准 SITL 镜像，避免抢占网关回包地址。
+scripts/start_arduplane_sitl.sh
+
+# 关闭本机 14551 镜像和远端观察输出，只保留 SITL -> 机巢模拟器 14552
+SITL_LOCAL_NEST_OUT=0 SITL_EXTRA_OUT_IPS="" scripts/start_arduplane_sitl.sh
 
 WEB_PORT=8091 scripts/start_web_console.sh
 ```

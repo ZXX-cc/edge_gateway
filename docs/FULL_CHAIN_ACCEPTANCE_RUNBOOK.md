@@ -95,7 +95,7 @@ cd ~/lxz/edge_gateway
 git status --short --branch
 bash tools/ubuntu_preflight.sh
 
-ss -tlnp | egrep ':1883|:8083|:6789|:18083|:14550|:14551' || true
+ss -tlnp | egrep ':1883|:8083|:6789|:18083|:14550|:14551|:14552' || true
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
 ```
 
@@ -147,10 +147,14 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t 'sys/product/EDGEGW001/#' -v
 ### 4.3 ArduPilot SITL
 
 ```bash
-export PATH=$PATH:$HOME/.local/bin:$HOME/lxz/ardupilot/Tools/autotest
-cd ~/lxz/ardupilot/ArduCopter
-sim_vehicle.py -v ArduCopter --out=127.0.0.1:14550
+cd ~/lxz/edge_gateway
+scripts/start_nest_simulator.sh
+
+# 另开终端；默认启动 ArduPlane quadplane / Changchun_HD
+scripts/start_arduplane_sitl.sh
 ```
+
+ArduPlane 脚本默认生成三路输出：`udp:127.0.0.1:14552` 作为机巢模拟器的 SITL 标准 MAVLink 主入口，`udp:127.0.0.1:14551` 保留本机联调镜像，`udp:192.168.2.59:14551` 提供内网观察。机巢模拟器只把 component `190` 或 `DRONE_NEST_COMMAND` 注册为 14551 网关客户端，防止 SITL 镜像抢占 12004/12005 回包地址。
 
 通过标准：
 

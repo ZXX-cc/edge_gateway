@@ -43,7 +43,9 @@
 | 端口/地址 | 用途 | 当前配置来源 |
 |---|---|---|
 | `127.0.0.1:1883` | MQTT Broker | `config/gateway.yaml` 的 `nanomq.host/port`，实际由 Mosquitto 提供 |
-| `127.0.0.1:14550` | MAVLink UDP | `config/gateway.yaml` 的 `mavlink.connection.port` |
+| `127.0.0.1:14551` | 网关与机巢模拟器自定义 MAVLink | `nest_mavlink.connection.port` |
+| `127.0.0.1:14552` | SITL 标准 MAVLink 输入到机巢模拟器 | `nest_mavlink.sitl.port` |
+| `127.0.0.1:14550` | 已关闭的网关主飞控直连兼容端口 | `mavlink.enabled=false` 时不使用 |
 | `0.0.0.0:8090` | Web 调试台 | `web/app.py` 默认 `WEB_PORT=8090` |
 | `thing/product/EDGE-GW-001/#` | 网关 MQTT 业务 topic | `config/gateway.yaml` 的 `gateway.sn` |
 | `sys/product/EDGE-GW-001/#` | 网关系统 topic | `config/gateway.yaml` 的 `gateway.sn` |

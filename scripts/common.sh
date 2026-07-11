@@ -72,6 +72,14 @@ nest_port() {
   config_value "nest_mavlink.connection.port" "14551"
 }
 
+nest_sitl_host() {
+  config_value "nest_mavlink.sitl.host" "127.0.0.1"
+}
+
+nest_sitl_port() {
+  config_value "nest_mavlink.sitl.port" "14552"
+}
+
 require_command() {
   local command_name="$1"
   if ! command -v "${command_name}" >/dev/null 2>&1; then

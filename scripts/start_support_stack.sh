@@ -150,9 +150,9 @@ else
 fi
 
 if component_enabled "${START_SITL}"; then
-  start_background "arducopter_sitl" "ArduCopter SITL" "${SCRIPT_DIR}/start_arducopter_sitl.sh" || true
+  start_background "arduplane_sitl" "ArduPlane QuadPlane SITL" "${SCRIPT_DIR}/start_arduplane_sitl.sh" || true
 else
-  skip_component "ArduCopter SITL" "START_SITL=${START_SITL}"
+  skip_component "ArduPlane QuadPlane SITL" "START_SITL=${START_SITL}"
 fi
 
 print_component_summary
