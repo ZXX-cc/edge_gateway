@@ -48,6 +48,31 @@ emqx_container() {
   return 0
 }
 
+emqx_ctl() {
+  local container first_error second_error
+  container="$1"
+  shift
+
+  if first_error="$(
+    docker exec -u emqx "${container}" /opt/emqx/bin/emqx ctl "$@" 2>&1
+  )"; then
+    printf '%s\n' "${first_error}"
+    return 0
+  fi
+  if second_error="$(
+    docker exec "${container}" /opt/emqx/bin/emqx ctl "$@" 2>&1
+  )"; then
+    printf '%s\n' "${second_error}"
+    return 0
+  fi
+
+  echo "[emqx 用户执行失败]" >&2
+  printf '%s\n' "${first_error}" >&2
+  echo "[root 用户回退失败]" >&2
+  printf '%s\n' "${second_error}" >&2
+  return 1
+}
+
 list_emqx_clients() {
   local container output filter
   container="$(emqx_container)"
@@ -58,7 +83,7 @@ list_emqx_clients() {
   fi
   echo "[信息] EMQX 容器：${container}"
   echo "[信息] 在线客户端过滤条件：${filter}"
-  if ! output="$(docker exec "${container}" /opt/emqx/bin/emqx ctl clients list 2>&1)"; then
+  if ! output="$(emqx_ctl "${container}" clients list 2>&1)"; then
     echo "[错误] EMQX 客户端查询失败：" >&2
     printf '%s\n' "${output}" >&2
     return 3
@@ -162,9 +187,9 @@ case "${ACTION}" in
     emqx_name="$(emqx_container)"
     if [[ -n "${emqx_name}" ]]; then
       echo "[信息] 查询 EMQX client_id：${CLIENT_ID}"
-      docker exec "${emqx_name}" /opt/emqx/bin/emqx ctl clients show "${CLIENT_ID}" || true
+      emqx_ctl "${emqx_name}" clients show "${CLIENT_ID}" || true
       echo "[提示] 确认是旧客户端后，可用以下命令临时断开："
-      echo "       sudo docker exec ${emqx_name} /opt/emqx/bin/emqx ctl clients kick ${CLIENT_ID}"
+      echo "       sudo docker exec -u emqx ${emqx_name} /opt/emqx/bin/emqx ctl clients kick ${CLIENT_ID}"
       echo "[提示] 若客户端自动重连，必须根据 peername 在来源主机停止旧程序。"
       exit 0
     fi

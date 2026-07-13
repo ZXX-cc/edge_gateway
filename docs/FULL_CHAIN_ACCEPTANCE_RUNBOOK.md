@@ -344,6 +344,9 @@ sudo bash scripts/mqtt_broker_audit.sh clients
 sudo EMQX_CONTAINER=docker-emqx-1 bash scripts/mqtt_broker_audit.sh clients
 ```
 
+容器内管理命令优先使用运行 Broker 的 `emqx` 用户，避免 root 用户的 Erlang Cookie
+或节点身份与 `emqx@emqx` 不一致；仅在该方式失败时回退 root 并同时保留两份错误信息。
+
 获得可疑 client ID 后执行 `client <client_id>` 查看 `peername` 等连接信息。确认是旧客户端后，
 脚本会给出 EMQX 临时断开命令；如果客户端自动重连，应在 `peername` 对应主机停止旧程序，
 不能仅依赖 Broker 踢下线。
