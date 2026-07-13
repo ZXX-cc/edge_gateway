@@ -322,6 +322,16 @@ sudo bash scripts/mqtt_broker_audit.sh disable
 
 `Received PUBLISH from <client_id>` 会显示旧回包的发布客户端。审计结束必须执行 `disable`，恢复默认 broker 日志量。
 
+如果 `enable/disable` 提示 `mosquitto.service` 重启失败，不要继续反复重启。新版脚本会在
+`enable` 失败时自动回滚审计配置，并输出 systemd、1883 监听进程和最近日志；也可单独执行：
+
+```bash
+sudo bash scripts/mqtt_broker_audit.sh diagnose
+```
+
+若 `mosquitto.service` 未运行但 1883 仍在监听，说明测试连接的是手工进程、Docker、
+NanoMQ/EMQX 或其他 broker 实例，必须先根据诊断输出确认真实监听者，再对对应实例开启日志。
+
 已知 client ID 时，可直接从 broker 日志和当前连接中查找其来源：
 
 ```bash
