@@ -31,7 +31,23 @@ class PropertySpec:
 
 
 DOCK3_PROPERTY_SPECS: Dict[str, PropertySpec] = {
-    # Dock3 official rw properties confirmed from the DJI Dock3 properties page.
+    # Complete top-level property catalog from the DJI Dock 3 properties page.
+    # Keep this table as the single source of truth for OSD/state routing and
+    # acceptance coverage. Nested struct validation lives in the acceptance
+    # tool because PropertySpec describes one top-level thing-model property.
+    "home_position_is_valid": PropertySpec(
+        "home_position_is_valid", "Home点有效性", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3},
+    ),
+    "heading": PropertySpec(
+        "heading", "机场朝向角", "double", "r", 0,
+        min_value=-180, max_value=180,
+    ),
+    "rtcm_info": PropertySpec("rtcm_info", "机场RTK标定源", "struct", "r", 1),
+    "wireless_link_topo": PropertySpec(
+        "wireless_link_topo", "图传连接拓扑", "struct", "r", 1,
+    ),
+    "air_conditioner": PropertySpec("air_conditioner", "机场空调工作状态", "struct", "r", 0),
     "air_transfer_enable": PropertySpec(
         name="air_transfer_enable",
         label="空中回传",
@@ -55,29 +71,111 @@ DOCK3_PROPERTY_SPECS: Dict[str, PropertySpec] = {
         push_mode=1,
         enum_values={0, 1, 2},
     ),
-
-    # Key Dock3 read-only properties currently used by the gateway.
+    "dongle_infos": PropertySpec("dongle_infos", "4G Dongle信息", "array", "r", 1),
+    "drone_battery_maintenance_info": PropertySpec(
+        "drone_battery_maintenance_info", "飞行器电池保养信息", "struct", "r", 0,
+    ),
+    "maintain_status": PropertySpec("maintain_status", "保养信息", "struct", "r", 0),
+    "position_state": PropertySpec("position_state", "搜星状态", "struct", "r", 0),
+    "emergency_stop_state": PropertySpec(
+        "emergency_stop_state", "紧急停止按钮状态", "enum_int", "r", 0,
+        enum_values={0, 1},
+    ),
+    "drone_charge_state": PropertySpec("drone_charge_state", "飞行器充电状态", "struct", "r", 0),
+    "backup_battery": PropertySpec("backup_battery", "机场备用电池信息", "struct", "r", 0),
+    "alarm_state": PropertySpec(
+        "alarm_state", "机场声光报警状态", "enum_int", "r", 0,
+        enum_values={0, 1},
+    ),
+    "battery_store_mode": PropertySpec(
+        "battery_store_mode", "电池运行模式", "enum_int", "r", 0,
+        enum_values={1, 2},
+    ),
+    "activation_time": PropertySpec("activation_time", "机场激活时间", "int", "r", 0, min_value=0),
+    "height": PropertySpec("height", "椭球高度", "double", "r", 0),
+    "alternate_land_point": PropertySpec("alternate_land_point", "备降点", "struct", "r", 0),
+    "compatible_status": PropertySpec(
+        "compatible_status", "固件一致性状态", "enum_int", "r", 1,
+        enum_values={0, 1},
+    ),
+    "acc_time": PropertySpec("acc_time", "累计运行时长", "int", "r", 1, min_value=0),
+    "first_power_on": PropertySpec("first_power_on", "首次上电时间", "int", "r", 0, min_value=0),
+    "storage": PropertySpec("storage", "机场存储", "struct", "r", 0),
+    "working_current": PropertySpec("working_current", "工作电流", "float", "r", 0, min_value=0),
+    "working_voltage": PropertySpec("working_voltage", "工作电压", "int", "r", 0, min_value=0),
+    "humidity": PropertySpec("humidity", "舱内湿度", "float", "r", 0, min_value=0, max_value=100),
+    "temperature": PropertySpec("temperature", "舱内温度", "float", "r", 0),
+    "environment_temperature": PropertySpec(
+        "environment_temperature", "环境温度", "float", "r", 0,
+    ),
+    "wind_speed": PropertySpec("wind_speed", "风速", "float", "r", 0, min_value=0),
+    "rainfall": PropertySpec(
+        "rainfall", "降雨量", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3},
+    ),
+    "live_capacity": PropertySpec("live_capacity", "直播能力", "struct", "r", 1),
+    "live_status": PropertySpec("live_status", "直播状态", "array", "r", 1),
+    "wireless_link": PropertySpec("wireless_link", "无线链路", "struct", "r", 0),
+    "media_file_detail": PropertySpec("media_file_detail", "媒体文件详情", "struct", "r", 0),
+    "job_number": PropertySpec("job_number", "作业架次", "int", "r", 0, min_value=0),
+    "drone_in_dock": PropertySpec(
+        "drone_in_dock", "飞行器是否在舱", "enum_int", "r", 0,
+        enum_values={0, 1},
+    ),
+    "network_state": PropertySpec("network_state", "网络状态", "struct", "r", 0),
+    "supplement_light_state": PropertySpec(
+        "supplement_light_state", "补光灯状态", "enum_int", "r", 0,
+        enum_values={0, 1},
+    ),
+    "cover_state": PropertySpec(
+        "cover_state", "舱盖状态", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3},
+    ),
+    "sub_device": PropertySpec("sub_device", "子设备状态", "struct", "r", 0),
+    "flighttask_step_code": PropertySpec(
+        "flighttask_step_code", "机场任务状态", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3, 4, 5, 255, 256},
+    ),
+    "mode_code": PropertySpec(
+        "mode_code", "机场状态", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3, 4, 5},
+    ),
+    "firmware_upgrade_status": PropertySpec(
+        "firmware_upgrade_status", "固件升级状态", "enum_int", "r", 1,
+        enum_values={0, 1},
+    ),
+    "firmware_version": PropertySpec("firmware_version", "固件版本", "text", "r", 1),
     "longitude": PropertySpec("longitude", "经度", "double", "r", 0, min_value=-180, max_value=180),
     "latitude": PropertySpec("latitude", "纬度", "double", "r", 0, min_value=-90, max_value=90),
-    "height": PropertySpec("height", "椭球高度", "double", "r", 0),
-    "firmware_version": PropertySpec("firmware_version", "固件版本", "text", "r", 1),
-    "firmware_upgrade_status": PropertySpec("firmware_upgrade_status", "固件升级状态", "enum_int", "r", 1, enum_values={0, 1}),
-    "compatible_status": PropertySpec("compatible_status", "固件一致性状态", "enum_int", "r", 1, enum_values={0, 1}),
-    "mode_code": PropertySpec("mode_code", "机场状态", "enum_int", "r", 0, enum_values={0, 1, 2, 3, 4, 5}),
-    "flighttask_step_code": PropertySpec("flighttask_step_code", "机场任务状态", "enum_int", "r", 0),
-    "sub_device": PropertySpec("sub_device", "子设备状态", "struct", "r", 0),
-    "cover_state": PropertySpec("cover_state", "舱盖状态", "enum_int", "r", 0, enum_values={0, 1, 2, 3}),
-    "supplement_light_state": PropertySpec("supplement_light_state", "补光灯状态", "enum_int", "r", 0, enum_values={0, 1}),
-    "network_state": PropertySpec("network_state", "网络状态", "struct", "r", 0),
-    "drone_in_dock": PropertySpec("drone_in_dock", "飞行器是否在舱", "enum_int", "r", 0, enum_values={0, 1}),
-    "battery_store_mode": PropertySpec("battery_store_mode", "电池运行模式", "enum_int", "r", 0, enum_values={1, 2}),
-    "alarm_state": PropertySpec("alarm_state", "机场声光报警状态", "enum_int", "r", 0, enum_values={0, 1}),
-    "backup_battery": PropertySpec("backup_battery", "机场备用电池信息", "struct", "r", 0),
-    "drone_charge_state": PropertySpec("drone_charge_state", "飞行器充电状态", "struct", "r", 0),
-    "position_state": PropertySpec("position_state", "搜星状态", "struct", "r", 0),
-    "wpmz_version": PropertySpec("wpmz_version", "航线解析库版本", "text", "r", 1),
     "drc_state": PropertySpec("drc_state", "DRC链路状态", "enum_int", "r", 0, enum_values={0, 1, 2}),
-    "drone_authority_info": PropertySpec("drone_authority_info", "飞行器控制权状态", "struct", "r", 0),
+    "self_converge_coordinate": PropertySpec(
+        "self_converge_coordinate", "自收敛坐标", "struct", "r", 0,
+    ),
+}
+
+
+# These properties now have a complete official schema and deterministic
+# simulator value, but their physical meaning cannot be accepted without Dock
+# 3 hardware/firmware. Acceptance tools report them separately instead of
+# presenting simulated values as real-device evidence.
+REAL_DEVICE_CONFIRMATION_PROPERTIES: Set[str] = {
+    "home_position_is_valid",
+    "heading",
+    "rtcm_info",
+    "wireless_link_topo",
+    "dongle_infos",
+    "drone_battery_maintenance_info",
+    "maintain_status",
+    "position_state",
+    "backup_battery",
+    "activation_time",
+    "first_power_on",
+    "wireless_link",
+    "sub_device",
+    "self_converge_coordinate",
+    "latitude",
+    "longitude",
+    "height",
 }
 
 
@@ -102,6 +200,19 @@ ALL_PROPERTY_SPECS: Dict[str, PropertySpec] = {
 
 def writable_property_names() -> Set[str]:
     return {name for name, spec in ALL_PROPERTY_SPECS.items() if spec.writable}
+
+
+def official_property_names(push_mode: Optional[int] = None) -> Set[str]:
+    """Return the official Dock 3 top-level property names.
+
+    ``push_mode=0`` is the OSD set and ``push_mode=1`` is the state set.
+    """
+    if push_mode is None:
+        return set(DOCK3_PROPERTY_SPECS)
+    return {
+        name for name, spec in DOCK3_PROPERTY_SPECS.items()
+        if spec.push_mode == push_mode
+    }
 
 
 def get_property_spec(name: str) -> Optional[PropertySpec]:

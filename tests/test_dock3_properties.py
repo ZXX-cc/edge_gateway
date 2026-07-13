@@ -8,15 +8,31 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.cloud_api.dock3_properties import (
+    DOCK3_PROPERTY_SPECS,
     PROPERTY_SET_FAILED,
     PROPERTY_SET_SUCCESS,
+    REAL_DEVICE_CONFIRMATION_PROPERTIES,
     get_property_spec,
+    official_property_names,
     validate_property_set,
     writable_property_names,
 )
 
 
 class Dock3PropertiesTest(unittest.TestCase):
+    def test_official_catalog_covers_all_49_top_level_properties(self):
+        self.assertEqual(len(DOCK3_PROPERTY_SPECS), 49)
+        self.assertEqual(len(official_property_names(push_mode=0)), 37)
+        self.assertEqual(len(official_property_names(push_mode=1)), 12)
+        self.assertEqual(
+            official_property_names(push_mode=0) | official_property_names(push_mode=1),
+            official_property_names(),
+        )
+
+    def test_real_device_confirmation_set_is_explicit_subset(self):
+        self.assertTrue(REAL_DEVICE_CONFIRMATION_PROPERTIES)
+        self.assertLess(REAL_DEVICE_CONFIRMATION_PROPERTIES, official_property_names())
+
     def test_writable_properties_are_official_dock3_rw_set(self):
         self.assertEqual(
             writable_property_names(),

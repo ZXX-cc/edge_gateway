@@ -10,6 +10,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from mqtt_test_client import MqttRequestClient, property_result
 from tool_config import add_config_argument, resolve_mqtt_settings
+from src.cloud_api.dock3_properties import (
+    DOCK3_PROPERTY_SPECS,
+    official_property_names,
+)
 
 
 DEFAULT_DRONE_SN = "DRONESIM001"
@@ -99,25 +103,58 @@ def validate_dock_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     if not isinstance(data, dict):
         return errors
 
-    check_field(data, "mode_code", int, errors, allowed={0, 1, 2, 3, 4, 5})
-    check_field(data, "flighttask_step_code", int, errors, min_value=0)
-    check_field(data, "cover_state", int, errors, allowed={0, 1, 2, 3})
-    check_field(data, "putter_state", int, errors, allowed={0, 1, 2, 3})
-    check_field(data, "drone_in_dock", int, errors, allowed={0, 1})
+    expected_osd = official_property_names(push_mode=0)
+    for name in sorted(expected_osd):
+        spec = DOCK3_PROPERTY_SPECS[name]
+        expected_type = {
+            "bool": bool,
+            "enum_int": int,
+            "int": int,
+            "float": "number",
+            "double": "number",
+            "text": str,
+            "struct": dict,
+            "array": list,
+        }[spec.value_type]
+        check_field(
+            data,
+            name,
+            expected_type,
+            errors,
+            allowed=spec.enum_values,
+            min_value=spec.min_value,
+            max_value=spec.max_value,
+        )
+
+    leaked_state = sorted(official_property_names(push_mode=1).intersection(data))
+    if leaked_state:
+        errors.append(f"dock OSD contains pushMode=1 properties: {leaked_state}")
+
     check_field(data, "network_state.type", int, errors, allowed={1, 2})
     check_field(data, "network_state.quality", int, errors, min_value=0, max_value=5)
     check_field(data, "network_state.rate", "number", errors, min_value=0)
     check_field(data, "drone_charge_state.capacity_percent", "number", errors, min_value=0, max_value=100)
     check_field(data, "drone_charge_state.state", int, errors, allowed={0, 1})
     check_field(data, "position_state.is_fixed", int, errors, allowed={0, 1, 2, 3})
-    check_field(data, "position_state.quality", int, errors, min_value=0, max_value=5)
+    check_field(data, "position_state.quality", int, errors, allowed={0, 1, 2, 3, 4, 5, 10})
     check_field(data, "position_state.gps_number", int, errors, min_value=0)
-    check_field(data, "electricity", "number", errors, min_value=0, max_value=100)
+    check_field(data, "position_state.rtk_number", int, errors, min_value=0)
+    check_field(data, "home_position_is_valid", int, errors, allowed={0, 1, 2, 3})
+    check_field(data, "heading", "number", errors, min_value=-180, max_value=180)
+    check_field(data, "self_converge_coordinate.latitude", "number", errors, min_value=-90, max_value=90)
+    check_field(data, "self_converge_coordinate.longitude", "number", errors, min_value=-180, max_value=180)
+    check_field(data, "self_converge_coordinate.height", "number", errors)
     check_field(data, "wind_speed", "number", errors, min_value=0)
     check_field(data, "drc_state", int, errors, allowed={0, 1, 2})
     check_field(data, "maintain_status.maintain_status_array", list, errors)
+    check_field(data, "air_conditioner.air_conditioner_state", int, errors, allowed=set(range(16)))
+    check_field(data, "air_conditioner.switch_time", int, errors, min_value=0)
+    check_field(data, "backup_battery.switch", int, errors, allowed={0, 1})
+    check_field(data, "backup_battery.voltage", int, errors, min_value=0, max_value=30000)
+    check_field(data, "storage.total", int, errors, min_value=0)
+    check_field(data, "storage.used", int, errors, min_value=0)
 
-    if "battery" in data:
+    if "battery" in data or "putter_state" in data or "electricity" in data:
         errors.append("dock OSD must use Dock3 dock properties, not drone battery OSD")
     return errors
 
@@ -201,20 +238,12 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
         if not properties:
             errors.append("state data.property must not be empty")
         internal_fields = {
-            "flight_mode",
-            "armed",
-            "connection_status",
-            "battery",
-            "gps_fixed",
-            "mode_code",
-            "flighttask_step_code",
-            "cover_state",
-            "putter_state",
-            "drone_in_dock",
-            "position_state",
-            "drc_state",
+            "flight_mode", "armed", "connection_status", "battery", "gps_fixed",
+            "putter_state", "charging_state", "electricity",
         }
-        leaked = sorted(internal_fields.intersection(properties))
+        leaked = sorted(
+            (internal_fields | official_property_names(push_mode=0)).intersection(properties)
+        )
         if leaked:
             errors.append(f"state contains internal telemetry fields: {leaked}")
         return errors

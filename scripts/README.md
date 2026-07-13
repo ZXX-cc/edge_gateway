@@ -111,3 +111,14 @@ BROKER_MODE=check scripts/start_support_stack.sh
 ```bash
 MOSQUITTO_CONFIG=/etc/mosquitto/mosquitto.conf MOSQUITTO_CONFIG_CHECK_TIMEOUT=8s scripts/start_mqtt_broker.sh
 ```
+
+## Dock 3 官方属性一键验收
+
+外围组件和网关均启动后执行：
+
+```bash
+bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-stale
+```
+
+脚本验证官方 49 项顶层属性、37 项 OSD、12 项 state 分流以及 3 项可写属性，
+日志和 JSON 摘要统一保存到 `logs/acceptance_evidence/<时间>_dock3_properties/`。

@@ -199,6 +199,29 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(properties["position_state"]["is_fixed"], 2)
         self.assertEqual(properties["position_state"]["quality"], 4)
 
+    def test_simulated_aircraft_position_populates_missing_dock3_position_fields(self):
+        properties = build_properties_from_osd({
+            "latitude": 43.817,
+            "longitude": 125.3235,
+            "height": 250.5,
+            "attitude_head": 270.0,
+            "position_state": {
+                "is_fixed": 2,
+                "quality": 10,
+                "gps_number": 18,
+                "rtk_number": 14,
+            },
+        })
+
+        self.assertEqual(properties["heading"], -90.0)
+        self.assertEqual(properties["home_position_is_valid"], 1)
+        self.assertEqual(properties["position_state"]["quality"], 10)
+        self.assertEqual(properties["self_converge_coordinate"], {
+            "latitude": 43.817,
+            "longitude": 125.3235,
+            "height": 250.5,
+        })
+
     def test_mount_status_maps_legacy_gimbal_angles(self):
         telemetry = new_telemetry_state()
 

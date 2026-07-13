@@ -34,6 +34,7 @@ from src.utils.message import MessageBuilder
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
     get_property_spec,
+    official_property_names,
     validate_property_set,
     writable_property_names,
 )
@@ -282,6 +283,29 @@ class DeviceManager:
             'longitude': 0.0,
             'latitude': 0.0,
             'height': 0.0,           # 椭球高度(m)
+            'heading': 0.0,          # 机场朝向角(-180..180°)，纯模拟阶段复用SITL航向
+            'home_position_is_valid': 0,
+            'self_converge_coordinate': {
+                'longitude': 0.0,
+                'latitude': 0.0,
+                'height': 0.0,
+            },
+
+            # ---- RTK/图传拓扑 (pushMode=1, 只读) ----
+            # 无真机阶段提供官方结构的明确“未标定/未连接”状态，不伪造硬件标识。
+            'rtcm_info': {
+                'mount_point': '',
+                'port': '',
+                'host': '',
+                'rtcm_device_type': 1,
+                'source_type': 0,
+            },
+            'wireless_link_topo': {
+                'secret_code': [0] * 28,
+                'center_node': {'sdr_id': 0, 'sn': ''},
+                'leaf_nodes': [],
+            },
+            'dongle_infos': [],
 
             # ---- 固件属性 (pushMode=1, 只读) ----
             'firmware_version': self._read_firmware_version(),
@@ -753,68 +777,22 @@ class DeviceManager:
         import copy
         return copy.deepcopy(self._properties)
 
-    def build_dock3_dock_osd(self, wrap_value: bool = True) -> Dict[str, Any]:
+    def build_dock3_dock_osd(self, wrap_value: bool = False) -> Dict[str, Any]:
         """
         构造 Dock3 机场 OSD。
 
         DJI Demo 页面按机场物模型判断舱盖、充电、作业模式等状态，网关
-        SN 的 OSD 不能使用飞行器遥测结构。默认包装成 ``{"value": ...}``
-        以兼容 DJI Cloud API Demo 的 OSD 解析和页面状态机。
+        SN 的 OSD 不能使用飞行器遥测结构。DJI Cloud API 示例直接在
+        ``data`` 中携带原始属性值；仅在显式请求 ``wrap_value=True`` 时
+        生成旧 Demo 所需的 ``{"value": ...}`` 兼容结构。
         """
         import copy
 
-        dock_osd_fields = (
-            # 基础位置/状态
-            "longitude",
-            "latitude",
-            "height",
-            "position_state",
-            "mode_code",
-            "flighttask_step_code",
-            "cover_state",
-            "putter_state",
-            "charging_state",
-            "drone_in_dock",
-            "emergency_stop_state",
-            "sub_device",
-            # 网络/链路
-            "network_state",
-            "transmission_signal_quality",
-            "wireless_link",
-            "drc_state",
-            "drone_authority_info",
-            # 机场电源/电量
-            "electricity",
-            "remain_flight_time",
-            "drone_charge_state",
-            "backup_battery",
-            # 环境/电气
-            "wind_speed",
-            "environment_temperature",
-            "temperature",
-            "humidity",
-            "rainfall",
-            "electric_supply_voltage",
-            "working_voltage",
-            "working_current",
-            # 舱体/维护
-            "supplement_light_state",
-            "air_conditioner",
-            "battery_store_mode",
-            "alarm_state",
-            "silent_mode",
-            "maintain_status",
-            # 存储/固件/统计
-            "storage",
-            "media_file_detail",
-            "firmware_version",
-            "firmware_upgrade_status",
-            "compatible_status",
-            "wpmz_version",
-            "job_number",
-            "acc_time",
-            "activation_time",
-        )
+        # Official pushMode=0 properties only. The official catalog is the
+        # single source of truth, preventing legacy/internal properties from
+        # leaking into the Dock 3 OSD and pushMode=1 fields from being routed
+        # to the wrong MQTT topic.
+        dock_osd_fields = sorted(official_property_names(push_mode=0))
 
         osd = {
             field: copy.deepcopy(self._properties[field])
@@ -1184,9 +1162,10 @@ class DeviceManager:
         except Exception as e:
             logger.warning(f"Storage query failed: {e}")
 
-        # 累计运行时间
+        # 累计运行时间是 Dock3 pushMode=1 属性，需要走 state；其余系统
+        # 查询字段均为 pushMode=0，仅保留在 OSD。
         elapsed = int(time.time() - self._acc_time_start)
-        updates['acc_time'] = self._properties.get('acc_time', 0) + elapsed
+        acc_time = self._properties.get('acc_time', 0) + elapsed
         self._acc_time_start = time.time()
 
         # 网络状态（简化实现，读取 /proc/net/dev 或调用 ifconfig）
@@ -1199,6 +1178,8 @@ class DeviceManager:
 
         if updates:
             self.update_properties(updates, notify=False)
+        if acc_time != self._properties.get('acc_time'):
+            self.update_properties({'acc_time': acc_time}, notify=True)
 
     def _query_network_status(self) -> Optional[dict]:
         """查询网络状态"""
@@ -1270,7 +1251,35 @@ class DeviceManager:
             'device_online_status': 1 if online else 0,
             'device_paired': 1 if paired else 0
         }
-        self._notify_state({'property': {'sub_device': self._properties['sub_device']}})
+        self._refresh_wireless_link_topo()
+
+    def _refresh_wireless_link_topo(self, notify: bool = True):
+        """Build an official Dock 3 wireless topology from simulated topology.
+
+        The simulator deliberately uses zero SDR IDs and an all-zero secret;
+        those values mean that no real radio credentials were observed. Device
+        SN relationships are still useful for validating the state schema.
+        """
+        selected = next((dev for dev in self._sub_devices.values() if dev.online), None)
+        if not selected:
+            selected = next(iter(self._sub_devices.values()), None)
+        topology = {
+            'secret_code': [0] * 28,
+            'center_node': {
+                'sdr_id': 0,
+                'sn': selected.sn if selected else '',
+            },
+            'leaf_nodes': ([{
+                'sdr_id': 0,
+                'sn': self.gateway_sn,
+                'control_source_index': 1,
+            }] if selected else []),
+        }
+        if self._properties.get('wireless_link_topo') == topology:
+            return
+        self._properties['wireless_link_topo'] = topology
+        if notify:
+            self._notify_state({'property': {'wireless_link_topo': topology}})
 
     def _refresh_sub_device_property(self, notify: bool = True):
         """
@@ -1292,8 +1301,10 @@ class DeviceManager:
             'device_paired': 1 if selected and selected.paired else 0,
         }
         if self._properties.get('sub_device') == state:
+            self._refresh_wireless_link_topo(notify=notify)
             return
         self._properties['sub_device'] = state
+        self._refresh_wireless_link_topo(notify=notify)
         if notify:
             self._notify_state({'property': {'sub_device': state}})
 
@@ -2593,14 +2604,13 @@ class DeviceManager:
         safe_height = data.get('safe_land_height', 0)
         logger.info(f"Alternate land point: ({lat}, {lon}, {alt})")
 
-        self._properties['alternate_land_point'] = {
+        self.update_properties({'alternate_land_point': {
             'latitude': lat,
             'longitude': lon,
             'safe_land_height': safe_height,
             'is_configured': 1,
             'height': alt
-        }
-        self._notify_state({'alternate_land_point': self._properties['alternate_land_point']})
+        }}, notify=False)
 
         # TODO: 持久化到配置文件
         return MessageBuilder.build_reply(msg, result=0, data={
@@ -2624,7 +2634,14 @@ class DeviceManager:
         if not isinstance(devices, list):
             return self._reject_cmd(msg, "rtk_calibration.devices must be array")
 
-        self.update_properties({'mode_code': 5})
+        rtcm_info = {
+            'mount_point': '',
+            'port': '',
+            'host': '',
+            'rtcm_device_type': 1,
+            'source_type': 1,
+        }
+        self.update_properties({'mode_code': 5, 'rtcm_info': rtcm_info})
         self._notify_cmd_progress('rtk_calibration')
         logger.info("RTK calibration simulated: devices=%s", len(devices))
         return self._build_cmd_reply(

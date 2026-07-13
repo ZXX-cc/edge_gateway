@@ -114,6 +114,33 @@ def build_properties_from_osd(osd_data: Dict[str, Any]) -> Dict[str, Any]:
         properties["latitude"] = osd_data["latitude"]
     if "height" in osd_data:
         properties["height"] = osd_data["height"]
+    if "attitude_head" in osd_data:
+        raw_heading = float(osd_data["attitude_head"] or 0.0)
+        # Aircraft OSD uses 0..360 in part of the current stack while the Dock
+        # 3 property requires -180..180. This is explicitly a simulator-only
+        # stand-in until the dock supplies its calibrated fixed heading.
+        properties["heading"] = ((raw_heading + 180.0) % 360.0) - 180.0
+
+    coordinate_keys = {"longitude", "latitude", "height"}
+    if coordinate_keys.issubset(properties):
+        longitude = float(properties["longitude"] or 0.0)
+        latitude = float(properties["latitude"] or 0.0)
+        height = float(properties["height"] or 0.0)
+        heading_available = "heading" in properties
+        coordinate_available = abs(longitude) > 1e-7 or abs(latitude) > 1e-7
+        if coordinate_available and heading_available:
+            properties["home_position_is_valid"] = 1
+        elif heading_available:
+            properties["home_position_is_valid"] = 2
+        elif coordinate_available:
+            properties["home_position_is_valid"] = 3
+        else:
+            properties["home_position_is_valid"] = 0
+        properties["self_converge_coordinate"] = {
+            "longitude": longitude,
+            "latitude": latitude,
+            "height": height,
+        }
     # aircraft mode_code 是飞行状态枚举，不能覆盖 gateway Dock3
     # mode_code(0..5)。机场作业状态只由 mission/device 状态机维护。
     if "battery" in osd_data:
@@ -126,7 +153,11 @@ def build_properties_from_osd(osd_data: Dict[str, Any]) -> Dict[str, Any]:
         properties["position_state"] = {
             "is_calibration": 1 if fixed_state == 2 else 0,
             "is_fixed": fixed_state if fixed_state in {0, 1, 2, 3} else 0,
-            "quality": max(0, min(5, int(position.get("quality", 0) or 0))),
+            # Dock 3 additionally uses quality=10 for RTK fixed.
+            "quality": (
+                10 if int(position.get("quality", 0) or 0) == 10
+                else max(0, min(5, int(position.get("quality", 0) or 0)))
+            ),
             "gps_number": position.get("gps_number", 0),
             "rtk_number": position.get("rtk_number", 0),
         }
