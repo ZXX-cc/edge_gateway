@@ -49,6 +49,31 @@ def legacy_competing_property_reply_count(client: Dock3OsdStateClient) -> int:
     )
 
 
+def stale_breakdown(client: Dock3OsdStateClient) -> Dict[str, int]:
+    """Split strict broker noise into competing replies and legacy reports."""
+    legacy_competing_replies = legacy_competing_property_reply_count(client)
+    reply_strict_total = sum(
+        int(client.stats.get(name, 0))
+        for name in (
+            "ignored_mismatched",
+            "ignored_legacy",
+            "ignored_duplicate",
+            "ignored_wrong_topic",
+        )
+    )
+    legacy_observed_total = int(client.stats.get("ignored_observed_legacy", 0))
+    current_competing_reply_total = max(0, reply_strict_total - legacy_competing_replies)
+    strict_total = current_competing_reply_total + legacy_observed_total
+    return {
+        "total": strict_total + legacy_competing_replies,
+        "strict_total": strict_total,
+        "current_competing_reply_total": current_competing_reply_total,
+        "legacy_observed_total": legacy_observed_total,
+        "legacy_competing_property_replies": legacy_competing_replies,
+        "unrelated_reply_total": int(client.stats.get("ignored_unknown", 0)),
+    }
+
+
 def value_error(name: str, value: Any) -> str:
     spec = DOCK3_PROPERTY_SPECS[name]
     if spec.value_type == "bool":
@@ -212,9 +237,10 @@ def main() -> int:
                 return rc
             covered_state.append(name)
 
-        stale_total = client.stale_total()
-        legacy_competing_replies = legacy_competing_property_reply_count(client)
-        strict_stale_total = max(0, stale_total - legacy_competing_replies)
+        stale = stale_breakdown(client)
+        stale_total = stale["total"]
+        legacy_competing_replies = stale["legacy_competing_property_replies"]
+        strict_stale_total = stale["strict_total"]
         if legacy_competing_replies:
             print(
                 "warning: legacy competing property replies observed "
@@ -227,9 +253,32 @@ def main() -> int:
                 f"(strict={strict_stale_total}, total={stale_total})",
                 file=sys.stderr,
             )
+            print("stale_breakdown=" + json.dumps(stale, ensure_ascii=False), file=sys.stderr)
             samples = client.stale_sample_summary(limit=12)
             if samples:
-                print("stale_samples=" + json.dumps(samples, ensure_ascii=False), file=sys.stderr)
+                print("reply_samples=" + json.dumps(samples, ensure_ascii=False), file=sys.stderr)
+            if client.ignored_legacy_samples:
+                print(
+                    "legacy_observed_samples="
+                    + json.dumps(client.ignored_legacy_samples[-12:], ensure_ascii=False),
+                    file=sys.stderr,
+                )
+            evidence_path = write_evidence(
+                args,
+                {
+                    "status": "failed",
+                    "failure": "strict_stale_sources",
+                    "gateway_sn": args.sn,
+                    "mqtt": {"host": args.host, "port": args.port},
+                    "property_get_covered": len(official_property_names().intersection(snapshot)),
+                    "writable_state_verified": sorted(covered_state),
+                    "stale": stale,
+                    "reply_samples": samples,
+                    "legacy_observed_samples": client.ignored_legacy_samples[-12:],
+                    "timestamp": int(time.time() * 1000),
+                },
+            )
+            print(f"Dock3 property failure evidence -> {evidence_path}", file=sys.stderr)
             return 9
 
         official = official_property_names()
@@ -252,6 +301,7 @@ def main() -> int:
             "stale_total": stale_total,
             "strict_stale_total": strict_stale_total,
             "legacy_competing_property_replies": legacy_competing_replies,
+            "stale": stale,
             "timestamp": int(time.time() * 1000),
         }
         evidence_path = write_evidence(args, summary)
