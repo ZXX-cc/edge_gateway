@@ -145,6 +145,13 @@ class LoggerNameFilter(logging.Filter):
         return any(self._matches(name, prefix) for prefix in self.prefixes)
 
 
+class ConsoleVisibilityFilter(logging.Filter):
+    """允许高频记录仅落盘，避免 HEARTBEAT 等刷屏。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not bool(getattr(record, "console_silent", False))
+
+
 class StreamToLogger:
     """把 print/stdout/stderr 按行转成日志，避免旧模块 print 丢失。"""
 
@@ -242,6 +249,7 @@ def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], li
         console = logging.StreamHandler(_ORIGINAL_STDOUT)
         console.setLevel(level)
         console.setFormatter(formatter)
+        console.addFilter(ConsoleVisibilityFilter())
         handlers.append(console)
 
     base_dir, filename_prefix = _resolve_log_dir(config)
