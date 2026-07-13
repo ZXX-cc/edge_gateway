@@ -5,8 +5,16 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+# ``python tools/<script>.py`` puts only ``tools/`` on sys.path. Add the
+# repository root before importing the shared ``src`` package so the tool also
+# works outside ``python -m unittest``.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, property_result
 from tool_config import add_config_argument, resolve_mqtt_settings
