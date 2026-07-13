@@ -10,6 +10,7 @@ AUDIT_CONFIG="${AUDIT_CONFIG:-/etc/mosquitto/conf.d/99-edge-gateway-audit.conf}"
 BROKER_SERVICE="${BROKER_SERVICE:-mosquitto}"
 BROKER_LOG="${BROKER_LOG:-/var/log/mosquitto/mosquitto.log}"
 BROKER_PORT="${BROKER_PORT:-1883}"
+EMQX_CONTAINER="${EMQX_CONTAINER:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "[错误] 请通过 sudo 执行：sudo bash scripts/mqtt_broker_audit.sh <enable|disable|status|diagnose|clients|client> [filter|client_id]" >&2
@@ -25,7 +26,26 @@ broker_listener_exists() {
 }
 
 emqx_container() {
-  docker ps --filter ancestor=emqx --format '{{.Names}}' 2>/dev/null | head -n 1
+  local detected
+  if [[ -n "${EMQX_CONTAINER}" ]]; then
+    if docker inspect -f '{{.State.Running}}' "${EMQX_CONTAINER}" 2>/dev/null | grep -qx true; then
+      printf '%s\n' "${EMQX_CONTAINER}"
+      return 0
+    fi
+    echo "[错误] 指定的 EMQX_CONTAINER=${EMQX_CONTAINER} 不存在或未运行。" >&2
+    return 0
+  fi
+
+  detected="$(
+    docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+      | awk 'tolower($0) ~ /emqx/ {print $1; exit}' \
+      || true
+  )"
+  if [[ -n "${detected}" ]]; then
+    printf '%s\n' "${detected}"
+    return 0
+  fi
+  return 0
 }
 
 list_emqx_clients() {

@@ -338,6 +338,12 @@ NanoMQ/EMQX 或其他 broker 实例，必须先根据诊断输出确认真实监
 sudo bash scripts/mqtt_broker_audit.sh clients
 ```
 
+脚本按容器名或镜像名中的 `emqx` 自动发现容器；若现场命名特殊，可显式指定：
+
+```bash
+sudo EMQX_CONTAINER=docker-emqx-1 bash scripts/mqtt_broker_audit.sh clients
+```
+
 获得可疑 client ID 后执行 `client <client_id>` 查看 `peername` 等连接信息。确认是旧客户端后，
 脚本会给出 EMQX 临时断开命令；如果客户端自动重连，应在 `peername` 对应主机停止旧程序，
 不能仅依赖 Broker 踢下线。
