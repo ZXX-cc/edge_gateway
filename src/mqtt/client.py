@@ -211,6 +211,19 @@ class MQTTClient:
         - property/set: 属性设置
         - drc/down: DRC控制指令
         """
+        # clean_session=False 会保留旧版本曾经订阅过的上行 topic。若不显式
+        # 清理，网关重连后可能收到自己的 events/osd/state，尤其 status 会
+        # 触发 update_topo -> status 的反馈循环。
+        upstream_only_topics = [
+            TopicBuilder.events(self.gateway_sn),
+            TopicBuilder.osd(self.gateway_sn),
+            TopicBuilder.state(self.gateway_sn),
+            TopicBuilder.status(self.gateway_sn),
+        ]
+        for topic in upstream_only_topics:
+            self.client.unsubscribe(topic)
+            logger.info(f"Removed stale upstream-only subscription: {topic}")
+
         topics = [
             TopicBuilder.services(self.gateway_sn),
             TopicBuilder.property_set(self.gateway_sn),

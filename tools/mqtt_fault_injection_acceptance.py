@@ -309,11 +309,18 @@ async def verify_operation_records(
     minimum: int,
     timeout: float,
 ):
-    from src.database.connection import get_async_session_local, init_database_async
-    from src.database.operation_db import OperationDB
     from src.utils.config import Config
 
     Config().load(config_path)
+    from src.database.connection import (
+        configure_database,
+        get_async_session_local,
+        init_database_async,
+    )
+    from src.database.operation_db import OperationDB
+
+    backend = configure_database(Config.get_database_config())
+    print(f"operation record audit backend -> {backend}")
     await init_database_async()
     session_factory = get_async_session_local()
     matching = []
@@ -340,6 +347,7 @@ async def verify_operation_records(
     return {
         "count": len(matching),
         "operation_ids": [record.operation_id for record in matching[:minimum]],
+        "backend": backend,
         "backend_verified": True,
     }
 

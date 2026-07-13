@@ -18,6 +18,30 @@ from tools.mqtt_fault_injection_acceptance import nested_property
 
 
 class FaultInjectionSupportTest(unittest.TestCase):
+    def test_mqtt_reconnect_removes_stale_upstream_subscriptions(self):
+        class FakePahoClient:
+            def __init__(self):
+                self.subscribed = []
+                self.unsubscribed = []
+
+            def subscribe(self, topic, qos=0):
+                self.subscribed.append((topic, qos))
+
+            def unsubscribe(self, topic):
+                self.unsubscribed.append(topic)
+
+        client = MQTTClient()
+        client.gateway_sn = "EDGEGW001"
+        client.client = FakePahoClient()
+        client.subscribe_downstream()
+
+        self.assertIn("sys/product/EDGEGW001/status", client.client.unsubscribed)
+        self.assertIn("thing/product/EDGEGW001/events", client.client.unsubscribed)
+        self.assertIn(
+            ("thing/product/EDGEGW001/services", 1),
+            client.client.subscribed,
+        )
+
     def test_acceptance_reads_osd_value_wrapper_and_state_raw_value(self):
         self.assertEqual(
             nested_property({"data": {"drone_in_dock": {"value": 0}}}, "drone_in_dock"),
