@@ -11,9 +11,10 @@ BROKER_SERVICE="${BROKER_SERVICE:-mosquitto}"
 BROKER_LOG="${BROKER_LOG:-/var/log/mosquitto/mosquitto.log}"
 BROKER_PORT="${BROKER_PORT:-1883}"
 EMQX_CONTAINER="${EMQX_CONTAINER:-}"
+MQTT_CAPTURE_DIR="${MQTT_CAPTURE_DIR:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "[错误] 请通过 sudo 执行：sudo bash scripts/mqtt_broker_audit.sh <enable|disable|status|diagnose|clients|client> [filter|client_id]" >&2
+  echo "[错误] 请通过 sudo 执行：sudo bash scripts/mqtt_broker_audit.sh <enable|disable|status|diagnose|clients|client|capture-start|capture-stop|capture-status> [argument]" >&2
   exit 1
 fi
 
@@ -71,6 +72,100 @@ emqx_ctl() {
   echo "[root 用户回退失败]" >&2
   printf '%s\n' "${second_error}" >&2
   return 1
+}
+
+capture_dir() {
+  local requested
+  requested="${CLIENT_ID:-${MQTT_CAPTURE_DIR}}"
+  if [[ -z "${requested}" ]]; then
+    requested="logs/acceptance_evidence/$(date '+%Y%m%d_%H%M%S')_mqtt_publishers"
+  fi
+  readlink -m "${requested}"
+}
+
+capture_start() {
+  local directory pid_file pcap log_file capture_pid
+  if ! command -v tcpdump >/dev/null 2>&1; then
+    echo "[错误] 未安装 tcpdump；请先执行 sudo apt-get install tcpdump。" >&2
+    return 4
+  fi
+  directory="$(capture_dir)"
+  pid_file="${directory}/tcpdump.pid"
+  pcap="${directory}/mqtt-publishers.pcap"
+  log_file="${directory}/tcpdump.log"
+  mkdir -p "${directory}"
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    chown "${SUDO_USER}:$(id -gn "${SUDO_USER}")" "${directory}"
+  fi
+  if [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
+    echo "[错误] MQTT 抓包已在运行：PID=$(cat "${pid_file}")" >&2
+    return 5
+  fi
+  rm -f "${pid_file}" "${pcap}" "${log_file}"
+  nohup tcpdump -i any -nn -s 0 -U -w "${pcap}" \
+    "tcp dst port ${BROKER_PORT}" >"${log_file}" 2>&1 &
+  capture_pid=$!
+  printf '%s\n' "${capture_pid}" > "${pid_file}"
+  sleep 1
+  if ! kill -0 "${capture_pid}" 2>/dev/null; then
+    echo "[错误] tcpdump 启动失败：" >&2
+    sed -n '1,80p' "${log_file}" >&2 || true
+    rm -f "${pid_file}"
+    return 6
+  fi
+  echo "[成功] MQTT 发布源抓包已启动：PID=${capture_pid}"
+  echo "[证据目录] ${directory}"
+}
+
+capture_stop() {
+  local directory pid_file pcap text_file matches_file capture_pid
+  directory="$(capture_dir)"
+  pid_file="${directory}/tcpdump.pid"
+  pcap="${directory}/mqtt-publishers.pcap"
+  text_file="${directory}/mqtt-publishers.txt"
+  matches_file="${directory}/mqtt-publisher-matches.log"
+  if [[ ! -f "${pid_file}" ]]; then
+    echo "[错误] 未找到抓包 PID 文件：${pid_file}" >&2
+    return 7
+  fi
+  capture_pid="$(cat "${pid_file}")"
+  if kill -0 "${capture_pid}" 2>/dev/null; then
+    kill -INT "${capture_pid}"
+    for _ in $(seq 1 30); do
+      kill -0 "${capture_pid}" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  rm -f "${pid_file}"
+  if [[ ! -s "${pcap}" ]]; then
+    echo "[错误] 抓包文件为空或不存在：${pcap}" >&2
+    return 8
+  fi
+  tcpdump -nn -tttt -A -r "${pcap}" > "${text_file}" 2>/dev/null
+  grep -n -B 2 -A 8 -E \
+    'EDGEGW001|DRONESIM001|property/set_reply|services_reply' \
+    "${text_file}" > "${matches_file}" || true
+  # 完整抓包可能包含 MQTT CONNECT 凭据，只开放过滤后的匹配日志给普通用户。
+  chmod 600 "${pcap}" "${text_file}"
+  chmod 644 "${matches_file}"
+  echo "[成功] MQTT 发布源抓包已停止并解析"
+  echo "[匹配日志] ${matches_file}"
+  echo "[完整文本] ${text_file}"
+  echo "[原始抓包] ${pcap}"
+}
+
+capture_status() {
+  local directory pid_file capture_pid
+  directory="$(capture_dir)"
+  pid_file="${directory}/tcpdump.pid"
+  if [[ -f "${pid_file}" ]]; then
+    capture_pid="$(cat "${pid_file}")"
+    if kill -0 "${capture_pid}" 2>/dev/null; then
+      echo "[信息] MQTT 发布源抓包运行中：PID=${capture_pid}，目录=${directory}"
+      return 0
+    fi
+  fi
+  echo "[信息] MQTT 发布源抓包未运行：目录=${directory}"
 }
 
 list_emqx_clients() {
@@ -178,6 +273,15 @@ case "${ACTION}" in
   clients)
     list_emqx_clients "${CLIENT_ID}"
     ;;
+  capture-start)
+    capture_start
+    ;;
+  capture-stop)
+    capture_stop
+    ;;
+  capture-status)
+    capture_status
+    ;;
   client)
     if [[ -z "${CLIENT_ID}" ]]; then
       echo "[错误] client 模式需要 MQTT client_id" >&2
@@ -203,7 +307,7 @@ case "${ACTION}" in
     echo "[提示] 若对端为其他主机，请在该主机停止对应旧模拟器；不要关闭当前 edge_gateway 实例。"
     ;;
   *)
-    echo "用法：$0 <enable|disable|status|diagnose|clients|client> [filter|client_id]" >&2
+    echo "用法：$0 <enable|disable|status|diagnose|clients|client|capture-start|capture-stop|capture-status> [argument]" >&2
     exit 2
     ;;
 esac

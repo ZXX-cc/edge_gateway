@@ -347,6 +347,22 @@ sudo EMQX_CONTAINER=docker-emqx-1 bash scripts/mqtt_broker_audit.sh clients
 容器内管理命令优先使用运行 Broker 的 `emqx` 用户，避免 root 用户的 Erlang Cookie
 或节点身份与 `emqx@emqx` 不一致；仅在该方式失败时回退 root 并同时保留两份错误信息。
 
+若两种身份都提示 `Node ... not responding to pings`，说明 EMQX MQTT 数据面可用、
+但本地 Erlang 管理 RPC 不可用。不要为审计重启生产 EMQX，改用被动抓包：
+
+```bash
+EVIDENCE_DIR="logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_mqtt_publishers"
+sudo bash scripts/mqtt_broker_audit.sh capture-start "$EVIDENCE_DIR"
+# 在这里执行一次严格属性验收
+sudo bash scripts/mqtt_broker_audit.sh capture-stop "$EVIDENCE_DIR"
+```
+
+抓包只保留客户端发往 1883 的明文 MQTT 流量，因此文本中的源 IP/端口就是发布端；
+`mqtt-publisher-matches.log` 汇总 `EDGEGW001`、`DRONESIM001` 和 reply topic，原始
+`mqtt-publishers.pcap` 可供 Wireshark/TShark 复核。完整抓包可能包含 MQTT CONNECT
+凭据，因此默认仅 root 可读；对外传递证据时优先提供过滤后的匹配日志。该流程不修改
+Broker 配置、连接或会话。
+
 获得可疑 client ID 后执行 `client <client_id>` 查看 `peername` 等连接信息。确认是旧客户端后，
 脚本会给出 EMQX 临时断开命令；如果客户端自动重连，应在 `peername` 对应主机停止旧程序，
 不能仅依赖 Broker 踢下线。
