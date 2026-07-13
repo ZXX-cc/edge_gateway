@@ -83,7 +83,11 @@ def atomic_write_json(path: Path, document: dict) -> None:
 def nested_property(payload: dict, name: str):
     data = payload.get("data", {}) if isinstance(payload, dict) else {}
     properties = data.get("property", data) if isinstance(data, dict) else {}
-    return properties.get(name) if isinstance(properties, dict) else None
+    value = properties.get(name) if isinstance(properties, dict) else None
+    # Dock3 OSD 使用 {"field": {"value": ...}}，state 使用裸值。
+    if isinstance(value, dict) and set(value) == {"value"}:
+        return value["value"]
+    return value
 
 
 def hms_keys(payload: dict) -> set[str]:

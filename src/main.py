@@ -480,6 +480,13 @@ class EdgeGateway:
         def nest_env_cb(nest_data):
             if self.device:
                 self.device.update_from_nest(nest_data)
+                # 机场 OSD 不能依赖飞控遥测线程。无 SITL/飞机时也要把机巢
+                # 心跳、舱盖、充电、急停和故障状态及时发布到网关 OSD。
+                if self.telemetry_reporter:
+                    self.telemetry_reporter.report_osd(
+                        Config.get_gateway_sn(),
+                        self.device.build_dock3_dock_osd(),
+                    )
             if self.dock:
                 dock_updates = filter_dock_status_fields(build_dock3_properties_from_nest(nest_data))
                 if dock_updates:

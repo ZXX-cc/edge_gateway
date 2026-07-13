@@ -14,9 +14,20 @@ from src.nest_simulator import (
     BIT_NEST_HEARTBEAT,
     NestSimulator,
 )
+from tools.mqtt_fault_injection_acceptance import nested_property
 
 
 class FaultInjectionSupportTest(unittest.TestCase):
+    def test_acceptance_reads_osd_value_wrapper_and_state_raw_value(self):
+        self.assertEqual(
+            nested_property({"data": {"drone_in_dock": {"value": 0}}}, "drone_in_dock"),
+            0,
+        )
+        self.assertEqual(
+            nested_property({"data": {"property": {"silent_mode": 1}}}, "silent_mode"),
+            1,
+        )
+
     def test_simulator_applies_and_clears_runtime_fault_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
             control = Path(directory) / "faults.json"
