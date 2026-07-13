@@ -7,6 +7,8 @@ import os
 import time
 import threading
 import uuid
+import copy
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Dict, Optional, List
 import paho.mqtt.client as mqtt
@@ -67,6 +69,67 @@ class MQTTClient:
         self._background_lock = threading.Lock()
         self._trace = get_request_trace_recorder()
         self._trace.start()
+        self._dedup_lock = threading.Lock()
+        self._dedup_cache = OrderedDict()
+        self._dedup_inflight = set()
+        self._dedup_ttl_seconds = max(10, int(self.config.get('dedup_ttl_seconds', 300)))
+        self._dedup_max_entries = max(32, int(self.config.get('dedup_max_entries', 1024)))
+
+    @staticmethod
+    def _dedup_key(source_topic: str, payload: dict):
+        tid = str(payload.get("tid") or "").strip()
+        method = str(payload.get("method") or "").strip()
+        if not tid or not method:
+            return None
+        return source_topic, method, tid
+
+    def _cached_downstream_reply(self, source_topic: str, payload: dict):
+        key = self._dedup_key(source_topic, payload)
+        if key is None:
+            return None
+        now = time.monotonic()
+        with self._dedup_lock:
+            while self._dedup_cache:
+                oldest_key, oldest = next(iter(self._dedup_cache.items()))
+                if now - oldest["created_at"] <= self._dedup_ttl_seconds:
+                    break
+                self._dedup_cache.pop(oldest_key, None)
+            cached = self._dedup_cache.get(key)
+            if not cached:
+                return None
+            self._dedup_cache.move_to_end(key)
+            return copy.deepcopy(cached["reply"])
+
+    def _remember_downstream_reply(self, source_topic: str, payload: dict, reply: dict):
+        key = self._dedup_key(source_topic, payload)
+        if key is None or not isinstance(reply, dict):
+            return
+        with self._dedup_lock:
+            self._dedup_cache[key] = {
+                "created_at": time.monotonic(),
+                "reply": copy.deepcopy(reply),
+            }
+            self._dedup_inflight.discard(key)
+            self._dedup_cache.move_to_end(key)
+            while len(self._dedup_cache) > self._dedup_max_entries:
+                self._dedup_cache.popitem(last=False)
+
+    def _claim_downstream_request(self, source_topic: str, payload: dict) -> bool:
+        key = self._dedup_key(source_topic, payload)
+        if key is None:
+            return True
+        with self._dedup_lock:
+            if key in self._dedup_inflight:
+                return False
+            self._dedup_inflight.add(key)
+            return True
+
+    def _release_downstream_request(self, source_topic: str, payload: dict):
+        key = self._dedup_key(source_topic, payload)
+        if key is None:
+            return
+        with self._dedup_lock:
+            self._dedup_inflight.discard(key)
 
     def connect(self) -> bool:
         """连接到NanoMQ Broker"""
@@ -751,6 +814,55 @@ class MQTTClient:
                             self._publish_reply_for_source_topic(msg.topic, error_reply)
                         return
 
+                    if is_downstream_command:
+                        cached_reply = self._cached_downstream_reply(msg.topic, payload)
+                        if cached_reply is not None:
+                            trace_command(
+                                "mqtt_duplicate_request_replayed",
+                                source_topic=msg.topic,
+                                method=method,
+                                tid=payload.get("tid"),
+                            )
+                            self._trace.record(
+                                "mqtt_duplicate_request_replayed",
+                                direction="in",
+                                topic=msg.topic,
+                                payload=payload,
+                                extra={"deduplicated": True},
+                            )
+                            logger.warning(
+                                "Duplicate MQTT request suppressed and cached reply replayed: "
+                                "topic=%s, method=%s, tid=%s",
+                                msg.topic,
+                                method,
+                                payload.get("tid"),
+                            )
+                            if payload.get('need_reply') == 1:
+                                self._publish_reply_for_downstream_topic(msg.topic, cached_reply)
+                            return
+                        if not self._claim_downstream_request(msg.topic, payload):
+                            trace_command(
+                                "mqtt_duplicate_request_inflight_suppressed",
+                                source_topic=msg.topic,
+                                method=method,
+                                tid=payload.get("tid"),
+                            )
+                            self._trace.record(
+                                "mqtt_duplicate_request_inflight_suppressed",
+                                direction="in",
+                                topic=msg.topic,
+                                payload=payload,
+                                extra={"deduplicated": True, "inflight": True},
+                            )
+                            logger.warning(
+                                "Duplicate in-flight MQTT request suppressed: "
+                                "topic=%s, method=%s, tid=%s",
+                                msg.topic,
+                                method,
+                                payload.get("tid"),
+                            )
+                            return
+
                     if method in self._background_methods:
                         self._submit_background_handler(
                             handler,
@@ -911,6 +1023,10 @@ class MQTTClient:
                 ("result", self._reply_result(result)),
                 ("reply", format_with_labels(result, max_length=3000)),
             ]))
+            if is_downstream_command and isinstance(result, dict):
+                self._remember_downstream_reply(source_topic, payload, result)
+            elif is_downstream_command:
+                self._release_downstream_request(source_topic, payload)
             if payload.get('need_reply') == 1 and result:
                 self._publish_reply_for_downstream_topic(source_topic, result)
         except Exception as error:
@@ -918,6 +1034,7 @@ class MQTTClient:
 
     def _handle_handler_exception(self, payload: dict, source_topic: str, started: float, error: Exception):
         method = payload.get("method", "")
+        self._release_downstream_request(source_topic, payload)
         self._trace.record(
             "mqtt_handler_exception",
             direction="in",

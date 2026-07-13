@@ -950,7 +950,7 @@ class MissionManager:
                 reasons.append("机巢系统忙")
             if nest.get('emergency_landing'):
                 reasons.append("机巢处于迫降流程")
-            if nest.get('gate_state') == 3:
+            if nest.get('gate_state') == 6:
                 reasons.append("舱盖状态异常")
 
             max_wind = self._as_float(Config.get('mission.precheck.max_wind_speed', 10.0), 10.0)

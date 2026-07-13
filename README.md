@@ -59,6 +59,7 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板：日级任务、人员分工、缺失脚本顺序和每日证据要求 |
 | `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡：44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 Runbook：启动顺序、P0/P1 验收命令、P2 边界和证据归档 |
+| `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md` | 无实体机巢/负载的故障注入、HMS、独立日志和数据保留一键验收 |
 | `docs/INTERFACE_DESIGN_SPEC.md` | 接口设计说明书：P0 字段映射、API 定义和 DJI 错误码规则 |
 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
@@ -137,6 +138,7 @@ http://Ubuntu服务器IP:8090
 - P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 的旧回包已通过 broker 审计定位为 `192.168.2.94` 上的旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`；停止后已在 Ubuntu 通过严格回归：`accepted=10`、全部 `ignored_*=0`。
 - 机巢模拟器已修复 UDP 注册和默认待命状态；Ubuntu 严格链路已通过 properties、device、OSD/state、CMD、DRC、Wayline 六段，其中 Wayline 输出 `accepted=11, events=12, ignored_total=0`，并实际完成 12003 命令、12004 状态、12005 回复的联调。真实 SITL 3 航点执行和进度已另行严格通过，完整完成态仍持续留证。
 - P1-16 短周期数据保留与操作记录已通过 Ubuntu 隔离 SQLite 专项：`tools/database_retention_audit.py` 验证遥测、已结束操作、告警、已上传媒体各清理 1/2/1/1 条，运行中操作与待上传媒体均保留；`tests.test_retention_manager` 同时通过。专项不会访问运行中的 `missions.db`。
+- 已补“独立日志 + 数据保留 + 模拟故障注入”一键验收：机巢模拟器支持运行时注入心跳丢失、急停、舱盖/充电异常、busy、fault/error_code；网关同步生成 HMS、events/OSD、MongoDB/SQLite 操作记录，并验证 pushMode state、MQTT 断线恢复、重复请求幂等和错误 topic。代码已完成，等待 Ubuntu 生成正式证据。
 - P1-09 相机/云台已通过 Ubuntu 严格 MQTT 专项：能力查询、云台转动/模式/复位状态回读、拍照、录像启停和重复停止录像失败码均正确，输出 `accepted=12`、全部 `ignored_*=0`。该证据覆盖 MAVLink/SITL 控制链路；真实 Payload 硬件 ACK 仍需后续适配验收。
 - P1-06 已通过真实 SITL 航点执行验收：Ubuntu 严格模式 `exit=0`，非模拟分支将 KMZ 上传为 3 个航点后执行进入 `in_progress`，15 秒后仍返回同一 `flight_id`、同一 KMZ、`waypoint_count=3`、`current_waypoint_index=1`，`accepted=3`、所有可归因旧回包计数为 0。网关会拒绝并发 Demo 航线覆盖；新增 `--require-completion` 可继续等待并验证最终完成态。
 

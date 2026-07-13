@@ -9,6 +9,7 @@ import socket
 import threading
 import struct
 import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -93,7 +94,10 @@ _GATE_STATE_LABELS = {
     0: "未知",
     1: "舱门打开",
     2: "舱门关闭",
-    3: "舱门异常",
+    3: "舱门开启中",
+    4: "舱门关闭中",
+    5: "舱门暂停中",
+    6: "舱门故障",
 }
 _CLAMP_STATE_LABELS = {
     0: "未知",
@@ -138,6 +142,8 @@ class NestSimulator:
         drone_host=None,
         drone_port=None,
         drone_status_log='logs/nest_simulator/drone_status.log',
+        fault_state_file='/tmp/edge_gateway_nest_faults.json',
+        fault_log='logs/nest_simulator/fault_injection.log',
         mission_file='/home/fenghuolun/zwz/HD.kml',
         mission_upload_timeout=30.0,
     ):
@@ -147,6 +153,10 @@ class NestSimulator:
         self.component_id = component_id
         self.command_log = Path(command_log) if command_log else None
         self.drone_status_log = Path(drone_status_log) if drone_status_log else None
+        self.fault_state_file = Path(fault_state_file) if fault_state_file else None
+        self.fault_log = Path(fault_log) if fault_log else None
+        self._fault_file_signature = None
+        self._fault_overrides = {}
         self.mission_file = mission_file
         self.mission_upload_timeout = float(mission_upload_timeout)
         self.sock = None
@@ -178,11 +188,11 @@ class NestSimulator:
             'ac_temp': 250,
             'nest_temperature': 260,
             'env_temperature': 240,
-            'wind_direction': 1800,
+            'wind_direction': 18000,
             'wind_speed': 30,
             'atmospheric_pressure': 1013,
             'rainfall': 0,
-            'charge_volt': 260,
+            'charge_volt': 2600,
             'charge_current': 0,
             'error_code': 0,
             # 默认以健康待命状态模拟可起飞机巢。故障/急停/忙碌分支
@@ -219,15 +229,16 @@ class NestSimulator:
         """
         ordinary_reason = 0
         takeoff_reason = 0
-        boolstate1 = self.env_data.get("boolstate1", 0)
-        boolstate2 = self.env_data.get("boolstate2", 0)
+        env_data = self._effective_env_data()
+        boolstate1 = env_data.get("boolstate1", 0)
+        boolstate2 = env_data.get("boolstate2", 0)
 
         if ordinary_order and takeoff_land_order:
             ordinary_reason = REJECT_COMMAND_CONFLICT
             takeoff_reason = REJECT_COMMAND_CONFLICT
 
         estop = self._bit(boolstate1, BIT_ESTOP)
-        fault = self._bit(boolstate1, BIT_FAULT) or bool(self.env_data.get("error_code", 0))
+        fault = self._bit(boolstate1, BIT_FAULT) or bool(env_data.get("error_code", 0))
         busy = self._bit(boolstate1, BIT_BUSY)
         ready = self._bit(boolstate1, BIT_READY)
         allow_takeoff = self._bit(boolstate2, BIT_ALLOW_TAKEOFF)
@@ -327,12 +338,13 @@ class NestSimulator:
             "device_code": f"0x{device_code:02X}",
         }
 
-    def _state_lines(self):
-        boolstate1 = self.env_data.get("boolstate1", 0)
-        boolstate2 = self.env_data.get("boolstate2", 0)
-        gate_state = self.env_data.get("gate_state", 0)
-        clamp_state = self.env_data.get("clamp_state", 0)
-        light_state = self.env_data.get("landing_light_state", 0)
+    def _state_lines(self, env_data=None):
+        env_data = env_data or self.env_data
+        boolstate1 = env_data.get("boolstate1", 0)
+        boolstate2 = env_data.get("boolstate2", 0)
+        gate_state = env_data.get("gate_state", 0)
+        clamp_state = env_data.get("clamp_state", 0)
+        light_state = env_data.get("landing_light_state", 0)
         return [
             (
                 "机构",
@@ -348,19 +360,19 @@ class NestSimulator:
             (
                 "电源",
                 "充电电压={volt:.1f}V，充电电流={current:.1f}A".format(
-                    volt=self.env_data.get("charge_volt", 0) / 10,
-                    current=self.env_data.get("charge_current", 0) / 10,
+                    volt=env_data.get("charge_volt", 0) / 100,
+                    current=env_data.get("charge_current", 0) / 100,
                 ),
             ),
             (
                 "环境",
                 "舱内={nest:.1f}C，外部={env:.1f}C，空调={ac:.1f}C，风向={wind_dir:.1f}deg，风速={wind_speed:.1f}m/s，雨量={rain}".format(
-                    nest=self.env_data.get("nest_temperature", 0) / 10,
-                    env=self.env_data.get("env_temperature", 0) / 10,
-                    ac=self.env_data.get("ac_temp", 0) / 10,
-                    wind_dir=self.env_data.get("wind_direction", 0) / 10,
-                    wind_speed=self.env_data.get("wind_speed", 0) / 10,
-                    rain=self.env_data.get("rainfall", 0),
+                    nest=env_data.get("nest_temperature", 0) / 10,
+                    env=env_data.get("env_temperature", 0) / 10,
+                    ac=env_data.get("ac_temp", 0) / 10,
+                    wind_dir=env_data.get("wind_direction", 0) / 100,
+                    wind_speed=env_data.get("wind_speed", 0) / 10,
+                    rain=env_data.get("rainfall", 0) / 10,
                 ),
             ),
             (
@@ -373,9 +385,118 @@ class NestSimulator:
             ),
             (
                 "故障",
-                f"error_code={self.env_data.get('error_code', 0)}，气压={self.env_data.get('atmospheric_pressure', 0)}hPa",
+                f"error_code={env_data.get('error_code', 0)}，气压={env_data.get('atmospheric_pressure', 0) / 10:.1f}kPa",
             ),
         ]
+
+    def _trace_fault(self, event, **fields):
+        if not self.fault_log:
+            return
+        try:
+            self.fault_log.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+                "event": event,
+                **fields,
+            }
+            with self.fault_log.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _set_mask_bit(mask, bit, enabled):
+        if enabled:
+            return mask | (1 << bit)
+        return mask & ~(1 << bit)
+
+    def _load_fault_overrides(self):
+        """读取运行时故障覆盖；文件缺失或 active=false 即恢复模拟器原状态。"""
+        if not self.fault_state_file:
+            return {}
+        try:
+            signature = (
+                self.fault_state_file.stat().st_mtime_ns,
+                self.fault_state_file.stat().st_size,
+            )
+        except FileNotFoundError:
+            signature = None
+        except OSError as exc:
+            self._trace_fault("fault_control_read_failed", error=str(exc))
+            return self._fault_overrides
+
+        if signature == self._fault_file_signature:
+            return self._fault_overrides
+
+        self._fault_file_signature = signature
+        if signature is None:
+            if self._fault_overrides:
+                self._trace_fault("fault_injection_cleared", reason="control_file_removed")
+            self._fault_overrides = {}
+            return self._fault_overrides
+
+        try:
+            document = json.loads(self.fault_state_file.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise ValueError("fault control must be a JSON object")
+            active = document.get("active", True)
+            raw = document.get("faults", document)
+            if not active:
+                raw = {}
+            if not isinstance(raw, dict):
+                raise ValueError("faults must be a JSON object")
+            allowed = {
+                "nest_heartbeat", "plc_heartbeat", "drone_heartbeat",
+                "estop_state", "charging_state", "system_busy", "fault_state",
+                "takeoff_allowed", "gate_state", "clamp_state",
+                "charge_volt", "charge_current", "error_code",
+            }
+            overrides = {key: raw[key] for key in allowed if key in raw}
+            self._fault_overrides = overrides
+            self._trace_fault(
+                "fault_injection_applied" if overrides else "fault_injection_cleared",
+                scenario=document.get("scenario", ""),
+                overrides=overrides,
+            )
+        except Exception as exc:
+            self._trace_fault("fault_control_invalid", error=str(exc))
+        return self._fault_overrides
+
+    def _effective_env_data(self):
+        data = dict(self.env_data)
+        overrides = self._load_fault_overrides()
+        boolstate1_bits = {
+            "nest_heartbeat": BIT_NEST_HEARTBEAT,
+            "drone_heartbeat": BIT_DRONE_HEARTBEAT,
+            "plc_heartbeat": BIT_PLC_HEARTBEAT,
+            "estop_state": BIT_ESTOP,
+            "charging_state": BIT_CHARGING,
+            "system_busy": BIT_BUSY,
+            "fault_state": BIT_FAULT,
+        }
+        for name, bit in boolstate1_bits.items():
+            if name in overrides:
+                data["boolstate1"] = self._set_mask_bit(
+                    data.get("boolstate1", 0), bit, bool(overrides[name])
+                )
+        if "takeoff_allowed" in overrides:
+            data["boolstate2"] = self._set_mask_bit(
+                data.get("boolstate2", 0), BIT_ALLOW_TAKEOFF, bool(overrides["takeoff_allowed"])
+            )
+        ranges = {
+            "gate_state": (0, 255),
+            "clamp_state": (0, 255),
+            "charge_volt": (0, 65535),
+            "charge_current": (0, 65535),
+            "error_code": (0, 65535),
+        }
+        for name, (minimum, maximum) in ranges.items():
+            if name in overrides:
+                try:
+                    data[name] = min(maximum, max(minimum, int(overrides[name])))
+                except (TypeError, ValueError):
+                    pass
+        return data
 
     @staticmethod
     def _print_block(title, rows):
@@ -745,10 +866,11 @@ class NestSimulator:
     def _send_drone_status_text(self):
         if not self.drone_peer_addr or not self.drone_mav:
             return
+        env_data = self._effective_env_data()
         text = (
-            f"NEST hb={int(bool(self.env_data['boolstate1'] & 1))} "
-            f"takeoff={int(bool(self.env_data['boolstate2'] & 1))} "
-            f"gate={self.env_data['gate_state']}"
+            f"NEST hb={int(bool(env_data['boolstate1'] & 1))} "
+            f"takeoff={int(bool(env_data['boolstate2'] & 1))} "
+            f"gate={env_data['gate_state']}"
         )
         try:
             msg = ardupilotmega.MAVLink_statustext_message(6, text.encode("utf-8")[:50])
@@ -758,26 +880,27 @@ class NestSimulator:
 
     # 使用自定义 dialect 发送 DRONE_NEST_RESPONSE
     def _send_nest_response(self):
+        env_data = self._effective_env_data()
         msg = drone_nest.MAVLink_drone_nest_response_message(
-            ac_temp=self.env_data['ac_temp'],
-            nest_temperature=self.env_data['nest_temperature'],
-            env_temperature=self.env_data['env_temperature'],
-            wind_direction=self.env_data['wind_direction'],
-            wind_speed=self.env_data['wind_speed'],
-            atmospheric_pressure=self.env_data['atmospheric_pressure'],
-            rainfall=self.env_data['rainfall'],
-            charge_volt=self.env_data['charge_volt'],
-            charge_current=self.env_data['charge_current'],
-            error_code=self.env_data['error_code'],
-            boolstate1=self.env_data['boolstate1'],
-            boolstate2=self.env_data['boolstate2'],
-            clamp_state=self.env_data['clamp_state'],
-            gate_state=self.env_data['gate_state'],
-            landing_light_state=self.env_data['landing_light_state']
+            ac_temp=env_data['ac_temp'],
+            nest_temperature=env_data['nest_temperature'],
+            env_temperature=env_data['env_temperature'],
+            wind_direction=env_data['wind_direction'],
+            wind_speed=env_data['wind_speed'],
+            atmospheric_pressure=env_data['atmospheric_pressure'],
+            rainfall=env_data['rainfall'],
+            charge_volt=env_data['charge_volt'],
+            charge_current=env_data['charge_current'],
+            error_code=env_data['error_code'],
+            boolstate1=env_data['boolstate1'],
+            boolstate2=env_data['boolstate2'],
+            clamp_state=env_data['clamp_state'],
+            gate_state=env_data['gate_state'],
+            landing_light_state=env_data['landing_light_state']
         )
         # 关键：直接调用 self.mav 的 pack 方法，不要用 self.mav.mav
         self._send_raw(msg.pack(self.mav))
-        self._print_block("已发送 DRONE_NEST_RESPONSE 状态上报", self._state_lines())
+        self._print_block("已发送 DRONE_NEST_RESPONSE 状态上报", self._state_lines(env_data))
 
     def _send_order_response(
         self,
@@ -831,7 +954,7 @@ class NestSimulator:
             self.env_data['clamp_state'] = 2
             print("模拟器：夹紧")
         elif ordinary_order == 0x0F01:
-            self.env_data['charge_current'] = 50
+            self.env_data['charge_current'] = 500
             self.env_data['boolstate1'] |= (1 << 4)
             print("模拟器：开始充电")
         elif ordinary_order == 0x0F02:
@@ -1161,6 +1284,16 @@ if __name__ == '__main__':
         help="SITL 飞机连接和状态日志文件；设为空字符串可关闭",
     )
     parser.add_argument(
+        "--fault-state-file",
+        default="/tmp/edge_gateway_nest_faults.json",
+        help="运行时故障注入 JSON 控制文件；删除文件或 active=false 可恢复",
+    )
+    parser.add_argument(
+        "--fault-log",
+        default="logs/nest_simulator/fault_injection.log",
+        help="故障注入轨迹 JSONL 文件；设为空字符串可关闭",
+    )
+    parser.add_argument(
         "--mission-file",
         default="/home/fenghuolun/zwz/HD.kml",
         help="机巢模拟器下发给 SITL 的真实航线文件，支持 KML/KMZ/WPML/waypoints",
@@ -1180,6 +1313,8 @@ if __name__ == '__main__':
         drone_host=args.drone_host,
         drone_port=args.drone_port,
         drone_status_log=args.drone_status_log,
+        fault_state_file=args.fault_state_file,
+        fault_log=args.fault_log,
         mission_file=args.mission_file,
         mission_upload_timeout=args.mission_upload_timeout,
     )

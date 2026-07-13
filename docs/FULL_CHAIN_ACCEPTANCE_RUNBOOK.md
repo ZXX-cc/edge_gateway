@@ -258,6 +258,7 @@ python tools/nest_v13_protocol_test.py --verbose
 python tools/mqtt_dock3_media_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_live_test.py --timeout 12 --quiet-stale
 python tools/mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale
+python tools/mqtt_fault_injection_acceptance.py --timeout 20
 python tools/mqtt_dock3_firmware_config_test.py --timeout 20 --quiet-stale
 python tools/e2e_takeoff_flow_test.py --timeout 12
 python tools/mqtt_one_key_takeoff_flow_test.py --simulate --timeout 60 --quiet-stale
@@ -274,6 +275,7 @@ P1 通过标准：
 | Media | 文件列表、删除、上传优先级、上传事件可用 |
 | Live | 开始/停止直播、质量、镜头、状态事件可用；当前 Ubuntu 专项已通过 |
 | HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
+| 故障注入 | 七类机巢故障生成 HMS、dock_operation、OSD；pushMode state、MQTT 断线恢复/重复请求/错误 topic 和数据库操作记录全部通过 |
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
 | 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复通过 |
 | 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)` |
@@ -335,6 +337,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 2026-07-10 完整 strict E2E 已通过：`python tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 e2e full-chain test ok (steps=11, elapsed=26.7s)`。全部 11 段均为 `exit=0`；最后 firmware/config 输出 `accepted=8, events=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0`。
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
+
+模拟故障注入完整验收统一执行 `bash scripts/fault_hms_acceptance.sh`。它串行验证八类独立日志、隔离数据保留、七类机巢故障、HMS/events/OSD/state、操作记录，以及 MQTT 断开恢复、重复请求和错误 topic，并在 `logs/acceptance_evidence/<时间>/` 生成汇总 JSON、日志尾部、隔离数据库和 SHA256 清单。详细启动方式和边界见 `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md`。
 
 2026-07-11 数据库默认运行时已切换为 Ubuntu 本机 MongoDB。切换前必须停止网关并保留 `missions.db` 文件副本，再执行 `python tools/migrate_sqlite_to_mongodb.py migrate-and-verify --sqlite missions.db --config config/gateway.yaml`；脚本只读 SQLite，按表 upsert 到同名 MongoDB 集合，清理已从 SQLite 删除的旧迁移副本，并只对带 `_sqlite_migration` 标记的迁移文档做数量和内容校验。迁移通过后执行 `python tools/mongodb_runtime_audit.py --config config/gateway.yaml --write-check`，必须输出 `MONGODB_CONNECTION_OK`、`MONGODB_INDEX_OK`、`MONGODB_RUNTIME_WRITE_READ_OK domains=8` 和 `MONGODB_RUNTIME_AUDIT_OK`，随后再启动网关运行完整 strict E2E。MongoDB 审计数据带隔离标识并在结束时自动清理。
 

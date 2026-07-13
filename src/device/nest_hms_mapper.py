@@ -73,6 +73,45 @@ def build_nest_hms_alarms(nest_data: Dict[str, Any], device_sn: str) -> List[Dic
             error_code=error_code,
         )
 
+    if _bool_value(nest_data, "system_busy"):
+        add(
+            "nest-system-busy",
+            1,
+            "dock3.nest.system_busy.active",
+            "机巢系统处于忙碌状态",
+        )
+
+    gate_state = nest_data.get("gate_state")
+    try:
+        gate_state_value = int(gate_state)
+    except (TypeError, ValueError):
+        gate_state_value = 0
+    if gate_state_value == 6:
+        add(
+            f"nest-cover-abnormal-{gate_state_value}",
+            2,
+            "dock3.nest.cover.abnormal",
+            f"机巢舱盖状态异常，gate_state={gate_state_value}",
+            gate_state=gate_state_value,
+        )
+
+    if _bool_value(nest_data, "charging_state"):
+        try:
+            charge_volt = float(nest_data.get("charge_volt", 0))
+            charge_current = float(nest_data.get("charge_current", 0))
+        except (TypeError, ValueError):
+            charge_volt = 0.0
+            charge_current = 0.0
+        if charge_volt < 10.0 or charge_current <= 0.0:
+            add(
+                "nest-charging-abnormal",
+                2,
+                "dock3.nest.charging.abnormal",
+                f"机巢充电状态异常，电压={charge_volt:.2f}V，电流={charge_current:.2f}A",
+                charge_volt=charge_volt,
+                charge_current=charge_current,
+            )
+
     if _bool_value(nest_data, "emergency_landing"):
         add(
             "nest-emergency-landing",

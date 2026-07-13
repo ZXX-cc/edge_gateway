@@ -25,6 +25,7 @@ import json
 import shutil
 import asyncio
 import copy
+import uuid
 from typing import Dict, Any, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
@@ -79,6 +80,7 @@ from src.utils.dji_error_codes import (
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.device_db import DeviceDB
 from src.database.alarm_db import AlarmDB
+from src.database.operation_db import OperationDB
 from src.device.nest_hms_mapper import (
     build_nest_hms_alarms,
     is_nest_hms_alarm,
@@ -1018,6 +1020,9 @@ class DeviceManager:
     def _notify_nest_operation_if_needed(self, nest_data: dict, changed_state: Dict[str, Any]):
         """Emit a lightweight operation event when important nest state changes."""
         status_flags = {
+            'nest_heartbeat': nest_data.get('nest_heartbeat'),
+            'plc_heartbeat': nest_data.get('plc_heartbeat'),
+            'drone_heartbeat': nest_data.get('drone_heartbeat'),
             'estop_state': bool(nest_data.get('estop_state')),
             'fault_state': bool(nest_data.get('fault_state')),
             'system_busy': bool(nest_data.get('system_busy')),
@@ -1038,17 +1043,26 @@ class DeviceManager:
         )
         if signature == self._last_nest_operation_signature:
             return
-        if not changed_state and not any(
-            value for key, value in status_flags.items()
-            if key != 'takeoff_allowed'
-        ):
+        fault_or_activity = any(
+            status_flags.get(key) for key in (
+                'estop_state', 'fault_state', 'system_busy',
+                'takeoff_in_progress', 'landing_in_progress',
+                'emergency_landing', 'error_code',
+            )
+        ) or any(
+            status_flags.get(key) is False for key in (
+                'nest_heartbeat', 'plc_heartbeat', 'drone_heartbeat',
+            )
+        )
+        if not changed_state and not fault_or_activity:
             self._last_nest_operation_signature = signature
             return
 
         self._last_nest_operation_signature = signature
         now_ms = int(time.time() * 1000)
-        self._notify_event('dock_operation', {
-            'operation_id': f'nest-status-{now_ms}',
+        operation_id = f'nest-status-{now_ms}-{uuid.uuid4().hex[:8]}'
+        event_data = {
+            'operation_id': operation_id,
             'event_type': 'state_changed',
             'command': 'nest_status_sync',
             'timestamp': now_ms,
@@ -1056,7 +1070,38 @@ class DeviceManager:
             'output': {'status': 'ok'},
             'changed_state': changed_state,
             'nest_status': status_flags,
-        })
+        }
+        self._notify_event('dock_operation', event_data)
+        self._schedule_async(self._save_nest_operation_to_db(operation_id, event_data))
+
+    async def _save_nest_operation_to_db(self, operation_id: str, event_data: Dict[str, Any]):
+        """把机巢状态变化事件作为已完成操作写入 SQLite/MongoDB。"""
+        try:
+            session_factory = get_async_session_local()
+            async with session_factory() as session:
+                async with session.begin():
+                    await OperationDB.create_operation_async(
+                        session,
+                        self.gateway_sn,
+                        "nest_status_sync",
+                        {
+                            "changed_state": event_data.get("changed_state", {}),
+                            "nest_status": event_data.get("nest_status", {}),
+                        },
+                        operator="nest_simulator",
+                        operation_id=operation_id,
+                    )
+                    await OperationDB.complete_operation_async(
+                        session,
+                        operation_id,
+                        {
+                            "result": event_data.get("result", 0),
+                            "output": event_data.get("output", {}),
+                            "timestamp": event_data.get("timestamp"),
+                        },
+                    )
+        except Exception as exc:
+            logger.error("Failed to save nest status operation record: %s", exc, exc_info=True)
 
     def _merge_updates_with_current(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """把嵌套属性更新与当前属性深合并，避免局部字段互相覆盖。"""
