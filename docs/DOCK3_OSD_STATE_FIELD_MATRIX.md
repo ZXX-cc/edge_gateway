@@ -14,6 +14,11 @@
 其中 `pushMode=0` OSD 37 项、`pushMode=1` state 12 项；官方 3 个 `rw` 属性均可在
 纯模拟环境通过 `property/set -> state` 验证。此处“结构覆盖”不等于 49 项真机语义验收完成。
 
+2026-07-13 Ubuntu 严格验收已在 `192.168.2.188:1883` 完成：37 项专项单测和 MQTT
+属性专项均以退出码 0 结束，覆盖摘要为 `status=passed`、`strict_stale_total=0`，竞争回复、
+旧格式回复和无关回复计数全部为 0。由此确认**纯模拟属性阶段完成**；下表标记的 17 项
+真机确认字段仍需实体 Dock3/飞行器样本，不能由模拟值替代。
+
 官方入口：
 
 - <https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html>
@@ -95,6 +100,10 @@ bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-s
 由独立 OSD/SITL 专项负责。共享 Broker 对同一事务发布的第二份 reply 仍属于严格失败，
 失败证据会分别记录 `current_competing_reply_total`、`legacy_competing_property_replies`
 和 reply 样本，便于结合 Mosquitto 日志定位客户端来源。
+
+本轮严格证据已确认上述计数全部为 0。此前共享 Broker 的竞争源经被动抓包定位为
+`192.168.2.113`，停止该端旧模拟器/旧网关后无需重启当前网关即可通过验收；后续若再次
+出现竞争回复，应先使用发布源审计脚本定位重复 `EDGEGW001` 客户端，再判断是否属于代码问题。
 
 完整日志和 `dock3_property_coverage_summary.json` 会保存到同一个
 `logs/acceptance_evidence/<时间>_dock3_properties/` 目录。JSON 将 17 个只能由
