@@ -181,6 +181,27 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertIn("thing/product/DRONESIM001/osd", topics)
         self.assertIn("thing/product/EDGEGW001/state", topics)
 
+    def test_drone_osd_observation_can_be_disabled_for_dock_only_acceptance(self):
+        client = Dock3OsdStateClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            "DRONESIM001",
+            1,
+            "",
+            quiet_stale=True,
+            observe_drone_osd=False,
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(client.connect(0.1))
+
+        topics = {topic for topic, _ in client.client.subscriptions}
+        self.assertIn("thing/product/EDGEGW001/osd", topics)
+        self.assertIn("thing/product/EDGEGW001/state", topics)
+        self.assertNotIn("thing/product/DRONESIM001/osd", topics)
+
     def test_observed_osd_and_state_samples_are_validated(self):
         state = envelope("EDGEGW001", {"property": {"silent_mode": 1}})
 

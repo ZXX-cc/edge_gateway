@@ -91,6 +91,11 @@ bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-s
 2. MQTT `property_get` 对 49 项逐项检查存在性、顶层类型、枚举和值域。
 3. 检查完整机场 OSD 无 state/历史字段泄漏，并依次触发 3 个 `rw` 属性的 state。
 
+属性专项只订阅机场 OSD 和机场 state，不把 aircraft OSD 纳入属性门禁；aircraft OSD
+由独立 OSD/SITL 专项负责。共享 Broker 对同一事务发布的第二份 reply 仍属于严格失败，
+失败证据会分别记录 `current_competing_reply_total`、`legacy_competing_property_replies`
+和 reply 样本，便于结合 Mosquitto 日志定位客户端来源。
+
 完整日志和 `dock3_property_coverage_summary.json` 会保存到同一个
 `logs/acceptance_evidence/<时间>_dock3_properties/` 目录。JSON 将 17 个只能由
 真机确认物理语义的字段单列，避免把模拟值当成真机证据。未接负载不影响机场 49 项

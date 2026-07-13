@@ -136,6 +136,7 @@ http://Ubuntu服务器IP:8090
 - `tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 已在 Ubuntu 严格通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，输出 `steps=11, elapsed=26.7s`。
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
 - P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 的旧回包已通过 broker 审计定位为 `192.168.2.94` 上的旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`；停止后已在 Ubuntu 通过严格回归：`accepted=10`、全部 `ignored_*=0`。
+- Dock3 官方属性已完成纯模拟最大覆盖：官方目录 49/49、OSD/state 分组 37/12、3 个可写属性 `property/set -> state`、机场 OSD 原始值结构和 36 项专项单测均已验证。2026-07-13 使用 `192.168.2.188:1883` 复测时，网关正确回包和状态全部通过，但共享 Broker 仍收到第二响应端的 `property_get result=-2` 和无 `method` 回包；属性验收已与 aircraft OSD 解耦，竞争响应端继续作为严格环境问题拦截并待 Broker 客户端审计。
 - 机巢模拟器已修复 UDP 注册和默认待命状态；Ubuntu 严格链路已通过 properties、device、OSD/state、CMD、DRC、Wayline 六段，其中 Wayline 输出 `accepted=11, events=12, ignored_total=0`，并实际完成 12003 命令、12004 状态、12005 回复的联调。真实 SITL 3 航点执行和进度已另行严格通过，完整完成态仍持续留证。
 - P1-16 短周期数据保留与操作记录已通过 Ubuntu 隔离 SQLite 专项：`tools/database_retention_audit.py` 验证遥测、已结束操作、告警、已上传媒体各清理 1/2/1/1 条，运行中操作与待上传媒体均保留；`tests.test_retention_manager` 同时通过。专项不会访问运行中的 `missions.db`。
 - “独立日志 + 数据保留 + 模拟故障注入”已于 2026-07-13 在 Ubuntu 完整通过：7 类故障及恢复、HMS、events/OSD/state、错误码 `325001`、重复请求幂等、MQTT 断线重连、八类独立日志和隔离数据保留均通过；MongoDB 回读确认 12 条 `nest_status_sync` 操作记录，证据提交为 `0934955`。
@@ -146,5 +147,6 @@ http://Ubuntu服务器IP:8090
 
 - 关闭 P0/P1 剩余强门禁：SITL 模式/基础飞控、真实 SITL 航点执行、机巢耗时状态机和非阻塞主链路审计。
 - 继续精校客户需求涉及的 Dock3 字段、枚举、单位和错误码。
+- 清理或隔离共享 Broker 上使用同一 `EDGEGW001` 的旧响应端，完成 49 属性 `--fail-on-stale` 零竞争证据。
 - 保存严格 E2E 证据，并继续真实 SITL 航点、实体机巢和真实负载联调。
 - 补齐真实 Payload 硬件 ACK adapter、P2 adapter/mock/限制说明。

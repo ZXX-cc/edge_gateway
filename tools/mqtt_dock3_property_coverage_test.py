@@ -197,6 +197,10 @@ def main() -> int:
         args.qos,
         expected_state_property="",
         quiet_stale=args.quiet_stale,
+        # This acceptance covers Dock 3 properties only. Aircraft OSD has its
+        # own protocol test and must not turn a valid Dock property run into a
+        # failure when a legacy/no-payload simulator is still publishing it.
+        observe_drone_osd=False,
     )
     if not client.connect(args.timeout):
         print("MQTT connect timeout", file=sys.stderr)

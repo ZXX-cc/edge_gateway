@@ -346,6 +346,7 @@ class Dock3OsdStateClient(MqttRequestClient):
         expected_state_property: str,
         quiet_stale: bool = False,
         require_live_drone: bool = False,
+        observe_drone_osd: bool = True,
         mqtt_module=None,
     ):
         self.drone_sn = drone_sn
@@ -363,6 +364,9 @@ class Dock3OsdStateClient(MqttRequestClient):
         self.invalid_samples: List[str] = []
         self.ignored_legacy_samples: List[Dict[str, Any]] = []
         self.placeholder_drone_samples: List[Dict[str, Any]] = []
+        observe_topics = {self.dock_osd_topic, self.state_topic}
+        if observe_drone_osd:
+            observe_topics.add(self.drone_osd_topic)
         super().__init__(
             host,
             port,
@@ -370,7 +374,7 @@ class Dock3OsdStateClient(MqttRequestClient):
             qos,
             quiet_stale=quiet_stale,
             client_id_prefix="edge_gateway_dock3_osd_state",
-            observe_topics={self.dock_osd_topic, self.drone_osd_topic, self.state_topic},
+            observe_topics=observe_topics,
             mqtt_module=mqtt_module,
         )
         self.stats["ignored_observed_legacy"] = 0
