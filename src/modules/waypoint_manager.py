@@ -344,6 +344,14 @@ class WaypointManager(BaseModule):
             return int(round(number))
         return int(round(number * 1e7))
 
+    @staticmethod
+    def _mavlink_message(message_cls, *args):
+        """兼容不同 pymavlink 版本的 MAVLink2 扩展字段构造差异。"""
+        try:
+            return message_cls(*args)
+        except TypeError:
+            return message_cls(*args[:-1])
+
     def clear_mission(self):
         """清空当前任务"""
         self.wploader.clear()
@@ -657,7 +665,8 @@ class WaypointManager(BaseModule):
 
     def _request_waypoint(self, seq: int):
         """请求指定序号的航点"""
-        msg = mavutil.mavlink.MAVLink_mission_request_int_message(
+        msg = self._mavlink_message(
+            mavutil.mavlink.MAVLink_mission_request_int_message,
             self.target_system,
             self.target_component,
             seq,
@@ -672,7 +681,8 @@ class WaypointManager(BaseModule):
 
         wp = self.wploader.wp(seq)
         if wp:
-            msg = mavutil.mavlink.MAVLink_mission_item_int_message(
+            msg = self._mavlink_message(
+                mavutil.mavlink.MAVLink_mission_item_int_message,
                 self.target_system,
                 self.target_component,
                 seq,
@@ -696,7 +706,8 @@ class WaypointManager(BaseModule):
         self.is_requesting = True
         self.mission_loading_complete.clear()
 
-        msg = mavutil.mavlink.MAVLink_mission_request_list_message(
+        msg = self._mavlink_message(
+            mavutil.mavlink.MAVLink_mission_request_list_message,
             self.target_system,
             self.target_component,
             mavlink.MAV_MISSION_TYPE_MISSION
@@ -716,7 +727,8 @@ class WaypointManager(BaseModule):
 
         self.mission_upload_complete.clear()
 
-        msg = mavutil.mavlink.MAVLink_mission_count_message(
+        msg = self._mavlink_message(
+            mavutil.mavlink.MAVLink_mission_count_message,
             self.target_system,
             self.target_component,
             self.wploader.count(),
