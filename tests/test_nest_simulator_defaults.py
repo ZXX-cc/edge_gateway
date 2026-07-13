@@ -61,6 +61,23 @@ class NestSimulatorDefaultStateTest(unittest.TestCase):
         )
         self.assertFalse(NestSimulator._is_gateway_link_message(Message("HEARTBEAT", 1)))
 
+    def test_gateway_standard_filter_forwards_aircraft_commands_only(self):
+        class Message:
+            def __init__(self, message_type, component):
+                self.message_type = message_type
+                self.component = component
+
+            def get_type(self):
+                return self.message_type
+
+            def get_srcComponent(self):
+                return self.component
+
+        self.assertTrue(NestSimulator._is_gateway_standard_message(Message("COMMAND_LONG", 190)))
+        self.assertTrue(NestSimulator._is_gateway_standard_message(Message("SET_MODE", 190)))
+        self.assertFalse(NestSimulator._is_gateway_standard_message(Message("DRONE_NEST_COMMAND", 190)))
+        self.assertFalse(NestSimulator._is_gateway_standard_message(Message("HEARTBEAT", 1)))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

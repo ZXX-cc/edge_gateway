@@ -156,6 +156,7 @@ class NestSimulator:
         self.client_addr = None
         self.running = False
         self.mav = None
+        self.gateway_standard_mav = None
         self.drone_mav = None
         self.drone_last_seen_at = 0.0
         self.drone_system_id = None
@@ -1029,20 +1030,46 @@ class NestSimulator:
                 data, addr = self.sock.recvfrom(4096)
                 if not data:
                     continue
+                should_forward_to_drone = False
                 for byte in data:
-                    msg = self.mav.parse_char(bytes([byte]))
-                    if msg:
-                        # ArduPlane 启动命令会按联调要求把一份 SITL 数据镜像到
-                        # 14551。该端口的业务客户端只能是网关（component=190）
-                        # 或明确的机巢命令，防止高频 SITL 心跳抢占 client_addr，
-                        # 导致 12004/12005 被错误回发给 MAVProxy。
-                        if not self._is_gateway_link_message(msg):
-                            continue
-                        if self.client_addr != addr:
-                            self.client_addr = addr
-                            print(f"已注册网关地址: {addr}")
-                            self._send_heartbeat()   # 立即回复心跳
-                        self._handle_message(msg)
+                    chunk = bytes([byte])
+                    try:
+                        msg = self.mav.parse_char(chunk)
+                        if msg:
+                            # ArduPlane 启动命令会按联调要求把一份 SITL 数据镜像到
+                            # 14551。该端口的业务客户端只能是网关（component=190）
+                            # 或明确的机巢命令，防止高频 SITL 心跳抢占 client_addr，
+                            # 导致 12004/12005 被错误回发给 MAVProxy。
+                            if not self._is_gateway_link_message(msg):
+                                continue
+                            if self.client_addr != addr:
+                                self.client_addr = addr
+                                print(f"已注册网关地址: {addr}")
+                                self._send_heartbeat()   # 立即回复心跳
+                            self._handle_message(msg)
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                            print(f"自定义 MAVLink 解析错误: {e}")
+                    try:
+                        standard_msg = self.gateway_standard_mav.parse_char(chunk) if self.gateway_standard_mav else None
+                        if standard_msg and self._is_gateway_standard_message(standard_msg):
+                            if self.client_addr != addr:
+                                self.client_addr = addr
+                                print(f"已注册网关地址: {addr}")
+                                self._send_heartbeat()
+                            should_forward_to_drone = True
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if 'invalid' not in error_str and 'prefix' not in error_str:
+                            print(f"标准 MAVLink 解析错误: {e}")
+                if should_forward_to_drone:
+                    self._send_to_drone(data)
+                    self._trace_drone_event(
+                        "gateway_standard_forwarded",
+                        bytes=len(data),
+                        target=self.drone_peer_addr or "-",
+                    )
             except socket.timeout:
                 continue
             except Exception as e:
@@ -1056,6 +1083,18 @@ class NestSimulator:
             msg.get_srcComponent() == 190
             or msg.get_type() == 'DRONE_NEST_COMMAND'
         )
+
+    @staticmethod
+    def _is_gateway_standard_message(msg):
+        """网关到飞机的标准 MAVLink 也必须经由机巢转发给 SITL。"""
+        msg_type = msg.get_type()
+        if msg_type in {
+            'DRONE_NEST_COMMAND',
+            'DRONE_NEST_RESPONSE',
+            'DRONE_NEST_ORDER_RESPONSE',
+        }:
+            return False
+        return msg.get_srcComponent() == 190
 
     def start(self):
         print(f"启动 MAVLink 机巢模拟器 (UDP)，监听 {self.host}:{self.port}")
@@ -1078,6 +1117,11 @@ class NestSimulator:
             def write(self, data):
                 pass
         self.mav = drone_nest.MAVLink(DummyFile(), srcSystem=self.system_id, srcComponent=self.component_id)
+        self.gateway_standard_mav = ardupilotmega.MAVLink(
+            DummyFile(),
+            srcSystem=self.system_id,
+            srcComponent=self.component_id,
+        )
         if self.drone_sock:
             self.drone_mav = ardupilotmega.MAVLink(
                 DummyFile(),

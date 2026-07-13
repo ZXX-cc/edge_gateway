@@ -197,6 +197,22 @@ class MAVLinkConnection:
                         )
                         self._receiver_thread.start()
 
+                    def _remember_aircraft_target(self, msg):
+                        """从机巢转发回来的飞机消息学习 sys/comp，供后续控制命令使用。"""
+                        try:
+                            msg_type = msg.get_type()
+                            sysid = int(msg.get_srcSystem())
+                            compid = int(msg.get_srcComponent())
+                        except Exception:
+                            return
+                        if not sysid or not compid:
+                            return
+                        if sysid >= 100:
+                            return
+                        if msg_type == "HEARTBEAT" or not self.target_system:
+                            self.target_system = sysid
+                            self.target_component = compid
+
                     def _receiver_loop(self):
                         while self._running:
                             try:
@@ -218,6 +234,7 @@ class MAVLinkConnection:
                                         if standard_msg:
                                             msg_id = _extract_msg_id(standard_msg)
                                             if msg_id not in self._valid_ids:
+                                                self._remember_aircraft_target(standard_msg)
                                                 self._message_queue.append(standard_msg)
                                     except Exception as e:
                                         error_str = str(e).lower()
@@ -321,6 +338,22 @@ class MAVLinkConnection:
                         )
                         self._receiver_thread.start()
 
+                    def _remember_aircraft_target(self, msg):
+                        """从机巢转发回来的飞机消息学习 sys/comp，供后续控制命令使用。"""
+                        try:
+                            msg_type = msg.get_type()
+                            sysid = int(msg.get_srcSystem())
+                            compid = int(msg.get_srcComponent())
+                        except Exception:
+                            return
+                        if not sysid or not compid:
+                            return
+                        if sysid >= 100:
+                            return
+                        if msg_type == "HEARTBEAT" or not self.target_system:
+                            self.target_system = sysid
+                            self.target_component = compid
+
                     def _receiver_loop(self):
                         """后台receiver线程：持续读取socket数据并解析消息"""
                         while self._running:
@@ -347,6 +380,7 @@ class MAVLinkConnection:
                                         if standard_msg:
                                             msg_id = _extract_msg_id(standard_msg)
                                             if msg_id not in self._valid_ids:
+                                                self._remember_aircraft_target(standard_msg)
                                                 self._message_queue.append(standard_msg)
                                     except Exception as e:
                                         error_str = str(e).lower()
