@@ -118,12 +118,14 @@ capture_start() {
 }
 
 capture_stop() {
-  local directory pid_file pcap text_file matches_file capture_pid
+  local directory pid_file pcap text_file matches_file summary_file summary_body capture_pid
   directory="$(capture_dir)"
   pid_file="${directory}/tcpdump.pid"
   pcap="${directory}/mqtt-publishers.pcap"
   text_file="${directory}/mqtt-publishers.txt"
   matches_file="${directory}/mqtt-publisher-matches.log"
+  summary_file="${directory}/mqtt-publisher-summary.tsv"
+  summary_body="${directory}/.mqtt-publisher-summary.body"
   if [[ ! -f "${pid_file}" ]]; then
     echo "[错误] 未找到抓包 PID 文件：${pid_file}" >&2
     return 7
@@ -145,10 +147,45 @@ capture_stop() {
   grep -n -B 2 -A 8 -E \
     'EDGEGW001|DRONESIM001|property/set_reply|services_reply' \
     "${text_file}" > "${matches_file}" || true
+  awk '
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].* IP / {
+      endpoint = $0
+      sub(/^.* IP /, "", endpoint)
+      sub(/ >.*$/, "", endpoint)
+      next
+    }
+    /thing\/product\/(EDGEGW001|DRONESIM001)\// {
+      payload = $0
+      if (endpoint == "") next
+      signature = endpoint SUBSEP payload
+      if (seen[signature]++) next
+      category = "current_or_other"
+      if (payload ~ /thing\/product\/EDGEGW001\/services_reply/ && index(payload, "\"result\": -2")) {
+        category = "legacy_unknown_method_reply"
+      } else if (payload ~ /thing\/product\/EDGEGW001\/property\/set_reply/ && !index(payload, "\"method\"")) {
+        category = "legacy_methodless_property_reply"
+      } else if (payload ~ /thing\/product\/EDGEGW001\/osd/ && index(payload, "\"value\"")) {
+        category = "legacy_value_wrapped_dock_osd"
+      }
+      counts[endpoint SUBSEP category]++
+    }
+    END {
+      for (key in counts) {
+        split(key, parts, SUBSEP)
+        printf "%s\t%s\t%d\n", parts[1], parts[2], counts[key]
+      }
+    }
+  ' "${text_file}" | sort > "${summary_body}"
+  {
+    printf 'source_endpoint\tcategory\tunique_publish_count\n'
+    cat "${summary_body}"
+  } > "${summary_file}"
+  rm -f "${summary_body}"
   # 完整抓包可能包含 MQTT CONNECT 凭据，只开放过滤后的匹配日志给普通用户。
   chmod 600 "${pcap}" "${text_file}"
-  chmod 644 "${matches_file}"
+  chmod 644 "${matches_file}" "${summary_file}"
   echo "[成功] MQTT 发布源抓包已停止并解析"
+  echo "[发布源摘要] ${summary_file}"
   echo "[匹配日志] ${matches_file}"
   echo "[完整文本] ${text_file}"
   echo "[原始抓包] ${pcap}"

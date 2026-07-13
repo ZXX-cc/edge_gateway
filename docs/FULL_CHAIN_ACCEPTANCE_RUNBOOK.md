@@ -358,7 +358,9 @@ sudo bash scripts/mqtt_broker_audit.sh capture-stop "$EVIDENCE_DIR"
 ```
 
 抓包只保留客户端发往 1883 的明文 MQTT 流量，因此文本中的源 IP/端口就是发布端；
-`mqtt-publisher-matches.log` 汇总 `EDGEGW001`、`DRONESIM001` 和 reply topic，原始
+`mqtt-publisher-summary.tsv` 会去除 `any` 接口重复包，并按源端点分类统计当前消息、
+旧 `result=-2`、无 `method` 属性回复和 value-wrapper 机场 OSD；
+`mqtt-publisher-matches.log` 保留对应上下文，原始
 `mqtt-publishers.pcap` 可供 Wireshark/TShark 复核。完整抓包可能包含 MQTT CONNECT
 凭据，因此默认仅 root 可读；对外传递证据时优先提供过滤后的匹配日志。该流程不修改
 Broker 配置、连接或会话。
