@@ -332,6 +332,16 @@ sudo bash scripts/mqtt_broker_audit.sh diagnose
 若 `mosquitto.service` 未运行但 1883 仍在监听，说明测试连接的是手工进程、Docker、
 NanoMQ/EMQX 或其他 broker 实例，必须先根据诊断输出确认真实监听者，再对对应实例开启日志。
 
+如果诊断显示 1883 由 Docker EMQX 监听，可直接列出与网关相关的在线客户端：
+
+```bash
+sudo bash scripts/mqtt_broker_audit.sh clients
+```
+
+获得可疑 client ID 后执行 `client <client_id>` 查看 `peername` 等连接信息。确认是旧客户端后，
+脚本会给出 EMQX 临时断开命令；如果客户端自动重连，应在 `peername` 对应主机停止旧程序，
+不能仅依赖 Broker 踢下线。
+
 已知 client ID 时，可直接从 broker 日志和当前连接中查找其来源：
 
 ```bash

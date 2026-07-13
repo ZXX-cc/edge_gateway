@@ -12,7 +12,7 @@ BROKER_LOG="${BROKER_LOG:-/var/log/mosquitto/mosquitto.log}"
 BROKER_PORT="${BROKER_PORT:-1883}"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "[错误] 请通过 sudo 执行：sudo bash scripts/mqtt_broker_audit.sh <enable|disable|status|diagnose|client> [client_id]" >&2
+  echo "[错误] 请通过 sudo 执行：sudo bash scripts/mqtt_broker_audit.sh <enable|disable|status|diagnose|clients|client> [filter|client_id]" >&2
   exit 1
 fi
 
@@ -24,6 +24,32 @@ broker_listener_exists() {
   ss -ltnp 2>/dev/null | grep -qE ":${BROKER_PORT}([[:space:]]|$)"
 }
 
+emqx_container() {
+  docker ps --filter ancestor=emqx --format '{{.Names}}' 2>/dev/null | head -n 1
+}
+
+list_emqx_clients() {
+  local container output filter
+  container="$(emqx_container)"
+  filter="${1:-EDGEGW001|dock3_sim|edge_gateway}"
+  if [[ -z "${container}" ]]; then
+    echo "[错误] 未发现正在运行的 EMQX Docker 容器。" >&2
+    return 1
+  fi
+  echo "[信息] EMQX 容器：${container}"
+  echo "[信息] 在线客户端过滤条件：${filter}"
+  if ! output="$(docker exec "${container}" /opt/emqx/bin/emqx ctl clients list 2>&1)"; then
+    echo "[错误] EMQX 客户端查询失败：" >&2
+    printf '%s\n' "${output}" >&2
+    return 3
+  fi
+  if ! printf '%s\n' "${output}" | grep -E "${filter}"; then
+    echo "[警告] 没有客户端匹配过滤条件，以下为客户端列表前 80 行：" >&2
+    printf '%s\n' "${output}" | sed -n '1,80p'
+    return 2
+  fi
+}
+
 diagnose_broker() {
   echo "[诊断] systemd 服务状态："
   systemctl --no-pager --full status "${BROKER_SERVICE}" 2>&1 | sed -n '1,24p' || true
@@ -31,6 +57,9 @@ diagnose_broker() {
   ss -ltnp 2>&1 | grep -E ":${BROKER_PORT}([[:space:]]|$)" || true
   echo "[诊断] MQTT broker 相关进程："
   pgrep -af 'mosquitto|nanomq|emqx' || true
+  echo "[诊断] MQTT broker 相关容器："
+  docker ps --no-trunc --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}' 2>/dev/null \
+    | grep -Ei 'emqx|mosquitto|nanomq' || true
   echo "[诊断] 最近的 systemd 日志："
   journalctl -u "${BROKER_SERVICE}" -n 50 --no-pager 2>&1 || true
 }
@@ -101,11 +130,23 @@ case "${ACTION}" in
   diagnose)
     diagnose_broker
     ;;
+  clients)
+    list_emqx_clients "${CLIENT_ID}"
+    ;;
   client)
     if [[ -z "${CLIENT_ID}" ]]; then
       echo "[错误] client 模式需要 MQTT client_id" >&2
       echo "用法：$0 client <client_id>" >&2
       exit 2
+    fi
+    emqx_name="$(emqx_container)"
+    if [[ -n "${emqx_name}" ]]; then
+      echo "[信息] 查询 EMQX client_id：${CLIENT_ID}"
+      docker exec "${emqx_name}" /opt/emqx/bin/emqx ctl clients show "${CLIENT_ID}" || true
+      echo "[提示] 确认是旧客户端后，可用以下命令临时断开："
+      echo "       sudo docker exec ${emqx_name} /opt/emqx/bin/emqx ctl clients kick ${CLIENT_ID}"
+      echo "[提示] 若客户端自动重连，必须根据 peername 在来源主机停止旧程序。"
+      exit 0
     fi
     echo "[信息] 查询 client_id：${CLIENT_ID}"
     echo "[信息] broker 日志中的连接与发布记录（最近 160 行上下文）："
@@ -117,7 +158,7 @@ case "${ACTION}" in
     echo "[提示] 若对端为其他主机，请在该主机停止对应旧模拟器；不要关闭当前 edge_gateway 实例。"
     ;;
   *)
-    echo "用法：$0 <enable|disable|status|diagnose|client> [client_id]" >&2
+    echo "用法：$0 <enable|disable|status|diagnose|clients|client> [filter|client_id]" >&2
     exit 2
     ;;
 esac
