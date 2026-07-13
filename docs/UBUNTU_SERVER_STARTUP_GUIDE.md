@@ -110,12 +110,13 @@ logging:
 
 `mavlink_raw` 会逐帧保存 RX/TX 十六进制内容，真实飞控长时间运行时文件增长速度明显高于其他分类；部署侧应把 `logs/mavlink_raw` 纳入磁盘容量和归档策略。
 
-无人机 `HEARTBEAT` 原始帧默认只写入网关总日志和 `mavlink_raw` 独立日志，
-不再输出到控制台；其他 MAVLink 状态、命令、告警和错误仍正常显示。可用
-下面命令单独查看已落盘的心跳：
+所有 MAVLink 原始帧默认只写入网关总日志和 `mavlink_raw` 独立日志，
+不再输出到控制台，包括 `HEARTBEAT`、`BATTERY_STATUS`、`AOA_SSA`、
+`ESC_TELEMETRY_*` 等高频消息；业务层状态、命令结果、告警、解析错误仍
+正常显示。可用下面命令查看已落盘的原始帧：
 
 ```bash
-grep 'type=HEARTBEAT' logs/mavlink_raw/$(date +%Y-%m)/mavlink_raw_$(date +%F).log | tail -n 20
+tail -n 20 logs/mavlink_raw/$(date +%Y-%m)/mavlink_raw_$(date +%F).log
 ```
 
 常用查看命令：

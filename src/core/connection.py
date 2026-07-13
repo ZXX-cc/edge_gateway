@@ -96,9 +96,9 @@ def _log_raw_mavlink(direction: str, connection_string: str, msg) -> None:
             sysid,
             compid,
             _raw_frame_hex(msg),
-            # 无人机心跳仍完整写入网关总日志和 mavlink_raw 独立日志，
-            # 但不进入控制台，避免 1Hz 高频帧刷屏。
-            extra={"console_silent": str(msg_type).upper() == "HEARTBEAT"},
+            # 所有 MAVLink 原始帧完整写入网关总日志和 mavlink_raw 独立日志，
+            # 但不进入控制台；解析错误和业务层状态仍正常显示。
+            extra={"console_silent": True},
         )
     except Exception as exc:
         mavlink_raw_logger.warning(

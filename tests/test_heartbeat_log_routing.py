@@ -1,4 +1,4 @@
-"""无人机 HEARTBEAT 仅落盘的日志路由测试。"""
+"""MAVLink 原始帧仅落盘的日志路由测试。"""
 from __future__ import annotations
 
 import logging
@@ -17,7 +17,7 @@ from src.core.connection import _log_raw_mavlink, mavlink_raw_logger  # noqa: E4
 from src.utils.logger import ConsoleVisibilityFilter  # noqa: E402
 
 
-class HeartbeatLogRoutingTest(unittest.TestCase):
+class RawMavlinkLogRoutingTest(unittest.TestCase):
     @staticmethod
     def _message(msg_type: str, msg_id: int):
         return SimpleNamespace(
@@ -34,11 +34,11 @@ class HeartbeatLogRoutingTest(unittest.TestCase):
 
         self.assertTrue(info.call_args.kwargs["extra"]["console_silent"])
 
-    def test_non_heartbeat_raw_record_remains_visible(self):
+    def test_non_heartbeat_raw_record_is_also_console_silent(self):
         with patch.object(mavlink_raw_logger, "info") as info:
             _log_raw_mavlink("RX", "udp:127.0.0.1:14551", self._message("SYS_STATUS", 1))
 
-        self.assertFalse(info.call_args.kwargs["extra"]["console_silent"])
+        self.assertTrue(info.call_args.kwargs["extra"]["console_silent"])
 
     def test_console_filter_does_not_affect_file_records(self):
         visibility_filter = ConsoleVisibilityFilter()
