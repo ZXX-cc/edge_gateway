@@ -133,7 +133,7 @@ http://Ubuntu服务器IP:8090
 - P0/P1 当前 34 项门禁中已有 27 项可用；评分卡口径见 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。
 - MQTT topic/reply、设备上线、组织绑定、拓扑、properties、OSD/state、错误码、request trace 已形成可重复脚本证据。
 - CMD、DRC、Wayline、Media、Live、HMS/log、firmware/config 已有专项脚本通过记录。
-- `tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 已在 Ubuntu 严格通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段，输出 `steps=11, elapsed=26.7s`。
+- `tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --timeout 20 --quiet-stale --fail-on-stale` 已在 Ubuntu 共享 EMQX 干净环境严格通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；2026-07-13 最新输出 `steps=11, elapsed=24.0s`，全部阶段 `exit=0`，可归因旧回包计数均为 0。
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
 - P0-16 文件 IO 后台化已通过 Ubuntu 回归：回调单测 2/2、HMS/日志 `accepted=8, events=5`、媒体 `accepted=6, events=2`。严格 properties 的旧回包已通过 broker 审计定位为 `192.168.2.94` 上的旧模拟器客户端 `dock3_sim_EDGEGW001_1783480416`；停止后已在 Ubuntu 通过严格回归：`accepted=10`、全部 `ignored_*=0`。
 - Dock3 官方属性已完成纯模拟最大覆盖并通过严格验收：官方目录 49/49、OSD/state 分组 37/12、3 个可写属性 `property/set -> state`、机场 OSD 原始值结构和 37 项专项单测均已验证。2026-07-13 在 `192.168.2.188:1883` 关闭 `192.168.2.113` 旧响应端后复测，单元测试和 MQTT 专项退出码均为 0，`status=passed`，竞争、旧回复、无关回复和 `strict_stale_total` 全部为 0。纯模拟属性阶段完成；17 项传感器/硬件物理语义保留到真机对接确认。

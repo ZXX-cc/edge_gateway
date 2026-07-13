@@ -74,7 +74,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | 已通过 `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：mock KMZ、机巢 `request_takeoff`、任务完成事件 | P1 |
 | `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
 | `tools/mqtt_one_key_takeoff_sitl_test.py` | 一键启航真实 SITL 航线验收：默认准备服务器 `/home/fenghuolun/zwz/HD.kml`，`one_key_takeoff_flow` 起飞后切 AUTO，并用 QGC/SITL OSD、航点进度和 `flighttask_pause` 证明真实执行与暂停；测试结束后停在 paused，不发送取消任务或降落清理指令 | P1 |
-| 已通过 `tools/e2e_full_chain_test.py` | 11 段 P0/P1 全链路；清理旧进程后继续用 `--fail-on-stale` 做严格验收 | P1 |
+| 已通过 `tools/e2e_full_chain_test.py` | 11 段 P0/P1 全链路；共享 EMQX 已完成 `--fail-on-stale` 严格验收 | P1 |
 
 P0-16 本地回归命令：
 
@@ -277,8 +277,8 @@ P1 通过标准：
 | HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
 | 故障注入 | 七类机巢故障生成 HMS、dock_operation、OSD；pushMode state、MQTT 断线恢复/重复请求/错误 topic 和数据库操作记录全部通过 |
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
-| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复通过 |
-| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；服务器最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=18.9s)` |
+| 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复严格通过 |
+| 完整 P1 E2E | 从上线绑定到任务、媒体、直播、运维事件可重复通过；2026-07-13 共享 EMQX 最新输出 `dock3 e2e full-chain test ok (steps=11, elapsed=24.0s)`，全部阶段 `exit=0` |
 
 多设备拓扑可通过 E2E device 阶段单独验证：
 
@@ -382,6 +382,13 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 2026-07-10 机巢 strict 联调已通过：被动 UDP 模拟器以网关首包心跳注册回传地址，并以健康待命 `boolstate1=0x0C47`、`boolstate2=0x0020` 上报 12004 状态。`python tools/e2e_full_chain_test.py --only wayline --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 wayline test ok (accepted=11, events=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`；验证 12003 命令、12004 状态、12005 回复以及 Wayline 状态机。接下来可直接执行完整 strict E2E。
 
 2026-07-10 完整 strict E2E 已通过：`python tools/e2e_full_chain_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 e2e full-chain test ok (steps=11, elapsed=26.7s)`。全部 11 段均为 `exit=0`；最后 firmware/config 输出 `accepted=8, events=10, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0`。
+
+2026-07-13 共享 EMQX 干净环境再次完成完整 strict E2E：停止已由被动抓包定位的
+`192.168.2.113` 旧响应端后，以 `--host 192.168.2.188 --port 1883 --timeout 20
+--quiet-stale --fail-on-stale --continue-on-fail` 执行，11 段全部 `exit=0`，总耗时
+24.0 秒。properties、device、OSD/state、CMD、DRC、Wayline、Media、Live、HMS/log、
+firmware/config 均无可归因旧回包；一键启航流程同时通过。该结果是当前共享 Broker
+纯模拟全链路严格基线，后续出现 stale 时应先与本次发布源基线比较。
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
 
