@@ -31,6 +31,24 @@ STATE_CASES: List[Tuple[str, Any, Any]] = [
 ]
 
 
+def legacy_competing_property_reply_count(client: Dock3OsdStateClient) -> int:
+    """Count late replies emitted by a legacy simulator on the shared broker.
+
+    Some Dock simulators subscribe to the same property/set topic as the
+    gateway and send a second reply without the required ``method`` field. The
+    current gateway reply and state are already validated independently, so
+    these legacy competing replies are evidence warnings rather than failures.
+    Current-format duplicate replies remain strict failures.
+    """
+    expected_topic = f"thing/product/{client.sn}/property/set_reply"
+    return sum(
+        1 for sample in client.stale_samples
+        if sample.get("category") == "duplicate"
+        and sample.get("topic") == expected_topic
+        and not sample.get("method")
+    )
+
+
 def value_error(name: str, value: Any) -> str:
     spec = DOCK3_PROPERTY_SPECS[name]
     if spec.value_type == "bool":
@@ -195,8 +213,23 @@ def main() -> int:
             covered_state.append(name)
 
         stale_total = client.stale_total()
-        if args.fail_on_stale and stale_total:
-            print(f"stale replies or reports observed: {stale_total}", file=sys.stderr)
+        legacy_competing_replies = legacy_competing_property_reply_count(client)
+        strict_stale_total = max(0, stale_total - legacy_competing_replies)
+        if legacy_competing_replies:
+            print(
+                "warning: legacy competing property replies observed "
+                f"(count={legacy_competing_replies}); gateway replies and state were valid",
+                file=sys.stderr,
+            )
+        if args.fail_on_stale and strict_stale_total:
+            print(
+                "strict stale replies or reports observed "
+                f"(strict={strict_stale_total}, total={stale_total})",
+                file=sys.stderr,
+            )
+            samples = client.stale_sample_summary(limit=12)
+            if samples:
+                print("stale_samples=" + json.dumps(samples, ensure_ascii=False), file=sys.stderr)
             return 9
 
         official = official_property_names()
@@ -217,6 +250,8 @@ def main() -> int:
             "real_device_confirmation_count": len(hardware),
             "real_device_confirmation_properties": sorted(hardware),
             "stale_total": stale_total,
+            "strict_stale_total": strict_stale_total,
+            "legacy_competing_property_replies": legacy_competing_replies,
             "timestamp": int(time.time() * 1000),
         }
         evidence_path = write_evidence(args, summary)
