@@ -709,8 +709,8 @@ class MissionManager:
         gcs_name = command_map.get(command_name)
         if not self._nest_module:
             return {
-                'success': True,
-                'simulated': True,
+                'success': False,
+                'simulated': False,
                 'message': 'nest_module_not_available',
                 'command': command_name,
             }
@@ -753,9 +753,11 @@ class MissionManager:
             self._record_takeoff_flow_step(
                 steps,
                 name,
-                detail={'success': True, 'simulated': True, 'message': 'flight_control_not_available'},
+                status=STATUS_FAILED,
+                result=-1,
+                detail={'success': False, 'simulated': False, 'message': 'flight_control_not_available'},
             )
-            return True
+            return False
         handler = getattr(self._flight_control, action, None)
         if not handler:
             self._record_takeoff_flow_step(
@@ -1007,7 +1009,7 @@ class MissionManager:
         self._emit_wayline_progress(STATUS_FAILED, current_step=5, percent=0, flight_id=flight_id)
         return MessageBuilder.build_reply(
             msg,
-            result=-1,
+            result=WAYLINE_EXECUTION_FAILED,
             data=self._wayline_reply_data(
                 STATUS_FAILED,
                 current_step=5,
@@ -1359,10 +1361,25 @@ class MissionManager:
         self._call_nest_action("request_takeoff", "execute_task")
 
         # 通过飞行控制模块启动航线任务
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            result = self._flight_control.set_mode("AUTO")
-            if not result.get("success"):
-                logger.warning(f"启动航线任务失败: {result.get('message')}")
+        if not self._flight_control:
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                msg_str="FlightControl not available",
+            )
+        result = self._flight_control.set_mode("AUTO")
+        if not result.get("success"):
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            reason = result.get("message") or "AUTO mode switch failed"
+            logger.warning(f"启动航线任务失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                msg_str=reason,
+            )
 
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -1413,7 +1430,7 @@ class MissionManager:
         self._call_nest_action("abort_landing", "cancel_task")
 
         # 发送返航指令
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
+        if self._flight_control:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
                 logger.warning(f"返航指令失败: {result.get('message')}")
@@ -1441,43 +1458,41 @@ class MissionManager:
                     msg_str="Mission not running"
                 )
 
-            simulate_enabled = self._simulate_mission.get('is_enable') == 1
-            if not simulate_enabled:
-                if not self._flight_control:
-                    reason = "FlightControl not available"
-                    logger.warning(f"暂停航线失败: {reason}")
-                    return MessageBuilder.build_reply(
-                        msg,
-                        result=WAYLINE_EXECUTION_FAILED,
-                        data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                        msg_str=reason,
-                    )
-
-                if hasattr(self._flight_control, "pause_mission"):
-                    result = self._flight_control.pause_mission()
-                else:
-                    result = self._flight_control.set_mode("LOITER")
-                if not result.get("success"):
-                    reason = result.get("message") or "pause mission failed"
-                    logger.warning(f"暂停航线失败: {reason}")
-                    error_code = (
-                        DEVICE_COMMAND_TIMEOUT
-                        if "超时" in reason or "timeout" in reason.lower()
-                        else WAYLINE_EXECUTION_FAILED
-                    )
-                    return MessageBuilder.build_reply(
-                        msg,
-                        result=error_code,
-                        data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                        msg_str=reason,
-                    )
-
-                logger.info(
-                    "Dock3 pause control confirmed: strategy=%s, target_mode=%s, native=%s",
-                    result.get("pause_strategy", "legacy"),
-                    result.get("target_mode"),
-                    result.get("native_pause"),
+            if not self._flight_control:
+                reason = "FlightControl not available"
+                logger.warning(f"暂停航线失败: {reason}")
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=WAYLINE_EXECUTION_FAILED,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
                 )
+
+            if hasattr(self._flight_control, "pause_mission"):
+                result = self._flight_control.pause_mission()
+            else:
+                result = self._flight_control.set_mode("LOITER")
+            if not result.get("success"):
+                reason = result.get("message") or "pause mission failed"
+                logger.warning(f"暂停航线失败: {reason}")
+                error_code = (
+                    DEVICE_COMMAND_TIMEOUT
+                    if "超时" in reason or "timeout" in reason.lower()
+                    else WAYLINE_EXECUTION_FAILED
+                )
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=error_code,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
+            logger.info(
+                "Dock3 pause control confirmed: strategy=%s, target_mode=%s, native=%s",
+                result.get("pause_strategy", "legacy"),
+                result.get("target_mode"),
+                result.get("native_pause"),
+            )
 
             self._status = self.MISSION_PAUSED
             self._wayline_mission_state = 7  # 航线中断
@@ -1527,8 +1542,7 @@ class MissionManager:
                 self._breakpoint_waypoint_idx,
             )
 
-        simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        if not simulate_enabled and not self._flight_control:
+        if not self._flight_control:
             reason = "FlightControl not available"
             logger.warning(f"恢复航线失败: {reason}")
             return MessageBuilder.build_reply(
@@ -1540,8 +1554,8 @@ class MissionManager:
 
         # 真实飞控任务必须先预留监控线程，再向飞控发送断点/AUTO 指令。监控线程
         # 在任务仍为 PAUSED 时只等待，不消费航点；这样启动失败不会留下无监控
-        # 的 AUTO 飞行。模拟任务只验证 Dock3 状态机，不依赖网关侧航点监控。
-        if not simulate_enabled and self.start_mission_monitor() is False:
+        # 的 AUTO 飞行。
+        if self.start_mission_monitor() is False:
             return MessageBuilder.build_reply(
                 msg,
                 result=WAYLINE_EXECUTION_FAILED,
@@ -1556,33 +1570,32 @@ class MissionManager:
             if not ok:
                 logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
 
-        if not simulate_enabled:
-            if hasattr(self._flight_control, "resume_mission"):
-                result = self._flight_control.resume_mission()
-            else:
-                result = self._flight_control.set_mode("AUTO")
-            if not result.get("success"):
-                self.stop_mission_monitor()
-                reason = result.get("message") or "resume mission failed"
-                logger.warning(f"恢复航线失败: {reason}")
-                error_code = (
-                    DEVICE_COMMAND_TIMEOUT
-                    if "超时" in reason or "timeout" in reason.lower()
-                    else WAYLINE_EXECUTION_FAILED
-                )
-                return MessageBuilder.build_reply(
-                    msg,
-                    result=error_code,
-                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
-                    msg_str=reason,
-                )
-
-            logger.info(
-                "Dock3 resume control confirmed: strategy=%s, target_mode=%s, native=%s",
-                result.get("resume_strategy", "legacy"),
-                result.get("target_mode", "AUTO"),
-                result.get("native_resume"),
+        if hasattr(self._flight_control, "resume_mission"):
+            result = self._flight_control.resume_mission()
+        else:
+            result = self._flight_control.set_mode("AUTO")
+        if not result.get("success"):
+            self.stop_mission_monitor()
+            reason = result.get("message") or "resume mission failed"
+            logger.warning(f"恢复航线失败: {reason}")
+            error_code = (
+                DEVICE_COMMAND_TIMEOUT
+                if "超时" in reason or "timeout" in reason.lower()
+                else WAYLINE_EXECUTION_FAILED
             )
+            return MessageBuilder.build_reply(
+                msg,
+                result=error_code,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                msg_str=reason,
+            )
+
+        logger.info(
+            "Dock3 resume control confirmed: strategy=%s, target_mode=%s, native=%s",
+            result.get("resume_strategy", "legacy"),
+            result.get("target_mode", "AUTO"),
+            result.get("native_resume"),
+        )
 
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 8  # 航线恢复
@@ -1658,22 +1671,27 @@ class MissionManager:
         """
         一键启航闭环编排。
 
-        模拟闭环顺序：
+        真实闭环顺序：
         起飞前检查 -> 断充 -> 开盖 -> 释放夹紧 -> 机巢起飞允许/起飞指令
         -> 飞控起飞 -> 航线执行 -> 返航 -> 降落 -> 夹紧 -> 关盖 -> 充电。
 
         data:
         - flight_id: 可选，默认使用当前 flighttask_prepare 的 flight_id
         - takeoff_height: 可选，默认 30m
-        - auto_complete: 可选；仿真默认 true，真实链路默认 false
+        - auto_complete: 可选；默认 false，必须依赖真实飞控/机巢 adapter
         """
         data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
         flight_id = data.get('flight_id') or self._current_task_id or f"takeoff-flow-{int(time.time() * 1000)}"
         takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
-        if isinstance(data.get('simulate_mission'), dict):
-            self._simulate_mission = data['simulate_mission']
-        simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        auto_complete_raw = data.get('auto_complete', simulate_enabled)
+        if isinstance(data.get('simulate_mission'), dict) and data['simulate_mission'].get('is_enable') == 1:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data={'output': {'status': STATUS_REJECTED, 'steps': [], 'flight_id': flight_id}},
+                msg_str='simulate_mission is disabled; real flight execution is required',
+            )
+        self._simulate_mission = {}
+        auto_complete_raw = data.get('auto_complete', False)
         if isinstance(auto_complete_raw, str):
             auto_complete = auto_complete_raw.strip().lower() not in ('0', 'false', 'no', 'off')
         else:
@@ -1685,7 +1703,7 @@ class MissionManager:
         self._record_takeoff_flow_step(steps, 'precheck', detail={
             'flight_id': flight_id,
             'waypoint_count': len(self._current_wayline),
-            'simulate_mission': self._simulate_mission.get('is_enable') == 1,
+            'simulate_mission': False,
         })
 
         for command_name in ('charge_close', 'cover_open', 'putter_open'):
@@ -1716,7 +1734,19 @@ class MissionManager:
                     msg_str='nest_takeoff_request failed',
                 )
         else:
-            self._record_takeoff_flow_step(steps, 'nest_takeoff_request', detail={'success': True, 'simulated': True})
+            self._record_takeoff_flow_step(
+                steps,
+                'nest_takeoff_request',
+                status=STATUS_FAILED,
+                result=-1,
+                detail={'success': False, 'simulated': False, 'message': 'nest_module_not_available'},
+            )
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                msg_str='nest_takeoff_request failed',
+            )
 
         if not self._run_takeoff_flow_flight_step(steps, 'flight_takeoff', 'takeoff', takeoff_height):
             return MessageBuilder.build_reply(
@@ -1726,7 +1756,7 @@ class MissionManager:
                 msg_str='flight_takeoff failed',
             )
 
-        real_wayline_activation = not simulate_enabled and bool(self._current_wayline)
+        real_wayline_activation = bool(self._current_wayline)
         if real_wayline_activation:
             if self.start_mission_monitor() is False:
                 self._record_takeoff_flow_step(
@@ -2713,25 +2743,9 @@ class MissionManager:
             self._event_callback(event)
 
     def complete_simulated_mission(self) -> bool:
-        """Complete a prepared simulation mission for offline one-key launch E2E."""
-        with self._mission_state_lock:
-            if self._simulate_mission.get('is_enable') != 1:
-                logger.warning("Simulated mission completion rejected: simulate_mission disabled")
-                return False
-            if self._status != self.MISSION_RUNNING:
-                logger.warning("Simulated mission completion rejected: status=%s", self._status)
-                return False
-
-            if self._current_wayline:
-                self._current_waypoint_idx = len(self._current_wayline) - 1
-            self._status = self.MISSION_COMPLETED
-            self._wayline_mission_state = 9
-            self._current_step = 33
-            self._report_mission_progress(status='completed')
-            self._clear_breakpoint_file()
-            self._call_nest_action("request_landing", "simulated_mission_completed")
-            logger.info("Simulated mission completed: flight_id=%s", self._current_task_id)
-            return True
+        """Simulation completion is disabled; missions must complete from real progress."""
+        logger.warning("Simulated mission completion rejected: simulation is disabled")
+        return False
 
     # ---- 大疆标准FlightTask接口 ----
 
@@ -2773,6 +2787,14 @@ class MissionManager:
         out_of_control_action = payload['out_of_control_action']
         exit_wayline_when_rc_lost = payload['exit_wayline_when_rc_lost']
         simulate_mission = payload['simulate_mission']
+        if isinstance(simulate_mission, dict) and simulate_mission.get('is_enable') == 1:
+            reason = "simulate_mission is disabled; real flight execution is required"
+            logger.warning("Flighttask prepare rejected: %s", reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=reason,
+            )
 
         logger.info(f"Flighttask prepare: flight_id={flight_id}, type={task_type}, "
                    f"execute_time={execute_time}")
@@ -2815,16 +2837,14 @@ class MissionManager:
         self._rth_altitude = rth_altitude
         self._out_of_control_action = out_of_control_action
         self._exit_wayline_when_rc_lost = exit_wayline_when_rc_lost
-        self._simulate_mission = simulate_mission
+        self._simulate_mission = {}
 
         self._status = self.MISSION_PREPARING
         self._wayline_mission_state = 2  # 航线准备状态
         self._current_step = 5  # 航线执行进入准备状态
 
-        simulate_enabled = isinstance(simulate_mission, dict) and simulate_mission.get('is_enable') == 1
-
         # ---- 实际航线上传到飞控 ----
-        if self._current_wayline and self._waypoint_manager and not simulate_enabled:
+        if self._current_wayline and self._waypoint_manager:
             self._waypoint_manager.clear_waypoints()
             for wp in self._current_wayline:
                 wp_dict = {
@@ -2868,11 +2888,20 @@ class MissionManager:
                 "No local wayline coordinates available for waypoint upload: %s",
                 file_info.get('url', '')[:80],
             )
-        elif self._current_wayline and self._waypoint_manager and simulate_enabled:
-            logger.info(
-                "Simulation mission enabled, skip waypoint upload to FC: flight_id=%s, waypoints=%s",
-                flight_id,
-                len(self._current_wayline),
+        elif self._current_wayline and not self._waypoint_manager:
+            reason = "WaypointManager not available"
+            logger.warning("Flighttask prepare failed: %s", reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                data=self._wayline_reply_data(
+                    STATUS_FAILED,
+                    current_step=5,
+                    percent=0,
+                    flight_id=flight_id,
+                    extra={"errors": [reason]},
+                ),
+                msg_str=reason,
             )
 
         # 断点续飞设置
@@ -2885,12 +2914,7 @@ class MissionManager:
         if rth_altitude and self._flight_control:
             logger.info(f"RTH altitude configured: {rth_altitude}m")
 
-        # 模拟器任务
-        if simulate_enabled:
-            logger.info(f"Simulate mission enabled: lat={simulate_mission.get('latitude')}, "
-                       f"lon={simulate_mission.get('longitude')}")
-
-        self_check_ok, self_check_reasons, self_check_details = self._run_prepare_self_check(simulate_enabled)
+        self_check_ok, self_check_reasons, self_check_details = self._run_prepare_self_check(False)
         if not self_check_ok:
             return self._fail_prepare_self_check(
                 msg,
@@ -2959,43 +2983,37 @@ class MissionManager:
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
 
-        # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
-        simulate_enabled = self._simulate_mission.get('is_enable') == 1
-        if not simulate_enabled:
-            # 在解锁和 AUTO 前预留唯一监控 owner。线程会等到下面把状态切为
-            # RUNNING 后才消费航点，因此失败时尚未对真实飞控产生副作用。
-            if self.start_mission_monitor() is False:
-                return self._fail_real_wayline_execute(
-                    msg,
-                    flight_id,
-                    "mission_monitor",
-                    "Mission monitor unavailable",
-                )
+        # 在解锁和 AUTO 前预留唯一监控 owner。线程会等到下面把状态切为
+        # RUNNING 后才消费航点，因此失败时尚未对真实飞控产生副作用。
+        if self.start_mission_monitor() is False:
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                "mission_monitor",
+                "Mission monitor unavailable",
+            )
 
-        if not simulate_enabled:
-            if not self._flight_control:
-                return self._fail_real_wayline_execute(
-                    msg,
-                    flight_id,
-                    "flight_control",
-                    "FlightControl not available",
-                )
-            armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
-            if not armed_ok:
-                logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
-                return self._fail_real_wayline_execute(msg, flight_id, "pre_arm", armed_reason)
+        if not self._flight_control:
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                "flight_control",
+                "FlightControl not available",
+            )
+        armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
+        if not armed_ok:
+            logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
+            return self._fail_real_wayline_execute(msg, flight_id, "pre_arm", armed_reason)
 
-            result = self._flight_control.set_mode("AUTO")
-            if not result.get("success"):
-                logger.warning(f"启动航线任务失败: {result.get('message')}")
-                return self._fail_real_wayline_execute(
-                    msg,
-                    flight_id,
-                    "auto_mode",
-                    result.get('message') or "AUTO mode switch failed",
-                )
-        elif simulate_enabled:
-            logger.info("Flighttask execute in simulation mode, skip AUTO mode switch and mission monitor")
+        result = self._flight_control.set_mode("AUTO")
+        if not result.get("success"):
+            logger.warning(f"启动航线任务失败: {result.get('message')}")
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                "auto_mode",
+                result.get('message') or "AUTO mode switch failed",
+            )
 
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 6  # 航线执行
@@ -3059,8 +3077,8 @@ class MissionManager:
             daemon=True,
         ).start()
 
-        # 真实飞控任务取消后安全返航；模拟任务只结束协议状态机。
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
+        # 真实飞控任务取消后安全返航。
+        if self._flight_control:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
                 logger.warning(f"返航指令失败: {result.get('message')}")
@@ -3127,13 +3145,28 @@ class MissionManager:
 
         self._wayline_mission_state = 7  # 航线中断，返航后允许断点恢复
         self._current_step = 24  # 进入返航的检查准备工作
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            if return_type == 0:
-                result = self._flight_control.one_click_return()
-            else:
-                result = self._flight_control.land()
-            if not result.get("success"):
-                logger.warning(f"Flighttask return failed: {result.get('message')}")
+        if not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(f"Flighttask return failed: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step, flight_id=task_id),
+                msg_str=reason,
+            )
+        if return_type == 0:
+            result = self._flight_control.one_click_return()
+        else:
+            result = self._flight_control.land()
+        if not result.get("success"):
+            reason = result.get("message") or "return control failed"
+            logger.warning(f"Flighttask return failed: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=WAYLINE_EXECUTION_FAILED,
+                data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step, flight_id=task_id),
+                msg_str=reason,
+            )
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent(), flight_id=task_id)
         self.report_return_home_info(
@@ -3173,11 +3206,15 @@ class MissionManager:
 
         self._wayline_mission_state = 9  # 航线停止
         self._current_step = 24  # 进入返航的检查准备工作
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            result = self._flight_control.one_click_return()
-            if not result.get("success"):
-                logger.warning(f"一键返航失败: {result.get('message')}")
-                return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get('message'))
+        if not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(f"一键返航失败: {reason}")
+            return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
+        result = self._flight_control.one_click_return()
+        if not result.get("success"):
+            reason = result.get("message") or "return home failed"
+            logger.warning(f"一键返航失败: {reason}")
+            return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(
@@ -3404,13 +3441,15 @@ class MissionManager:
             logger.warning(f"Return home cancel validation failed: data 应为 null 或空对象")
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="data 应为 null 或空对象")
 
-        # 纯模拟任务只验证 Dock3 协议状态机，不触发真实飞控模式切换。
-        if self._flight_control and self._simulate_mission.get('is_enable') != 1:
-            result = self._flight_control.set_mode("LOITER")
-            if not result.get("success"):
-                logger.warning(f"取消返航失败: {result.get('message')}")
-        elif self._simulate_mission.get('is_enable') == 1:
-            logger.info("Return home cancel in simulation mode, skip LOITER mode switch")
+        if not self._flight_control:
+            reason = "FlightControl not available"
+            logger.warning(f"取消返航失败: {reason}")
+            return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
+        result = self._flight_control.set_mode("LOITER")
+        if not result.get("success"):
+            reason = result.get("message") or "LOITER mode switch failed"
+            logger.warning(f"取消返航失败: {reason}")
+            return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
         self._emit_wayline_progress(STATUS_PAUSED, current_step=23, percent=self._current_progress_percent())
         return MessageBuilder.build_reply(
             msg,

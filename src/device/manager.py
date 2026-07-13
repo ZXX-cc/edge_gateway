@@ -2194,18 +2194,8 @@ class DeviceManager:
                 property=prop_name,
                 value=prop_value,
                 reason="nest_module_not_available",
-                simulation=bool(Config.get('simulation.nest_command_fallback', True)),
+                simulation=False,
             )
-            if Config.get('simulation.nest_command_fallback', True):
-                logger.info(
-                    "%s: Nest module not available, using simulated state update %s=%s",
-                    command_name,
-                    prop_name,
-                    prop_value,
-                )
-                self._remember_nest_command_target(command_name, prop_name, prop_value)
-                self.update_properties({prop_name: prop_value})
-                return True
             logger.warning(f"{command_name}: Nest module not available, MAVLink command not sent")
             return False
 
@@ -2254,7 +2244,7 @@ class DeviceManager:
             return False
 
     def _send_drone_power_command(self, command_name: str, power_on: bool) -> bool:
-        """通过机巢协议下发飞机上下电；无机巢模块时保留模拟拓扑更新。"""
+        """通过机巢协议下发飞机上下电；无机巢模块时失败。"""
         if not self._nest_module:
             trace_command(
                 "gateway_nest_command_fallback",
@@ -2262,10 +2252,10 @@ class DeviceManager:
                 action="drone_power",
                 power_on=power_on,
                 reason="nest_module_not_available",
-                simulation=bool(Config.get('simulation.nest_command_fallback', True)),
+                simulation=False,
             )
-            logger.info("%s: Nest module not available, using simulated drone power state", command_name)
-            return bool(Config.get('simulation.nest_command_fallback', True))
+            logger.warning("%s: Nest module not available, drone power command not sent", command_name)
+            return False
 
         try:
             from src.generated_dialect.gcs_order_protocol import GCSCommand
@@ -2674,7 +2664,7 @@ class DeviceManager:
         """
         logger.info("Drone power ON")
         sent = self._send_drone_power_command('drone_open', power_on=True)
-        if self._nest_module and not sent:
+        if not sent:
             return self._build_nest_command_reply(msg, 'drone_open', False)
         for dev in self._sub_devices.values():
             dev.online = True
@@ -2700,7 +2690,7 @@ class DeviceManager:
         """
         logger.info("Drone power OFF")
         sent = self._send_drone_power_command('drone_close', power_on=False)
-        if self._nest_module and not sent:
+        if not sent:
             return self._build_nest_command_reply(msg, 'drone_close', False)
         for dev in self._sub_devices.values():
             dev.online = False

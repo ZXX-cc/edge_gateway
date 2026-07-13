@@ -179,7 +179,7 @@ class RecordingWaypointManager:
 
     def upload_mission(self, timeout=15.0):
         self.upload_calls.append(timeout)
-        return False
+        return True
 
     def set_current_waypoint(self, wp_num: int, reset: bool = False):
         self.current_waypoints.append((wp_num, reset))
@@ -226,6 +226,14 @@ class RecordingRealWaylineFlightControl:
 
     def set_mode(self, mode):
         self.calls.append(("set_mode", mode))
+        return {"success": True, "message": "ok"}
+
+    def one_click_return(self):
+        self.calls.append(("one_click_return", None))
+        return {"success": True, "message": "ok"}
+
+    def land(self):
+        self.calls.append(("land", None))
         return {"success": True, "message": "ok"}
 
     def arm(self):
@@ -390,7 +398,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
             manager._current_waypoint_idx = 1
             manager._status = manager.MISSION_RUNNING
-            manager._simulate_mission = {"is_enable": 1}
+            manager.set_flight_control(RecordingRealWaylineFlightControl())
             manager.stop_mission_monitor = lambda: None
             manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
 
@@ -422,7 +430,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._current_waypoint_idx = 1
             manager._breakpoint_waypoint_idx = 1
             manager._status = manager.MISSION_PAUSED
-            manager._simulate_mission = {"is_enable": 1}
+            manager.set_flight_control(RecordingRealWaylineFlightControl())
             manager.stop_mission_monitor = lambda: True
             manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
             manager._save_breakpoint_file("test persisted mission")
@@ -465,12 +473,12 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
             manager.stop_mission_monitor = lambda: None
             manager.start_mission_monitor = lambda: None
+            manager.set_flight_control(RecordingRealWaylineFlightControl())
 
             manager._current_task_id = "flight-001"
             manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}, {"seq": 3}]
             manager._current_waypoint_idx = 2
             manager._status = manager.MISSION_RUNNING
-            manager._simulate_mission = {"is_enable": 1}
 
             ret = manager.handle_flighttask_return(base_msg("flighttask_return", {
                 "flight_id": "flight-001",
@@ -708,21 +716,21 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(waypoint_manager.current_waypoints, [])
         self.assertEqual(db_updates, [])
 
-    def test_simulated_resume_does_not_require_mission_monitor(self):
+    def test_resume_requires_mission_monitor_when_simulation_disabled(self):
         manager = MissionManager()
         manager._current_task_id = "flight-001"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
         manager._status = manager.MISSION_PAUSED
-        manager._simulate_mission = {"is_enable": 1}
+        manager.set_flight_control(RecordingRealWaylineFlightControl())
         manager._load_breakpoint_file = lambda: None
         manager.start_mission_monitor = lambda: False
         manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
 
         resume = manager.handle_resume_wayline(base_msg("resume_wayline", {}))
 
-        self.assertEqual(resume["data"]["result"], 0)
-        self.assertEqual(resume["data"]["output"]["status"], "in_progress")
-        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+        self.assertEqual(resume["data"]["result"], WAYLINE_EXECUTION_FAILED)
+        self.assertEqual(resume["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
@@ -758,7 +766,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_mission_manager_wayline_lifecycle_outputs_dock3_status(self):
         events = []
-        flight_control = FailingFlightControl()
+        flight_control = RecordingRealWaylineFlightControl()
         manager = MissionManager()
         manager.set_event_callback(events.append)
         manager.set_flight_control(flight_control)
@@ -776,11 +784,6 @@ class Dock3WaylineTest(unittest.TestCase):
                 "task_type": 0,
                 "execute_time": int(time.time() * 1000),
                 "file": {"url": kmz_path.as_uri(), "fingerprint": "fp"},
-                "simulate_mission": {
-                    "is_enable": 1,
-                    "latitude": -35.36,
-                    "longitude": 149.16,
-                },
             }))
         self.assertEqual(prepare["data"]["result"], 0)
         self.assertEqual(prepare["data"]["output"]["status"], "sent")
@@ -788,9 +791,9 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertTrue(file_summary["parsed"])
         self.assertEqual(file_summary["waypoint_count"], 2)
         self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
-        self.assertEqual(waypoint_manager.clear_calls, 0)
-        self.assertEqual(waypoint_manager.added, [])
-        self.assertEqual(waypoint_manager.upload_calls, [])
+        self.assertEqual(waypoint_manager.clear_calls, 1)
+        self.assertEqual(len(waypoint_manager.added), 2)
+        self.assertEqual(waypoint_manager.upload_calls, [15.0])
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
             "flight_id": "flight-001",
@@ -828,7 +831,9 @@ class Dock3WaylineTest(unittest.TestCase):
         }))
         self.assertEqual(undo["data"]["result"], 0)
         self.assertEqual(undo["data"]["output"]["status"], "canceled")
-        self.assertEqual(flight_control.calls, [])
+        self.assertIn(("set_mode", "AUTO"), flight_control.calls)
+        self.assertIn(("set_mode", "LOITER"), flight_control.calls)
+        self.assertIn(("one_click_return", None), flight_control.calls)
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
 
     def test_real_flighttask_execute_prearms_before_auto(self):
@@ -920,7 +925,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(progress["data"]["active_flight_id"], "flight-active")
         self.assertEqual(progress["data"]["output"]["ext"]["flight_id"], "flight-active")
 
-    def test_simulated_takeoff_flow_requests_nest_and_completes(self):
+    def test_simulated_wayline_prepare_and_completion_are_disabled(self):
         events = []
         manager = MissionManager()
         nest = RecordingNest()
@@ -944,28 +949,13 @@ class Dock3WaylineTest(unittest.TestCase):
                     "longitude": 149.16,
                 },
             }))
-            self.assertEqual(prepare["data"]["result"], 0)
-
-            execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
-                "flight_id": "takeoff-flow-001",
-            }))
-            self.assertEqual(execute["data"]["result"], 0)
-            self.assertEqual(nest.calls, ["request_takeoff"])
+            self.assertNotEqual(prepare["data"]["result"], 0)
 
             completed = manager.complete_simulated_mission()
-            self.assertTrue(completed)
-            self.assertEqual(manager._status, manager.MISSION_COMPLETED)
-            self.assertEqual(manager._current_step, 33)
-            self.assertEqual(nest.calls, ["request_takeoff"])
+            self.assertFalse(completed)
+            self.assertEqual(nest.calls, [])
 
-        statuses = [
-            event.get("data", {}).get("output", {}).get("status")
-            for event in events
-            if event.get("method") == "flighttask_progress"
-        ]
-        self.assertIn("sent", statuses)
-        self.assertIn("in_progress", statuses)
-        self.assertIn("ok", statuses)
+        self.assertFalse(any(event.get("method") == "flighttask_progress" for event in events))
 
     def test_invalid_wayline_requests_return_dji_error_codes(self):
         manager = MissionManager()

@@ -97,7 +97,7 @@ class RecordingFlightControl:
 
 
 class OneKeyTakeoffFlowTest(unittest.TestCase):
-    def test_one_key_takeoff_flow_closes_full_simulated_loop(self):
+    def test_one_key_takeoff_flow_closes_full_real_adapter_loop(self):
         manager = MissionManager()
         nest = RecordingNest()
         flight = RecordingFlightControl()
@@ -107,11 +107,12 @@ class OneKeyTakeoffFlowTest(unittest.TestCase):
         manager.set_event_callback(events.append)
         manager._current_task_id = "flight-001"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager.start_mission_monitor = lambda: True
 
         reply = manager.handle_one_key_takeoff_flow(base_msg("one_key_takeoff_flow", {
             "flight_id": "flight-001",
             "takeoff_height": 35,
-            "simulate_mission": {"is_enable": 1},
+            "auto_complete": True,
         }))
 
         self.assertEqual(reply["data"]["result"], 0)
@@ -123,7 +124,7 @@ class OneKeyTakeoffFlowTest(unittest.TestCase):
         self.assertEqual(nest.takeoff_requests, 1)
         self.assertEqual(
             flight.calls,
-            [("takeoff", 35.0), ("one_click_return", None), ("land", None)],
+            [("takeoff", 35.0), ("set_mode", "AUTO"), ("one_click_return", None), ("land", None)],
         )
         step_names = [step["name"] for step in reply["data"]["output"]["steps"]]
         self.assertEqual(
@@ -146,6 +147,28 @@ class OneKeyTakeoffFlowTest(unittest.TestCase):
         )
         self.assertTrue(any(event.get("method") == "one_key_takeoff_progress" for event in events))
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+    def test_one_key_takeoff_flow_rejects_simulate_mission(self):
+        manager = MissionManager()
+
+        reply = manager.handle_one_key_takeoff_flow(base_msg("one_key_takeoff_flow", {
+            "flight_id": "flight-sim-disabled",
+            "simulate_mission": {"is_enable": 1},
+        }))
+
+        self.assertNotEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+
+    def test_one_key_takeoff_flow_fails_without_nest_module(self):
+        manager = MissionManager()
+        manager.set_flight_control(RecordingFlightControl())
+
+        reply = manager.handle_one_key_takeoff_flow(base_msg("one_key_takeoff_flow", {
+            "flight_id": "flight-no-nest",
+        }))
+
+        self.assertNotEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
 
     def test_one_key_takeoff_flow_can_stop_after_execution_started(self):
         manager = MissionManager()
