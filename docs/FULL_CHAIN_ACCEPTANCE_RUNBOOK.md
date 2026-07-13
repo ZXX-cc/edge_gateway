@@ -340,6 +340,8 @@ sudo bash scripts/mqtt_broker_audit.sh client dock3_sim_EDGEGW001_1783480416
 
 模拟故障注入完整验收统一执行 `bash scripts/fault_hms_acceptance.sh`。它串行验证八类独立日志、隔离数据保留、七类机巢故障、HMS/events/OSD/state、操作记录，以及 MQTT 断开恢复、重复请求和错误 topic，并在 `logs/acceptance_evidence/<时间>/` 生成汇总 JSON、日志尾部、隔离数据库和 SHA256 清单。详细启动方式和边界见 `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md`。
 
+2026-07-13 Ubuntu 正式证据已通过：提交 `0934955` 下执行一键脚本，5 个专项单测、八类独立日志和隔离数据保留均通过；7 类故障全部 `result=passed`，重复请求 `state_count=1/reply_replayed=true`，错误 topic 返回 `325001`，MQTT 重连后 OSD 恢复；MongoDB `edge_gateway` 回读 12 条已完成操作记录。证据目录为 `logs/acceptance_evidence/20260713_104438/`。
+
 2026-07-11 数据库默认运行时已切换为 Ubuntu 本机 MongoDB。切换前必须停止网关并保留 `missions.db` 文件副本，再执行 `python tools/migrate_sqlite_to_mongodb.py migrate-and-verify --sqlite missions.db --config config/gateway.yaml`；脚本只读 SQLite，按表 upsert 到同名 MongoDB 集合，清理已从 SQLite 删除的旧迁移副本，并只对带 `_sqlite_migration` 标记的迁移文档做数量和内容校验。迁移通过后执行 `python tools/mongodb_runtime_audit.py --config config/gateway.yaml --write-check`，必须输出 `MONGODB_CONNECTION_OK`、`MONGODB_INDEX_OK`、`MONGODB_RUNTIME_WRITE_READ_OK domains=8` 和 `MONGODB_RUNTIME_AUDIT_OK`，随后再启动网关运行完整 strict E2E。MongoDB 审计数据带隔离标识并在结束时自动清理。
 
 2026-07-10 相机/云台严格专项已通过：`python tools/mqtt_dock3_payload_test.py --timeout 20 --quiet-stale --fail-on-stale` 输出 `dock3 payload test ok (accepted=12, ignored_mismatched=0, ignored_legacy=0, ignored_late=0, ignored_wrong_topic=0, ignored_total=0)`。已验证能力查询、云台转动/模式/复位后的状态回读、拍照、录像启停及重复停止录像返回 `319999`；该结论仅覆盖 MAVLink/SITL 命令发送闭环，真实 Payload 硬件 ACK 需后续专项。

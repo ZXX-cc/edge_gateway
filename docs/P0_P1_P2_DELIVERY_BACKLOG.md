@@ -79,7 +79,7 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-10 | Wayline 基础闭环 | 航线飞行、任务执行 | `flighttask_prepare/execute/progress/pause/resume/return/undo` | 已可用 | 纯模拟任务不误触发真实飞控，进度和错误码符合 Dock3 | `mqtt_dock3_wayline_test.py` |
 | P0-11 | CMD 基础控制 | 机巢控制、远程调试 | Dock3 `cmd` | 已可用 | 舱盖、充电、推杆、灯、报警、设备动作有 Dock3 回包和事件 | `mqtt_dock3_cmd_test.py` |
 | P0-12 | 机巢 v1.3 基础通信 | `机巢协议v1.3` | 设备侧 `DRONE_NEST_*`，云端映射到 `cmd/properties/state` | 部分可用 | 12003/12004/12005、命令应答、周期状态、关键 bit 位可解析 | `nest_v13_protocol_test.py` |
-| P0-13 | 机巢关键状态 | D 类机场状态、I 类交互 | `cover_state`、`drone_charge_state`、急停、故障、ready/busy | 部分可用 | 舱盖、夹紧、充电、急停、故障、备飞能进入 Dock3 state/properties/HMS，并产生 `dock_operation` 证据事件；Ubuntu 机巢实跑需补 | 机巢专项 + CMD 专项 |
+| P0-13 | 机巢关键状态 | D 类机场状态、I 类交互 | `cover_state`、`drone_charge_state`、急停、故障、ready/busy | 已可用 | 7 类模拟故障及恢复已进入 Dock3 HMS、events/OSD/state，并由 MongoDB 操作记录回读验证；真机枚举和阈值后续精校 | `scripts/fault_hms_acceptance.sh` 已通过 |
 | P0-14 | 错误码边界 | DJI 错误码、异常分支 | `services_reply`、`property/set_reply`、`drc/up` | 已可用 | 对外不暴露内部负数；未知 method、topic 错误、参数错误有官方码 | `tests/test_dji_error_codes.py` |
 | P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | 已可用 | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；properties 专项后 trace 已能统计三段事件和 `result=0/1` | `request_trace_query.py`、Ubuntu trace 断言通过 |
 | P0-16 | 非阻塞主链路 | 第六章技术栈和风险 | MQTT/MAVLink/DB/文件后台化 | 部分可用 | MQTT 回调、MAVLink 接收、状态机不得被 DB、文件、上传、压缩、升级阻塞 | 代码审计 + E2E 压测 |
