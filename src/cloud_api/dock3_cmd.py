@@ -29,6 +29,32 @@ TASK_STATUSES = {
     TASK_STATUS_TIMEOUT,
 }
 
+OFFICIAL_DOCK3_CMD_METHODS = frozenset({
+    "esim_operator_switch",
+    "sim_slot_switch",
+    "esim_activate",
+    "sdr_workmode_switch",
+    "charge_close",
+    "charge_open",
+    "cover_close",
+    "cover_open",
+    "drone_format",
+    "device_format",
+    "drone_close",
+    "drone_open",
+    "device_reboot",
+    "battery_store_mode_switch",
+    "alarm_state_switch",
+    "air_conditioner_mode_switch",
+    "battery_maintenance_switch",
+    "supplement_light_close",
+    "supplement_light_open",
+    "debug_mode_close",
+    "debug_mode_open",
+    "rtk_calibration",
+    "cover_force_close",
+})
+
 
 @dataclass(frozen=True)
 class CommandActionSpec:
@@ -88,6 +114,8 @@ PROGRESS_STEP_KEYS: Dict[str, str] = {
     "cover_force_close": "force_close_cover",
     "charge_open": "start_charge",
     "charge_close": "stop_charge",
+    # Legacy/internal aliases kept for compatibility tests; these are not on
+    # the DJI Dock3 remote-debug page.
     "putter_open": "free_putter",
     "putter_close": "close_putter",
     "drone_open": "turn_on_drone",

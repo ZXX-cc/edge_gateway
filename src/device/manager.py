@@ -2353,9 +2353,7 @@ class DeviceManager:
                 logger.warning(f"{command_name}: No nest command mapping for {prop_name}={prop_value}")
                 return False
 
-            # 先更新属性（实际项目中应等待机巢响应确认后再更新）
             self._remember_nest_command_target(command_name, prop_name, prop_value)
-            self.update_properties({prop_name: prop_value})
             return True
 
         except Exception as e:
@@ -2444,6 +2442,19 @@ class DeviceManager:
             msg,
             result=result,
             status=TASK_STATUS_REJECTED,
+            msg_str=reason,
+        )
+
+    def _real_device_command_unavailable(self, msg: dict, reason: str) -> dict:
+        logger.warning(
+            "Dock3 cmd real adapter unavailable: method=%s, reason=%s",
+            msg.get('method'),
+            reason,
+        )
+        return self._build_cmd_reply(
+            msg,
+            result=DOCK_COMMUNICATION_ERROR,
+            status=TASK_STATUS_FAILED,
             msg_str=reason,
         )
 
@@ -2547,14 +2558,10 @@ class DeviceManager:
         if not valid:
             return self._reject_cmd(msg, "; ".join(errors))
 
-        wireless = self._properties.get('wireless_link', {}).copy()
-        wireless['link_workmode'] = mode
-        self.update_properties({'wireless_link': wireless})
-        logger.info("SDR workmode switch: %s=%s", used_field, mode)
-        extra = {'link_workmode': mode}
-        if used_field in {'action', 'mode'}:
-            extra[used_field] = mode
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
+        return self._real_device_command_unavailable(
+            msg,
+            "sdr_workmode_switch requires a real wireless-link adapter",
+        )
 
     def handle_sim_slot_switch(self, msg: dict) -> dict:
         """SIM/eSIM 卡槽切换，模拟记录当前卡槽。"""
@@ -2563,28 +2570,16 @@ class DeviceManager:
         if not isinstance(sim_slot, int) or isinstance(sim_slot, bool) or sim_slot not in (0, 1):
             return self._reject_cmd(msg, "sim_slot_switch.sim_slot out of range, allowed: 0,1")
 
-        wireless = self._properties.get('wireless_link', {}).copy()
-        wireless['sim_slot'] = sim_slot
-        self.update_properties({'wireless_link': wireless})
-        logger.info("SIM slot switch: sim_slot=%s", sim_slot)
-        return self._build_cmd_reply(
+        return self._real_device_command_unavailable(
             msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'sim_slot': sim_slot},
+            "sim_slot_switch requires a real SIM/eSIM adapter",
         )
 
     def handle_esim_activate(self, msg: dict) -> dict:
-        """eSIM 激活模拟入口，避免联调脚本被误判为未知指令。"""
-        esim = self._properties.get('esim', {}).copy()
-        esim.update({'activated': 1, 'status': 'activated'})
-        self.update_properties({'esim': esim})
-        logger.info("eSIM activate simulated")
-        return self._build_cmd_reply(
+        """eSIM 激活。无真实蜂窝适配器时不得伪造成功。"""
+        return self._real_device_command_unavailable(
             msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'activated': 1, 'simulation_mode': True},
+            "esim_activate requires a real SIM/eSIM adapter",
         )
 
     def handle_esim_operator_switch(self, msg: dict) -> dict:
@@ -2594,15 +2589,9 @@ class DeviceManager:
         if not isinstance(operator, int) or isinstance(operator, bool) or operator < 0:
             return self._reject_cmd(msg, "esim_operator_switch.operator must be non-negative int")
 
-        esim = self._properties.get('esim', {}).copy()
-        esim.update({'operator': operator, 'status': 'operator_switched'})
-        self.update_properties({'esim': esim})
-        logger.info("eSIM operator switch: operator=%s", operator)
-        return self._build_cmd_reply(
+        return self._real_device_command_unavailable(
             msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'operator': operator, 'simulation_mode': True},
+            "esim_operator_switch requires a real SIM/eSIM adapter",
         )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
@@ -2641,13 +2630,13 @@ class DeviceManager:
         action: 0=关闭保养 1=开启保养
         """
         data = msg.get('data', {})
-        action = data.get('action', 0)
         valid, action, _, errors = validate_action_payload('battery_maintenance_switch', data)
         if not valid:
             return self._reject_cmd(msg, "; ".join(errors))
-        self.update_properties({'battery_maintenance_mode': action})
-        logger.info(f"Battery maintenance: {'ON' if action else 'OFF'}")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
+        return self._real_device_command_unavailable(
+            msg,
+            "battery_maintenance_switch requires a real battery maintenance adapter",
+        )
 
     def handle_air_conditioner_mode_switch(self, msg: dict) -> dict:
         """
@@ -2655,20 +2644,12 @@ class DeviceManager:
         action: 0=关闭 1=制冷 2=制热 3=自动
         """
         data = msg.get('data', {})
-        action = data.get('action', 0)
         valid, action, _, errors = validate_action_payload('air_conditioner_mode_switch', data)
         if not valid:
             return self._reject_cmd(msg, "; ".join(errors))
-        # 联动更新air_conditioner结构
-        ac = self._properties.get('air_conditioner', {}).copy()
-        ac['air_conditioner_state'] = action
-        self.update_properties({'air_conditioner_mode': action, 'air_conditioner': ac})
-        logger.info(f"Air conditioner mode: {action}")
-        return self._build_cmd_reply(
+        return self._real_device_command_unavailable(
             msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'action': action},
+            "air_conditioner_mode_switch requires a real air-conditioner adapter",
         )
 
     def handle_alarm_state_switch(self, msg: dict) -> dict:
@@ -2677,13 +2658,13 @@ class DeviceManager:
         action: 0=关闭 1=开启
         """
         data = msg.get('data', {})
-        action = data.get('action', 0)
         valid, action, _, errors = validate_action_payload('alarm_state_switch', data)
         if not valid:
             return self._reject_cmd(msg, "; ".join(errors))
-        self.update_properties({'alarm_state': action})
-        logger.info(f"Alarm: {'ON' if action else 'OFF'}")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra={'action': action})
+        return self._real_device_command_unavailable(
+            msg,
+            "alarm_state_switch requires a real alarm adapter",
+        )
 
     def handle_battery_store_mode_switch(self, msg: dict) -> dict:
         """
@@ -2691,16 +2672,13 @@ class DeviceManager:
         action: 1=正常工作模式 2=存储模式
         """
         data = msg.get('data', {})
-        action = data.get('action', 1)
         valid, action, _, errors = validate_action_payload('battery_store_mode_switch', data)
         if not valid:
             return self._reject_cmd(msg, "; ".join(errors))
-        self.update_properties({'battery_store_mode': action})
-        logger.info(f"Battery store mode: {action}")
-        extra = {'action': data.get('action', action), 'battery_store_mode': action}
-        if data.get('action') != action:
-            extra['normalized_action'] = action
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK, extra=extra)
+        return self._real_device_command_unavailable(
+            msg,
+            "battery_store_mode_switch requires a real battery mode adapter",
+        )
 
     # ========== API处理器：RTK/降落点 ==========
 
@@ -2735,7 +2713,7 @@ class DeviceManager:
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_rtk_calibration(self, msg: dict) -> dict:
-        """一键 RTK 标定模拟入口。"""
+        """一键 RTK 标定。无真实 RTK 标定适配器时不得伪造成功。"""
         data = msg.get('data', {})
         devices = data.get('devices', [])
         if devices is None:
@@ -2743,25 +2721,9 @@ class DeviceManager:
         if not isinstance(devices, list):
             return self._reject_cmd(msg, "rtk_calibration.devices must be array")
 
-        rtcm_info = {
-            'mount_point': '',
-            'port': '',
-            'host': '',
-            'rtcm_device_type': 1,
-            'source_type': 1,
-        }
-        self.update_properties({'mode_code': 5, 'rtcm_info': rtcm_info})
-        self._notify_cmd_progress('rtk_calibration')
-        logger.info("RTK calibration simulated: devices=%s", len(devices))
-        return self._build_cmd_reply(
+        return self._real_device_command_unavailable(
             msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={
-                'calibration_status': 'started',
-                'devices_count': len(devices),
-                'simulation_mode': True,
-            },
+            "rtk_calibration requires a real RTK calibration adapter",
         )
 
     def handle_rtk_ref_points_query(self, msg: dict) -> dict:
@@ -2830,12 +2792,10 @@ class DeviceManager:
     def handle_drone_format(self, msg: dict) -> dict:
         """飞行器数据格式化"""
         logger.info("Drone format")
-        self.update_properties({
-            'remain_storage_capacity': self._properties.get('storage_capacity', 64000),
-            'media_file_detail': {'remain_upload': 0}
-        })
-        self._notify_cmd_progress('drone_format')
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
+        return self._real_device_command_unavailable(
+            msg,
+            "drone_format requires a real aircraft storage adapter",
+        )
 
     def handle_device_format(self, msg: dict) -> dict:
         """设备格式化（网关本地存储格式化）"""
@@ -2862,23 +2822,18 @@ class DeviceManager:
                     msg_str=f"Device format failed: {e}",
                 )
         else:
-            logger.info(
-                "%s simulated; set device.allow_storage_format=true to delete media path: %s",
+            logger.warning(
+                "%s rejected; set device.allow_storage_format=true only when real storage formatting is intended: %s",
                 method,
                 media_path,
             )
+            return self._real_device_command_unavailable(
+                msg,
+                f"{method} requires device.allow_storage_format=true and a real storage target",
+            )
 
-        self.update_properties({
-            'remain_storage_capacity': self._properties.get('storage_capacity', 64000),
-            'media_file_detail': {'remain_upload': 0}
-        })
         self._notify_cmd_progress(method)
-        return self._build_cmd_reply(
-            msg,
-            result=0,
-            status=TASK_STATUS_OK,
-            extra={'simulation_mode': not allow_storage_format},
-        )
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     # ========== API处理器：相机模式/重启/标定/重置 ==========
 
@@ -2892,7 +2847,7 @@ class DeviceManager:
     def handle_device_reboot(self, msg: dict) -> dict:
         """
         设备重启
-        默认按服务器模拟模式处理，避免联调服务器被真实 reboot。
+        默认拒绝，避免联调服务器被真实 reboot。
         如确需真实重启，配置 device.allow_system_reboot=true。
         """
         logger.info("Device reboot requested")
@@ -2911,14 +2866,18 @@ class DeviceManager:
             reboot_thread.start()
             logger.warning("System reboot thread scheduled by device_reboot")
         else:
-            logger.info("Device reboot simulated; set device.allow_system_reboot=true to enable real reboot")
+            logger.warning("Device reboot rejected; set device.allow_system_reboot=true only for real reboot")
+            return self._real_device_command_unavailable(
+                msg,
+                "device_reboot requires device.allow_system_reboot=true",
+            )
 
         self._notify_cmd_progress('device_reboot')
         return self._build_cmd_reply(
             msg,
             result=0,
             status=TASK_STATUS_OK,
-            extra={'reboot_delay': reboot_delay, 'simulation_mode': not allow_system_reboot},
+            extra={'reboot_delay': reboot_delay},
         )
 
     def handle_device_calibration(self, msg: dict) -> dict:

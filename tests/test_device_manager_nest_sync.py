@@ -22,8 +22,20 @@ if "src.database.connection" not in sys.modules:
     def get_async_session_local():
         return None
 
+    def is_mongo_session(_session):
+        return False
+
+    def mongo_expired_filter(*_args, **_kwargs):
+        return {}
+
+    def mongo_model_from_document(_model, document):
+        return document
+
     connection.init_database_async = init_database_async
     connection.get_async_session_local = get_async_session_local
+    connection.is_mongo_session = is_mongo_session
+    connection.mongo_expired_filter = mongo_expired_filter
+    connection.mongo_model_from_document = mongo_model_from_document
     sys.modules["src.database.connection"] = connection
 
 if "src.database.device_db" not in sys.modules:
@@ -35,6 +47,11 @@ if "src.database.alarm_db" not in sys.modules:
     alarm_db = ModuleType("src.database.alarm_db")
     alarm_db.AlarmDB = type("AlarmDB", (), {})
     sys.modules["src.database.alarm_db"] = alarm_db
+
+if "src.database.operation_db" not in sys.modules:
+    operation_db = ModuleType("src.database.operation_db")
+    operation_db.OperationDB = type("OperationDB", (), {})
+    sys.modules["src.database.operation_db"] = operation_db
 
 from src.device.manager import DeviceManager  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
@@ -154,10 +171,11 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertTrue(sent_commands)
-        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertEqual(self.manager.get_property("cover_state"), 1)
+        self.assertIn("cover_state", self.manager._pending_nest_command_targets)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=1))
-        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertEqual(self.manager.get_property("cover_state"), 1)
         self.assertIn("cover_state", self.manager._pending_nest_command_targets)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=0))

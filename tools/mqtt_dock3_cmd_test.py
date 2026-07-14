@@ -9,7 +9,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.cloud_api.dock3_cmd import OFFICIAL_DOCK3_CMD_METHODS
+from src.utils.dji_error_codes import (
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_COMMUNICATION_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
 from tool_config import add_config_argument, resolve_mqtt_settings
 
 
@@ -73,11 +78,13 @@ def require_nested_property(client, args, property_name, nested_path, expected):
 
 
 def run_switch_checks(client, args):
-    cases = [
+    state_cases = [
         ("debug_mode_open", {}, "mode_code", 2),
         ("debug_mode_close", {}, "mode_code", 0),
         ("supplement_light_open", {}, "supplement_light_state", 1),
         ("supplement_light_close", {}, "supplement_light_state", 0),
+    ]
+    adapter_cases = [
         ("battery_maintenance_switch", {"action": 1}, "battery_maintenance_mode", 1),
         ("battery_maintenance_switch", {"action": 0}, "battery_maintenance_mode", 0),
         ("air_conditioner_mode_switch", {"action": 2}, "air_conditioner_mode", 2),
@@ -89,7 +96,7 @@ def run_switch_checks(client, args):
         ("battery_store_mode_switch", {"action": 0}, "battery_store_mode", 1),
     ]
 
-    for method, data, prop_name, expected in cases:
+    for method, data, prop_name, expected in state_cases:
         rc, _ = client.request(method, data, args.timeout)
         if rc != 0:
             return rc
@@ -97,24 +104,44 @@ def run_switch_checks(client, args):
         if rc != 0:
             return rc
 
-    rc, _ = client.request("sdr_workmode_switch", {"link_workmode": 1}, args.timeout)
-    if rc != 0:
-        return rc
-    rc = require_nested_property(client, args, "wireless_link", ["link_workmode"], 1)
+    for method, data, _prop_name, _expected in adapter_cases:
+        rc, _ = client.request(
+            method,
+            data,
+            args.timeout,
+            allowed_results={0, DOCK_COMMUNICATION_ERROR},
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc
+
+    rc, _ = client.request(
+        "sdr_workmode_switch",
+        {"link_workmode": 1},
+        args.timeout,
+        allowed_results={0, DOCK_COMMUNICATION_ERROR},
+        expected_status=None,
+    )
     if rc != 0:
         return rc
 
-    rc, _ = client.request("sdr_workmode_switch", {"mode": 0}, args.timeout)
-    if rc != 0:
-        return rc
-    rc = require_nested_property(client, args, "wireless_link", ["link_workmode"], 0)
+    rc, _ = client.request(
+        "sdr_workmode_switch",
+        {"mode": 0},
+        args.timeout,
+        allowed_results={0, DOCK_COMMUNICATION_ERROR},
+        expected_status=None,
+    )
     if rc != 0:
         return rc
 
-    rc, _ = client.request("sdr_workmode_switch", {"action": 1}, args.timeout)
-    if rc != 0:
-        return rc
-    rc = require_nested_property(client, args, "wireless_link", ["link_workmode"], 1)
+    rc, _ = client.request(
+        "sdr_workmode_switch",
+        {"action": 1},
+        args.timeout,
+        allowed_results={0, DOCK_COMMUNICATION_ERROR},
+        expected_status=None,
+    )
     if rc != 0:
         return rc
 
@@ -160,18 +187,23 @@ def run_job_checks(client, args):
         ("cover_close", {}, "cover_state", 0),
         ("charge_open", {}, "charging_state", 1),
         ("charge_close", {}, "charging_state", 0),
-        ("putter_open", {}, "putter_state", 1),
-        ("putter_close", {}, "putter_state", 0),
         ("drone_open", {}, None, None),
         ("drone_close", {}, None, None),
-        ("drone_format", {}, None, None),
-        ("device_format", {}, None, None),
-        ("format_sd_card", {}, None, None),
-        ("device_reboot", {}, None, None),
-        ("device_reset", {}, "mode_code", 0),
     ]
     for method, data, prop_name, expected in jobs:
         rc = run_job_method(client, args, method, data, prop_name, expected)
+        if rc != 0:
+            return rc
+
+    adapter_jobs = ("drone_format", "device_format", "device_reboot")
+    for method in adapter_jobs:
+        rc, _ = client.request(
+            method,
+            {},
+            args.timeout,
+            allowed_results={0, DOCK_COMMUNICATION_ERROR},
+            expected_status=None,
+        )
         if rc != 0:
             return rc
 
@@ -196,7 +228,36 @@ def run_job_checks(client, args):
     return 0
 
 
+def assert_official_scope():
+    script_methods = {
+        "debug_mode_open",
+        "debug_mode_close",
+        "supplement_light_open",
+        "supplement_light_close",
+        "battery_maintenance_switch",
+        "air_conditioner_mode_switch",
+        "alarm_state_switch",
+        "battery_store_mode_switch",
+        "sdr_workmode_switch",
+        "cover_open",
+        "cover_close",
+        "charge_open",
+        "charge_close",
+        "drone_open",
+        "drone_close",
+        "drone_format",
+        "device_format",
+        "device_reboot",
+        "cover_force_close",
+    }
+    missing = script_methods - OFFICIAL_DOCK3_CMD_METHODS
+    if missing:
+        raise AssertionError(f"non-official Dock3 cmd methods in official test: {sorted(missing)}")
+
+
 def main():
+    assert_official_scope()
+
     parser = argparse.ArgumentParser(description="Test DJI Dock3 cmd/remote-debug category")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)

@@ -8,6 +8,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.cloud_api.dock3_cmd import (
+    OFFICIAL_DOCK3_CMD_METHODS,
     TASK_STATUS_OK,
     command_output,
     progress_event_data,
@@ -16,6 +17,13 @@ from src.cloud_api.dock3_cmd import (
 
 
 class Dock3CmdTest(unittest.TestCase):
+    def test_official_dock3_cmd_scope_excludes_legacy_internal_methods(self):
+        self.assertIn("cover_open", OFFICIAL_DOCK3_CMD_METHODS)
+        self.assertIn("sim_slot_switch", OFFICIAL_DOCK3_CMD_METHODS)
+        self.assertNotIn("putter_open", OFFICIAL_DOCK3_CMD_METHODS)
+        self.assertNotIn("device_reset", OFFICIAL_DOCK3_CMD_METHODS)
+        self.assertNotIn("format_sd_card", OFFICIAL_DOCK3_CMD_METHODS)
+
     def test_action_switch_accepts_official_action_field(self):
         ok, value, field, errors = validate_action_payload(
             "air_conditioner_mode_switch",
