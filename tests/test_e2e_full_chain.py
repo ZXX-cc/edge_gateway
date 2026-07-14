@@ -13,7 +13,9 @@ from e2e_full_chain_test import (  # noqa: E402
     STEPS,
     build_binding_precondition_command,
     build_command,
+    build_state_precondition_command,
     selected_steps,
+    step_requires_idle_drc,
     step_requires_bound_device,
 )
 
@@ -35,6 +37,7 @@ class E2EFullChainTest(unittest.TestCase):
             "device_extra_sub_device_json": [],
             "device_include_unbind_check": False,
             "skip_device_binding_precondition": False,
+            "skip_state_precondition": False,
             "binding_workspace_id": "full_chain_workspace",
             "binding_workspace_name": "全链路验收工作空间",
         }
@@ -135,6 +138,27 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertFalse(step_requires_bound_device(properties))
         self.assertFalse(step_requires_bound_device(device))
         self.assertTrue(step_requires_bound_device(osd_state))
+
+    def test_state_precondition_command_uses_common_mqtt_args(self):
+        command = build_state_precondition_command(
+            self.args(host="192.168.2.188", port=1883, sn="EDGEGW001", fail_on_stale=True)
+        )
+
+        self.assertIn("mqtt_dock3_state_precondition.py", command[1])
+        self.assertIn("192.168.2.188", command)
+        self.assertIn("EDGEGW001", command)
+        self.assertIn("--fail-on-stale", command)
+
+    def test_step_requires_idle_drc_for_mutually_exclusive_steps(self):
+        wayline = next(step for step in STEPS if step.key == "wayline")
+        takeoff_flow = next(step for step in STEPS if step.key == "takeoff-flow")
+        firmware_config = next(step for step in STEPS if step.key == "firmware-config")
+        media = next(step for step in STEPS if step.key == "media")
+
+        self.assertTrue(step_requires_idle_drc(wayline))
+        self.assertTrue(step_requires_idle_drc(takeoff_flow))
+        self.assertTrue(step_requires_idle_drc(firmware_config))
+        self.assertFalse(step_requires_idle_drc(media))
 
 
 if __name__ == "__main__":

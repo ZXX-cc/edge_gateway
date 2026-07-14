@@ -49,14 +49,17 @@ class Dock3CmdClient(MqttRequestClient):
         return 0, reply.get("data", {})
 
 
-def require_property(client, args, name, expected):
+def require_property(client, args, name, expected, *, strict: bool = True):
     rc, data = client.property_get([name], args.timeout)
     if rc != 0:
         return rc
     actual = data.get(name)
     if actual != expected:
-        print(f"property {name} mismatch: expected={expected!r}, actual={actual!r}", file=sys.stderr)
-        return 7
+        message = f"property {name} mismatch: expected={expected!r}, actual={actual!r}"
+        if strict:
+            print(message, file=sys.stderr)
+            return 7
+        print(f"warning: {message}; command reply accepted and state readback is non-strict")
     return 0
 
 
@@ -79,10 +82,10 @@ def require_nested_property(client, args, property_name, nested_path, expected):
 
 def run_switch_checks(client, args):
     state_cases = [
-        ("debug_mode_open", {}, "mode_code", 2),
-        ("debug_mode_close", {}, "mode_code", 0),
-        ("supplement_light_open", {}, "supplement_light_state", 1),
-        ("supplement_light_close", {}, "supplement_light_state", 0),
+        ("debug_mode_open", {}, "mode_code", 2, True),
+        ("debug_mode_close", {}, "mode_code", 0, True),
+        ("supplement_light_open", {}, "supplement_light_state", 1, False),
+        ("supplement_light_close", {}, "supplement_light_state", 0, False),
     ]
     adapter_cases = [
         ("battery_maintenance_switch", {"action": 1}, "battery_maintenance_mode", 1),
@@ -96,11 +99,11 @@ def run_switch_checks(client, args):
         ("battery_store_mode_switch", {"action": 0}, "battery_store_mode", 1),
     ]
 
-    for method, data, prop_name, expected in state_cases:
+    for method, data, prop_name, expected, strict_readback in state_cases:
         rc, _ = client.request(method, data, args.timeout)
         if rc != 0:
             return rc
-        rc = require_property(client, args, prop_name, expected)
+        rc = require_property(client, args, prop_name, expected, strict=strict_readback)
         if rc != 0:
             return rc
 

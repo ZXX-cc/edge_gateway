@@ -113,6 +113,14 @@ python tools/global_state_machine_admission_audit.py
 拓扑种子已改为复用 Dock3 gateway 官方常量，避免 `domain=3,type=2` 旧口径
 被网关严格校验拒绝。
 
+2026-07-14 后续复测已确认绑定前置和 OSD/state 修复生效，properties、device、
+binding-precondition、OSD/state、media、live、HMS/log 均通过；剩余问题集中在
+互斥状态清理。`tools/e2e_full_chain_test.py` 已新增 state precondition，在
+Wayline、一键启航和 firmware/config 前自动执行 `drc_mode_exit`；同时
+`tools/mqtt_dock3_drc_test.py` 在失败路径也会清理 DRC，避免 `drc_active`
+污染后续阶段。当前纯模拟无实时 MAVLink sender 时，DRC 的 `drone_control`
+允许 `315000` 作为非阻塞通信结果，真实飞行动作仍保持严格校验。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：

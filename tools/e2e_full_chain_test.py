@@ -148,6 +148,30 @@ def build_binding_precondition_command(args) -> List[str]:
     return command
 
 
+def build_state_precondition_command(args) -> List[str]:
+    command = [
+        args.python,
+        str(TOOLS_DIR / "mqtt_dock3_state_precondition.py"),
+        "--config",
+        args.config,
+        "--timeout",
+        str(args.timeout),
+        "--qos",
+        str(args.qos),
+    ]
+    if args.host:
+        command.extend(["--host", args.host])
+    if args.port is not None:
+        command.extend(["--port", str(args.port)])
+    if args.sn:
+        command.extend(["--sn", args.sn])
+    if args.quiet_stale:
+        command.append("--quiet-stale")
+    if args.fail_on_stale:
+        command.append("--fail-on-stale")
+    return command
+
+
 def run_step(step: Step, command: List[str], process_timeout: float, dry_run: bool) -> int:
     print(f"\n=== {step.title} [{step.key}] ===")
     print("+ " + " ".join(command))
@@ -169,6 +193,10 @@ def run_step(step: Step, command: List[str], process_timeout: float, dry_run: bo
 
 def step_requires_bound_device(step: Step) -> bool:
     return step.key not in {"properties", "device"}
+
+
+def step_requires_idle_drc(step: Step) -> bool:
+    return step.key in {"wayline", "takeoff-flow", "firmware-config"}
 
 
 def main() -> int:
@@ -207,6 +235,11 @@ def main() -> int:
         "--skip-device-binding-precondition",
         action="store_true",
         help="Do not send device_binding before business steps that require bound/online state.",
+    )
+    parser.add_argument(
+        "--skip-state-precondition",
+        action="store_true",
+        help="Do not send drc_mode_exit before mutually exclusive mission/OTA steps.",
     )
     parser.add_argument("--binding-workspace-id", default="full_chain_workspace")
     parser.add_argument("--binding-workspace-name", default="全链路验收工作空间")
@@ -249,6 +282,20 @@ def main() -> int:
             binding_precondition_done = True
             if rc != 0:
                 failures.append((binding_step.key, rc))
+                if not args.continue_on_fail:
+                    break
+
+        if step_requires_idle_drc(step) and not args.skip_state_precondition:
+            state_command = build_state_precondition_command(args)
+            state_step = Step(
+                f"{step.key}-state-precondition",
+                f"{step.title} state precondition",
+                step.phase,
+                "mqtt_dock3_state_precondition.py",
+            )
+            rc = run_step(state_step, state_command, args.process_timeout, args.dry_run)
+            if rc != 0:
+                failures.append((state_step.key, rc))
                 if not args.continue_on_fail:
                     break
 

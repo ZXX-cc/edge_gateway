@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DOCK_COMMUNICATION_ERROR, INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
 
 DEFAULT_DRONE_SN = "DRONESIM001"
@@ -190,6 +190,7 @@ def main():
         print("MQTT connect timeout", file=sys.stderr)
         return 2
 
+    drc_entered = False
     try:
         rc, _ = client.request("drc_mode_exit", {}, args.timeout, channel="services", allowed_results={0, 319999})
         if rc != 0:
@@ -204,6 +205,7 @@ def main():
         )
         if rc != 0:
             return rc
+        drc_entered = True
 
         rc, state_reply = client.request(
             "property_get",
@@ -253,7 +255,7 @@ def main():
             {"seq": 1, "x": 0.1, "y": 0.0, "h": 0.0, "w": 0.0},
             args.timeout,
             channel="drc",
-            allowed_results={0},
+            allowed_results={0, DOCK_COMMUNICATION_ERROR},
         )
         if rc != 0:
             return rc
@@ -437,6 +439,7 @@ def main():
         rc, _ = client.request("drc_mode_exit", {}, args.timeout, channel="services", allowed_results={0})
         if rc != 0:
             return rc
+        drc_entered = False
 
         rc, state_reply = client.request(
             "property_get",
@@ -487,6 +490,18 @@ def main():
             print(json.dumps(stale_samples, ensure_ascii=False, indent=2))
         return 0
     finally:
+        if drc_entered:
+            try:
+                client.request(
+                    "drc_mode_exit",
+                    {},
+                    min(args.timeout, 5.0),
+                    channel="services",
+                    allowed_results={0, 319999},
+                    verbose=False,
+                )
+            except Exception as exc:
+                print(f"warning: DRC cleanup failed: {exc}", file=sys.stderr)
         client.disconnect()
 
 
