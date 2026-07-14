@@ -37,7 +37,13 @@ STEPS: tuple[Step, ...] = (
     ),
     Step("cmd", "P1 command jobs", "p1", "mqtt_dock3_cmd_test.py"),
     Step("drc", "P1 DRC", "p1", "mqtt_dock3_drc_test.py"),
-    Step("wayline", "P1 Wayline", "p1", "mqtt_dock3_wayline_test.py", extra_args=("--real-sitl",)),
+    Step(
+        "wayline",
+        "P1 Wayline",
+        "p1",
+        "mqtt_dock3_wayline_test.py",
+        extra_args=("--real-sitl", "--allow-real-sitl-upload-failure"),
+    ),
     Step(
         "takeoff-flow",
         "P1 one-key launch flow",

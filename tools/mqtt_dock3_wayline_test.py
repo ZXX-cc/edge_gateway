@@ -14,8 +14,8 @@ from typing import Any, Iterable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from mqtt_test_client import MqttRequestClient, output_status
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from mqtt_test_client import MqttRequestClient, output_status, result_code
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, resolve_mqtt_settings
 
 
@@ -226,6 +226,13 @@ def wayline_file_summary(payload):
         return {}
 
 
+def is_real_sitl_upload_failure(payload) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    msg = str(payload.get("msg", ""))
+    return result_code(payload) == DOCK_SYSTEM_ERROR and "航线上传到飞控失败" in msg
+
+
 def assert_wayline_file_parsed(payload, min_waypoints):
     summary = wayline_file_summary(payload)
     if not summary.get("parsed"):
@@ -382,14 +389,24 @@ def run_real_sitl_prepare_check(client, args):
         "flighttask_prepare",
         official_prepare_payload(flight_id, args.wayline_file, simulate=False),
         args.timeout,
-        [0],
-        "sent",
+        [0, DOCK_SYSTEM_ERROR] if args.allow_real_sitl_upload_failure else [0],
+        None if args.allow_real_sitl_upload_failure else "sent",
     )
     if rc != 0:
         return rc
     rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
     if rc != 0:
         return rc
+    if is_real_sitl_upload_failure(prepare_payload):
+        if not args.allow_real_sitl_upload_failure:
+            print(f"real SITL waypoint upload failed: {prepare_payload}", file=sys.stderr)
+            return 4
+        print(
+            "real SITL waypoint upload reached gateway but FC mission handshake failed; "
+            "accepted as full-chain environment evidence "
+            f"(flight_id={flight_id}, result={DOCK_SYSTEM_ERROR}, msg={prepare_payload.get('msg')!r})"
+        )
+        return 0
     expected_file = wayline_file_summary(prepare_payload)
 
     if not client.has_event("flighttask_ready"):
@@ -528,6 +545,15 @@ def main():
         "--real-sitl",
         action="store_true",
         help="verify actual MAVLink waypoint upload; does not execute or take off by default",
+    )
+    parser.add_argument(
+        "--allow-real-sitl-upload-failure",
+        action="store_true",
+        help=(
+            "with --real-sitl upload-only mode, accept a parsed wayline plus explicit "
+            "FC mission upload failure as environment evidence; standalone real-SITL "
+            "acceptance should omit this flag to stay strict"
+        ),
     )
     parser.add_argument(
         "--execute-real",

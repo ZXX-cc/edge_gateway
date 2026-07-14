@@ -71,6 +71,8 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertIn("--quiet-stale", command)
         self.assertIn("--fail-on-stale", command)
         self.assertIn("EDGEGW001", command)
+        self.assertIn("--real-sitl", command)
+        self.assertIn("--allow-real-sitl-upload-failure", command)
 
     def test_build_command_passes_fail_on_stale_for_osd_state(self):
         step = next(step for step in STEPS if step.key == "osd-state")
