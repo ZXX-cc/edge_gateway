@@ -99,9 +99,9 @@ python tools/global_state_machine_admission_audit.py
 保存 summary。该脚本只验证准入规则，不替代 MQTT/E2E；状态机代码变更后仍需
 继续跑 11 段全链路确认不会误拦截既有 P0/P1 正常命令。
 
-2026-07-14 Ubuntu 已通过：`tests.test_global_state_machine` 输出 7/7 OK，
+2026-07-14 Ubuntu 已通过：`tests.test_global_state_machine` 输出 9/9 OK，
 `tools/global_state_machine_admission_audit.py` 输出 `status=passed`、
-`passed=11`、`total=11`，两项退出码均为 0。下一步必须跑 11 段全链路
+`passed=15`、`total=15`，两项退出码均为 0。下一步必须跑 11 段全链路
 确认 MQTT 接入点不会误拦截正常 P0/P1 命令。
 
 2026-07-14 服务器全链路复测显示：全局状态机接入后，E2E 必须显式满足
@@ -152,6 +152,17 @@ adapter 但因当前飞控模式/发送器状态返回 `315000`，脚本记录�
 真实 FC 上传握手失败时，记录为环境留证通过。单独执行
 `tools/mqtt_dock3_wayline_test.py --real-sitl` 默认仍保持严格上传成功判定；需要验证
 真实 SITL 航线上传/执行时，不要加该放宽参数。
+
+2026-07-14 `state_cleanup_v4` 已完成状态机接入后的 11 段全链路回归：
+`tests.test_global_state_machine` 为 9/9 OK，`global_state_machine_admission_audit`
+为 `status=passed, passed=15, total=15`，`tools/e2e_full_chain_test.py --host
+192.168.2.188 --port 1883 --timeout 20 --quiet-stale --fail-on-stale
+--continue-on-fail` 输出 `dock3 e2e full-chain test ok (steps=11, elapsed=36.4s)`。
+其中 properties、device、binding-precondition、OSD/state、CMD、DRC、
+Wayline、takeoff-flow、media、live、HMS/log、firmware/config 全部退出码为 0。
+Wayline 阶段采用 `--real-sitl --allow-real-sitl-upload-failure`，证明文件解析和
+真实 MAVLink 上传入口已到达；严格真实 SITL mission upload/execute 仍需单项
+不加放宽参数继续验收。
 
 ## 3. 启动前检查
 
