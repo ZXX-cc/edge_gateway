@@ -1188,6 +1188,12 @@ async def main_async():
                        help='Override device.topology.nonce for update_topo')
     parser.add_argument('--sub-device-json', action='append', default=[],
                        help='Add a real-chain sub-device JSON object with sn/domain/type/sub_type/index/device_secret/nonce/thing_version/online.')
+    parser.add_argument('--mission-completion-enabled', choices=['true', 'false'],
+                       help='Enable or disable post-wayline return/landing/dock recovery flow.')
+    parser.add_argument('--mission-completion-retry-count', type=int,
+                       help='Retry count for flight-control and dock commands in one-key takeoff/completion flow.')
+    parser.add_argument('--mission-completion-retry-interval', type=float,
+                       help='Retry interval seconds for one-key takeoff/completion flow.')
     args = parser.parse_args()
 
     runtime_overrides = build_runtime_overrides(args)

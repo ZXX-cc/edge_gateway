@@ -124,6 +124,16 @@ device:
     obstacle_avoidance: true
     airsense_enabled: false
 
+# --- 航线任务真实闭环配置 ---
+mission:
+  completion:
+    enabled: true # 航线末航点到达后执行返航、降落、收舱、充电闭环
+    auto_return_home: true # 调用真实飞控 RTL/QRTL，不生成模拟完成
+    auto_land: true # 返航指令下发后继续调用真实降落指令
+    nest_recovery: true # 降落后夹紧、关盖、恢复充电
+    retry_count: 3 # 飞控/机巢命令失败后的最大尝试次数
+    retry_interval_seconds: 2.0 # 两次尝试之间的等待时间
+
 # --- 媒体配置 ---
 media:
   storage_path: "/data/media" # 本地存储路径

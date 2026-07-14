@@ -305,6 +305,7 @@ class MissionManager:
         self._telemetry_module = None
         self._telemetry_reporter = None
         self._last_takeoff_flow_steps: List[dict] = []
+        self._last_completion_flow_steps: List[dict] = []
 
     def set_flight_control(self, flight_control):
         """注入飞行控制模块"""
@@ -725,7 +726,15 @@ class MissionManager:
                     'message': 'nest_module_missing_send_gcs_command',
                     'command': command_name,
                 }
-            self._nest_module.send_gcs_command(command)
+            sent = self._nest_module.send_gcs_command(command)
+            if sent is False:
+                return {
+                    'success': False,
+                    'simulated': False,
+                    'message': 'send_gcs_command_failed',
+                    'command': command_name,
+                    'gcs_command': gcs_name,
+                }
             return {
                 'success': True,
                 'simulated': False,
@@ -743,11 +752,49 @@ class MissionManager:
                 'gcs_command': gcs_name,
             }
 
+    def _flow_retry_settings(self) -> Tuple[int, float]:
+        """读取真实控制链路重试参数；缺省值偏保守，避免把偶发 ACK 超时当成最终失败。"""
+        attempts = Config.get('mission.completion.retry_count', Config.get('mission.retry_count', 3))
+        interval = Config.get('mission.completion.retry_interval_seconds', Config.get('mission.retry_interval_seconds', 2.0))
+        try:
+            attempts = max(1, int(attempts))
+        except (TypeError, ValueError):
+            attempts = 3
+        return attempts, max(0.0, self._as_float(interval, 2.0))
+
+    @staticmethod
+    def _is_non_retryable_adapter_error(result: dict) -> bool:
+        message = str((result or {}).get('message', ''))
+        return message in {
+            'nest_module_not_available',
+            'nest_module_missing_send_gcs_command',
+            'flight_control_not_available',
+        } or message.startswith('flight_control_missing_')
+
     def _run_takeoff_flow_nest_step(self, steps: list, command_name: str) -> bool:
-        result = self._send_takeoff_flow_nest_command(command_name)
-        status = STATUS_OK if result.get('success') else STATUS_FAILED
-        self._record_takeoff_flow_step(steps, command_name, status=status, result=0 if result.get('success') else -1, detail=result)
-        return bool(result.get('success'))
+        attempts, interval = self._flow_retry_settings()
+        for attempt in range(1, attempts + 1):
+            result = self._send_takeoff_flow_nest_command(command_name)
+            success = bool(result.get('success'))
+            detail = {
+                **result,
+                'attempt': attempt,
+                'max_attempts': attempts,
+            }
+            self._record_takeoff_flow_step(
+                steps,
+                command_name,
+                status=STATUS_OK if success else STATUS_FAILED,
+                result=0 if success else -1,
+                detail=detail,
+            )
+            if success:
+                return True
+            if self._is_non_retryable_adapter_error(result):
+                return False
+            if attempt < attempts and interval > 0:
+                time.sleep(interval)
+        return False
 
     def _run_takeoff_flow_flight_step(self, steps: list, name: str, action: str, *args) -> bool:
         if not self._flight_control:
@@ -769,16 +816,103 @@ class MissionManager:
                 detail={'success': False, 'message': f'flight_control_missing_{action}'},
             )
             return False
-        result = handler(*args)
-        success = bool(result.get('success', result is True)) if isinstance(result, dict) else bool(result)
+        attempts, interval = self._flow_retry_settings()
+        for attempt in range(1, attempts + 1):
+            try:
+                result = handler(*args)
+            except Exception as exc:
+                result = {'success': False, 'message': str(exc)}
+            success = bool(result.get('success', result is True)) if isinstance(result, dict) else bool(result)
+            detail = result if isinstance(result, dict) else {'success': success}
+            self._record_takeoff_flow_step(
+                steps,
+                name,
+                status=STATUS_OK if success else STATUS_FAILED,
+                result=0 if success else -1,
+                detail={
+                    **detail,
+                    'attempt': attempt,
+                    'max_attempts': attempts,
+                    'simulated': False,
+                },
+            )
+            if success:
+                return True
+            if attempt < attempts and interval > 0:
+                time.sleep(interval)
+        return False
+
+    def _bool_config(self, key: str, default: bool = True) -> bool:
+        value = Config.get(key, default)
+        if isinstance(value, str):
+            return value.strip().lower() not in ('0', 'false', 'no', 'off')
+        return bool(value)
+
+    def _run_mission_completion_flow(self, flight_id: str, source: str = "mission_completed") -> bool:
+        """
+        航线末航点完成后的真实闭环：返航 -> 降落 -> 夹紧 -> 关盖 -> 充电。
+        这里不生成模拟完成；任一真实 adapter 缺失或控制失败都会让任务进入 failed。
+        """
+        steps: List[dict] = []
+        self._last_completion_flow_steps = steps
         self._record_takeoff_flow_step(
             steps,
-            name,
-            status=STATUS_OK if success else STATUS_FAILED,
-            result=0 if success else -1,
-            detail=result if isinstance(result, dict) else {'success': success},
+            'mission_completed_detected',
+            detail={'flight_id': flight_id, 'source': source, 'simulated': False},
         )
-        return success
+
+        completion_enabled = self._bool_config('mission.completion.enabled', True)
+        if not completion_enabled:
+            self._record_takeoff_flow_step(
+                steps,
+                'completion_flow_skipped',
+                detail={'flight_id': flight_id, 'reason': 'mission.completion.enabled=false'},
+            )
+            return True
+
+        if self._bool_config('mission.completion.auto_return_home', True):
+            if not self._run_takeoff_flow_flight_step(steps, 'return_home', 'one_click_return'):
+                self._fail_mission_completion_flow(flight_id, steps, 'return_home failed')
+                return False
+
+        if self._bool_config('mission.completion.auto_land', True):
+            if not self._run_takeoff_flow_flight_step(steps, 'landing', 'land'):
+                self._fail_mission_completion_flow(flight_id, steps, 'landing failed')
+                return False
+
+        if self._bool_config('mission.completion.nest_recovery', True):
+            for command_name in ('putter_close', 'cover_close', 'charge_open'):
+                if not self._run_takeoff_flow_nest_step(steps, command_name):
+                    self._fail_mission_completion_flow(flight_id, steps, f'{command_name} failed')
+                    return False
+
+        self._record_takeoff_flow_step(
+            steps,
+            'completion_flow_completed',
+            detail={'flight_id': flight_id, 'simulated': False},
+        )
+        self._last_completion_flow_steps = list(steps)
+        return True
+
+    def _fail_mission_completion_flow(self, flight_id: str, steps: list, reason: str):
+        self._status = self.MISSION_FAILED
+        self._wayline_mission_state = 7  # 航线执行失败
+        self._current_step = 33  # 通知任务结果
+        self._last_completion_flow_steps = list(steps)
+        logger.warning("Mission completion flow failed: flight_id=%s, reason=%s", flight_id, reason)
+        self._emit_wayline_progress(
+            STATUS_FAILED,
+            current_step=self._current_step,
+            percent=100,
+            flight_id=flight_id,
+            extra={'completion_steps': list(steps), 'reason': reason},
+        )
+        if flight_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(flight_id, 'failed'),),
+                daemon=True,
+            ).start()
 
     @staticmethod
     def _as_float(value: Any, default: float = 0.0) -> float:
@@ -2586,24 +2720,40 @@ class MissionManager:
 
         # 检测任务完成
         if self._status == self.MISSION_RUNNING and new_idx >= len(self._current_wayline) - 1:
+            flight_id = self._current_task_id
+            self._current_step = 24  # 进入返航/降落阶段
+            self._emit_wayline_progress(
+                STATUS_IN_PROGRESS,
+                current_step=self._current_step,
+                percent=100,
+                flight_id=flight_id,
+                extra={'completion_phase': 'return_land_recovery'},
+            )
+            if not self._run_mission_completion_flow(flight_id, "mission_completed"):
+                return True
+
             self._status = self.MISSION_COMPLETED
             self._wayline_mission_state = 9  # 航线停止
             self._current_step = 33  # 通知任务结果
             self._report_mission_progress(status='completed')
+            self._emit_wayline_progress(
+                STATUS_OK,
+                current_step=self._current_step,
+                percent=100,
+                flight_id=flight_id,
+                extra={'completion_steps': list(self._last_completion_flow_steps)},
+            )
             self._clear_breakpoint_file()
 
             # 更新数据库状态
-            if self._current_task_id:
+            if flight_id:
                 threading.Thread(
                     target=self._run_db_coroutine,
-                    args=(self._update_mission_status(self._current_task_id, 'completed'),),
+                    args=(self._update_mission_status(flight_id, 'completed'),),
                     daemon=True
                 ).start()
 
-            # 机巢联动：v1.3 没有强制 landing-start，使用安全调用避免旧模块缺方法时报错。
-            self._call_nest_action("request_landing", "mission_completed")
-
-            logger.info("Mission completed!, wayline_state=9(航线停止)")
+            logger.info("Mission completed with return/landing recovery, wayline_state=9(航线停止)")
             return True
 
         return False

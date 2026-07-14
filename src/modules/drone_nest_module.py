@@ -626,7 +626,7 @@ class DroneNestModule(BaseModule):
             self._report_operation_event('failed', 'gcs_command',
                                          {'commands': [cmd.name for cmd in commands],
                                           'error': 'connection not ready'})
-            return
+            return False
 
         try:
             gcs_order = self.gcs_codec.encode_gcs_command(*commands)
@@ -644,7 +644,8 @@ class DroneNestModule(BaseModule):
                 ordinary_order=f"0x{ordinary_order:04X}",
                 takeoff_land_order=f"0x{takeoff_land_order:02X}",
             )
-            self.send_gcs_order_response(ordinary_order, takeoff_land_order)
+            if self.send_gcs_order_response(ordinary_order, takeoff_land_order) is False:
+                return False
 
             self.log(
                 f"📤 已发送命令: {[cmd.name for cmd in commands]}, "
@@ -657,6 +658,7 @@ class DroneNestModule(BaseModule):
                                          {'commands': [cmd.name for cmd in commands],
                                           'ordinary_order': ordinary_order,
                                           'takeoff_land_order': takeoff_land_order})
+            return True
 
         except Exception as e:
             self.log(f"发送命令失败: {e}", "ERROR")
@@ -665,6 +667,7 @@ class DroneNestModule(BaseModule):
                                           'error': str(e)})
             import traceback
             traceback.print_exc()
+            return False
 
     def send_gcs_order_response(
         self,
@@ -681,7 +684,7 @@ class DroneNestModule(BaseModule):
         """
         if not self.dispatcher or not self.dispatcher.connection:
             self.log("⚠️ 机巢连接未就绪，无法发送响应", "WARNING")
-            return
+            return False
 
         try:
             connection = self.dispatcher.connection
@@ -694,7 +697,7 @@ class DroneNestModule(BaseModule):
 
             if not mav_obj:
                 self.log("⚠️ 无法找到 MAV 对象", "ERROR")
-                return
+                return False
 
             # ✅ 使用真实存在的消息：DRONE_NEST_COMMAND
             if hasattr(mav_obj, 'drone_nest_command_send'):
@@ -723,11 +726,13 @@ class DroneNestModule(BaseModule):
                     f"📤 已发送指令: ordinary=0x{ordinary_order:04X}, "
                     f"takeoff_land=0x{takeoff_land_order:02X}"
                 )
+            return True
 
         except Exception as e:
             self.log(f"发送指令失败: {e}", "ERROR")
             import traceback
             traceback.print_exc()
+            return False
 
     def poll_nest_status(self):
         """定期发送空机巢命令，用于 UDP 握手和状态查询。"""

@@ -15,6 +15,17 @@ def build_runtime_overrides(args) -> dict:
         overrides.setdefault("device", {}).setdefault("topology", {})["device_secret"] = args.gateway_device_secret
     if getattr(args, "gateway_nonce", None):
         overrides.setdefault("device", {}).setdefault("topology", {})["nonce"] = args.gateway_nonce
+    mission_completion = overrides.setdefault("mission", {}).setdefault("completion", {})
+    if getattr(args, "mission_completion_enabled", None):
+        mission_completion["enabled"] = args.mission_completion_enabled.lower() == "true"
+    if getattr(args, "mission_completion_retry_count", None) is not None:
+        mission_completion["retry_count"] = args.mission_completion_retry_count
+    if getattr(args, "mission_completion_retry_interval", None) is not None:
+        mission_completion["retry_interval_seconds"] = args.mission_completion_retry_interval
+    if not mission_completion:
+        overrides.get("mission", {}).pop("completion", None)
+        if not overrides.get("mission"):
+            overrides.pop("mission", None)
 
     sub_devices = []
     for raw in getattr(args, "sub_device_json", []) or []:

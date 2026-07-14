@@ -1,8 +1,59 @@
 import threading
 import time
+import sys
+import types
 import unittest
 from queue import Empty, Queue
 from types import SimpleNamespace
+
+
+class _MAVWPLoader:
+    def __init__(self):
+        self._items = []
+
+    def clear(self):
+        self._items.clear()
+
+    def add(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+
+if "pymavlink" not in sys.modules:
+    pymavlink = types.ModuleType("pymavlink")
+    pymavlink.mavutil = types.SimpleNamespace(mavlink=types.SimpleNamespace(
+        MAV_CMD_NAV_WAYPOINT=16,
+        MAV_FRAME_GLOBAL_RELATIVE_ALT=3,
+        MAV_MISSION_TYPE_MISSION=0,
+        MAV_CMD_DO_SET_MISSION_CURRENT=224,
+        MAV_CMD_GET_HOME_POSITION=410,
+    ))
+    pymavlink.mavwp = types.SimpleNamespace(MAVWPLoader=_MAVWPLoader)
+    sys.modules["pymavlink"] = pymavlink
+    sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
+    sys.modules["pymavlink.mavwp"] = pymavlink.mavwp
+else:
+    pymavlink = sys.modules["pymavlink"]
+    mavlink = getattr(getattr(pymavlink, "mavutil", None), "mavlink", None)
+    if mavlink is None:
+        pymavlink.mavutil = types.SimpleNamespace(mavlink=types.SimpleNamespace())
+        mavlink = pymavlink.mavutil.mavlink
+    for name, value in {
+        "MAV_CMD_NAV_WAYPOINT": 16,
+        "MAV_FRAME_GLOBAL_RELATIVE_ALT": 3,
+        "MAV_MISSION_TYPE_MISSION": 0,
+        "MAV_CMD_DO_SET_MISSION_CURRENT": 224,
+        "MAV_CMD_GET_HOME_POSITION": 410,
+    }.items():
+        if not hasattr(mavlink, name):
+            setattr(mavlink, name, value)
+    if not hasattr(pymavlink, "mavwp"):
+        pymavlink.mavwp = types.SimpleNamespace(MAVWPLoader=_MAVWPLoader)
+        sys.modules["pymavlink.mavwp"] = pymavlink.mavwp
+    elif not hasattr(pymavlink.mavwp, "MAVWPLoader"):
+        pymavlink.mavwp.MAVWPLoader = _MAVWPLoader
 
 from src.core.message_dispatcher import MessageDispatcher
 from src.mission.manager import MissionManager
@@ -310,7 +361,7 @@ class MissionProgressBoundsTest(unittest.TestCase):
         manager._execute_waypoint_actions = lambda waypoint_index: None
         manager._save_breakpoint_file = lambda reason="": None
         manager._clear_breakpoint_file = lambda: None
-        manager._call_nest_action = lambda action, context: None
+        manager._run_mission_completion_flow = lambda flight_id, source: True
 
         completed = threading.Event()
 

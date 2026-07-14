@@ -282,6 +282,9 @@ class RecordingNest:
     def get_environment_data(self):
         return self.environment_data
 
+    def send_gcs_command(self, command):
+        self.calls.append(getattr(command, "name", str(command)))
+
     def request_takeoff(self):
         self.calls.append("request_takeoff")
 
@@ -531,7 +534,7 @@ class Dock3WaylineTest(unittest.TestCase):
         manager._save_breakpoint_file = lambda reason="": None
         manager._clear_breakpoint_file = lambda: None
         manager._report_mission_progress = lambda status="executing": None
-        manager._call_nest_action = lambda action, context: None
+        manager._run_mission_completion_flow = lambda flight_id, source: True
         manager.stop_mission_monitor = lambda: True
 
         action_started = threading.Event()
@@ -570,6 +573,62 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(manager._status, manager.MISSION_COMPLETED)
         self.assertEqual(pause_reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertEqual(flight_control.calls, [])
+
+    def test_mission_completion_runs_real_return_land_and_dock_recovery(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        nest = RecordingNest()
+        events = []
+        manager.set_flight_control(flight_control)
+        manager.set_nest_module(nest)
+        manager.set_event_callback(events.append)
+        manager._current_task_id = "flight-complete"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+        manager._simulate_mission = {"is_enable": 0}
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._clear_breakpoint_file = lambda: None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+        manager._flow_retry_settings = lambda: (2, 0.0)
+
+        completed = manager._process_mission_current(1)
+
+        self.assertTrue(completed)
+        self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+        self.assertIn(("one_click_return", None), flight_control.calls)
+        self.assertIn(("land", None), flight_control.calls)
+        self.assertEqual(nest.calls[-3:], ["CLAMP_TIGHTEN", "DOOR_CLOSE", "CHARGE_START"])
+        self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+    def test_mission_completion_retries_and_reports_failure_without_fake_success(self):
+        manager = MissionManager()
+        flight_control = FailingFlightControl()
+        events = []
+        manager.set_flight_control(flight_control)
+        manager.set_event_callback(events.append)
+        manager._current_task_id = "flight-fail-return"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_RUNNING
+        manager._simulate_mission = {"is_enable": 0}
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._clear_breakpoint_file = lambda: None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+        manager._flow_retry_settings = lambda: (2, 0.0)
+
+        processed = manager._process_mission_current(1)
+
+        self.assertTrue(processed)
+        self.assertEqual(manager._status, manager.MISSION_FAILED)
+        self.assertEqual(
+            flight_control.calls,
+            [("one_click_return", None), ("one_click_return", None)],
+        )
+        failed_events = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+            and event.get("data", {}).get("output", {}).get("status") == "failed"
+        ]
+        self.assertTrue(failed_events)
 
     def test_waypoint_update_waiting_on_pause_cannot_run_actions_after_hold(self):
         pause_started = threading.Event()

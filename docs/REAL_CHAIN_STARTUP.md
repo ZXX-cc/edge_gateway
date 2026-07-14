@@ -23,7 +23,10 @@ python src/main.py \
   --runtime-mode production \
   --gateway-sn REALDOCK001 \
   --gateway-device-secret "$GATEWAY_DEVICE_SECRET" \
-  --gateway-nonce "$GATEWAY_NONCE"
+  --gateway-nonce "$GATEWAY_NONCE" \
+  --mission-completion-enabled true \
+  --mission-completion-retry-count 3 \
+  --mission-completion-retry-interval 2.0
 ```
 
 带一个真实子设备：
@@ -126,6 +129,25 @@ Dock3 航线管理按官方 `wayline.html` 方法名接入：
 真实链路中 `flighttask_prepare` 会拒绝 `simulate_mission.is_enable=1`，并要求航线文件可被真实下载/解析并上传到飞控；没有飞控或航线 adapter 时返回明确错误，不再返回模拟成功。`in_flight_wayline_*` 已按官方字段校验，但当前没有真实空中航线 adapter，生产环境会返回“不支持”错误，避免云端误判为空中航线已执行。
 
 `return_specific_home` 需要多机场 home 点规划能力；当前单机场链路只允许返回本网关 SN，目标为其他机场时会明确拒绝。蛙跳任务需要后续接入多机场拓扑、图传链路和返航规划 adapter 后再打开。
+
+航线末航点完成后，网关默认执行真实闭环：`one_click_return` 返航、`land` 降落、机巢 `CLAMP_TIGHTEN/DOOR_CLOSE/CHARGE_START` 收舱充电。任一真实 adapter 缺失或命令重试后仍失败时，`flighttask_progress` 会上报 `failed`，不会把测试环境的缺设备状态伪装成任务完成。
+
+可通过配置调整重试和闭环动作：
+
+```yaml
+mission:
+  completion:
+    enabled: true
+    auto_return_home: true
+    auto_land: true
+    nest_recovery: true
+    retry_count: 3
+    retry_interval_seconds: 2.0
+```
+
+测试环境如果暂时只验证协议字段，可把 `mission.completion.enabled=false` 写入测试专用配置；真实接入验收建议保持默认开启，并确认飞控 adapter 与机巢 MAVLink adapter 都已连通。
+
+一键启航 `one_key_takeoff_flow` 也使用同一套重试参数。`auto_complete=false` 时流程会停在真实起飞/航线执行中，等待实际航线进度；`auto_complete=true` 只适合已有真实飞控与机巢链路的联调，它会继续执行返航、降落、收舱、充电闭环。
 
 ## HMS 字段
 
