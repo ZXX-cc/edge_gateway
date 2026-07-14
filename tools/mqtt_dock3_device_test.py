@@ -58,7 +58,10 @@ class DeviceTopologyClient(MqttRequestClient):
         print(f"received <- {self.status_topic}, method={payload.get('method')}, tid={payload.get('tid')}")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         if payload.get("method") == "update_topo":
-            valid, errors = validate_update_topo_payload(payload.get("data", {}))
+            valid, errors = validate_update_topo_payload(payload.get("data", {}), strict=True)
+            if payload.get("need_reply") != 1:
+                valid = False
+                errors = [*errors, "update_topo status must set need_reply=1"]
             if errors:
                 self.status_validation_errors.extend(errors)
             self.status_messages_by_method.setdefault("update_topo", []).append(payload)
@@ -91,8 +94,12 @@ def assert_status_payload(status_msg, expected_count, expected_sns=None):
         print("timeout waiting for update_topo status", file=sys.stderr)
         return 4
 
+    if status_msg.get("need_reply") != 1:
+        print("update_topo status missing need_reply=1", file=sys.stderr)
+        return 14
+
     data = status_msg.get("data", {})
-    valid, errors = validate_update_topo_payload(data)
+    valid, errors = validate_update_topo_payload(data, strict=True)
     if not valid:
         for error in errors:
             print(error, file=sys.stderr)
@@ -219,7 +226,7 @@ def main():
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--gateway-secret", default="gw-secret")
     parser.add_argument("--gateway-nonce", default="gw-nonce")
-    parser.add_argument("--sub-device-sn", default="DRONE-SIM-001")
+    parser.add_argument("--sub-device-sn", default="DRONESIM001")
     parser.add_argument("--sub-device-domain", default="0")
     parser.add_argument("--sub-device-type", type=int, default=60)
     parser.add_argument("--sub-device-sub-type", type=int, default=0)

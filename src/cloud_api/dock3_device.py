@@ -16,6 +16,13 @@ GATEWAY_DOMAIN = "3"
 GATEWAY_TYPE = 119
 GATEWAY_SUB_TYPE = 0
 THING_VERSION = "1.1.2"
+GATEWAY_TOPOLOGY_KEYS = {
+    (GATEWAY_DOMAIN, GATEWAY_TYPE, GATEWAY_SUB_TYPE),
+}
+SUB_DEVICE_TOPOLOGY_KEYS = {
+    ("0", 60, 0),
+    ("0", 91, 0),
+}
 
 REQUIRED_TOPO_FIELDS = {
     "domain",
@@ -109,7 +116,7 @@ def build_update_topo_payload(
     }
 
 
-def validate_update_topo_payload(data: Any) -> Tuple[bool, List[str]]:
+def validate_update_topo_payload(data: Any, strict: bool = False) -> Tuple[bool, List[str]]:
     errors: List[str] = []
     if not isinstance(data, dict):
         return False, ["update_topo data must be an object"]
@@ -126,10 +133,21 @@ def validate_update_topo_payload(data: Any) -> Tuple[bool, List[str]]:
         errors.append("sub_type must be int")
     if not isinstance(data.get("device_secret"), str):
         errors.append("device_secret must be string")
+    elif strict and not data.get("device_secret"):
+        errors.append("device_secret must not be empty")
     if not isinstance(data.get("nonce"), str):
         errors.append("nonce must be string")
+    elif strict and not data.get("nonce"):
+        errors.append("nonce must not be empty")
     if not isinstance(data.get("thing_version"), str):
         errors.append("thing_version must be string")
+    elif strict and data.get("thing_version") != THING_VERSION:
+        errors.append(f"thing_version must be {THING_VERSION}")
+
+    if strict and isinstance(data.get("domain"), str) and isinstance(data.get("type"), int) and not isinstance(data.get("type"), bool) and isinstance(data.get("sub_type"), int) and not isinstance(data.get("sub_type"), bool):
+        gateway_key = (data.get("domain"), data.get("type"), data.get("sub_type"))
+        if gateway_key not in GATEWAY_TOPOLOGY_KEYS:
+            errors.append(f"unsupported gateway topology: domain={gateway_key[0]}, type={gateway_key[1]}, sub_type={gateway_key[2]}")
 
     sub_devices = data.get("sub_devices")
     if not isinstance(sub_devices, list):
@@ -156,9 +174,22 @@ def validate_update_topo_payload(data: Any) -> Tuple[bool, List[str]]:
             errors.append(f"sub_devices[{index}].index must be string")
         if not isinstance(device.get("device_secret"), str):
             errors.append(f"sub_devices[{index}].device_secret must be string")
+        elif strict and not device.get("device_secret"):
+            errors.append(f"sub_devices[{index}].device_secret must not be empty")
         if not isinstance(device.get("nonce"), str):
             errors.append(f"sub_devices[{index}].nonce must be string")
+        elif strict and not device.get("nonce"):
+            errors.append(f"sub_devices[{index}].nonce must not be empty")
         if not isinstance(device.get("thing_version"), str):
             errors.append(f"sub_devices[{index}].thing_version must be string")
+        elif strict and device.get("thing_version") != THING_VERSION:
+            errors.append(f"sub_devices[{index}].thing_version must be {THING_VERSION}")
+        if strict and isinstance(device.get("domain"), str) and isinstance(device.get("type"), int) and not isinstance(device.get("type"), bool) and isinstance(device.get("sub_type"), int) and not isinstance(device.get("sub_type"), bool):
+            sub_key = (device.get("domain"), device.get("type"), device.get("sub_type"))
+            if sub_key not in SUB_DEVICE_TOPOLOGY_KEYS:
+                errors.append(
+                    f"sub_devices[{index}] unsupported topology: "
+                    f"domain={sub_key[0]}, type={sub_key[1]}, sub_type={sub_key[2]}"
+                )
 
     return not errors, errors

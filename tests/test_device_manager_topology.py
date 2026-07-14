@@ -37,7 +37,13 @@ if "src.database.alarm_db" not in sys.modules:
     alarm_db.AlarmDB = type("AlarmDB", (), {})
     sys.modules["src.database.alarm_db"] = alarm_db
 
+if "src.database.operation_db" not in sys.modules:
+    operation_db = ModuleType("src.database.operation_db")
+    operation_db.OperationDB = type("OperationDB", (), {})
+    sys.modules["src.database.operation_db"] = operation_db
+
 from src.cloud_api.dock3_device import build_sub_device_payload, build_update_topo_payload  # noqa: E402
+from src.utils.config import Config  # noqa: E402
 from src.device.manager import DeviceManager, SubDevice  # noqa: E402
 
 
@@ -56,16 +62,76 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.events = []
         self.states = []
+        self.config_data = Config._data
+        Config._data = {}
         self.manager = DeviceManager()
         self.manager._org_data_path = str(Path(self.tmp.name) / "organization.json")
         self.manager._event_callback = self.events.append
         self.manager._state_callback = self.states.append
+        self.manager._topo_retry_limit = 0
 
     def tearDown(self):
+        Config._data = self.config_data
         self.tmp.cleanup()
 
     def update_topo_events(self):
         return [event for event in self.events if event.get("method") == "update_topo"]
+
+    def test_report_update_topo_requests_status_reply(self):
+        self.assertTrue(self.manager.report_update_topo())
+
+        event = self.update_topo_events()[-1]
+        self.assertEqual(event["method"], "update_topo")
+        self.assertEqual(event["need_reply"], 1)
+        self.assertIn("tid", event)
+        self.assertEqual(event["data"]["sub_devices"], [])
+
+    def test_already_bound_startup_reports_topology_without_service_trigger(self):
+        self.manager._device_state = self.manager.STATE_BOUND
+
+        self.manager.auto_query_bind_status_on_startup()
+
+        self.assertEqual(len(self.update_topo_events()), 1)
+        self.assertEqual(self.update_topo_events()[-1]["method"], "update_topo")
+
+    def test_device_binding_reports_topology(self):
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            reply = self.manager.handle_device_binding(msg(
+                "device_binding",
+                {"workspace_id": "workspace-001", "workspace_name": "Test Workspace"},
+            ))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(len(self.update_topo_events()), 1)
+        self.assertEqual(self.update_topo_events()[-1]["need_reply"], 1)
+
+    def test_update_topo_retries_rejected_status_reply_and_clears_on_success(self):
+        self.manager._topo_retry_limit = 1
+        self.manager._topo_retry_delay = 30.0
+
+        self.assertTrue(self.manager.report_update_topo())
+        first = self.update_topo_events()[-1]
+        self.manager.handle_update_topo_reply(
+            "update_topo",
+            {"tid": first["tid"], "method": "update_topo", "data": {"result": 325001}},
+        )
+
+        self.assertEqual(len(self.update_topo_events()), 2)
+        retry = self.update_topo_events()[-1]
+        self.assertEqual(retry["tid"], first["tid"])
+        self.assertEqual(retry["need_reply"], 1)
+        self.assertIn(first["tid"], self.manager._pending_update_topo)
+
+        self.manager.handle_update_topo_reply(
+            "update_topo",
+            {"tid": first["tid"], "method": "update_topo", "data": {"result": 0}},
+        )
+
+        self.assertNotIn(first["tid"], self.manager._pending_update_topo)
 
     def test_state_callback_only_receives_pushmode_one_properties(self):
         self.assertTrue(self.manager.set_property("silent_mode", 1))
@@ -75,13 +141,43 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.manager.update_properties({"mode_code": 4}, notify=True)
         self.assertEqual(len(self.states), before)
 
+    def test_configured_sub_device_is_available_for_binding_and_topology(self):
+        Config._data = {
+            "gateway": {"sn": "EDGEGW001"},
+            "device": {
+                "sub_devices": [
+                    {
+                        "sn": "DRONESIM001",
+                        "domain": "0",
+                        "type": 91,
+                        "sub_type": 0,
+                        "index": "A",
+                        "device_secret": "drone-secret",
+                        "nonce": "drone-nonce",
+                        "thing_version": "1.1.2",
+                        "online": True,
+                    }
+                ]
+            },
+        }
+        manager = DeviceManager()
+
+        sub_device = manager.get_sub_device("DRONESIM001")
+        self.assertIsNotNone(sub_device)
+        self.assertTrue(sub_device.online)
+        self.assertFalse(sub_device.paired)
+
+        payload = manager.build_topo_payload()
+        self.assertEqual(payload["sub_devices"][0]["sn"], "DRONESIM001")
+        self.assertEqual(manager.get_property("sub_device")["device_sn"], "DRONESIM001")
+
     def test_empty_topology_marks_known_sub_devices_offline_without_dropping_cache(self):
         online_payload = build_update_topo_payload(
             device_secret="gw-secret",
             nonce="gw-nonce",
             sub_devices=[
-                build_sub_device_payload("DRONE-A", device_type=60, index="A"),
-                build_sub_device_payload("DRONE-B", device_type=60, index="B"),
+                build_sub_device_payload("DRONE-A", device_type=60, index="A", device_secret="a-secret", nonce="a-nonce"),
+                build_sub_device_payload("DRONE-B", device_type=60, index="B", device_secret="b-secret", nonce="b-nonce"),
             ],
         )
 
@@ -105,7 +201,10 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(set(devices), {"DRONE-A", "DRONE-B"})
         self.assertFalse(any(device.online for device in devices.values()))
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"], [])
-        self.assertEqual(self.states, [])
+        state_properties = {}
+        for state in self.states:
+            state_properties.update(state.get("property", {}))
+        self.assertLessEqual(set(state_properties), {"sub_device", "wireless_link_topo"})
         sub_device_state = self.manager.get_property("sub_device")
         self.assertIn(sub_device_state["device_sn"], {"DRONE-A", "DRONE-B"})
         self.assertEqual(sub_device_state["device_online_status"], 0)
@@ -114,13 +213,15 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.manager.add_sub_device(SubDevice("DRONE-A", device_type=60, index="A"))
         self.manager._sub_devices["DRONE-A"].paired = True
 
-        offline_payload = build_update_topo_payload(sub_devices=[])
+        offline_payload = build_update_topo_payload(device_secret="gw-secret", nonce="gw-nonce", sub_devices=[])
         self.manager.handle_update_topo(msg("update_topo", offline_payload))
         self.assertFalse(self.manager.get_sub_device("DRONE-A").online)
 
         reconnect_payload = build_update_topo_payload(
+            device_secret="gw-secret",
+            nonce="gw-nonce",
             sub_devices=[
-                build_sub_device_payload("DRONE-A", device_type=60, index="A"),
+                build_sub_device_payload("DRONE-A", device_type=60, index="A", device_secret="a-secret", nonce="a-nonce"),
             ],
         )
         self.manager.handle_update_topo(msg("update_topo", reconnect_payload))

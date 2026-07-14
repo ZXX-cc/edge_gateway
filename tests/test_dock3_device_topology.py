@@ -49,6 +49,9 @@ class Dock3DeviceTopologyTest(unittest.TestCase):
         self.assertEqual(payload["thing_version"], THING_VERSION)
         self.assertEqual(payload["sub_devices"][0]["sn"], "DRONE-SIM-001")
 
+        strict_ok, strict_errors = validate_update_topo_payload(payload, strict=True)
+        self.assertTrue(strict_ok, strict_errors)
+
     def test_empty_sub_devices_is_valid_offline_topology(self):
         payload = build_update_topo_payload(sub_devices=[])
 
@@ -56,6 +59,36 @@ class Dock3DeviceTopologyTest(unittest.TestCase):
 
         self.assertTrue(ok, errors)
         self.assertEqual(payload["sub_devices"], [])
+
+    def test_strict_topology_rejects_empty_secret_and_nonce(self):
+        payload = build_update_topo_payload(sub_devices=[])
+
+        ok, errors = validate_update_topo_payload(payload, strict=True)
+
+        self.assertFalse(ok)
+        self.assertIn("device_secret must not be empty", errors)
+        self.assertIn("nonce must not be empty", errors)
+
+    def test_strict_topology_rejects_unknown_device_enum(self):
+        payload = build_update_topo_payload(
+            device_secret="gw-secret",
+            nonce="gw-nonce",
+            sub_devices=[
+                build_sub_device_payload(
+                    "DRONE-SIM-001",
+                    domain="0",
+                    device_type=9999,
+                    sub_type=0,
+                    device_secret="drone-secret",
+                    nonce="drone-nonce",
+                )
+            ],
+        )
+
+        ok, errors = validate_update_topo_payload(payload, strict=True)
+
+        self.assertFalse(ok)
+        self.assertTrue(any("unsupported topology" in error for error in errors))
 
     def test_missing_required_keys_are_rejected(self):
         ok, errors = validate_update_topo_payload({"sub_devices": []})

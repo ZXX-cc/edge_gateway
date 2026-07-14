@@ -214,8 +214,14 @@ class DeviceManager:
         self._gateway_domain = GATEWAY_DOMAIN
         self._gateway_type = GATEWAY_TYPE
         self._gateway_sub_type = GATEWAY_SUB_TYPE
-        self._gateway_device_secret = ""
-        self._gateway_nonce = ""
+        self._gateway_device_secret = str(
+            Config.get('device.topology.device_secret', '')
+            or f"{self.gateway_sn}-gateway-secret"
+        )
+        self._gateway_nonce = str(
+            Config.get('device.topology.nonce', '')
+            or f"{self.gateway_sn}-gateway-nonce"
+        )
         self._gateway_thing_version = THING_VERSION
 
         # 子设备列表
@@ -253,6 +259,10 @@ class DeviceManager:
         self._last_nest_hms_signature = tuple()
         self._last_nest_operation_signature = ""
         self._pending_nest_command_targets: Dict[str, Dict[str, Any]] = {}
+        self._topo_lock = threading.Lock()
+        self._pending_update_topo: Dict[str, Dict[str, Any]] = {}
+        self._topo_retry_limit = max(0, int(Config.get('device.topology.retry_limit', 2) or 0))
+        self._topo_retry_delay = max(0.5, float(Config.get('device.topology.retry_delay', 3.0) or 3.0))
 
         # ===== 系统状态定时更新线程 =====
         self._system_update_thread: Optional[threading.Thread] = None
@@ -491,6 +501,20 @@ class DeviceManager:
 
         self._properties['activation_time'] = 0
         self._properties['job_number'] = 0
+
+        configured_sub_devices = device_config.get('sub_devices', [])
+        if isinstance(configured_sub_devices, list):
+            for item in configured_sub_devices:
+                if not isinstance(item, dict):
+                    continue
+                sub_device = SubDevice.from_dict(item)
+                if not sub_device.sn:
+                    continue
+                sub_device.online = bool(item.get('online', sub_device.online))
+                sub_device.paired = bool(item.get('paired', sub_device.paired))
+                self._sub_devices[sub_device.sn] = sub_device
+            if self._sub_devices:
+                self._refresh_sub_device_property(notify=False)
 
     def _schedule_async(self, coro):
         """安全调度异步任务"""
@@ -834,9 +858,11 @@ class DeviceManager:
 
     def _notify_event(self, method: str, data: dict):
         """触发事件上报 (Topic: thing/product/{sn}/events)"""
+        event = None
         if self._event_callback:
             event = MessageBuilder.build_event(method, data, self.gateway_sn)
             self._event_callback(event)
+        return event
 
     # ========== 数据源更新方法 ==========
 
@@ -1344,7 +1370,7 @@ class DeviceManager:
         Topic: sys/product/{gateway_sn}/status
         """
         sub_devices = [
-            dev.to_dict() for dev in self._sub_devices.values()
+            self._sub_device_topo_payload(dev) for dev in self._sub_devices.values()
             if dev.online  # Dock3 offline topology uses an empty sub_devices list.
         ]
         return build_update_topo_payload(
@@ -1357,15 +1383,34 @@ class DeviceManager:
             sub_devices=sub_devices,
         )
 
+    def _sub_device_topo_payload(self, dev: SubDevice) -> dict:
+        payload = dev.to_dict()
+        if not payload.get('device_secret'):
+            payload['device_secret'] = f"{dev.sn}-device-secret"
+        if not payload.get('nonce'):
+            payload['nonce'] = f"{dev.sn}-device-nonce"
+        return payload
+
     def report_update_topo(self):
         """主动上报设备拓扑（update_topo）"""
         payload = self.build_topo_payload()
-        valid, errors = validate_update_topo_payload(payload)
+        valid, errors = validate_update_topo_payload(payload, strict=True)
         if not valid:
             logger.error("Update topo payload invalid: %s", "; ".join(errors))
             return False
-        self._notify_event('update_topo', payload)
-        logger.info(f"Update topo reported: {len(payload['sub_devices'])} sub-devices")
+        event = MessageBuilder.build(
+            'update_topo',
+            payload,
+            self.gateway_sn,
+            need_reply=True,
+        )
+        self._publish_update_topo_event(event)
+        self._track_update_topo(event)
+        logger.info(
+            "Update topo reported: %s sub-devices, tid=%s",
+            len(payload['sub_devices']),
+            event.get('tid'),
+        )
         return True
 
     def handle_update_topo_reply(self, method: str, msg: dict):
@@ -1375,10 +1420,94 @@ class DeviceManager:
             return
         data = msg.get('data', {})
         result = data.get('result', -1)
+        tid = msg.get('tid', '')
+        with self._topo_lock:
+            pending = self._pending_update_topo.get(tid)
+            if pending and pending.get('timer'):
+                pending['timer'].cancel()
         if result == 0:
-            logger.info("Update topo accepted by cloud")
+            with self._topo_lock:
+                self._pending_update_topo.pop(tid, None)
+            logger.info("Update topo accepted by cloud, tid=%s", tid)
         else:
-            logger.error(f"Update topo rejected by cloud, result={result}")
+            logger.error(f"Update topo rejected by cloud, tid={tid}, result={result}")
+            self._retry_update_topo_event(tid, pending, reason=f"rejected result={result}")
+
+    def _publish_update_topo_event(self, event: dict):
+        if self._event_callback:
+            self._event_callback(event)
+
+    def _track_update_topo(self, event: dict, attempt: int = 0):
+        tid = event.get('tid')
+        if not tid or self._topo_retry_limit <= 0:
+            return
+        timer = threading.Timer(
+            self._topo_retry_delay,
+            self._handle_update_topo_timeout,
+            args=(tid,),
+        )
+        timer.daemon = True
+        with self._topo_lock:
+            previous = self._pending_update_topo.get(tid)
+            if previous and previous.get('timer'):
+                previous['timer'].cancel()
+            self._pending_update_topo[tid] = {
+                'event': copy.deepcopy(event),
+                'attempt': attempt,
+                'timer': timer,
+            }
+        timer.start()
+
+    def _handle_update_topo_timeout(self, tid: str):
+        with self._topo_lock:
+            pending = self._pending_update_topo.get(tid)
+            if not pending:
+                return
+            attempt = int(pending.get('attempt', 0))
+            if attempt >= self._topo_retry_limit:
+                self._pending_update_topo.pop(tid, None)
+                logger.error(
+                    "Update topo status_reply timeout after retries: tid=%s, attempts=%s",
+                    tid,
+                    attempt + 1,
+                )
+                return
+            event = copy.deepcopy(pending.get('event', {}))
+        event['timestamp'] = int(time.time() * 1000)
+        logger.warning(
+            "Update topo status_reply timeout, retrying: tid=%s, attempt=%s/%s",
+            tid,
+            attempt + 1,
+            self._topo_retry_limit,
+        )
+        self._publish_update_topo_event(event)
+        self._track_update_topo(event, attempt=attempt + 1)
+
+    def _retry_update_topo_event(self, tid: str, pending: Optional[Dict[str, Any]], reason: str):
+        if self._topo_retry_limit <= 0 or not pending:
+            return
+        attempt = int(pending.get('attempt', 0))
+        if attempt >= self._topo_retry_limit:
+            with self._topo_lock:
+                self._pending_update_topo.pop(tid, None)
+            logger.error(
+                "Update topo retry limit reached: tid=%s, attempts=%s, reason=%s",
+                tid,
+                attempt + 1,
+                reason,
+            )
+            return
+        event = copy.deepcopy(pending.get('event', {}))
+        event['timestamp'] = int(time.time() * 1000)
+        logger.warning(
+            "Update topo retrying: tid=%s, attempt=%s/%s, reason=%s",
+            tid,
+            attempt + 1,
+            self._topo_retry_limit,
+            reason,
+        )
+        self._publish_update_topo_event(event)
+        self._track_update_topo(event, attempt=attempt + 1)
 
     # ========== 设备生命周期 ==========
 
@@ -1425,6 +1554,7 @@ class DeviceManager:
             'bind_status': 'success',
             'timestamp': bind_time
         })
+        self.report_update_topo()
 
         self._schedule_async(self._save_binding_to_db())
 
@@ -3108,6 +3238,7 @@ class DeviceManager:
                         self._bound_workspace_id = org_id
                         self._bound_workspace_name = org_name
                         self._set_organization_info(org_id, org_name, bind_time=int(time.time()*1000))
+                        topology_changed = True
                         logger.info(f"Gateway bound from cloud reply: org={org_id}")
                         self._notify_event('device_binding', {
                             'device_sn': sn,
@@ -3123,6 +3254,7 @@ class DeviceManager:
                         self._bound_workspace_id = ''
                         self._bound_workspace_name = ''
                         self._clear_organization_info()
+                        topology_changed = True
                         self._notify_event('device_unbinding', {
                             'device_sn': sn,
                             'bind_status': 'success',
@@ -3359,6 +3491,7 @@ class DeviceManager:
         """
         if self._device_state >= self.STATE_BOUND:
             logger.info("Device already bound, skip bind status query")
+            self.report_update_topo()
             return
 
         if not self._cloud_conn:
@@ -3380,7 +3513,7 @@ class DeviceManager:
         """
         data = msg.get('data', {})
 
-        valid, errors = validate_update_topo_payload(data)
+        valid, errors = validate_update_topo_payload(data, strict=True)
         if not valid:
             reason = "; ".join(errors)
             logger.warning("Rejected invalid update_topo payload: %s", reason)
@@ -3399,9 +3532,9 @@ class DeviceManager:
         self._gateway_domain = normalized.get('domain', self._gateway_domain)
         self._gateway_type = normalized.get('type', self._gateway_type)
         self._gateway_sub_type = normalized.get('sub_type', self._gateway_sub_type)
-        self._gateway_device_secret = normalized.get('device_secret', self._gateway_device_secret)
-        self._gateway_nonce = normalized.get('nonce', self._gateway_nonce)
-        self._gateway_thing_version = normalized.get('thing_version', self._gateway_thing_version)
+        self._gateway_device_secret = normalized.get('device_secret') or self._gateway_device_secret
+        self._gateway_nonce = normalized.get('nonce') or self._gateway_nonce
+        self._gateway_thing_version = normalized.get('thing_version') or self._gateway_thing_version
 
         incoming_sub_devices = normalized.get('sub_devices', [])
         seen_sns = set()
