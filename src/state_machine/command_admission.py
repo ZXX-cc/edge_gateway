@@ -140,10 +140,6 @@ class CommandAdmissionEngine:
         "execute_task",
         "take_off",
         "one_key_takeoff_flow",
-        "start_takeoff_to_point",
-        "takeoff_to_point",
-        "flyto",
-        "fly_to_point",
         "return_specific_home",
         "in_flight_wayline_deliver",
         "in_flight_wayline_recover",
@@ -172,6 +168,14 @@ class CommandAdmissionEngine:
     DRC_ENTER_METHODS = frozenset({"drc_mode_enter"})
     DRC_EXIT_METHODS = frozenset({"drc_mode_exit"})
     DRC_HEARTBEAT_METHODS = frozenset({"heart_beat", "drc_heartbeat"})
+    DRC_POINT_FLIGHT_METHODS = frozenset({
+        "start_takeoff_to_point",
+        "takeoff_to_point",
+        "flyto",
+        "fly_to_point",
+        "fly_to_point_update",
+        "fly_to_point_stop",
+    })
     DRC_CONTROL_METHODS = frozenset({
         "drc_speed_push",
         "drc_heading_push",
@@ -182,15 +186,13 @@ class CommandAdmissionEngine:
         "payload_control",
         "flight_authority_grab",
         "drc_gimbal_speed_push",
-        "fly_to_point_stop",
-        "fly_to_point_update",
         "camera_screen_drag",
         "camera_aim",
         "camera_screen_split",
         "poi_mode_enter",
         "poi_mode_exit",
         "poi_circle_speed_set",
-    })
+    }) | DRC_POINT_FLIGHT_METHODS
 
     OTA_METHODS = frozenset({
         "ota_create",
@@ -249,7 +251,11 @@ class CommandAdmissionEngine:
             )
 
         if snapshot.safety in {"blocking_hms_alarm", "low_battery"}:
-            if method in self.MISSION_START_METHODS or method in self.DRC_ENTER_METHODS:
+            if (
+                method in self.MISSION_START_METHODS
+                or method in self.DRC_ENTER_METHODS
+                or method in self.DRC_POINT_FLIGHT_METHODS
+            ):
                 return self._reject(
                     snapshot,
                     "blocking_hms_alarm",
@@ -259,7 +265,12 @@ class CommandAdmissionEngine:
                 )
 
         if snapshot.ota in self.OTA_BUSY_STATES and method not in self.OTA_CANCEL_METHODS:
-            if method in self.MISSION_START_METHODS or method in self.DRC_ENTER_METHODS or method in self.DOCK_CONTROL_METHODS:
+            if (
+                method in self.MISSION_START_METHODS
+                or method in self.DRC_ENTER_METHODS
+                or method in self.DRC_POINT_FLIGHT_METHODS
+                or method in self.DOCK_CONTROL_METHODS
+            ):
                 return self._reject(
                     snapshot,
                     "ota_in_progress",

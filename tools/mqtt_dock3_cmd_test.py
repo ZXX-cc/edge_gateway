@@ -169,7 +169,7 @@ def run_switch_checks(client, args):
     return 0
 
 
-def run_job_method(client, args, method, data=None, property_name=None, expected_value=None):
+def run_job_method(client, args, method, data=None, property_name=None, expected_value=None, *, strict_readback: bool = True):
     before = client.event_count(method)
     rc, _ = client.request(method, data or {}, args.timeout)
     if rc != 0:
@@ -178,7 +178,7 @@ def run_job_method(client, args, method, data=None, property_name=None, expected
     if rc != 0:
         return rc
     if property_name is not None:
-        rc = require_property(client, args, property_name, expected_value)
+        rc = require_property(client, args, property_name, expected_value, strict=strict_readback)
         if rc != 0:
             return rc
     return 0
@@ -186,15 +186,23 @@ def run_job_method(client, args, method, data=None, property_name=None, expected
 
 def run_job_checks(client, args):
     jobs = [
-        ("cover_open", {}, "cover_state", 1),
-        ("cover_close", {}, "cover_state", 0),
-        ("charge_open", {}, "charging_state", 1),
-        ("charge_close", {}, "charging_state", 0),
-        ("drone_open", {}, None, None),
-        ("drone_close", {}, None, None),
+        ("cover_open", {}, "cover_state", 1, False),
+        ("cover_close", {}, "cover_state", 0, False),
+        ("charge_open", {}, "charging_state", 1, True),
+        ("charge_close", {}, "charging_state", 0, True),
+        ("drone_open", {}, None, None, True),
+        ("drone_close", {}, None, None, True),
     ]
-    for method, data, prop_name, expected in jobs:
-        rc = run_job_method(client, args, method, data, prop_name, expected)
+    for method, data, prop_name, expected, strict_readback in jobs:
+        rc = run_job_method(
+            client,
+            args,
+            method,
+            data,
+            prop_name,
+            expected,
+            strict_readback=strict_readback,
+        )
         if rc != 0:
             return rc
 

@@ -94,7 +94,7 @@ python -m unittest -v tests.test_global_state_machine
 python tools/global_state_machine_admission_audit.py
 ```
 
-通过标准：单测全通过，审计脚本输出 `status=passed`、`passed=11`、`total=11`，
+通过标准：单测全通过，审计脚本输出 `status=passed`、`passed=13`、`total=13`，
 并在 `logs/acceptance_evidence/global_state_machine_admission_summary.json`
 保存 summary。该脚本只验证准入规则，不替代 MQTT/E2E；状态机代码变更后仍需
 继续跑 11 段全链路确认不会误拦截既有 P0/P1 正常命令。
@@ -120,6 +120,18 @@ Wayline、一键启航和 firmware/config 前自动执行 `drc_mode_exit`；同�
 `tools/mqtt_dock3_drc_test.py` 在失败路径也会清理 DRC，避免 `drc_active`
 污染后续阶段。当前纯模拟无实时 MAVLink sender 时，DRC 的 `drone_control`
 允许 `315000` 作为非阻塞通信结果，真实飞行动作仍保持严格校验。
+
+2026-07-14 状态清理复测显示：CMD 舱盖命令 reply/event 已成功，但模拟器
+`cover_state` 回读可能滞后，导致脚本提前失败并未执行后续 `cover_close`，进而
+污染 Wayline 的 `dock_not_ready` 准入。`tools/mqtt_dock3_cmd_test.py` 已将
+舱盖开/关回读改为非阻塞告警，保证命令成功后继续执行关盖恢复；充电状态回读
+仍保持严格校验。全局状态机同时把 `takeoff_to_point`、`fly_to_point_update`、
+`fly_to_point_stop` 等归入 DRC 指点飞行控制：DRC 激活时允许进入业务 handler，
+DRC 未激活时仍按非法状态迁移拒绝，不再误判为“新航线任务”。此外，
+`tools/e2e_takeoff_flow_test.py` 已适配当前真实执行策略：当网关明确拒绝
+`simulate_mission` 并返回 `simulate_mission is disabled; real flight execution is required`
+时，脚本记录为真实执行保护生效；如需强制旧离线模拟闭环，可显式增加
+`--fail-on-simulate-disabled`。
 
 ## 3. 启动前检查
 

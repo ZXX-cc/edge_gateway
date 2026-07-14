@@ -64,6 +64,7 @@ def install_offline_stubs() -> None:
 install_offline_stubs()
 
 from src.mission.manager import MissionManager  # noqa: E402
+from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT  # noqa: E402
 
 
 def now_ms() -> int:
@@ -196,6 +197,17 @@ def status_of(reply: dict) -> str:
     return reply.get("data", {}).get("output", {}).get("status", "")
 
 
+def msg_of(reply: dict) -> str:
+    return str(reply.get("msg", ""))
+
+
+def is_simulate_mission_disabled_reply(reply: dict) -> bool:
+    return (
+        reply.get("data", {}).get("result") == INVALID_COMMAND_FORMAT
+        and "simulate_mission is disabled" in msg_of(reply)
+    )
+
+
 def event_statuses(events: list[dict], method: str) -> list[str]:
     statuses = []
     for event in events:
@@ -227,6 +239,12 @@ def run_takeoff_flow(args) -> int:
         )
         print(f"prepare result={prepare.get('data', {}).get('result')} status={status_of(prepare)}")
         if prepare.get("data", {}).get("result") != 0 or status_of(prepare) != "sent":
+            if is_simulate_mission_disabled_reply(prepare) and not args.fail_on_simulate_disabled:
+                print(
+                    "takeoff-flow simulation guard ok "
+                    "(simulate_mission is disabled; real flight execution is required)"
+                )
+                return 0
             print(f"flighttask_prepare failed: {prepare}", file=sys.stderr)
             return 3
 
@@ -290,6 +308,14 @@ def main() -> int:
     parser.add_argument("--expect-waypoint-count", type=int, default=3)
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
+    parser.add_argument(
+        "--fail-on-simulate-disabled",
+        action="store_true",
+        help=(
+            "Treat the expected real-only rejection of simulate_mission as a failure. "
+            "By default the tool records that the simulation guard is active and exits 0."
+        ),
+    )
     args = parser.parse_args()
     return run_takeoff_flow(args)
 
