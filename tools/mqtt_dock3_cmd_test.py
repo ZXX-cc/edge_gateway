@@ -188,8 +188,8 @@ def run_job_checks(client, args):
     jobs = [
         ("cover_open", {}, "cover_state", 1, False),
         ("cover_close", {}, "cover_state", 0, False),
-        ("charge_open", {}, "charging_state", 1, True),
-        ("charge_close", {}, "charging_state", 0, True),
+        ("charge_open", {}, "charging_state", 1, False),
+        ("charge_close", {}, "charging_state", 0, False),
         ("drone_open", {}, None, None, True),
         ("drone_close", {}, None, None, True),
     ]

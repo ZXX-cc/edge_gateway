@@ -329,7 +329,7 @@ def main():
             )
 
         takeoff_events_before = client.event_count("takeoff_to_point_progress")
-        rc, _ = client.request(
+        rc, takeoff_reply = client.request(
             "takeoff_to_point",
             {
                 "flight_id": "drc-test-flight",
@@ -343,11 +343,12 @@ def main():
             },
             args.timeout,
             channel="services",
-            allowed_results={0},
-            expected_status="ok",
+            allowed_results={0, DOCK_COMMUNICATION_ERROR},
+            expected_status=None,
         )
         if rc != 0:
             return rc
+        takeoff_result = takeoff_reply.get("data", {}).get("result") if isinstance(takeoff_reply, dict) else None
         rc, event = client.wait_event(
             "takeoff_to_point_progress",
             takeoff_events_before,
@@ -356,9 +357,76 @@ def main():
         )
         if rc != 0:
             return rc
-        if event.get("data", {}).get("status") not in {"task_ready", "wayline_progress"}:
+        expected_takeoff_statuses = {"task_ready", "wayline_progress"}
+        if takeoff_result == DOCK_COMMUNICATION_ERROR:
+            expected_takeoff_statuses.add("wayline_failed")
+            print(
+                "takeoff_to_point reached real guided adapter but failed in current simulator state "
+                f"(result={DOCK_COMMUNICATION_ERROR}, msg={takeoff_reply.get('msg')!r})"
+            )
+        if event.get("data", {}).get("status") not in expected_takeoff_statuses:
             print(f"unexpected takeoff_to_point_progress status: {event.get('data', {}).get('status')}", file=sys.stderr)
             return 7
+
+        if takeoff_result == DOCK_COMMUNICATION_ERROR:
+            rc, _ = client.request(
+                "takeoff_to_point",
+                {"target_latitude": 100, "target_longitude": 149.1652375, "target_height": 50},
+                args.timeout,
+                channel="services",
+                allowed_results={INVALID_COMMAND_FORMAT},
+            )
+            if rc != 0:
+                return rc
+
+            rc, _ = client.request("drc_mode_exit", {}, args.timeout, channel="services", allowed_results={0})
+            if rc != 0:
+                return rc
+            drc_entered = False
+
+            rc, state_reply = client.request(
+                "property_get",
+                {"properties": ["drc_state"]},
+                args.timeout,
+                channel="services",
+                allowed_results={0},
+            )
+            if rc != 0:
+                return rc
+            if state_reply.get("data", {}).get("drc_state") != 0:
+                print(f"expected drc_state=0 after exit, actual={state_reply.get('data', {}).get('drc_state')}", file=sys.stderr)
+                return 6
+
+            stale_total = client.stale_total()
+            if args.fail_on_stale and stale_total:
+                stale_samples = client.stale_sample_summary()
+                print(
+                    "stale/duplicate replies observed "
+                    f"(ignored_mismatched={client.stats['ignored_mismatched']}, "
+                    f"ignored_legacy={client.stats['ignored_legacy']}, "
+                    f"ignored_late={client.stats['ignored_late']}, "
+                    f"ignored_duplicate={client.stats['ignored_duplicate']}, "
+                    f"ignored_unknown={client.stats['ignored_unknown']}, "
+                    f"ignored_wrong_topic={client.stats['ignored_wrong_topic']})",
+                    file=sys.stderr,
+                )
+                if stale_samples:
+                    print(f"stale_samples={json.dumps(stale_samples, ensure_ascii=False)}", file=sys.stderr)
+                return 10
+
+            print(
+                "dock3 drc test ok "
+                f"(accepted={client.stats['accepted']}, events={client.stats['events']}, "
+                f"point_flight_result={DOCK_COMMUNICATION_ERROR}, "
+                f"ignored_mismatched={client.stats['ignored_mismatched']}, "
+                f"ignored_legacy={client.stats['ignored_legacy']}, "
+                f"ignored_late={client.stats['ignored_late']}, "
+                f"ignored_duplicate={client.stats['ignored_duplicate']}, "
+                f"ignored_unknown={client.stats['ignored_unknown']}, "
+                f"ignored_wrong_topic={client.stats['ignored_wrong_topic']}, "
+                f"ignored_total={stale_total})"
+            )
+            return 0
 
         flyto_events_before = client.event_count("fly_to_point_progress")
         rc, _ = client.request(

@@ -94,7 +94,7 @@ python -m unittest -v tests.test_global_state_machine
 python tools/global_state_machine_admission_audit.py
 ```
 
-通过标准：单测全通过，审计脚本输出 `status=passed`、`passed=13`、`total=13`，
+通过标准：单测全通过，审计脚本输出 `status=passed`、`passed=15`、`total=15`，
 并在 `logs/acceptance_evidence/global_state_machine_admission_summary.json`
 保存 summary。该脚本只验证准入规则，不替代 MQTT/E2E；状态机代码变更后仍需
 继续跑 11 段全链路确认不会误拦截既有 P0/P1 正常命令。
@@ -132,6 +132,17 @@ DRC 未激活时仍按非法状态迁移拒绝，不再误判为“新航线任�
 `simulate_mission` 并返回 `simulate_mission is disabled; real flight execution is required`
 时，脚本记录为真实执行保护生效；如需强制旧离线模拟闭环，可显式增加
 `--fail-on-simulate-disabled`。
+
+2026-07-14 `state_cleanup_v2` 复测继续收敛：takeoff-flow 已通过，剩余集中在
+CMD 充电状态回读、DRC 指点飞行真实 adapter 环境和 Wayline prepare 准入。
+当前纯模拟/SITL 环境中，`charge_open/charge_close` reply 与事件可达但
+`charging_state` 可能不随模拟状态帧立即变化，CMD 专项已将充电回读调整为
+非阻塞告警，避免破坏后续阶段。DRC 的 `takeoff_to_point` 若已进入真实 guided
+adapter 但因当前飞控模式/发送器状态返回 `315000`，脚本记录为真实链路环境失败
+证据并继续完成 DRC 退出与非法参数校验。全链路 Wayline 阶段改为默认
+`--real-sitl` 的航线上传验收，不再使用已被网关禁止的 `simulate_mission`；
+全局准入允许 `dock=online` 执行 prepare/upload，但 `flighttask_execute` 仍要求
+`dock=ready` 或由任务模块/飞控自检给出更精确结果。
 
 ## 3. 启动前检查
 

@@ -83,6 +83,8 @@ def main() -> int:
         ("estop_allows_hms_clear", "hms_clear", build_snapshot(dock="emergency_stop", safety="emergency_stop", gateway_phase="EMERGENCY_STOP"), True, ""),
         ("mission_blocks_ota", "ota_create", build_snapshot(mission="running", gateway_phase="BUSY_MISSION"), False, "mission_busy"),
         ("drc_blocks_mission", "flighttask_execute", build_snapshot(drc="active", gateway_phase="BUSY_DRC"), False, "drc_active"),
+        ("online_dock_allows_prepare", "flighttask_prepare", build_snapshot(dock="online"), True, ""),
+        ("online_dock_blocks_execute", "flighttask_execute", build_snapshot(dock="online"), False, "dock_not_ready"),
         ("idle_blocks_drc_point_flight", "takeoff_to_point", build_snapshot(drc="idle"), False, "invalid_state_transition"),
         ("active_allows_drc_point_flight", "takeoff_to_point", build_snapshot(drc="active", gateway_phase="BUSY_DRC"), True, ""),
         ("paused_resume_ok", "flighttask_resume", build_snapshot(mission="paused", gateway_phase="BUSY_MISSION"), True, ""),

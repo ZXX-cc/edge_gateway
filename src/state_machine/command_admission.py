@@ -144,6 +144,16 @@ class CommandAdmissionEngine:
         "in_flight_wayline_deliver",
         "in_flight_wayline_recover",
     })
+    MISSION_PREPARE_METHODS = frozenset({
+        "flighttask_prepare",
+        "flighttask_create",
+        "wayline_task_create",
+        "wayline_mission_upload",
+        "load_wayline",
+        "upload_wayline",
+        "in_flight_wayline_deliver",
+        "in_flight_wayline_recover",
+    })
 
     MISSION_CONTROL_METHODS = frozenset({
         "flighttask_pause",
@@ -321,7 +331,14 @@ class CommandAdmissionEngine:
             return self._reject(snapshot, "ota_in_progress", "OTA/配置升级进行中，不能开始航线/飞行任务", ["ota.idle"], GLOBAL_STATE_CONFLICT)
         if snapshot.aircraft == "offline":
             return self._reject(snapshot, "aircraft_offline", "飞控未在线，不能开始航线/飞行任务", ["aircraft.online"], GLOBAL_ADMISSION_REJECTED)
-        if snapshot.dock not in {"ready", "unknown"}:
+        allowed_dock_states = {"ready", "unknown"}
+        if method in self.MISSION_PREPARE_METHODS:
+            # ``online`` means the dock status frame and PLC heartbeat are
+            # available but the transient takeoff_allowed bit is not asserted.
+            # Preparation/upload is still useful in this state; the mission
+            # module's self-check reports more precise failures before execute.
+            allowed_dock_states.add("online")
+        if snapshot.dock not in allowed_dock_states:
             reason = "dock_busy" if snapshot.dock == "busy" else "dock_not_ready"
             return self._reject(
                 snapshot,
