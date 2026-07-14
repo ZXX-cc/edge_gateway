@@ -72,6 +72,7 @@ from src.database.connection import (
 )
 from src.database.telemetry_db import TelemetryDB
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
+from src.state_machine import CommandAdmissionEngine, GatewayEventReducer, GatewayStateProvider
 
 logger = get_logger("main")
 
@@ -164,6 +165,8 @@ class EdgeGateway:
         self.custom_data: CustomDataManager = None
         self.waypoint_manager: WaypointManager = None
         self.rtk_module: RTKModule = None
+        self.global_state: GatewayEventReducer = None
+        self.command_admission: CommandAdmissionEngine = None
 
     def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
@@ -232,6 +235,21 @@ class EdgeGateway:
             self.cloud_conn = CloudConnectionManager(self.mqtt)
             self.telemetry_reporter = TelemetryReporter(self.mqtt)
             self.capability_reporter = CapabilityReporter(self.mqtt)
+
+            # 8.1 初始化全局状态机/命令准入层。具体 MAVLink/机巢源会在 start()
+            # 中创建后再次注入，初始化阶段先覆盖 MQTT、设备、任务、DRC、Dock。
+            self.global_state = GatewayEventReducer(
+                GatewayStateProvider(
+                    mqtt=self.mqtt,
+                    device=self.device,
+                    mission=self.mission,
+                    drc=self.drc,
+                    dock=self.dock,
+                    telemetry=self.telemetry,
+                )
+            )
+            self.command_admission = CommandAdmissionEngine(self.global_state)
+            self.mqtt.set_command_admission(self.command_admission)
 
             # 9. 设置回调
             self._setup_callbacks()
@@ -454,6 +472,8 @@ class EdgeGateway:
                     self._wire_nest_module_to_business()
                     self._start_nest_mavlink(nest_mavlink_config)
 
+            self._refresh_state_machine_sources()
+
             # 启动云端连接管理（上报在线、启动心跳）
             if self.cloud_conn:
                 logger.info("Starting cloud connection manager...")
@@ -475,6 +495,26 @@ class EdgeGateway:
         except Exception as e:
             logger.error(f"Start failed: {e}", exc_info=True)
             return False
+
+    def _refresh_state_machine_sources(self):
+        """Refresh global-state data sources after runtime modules are created."""
+        if not self.global_state:
+            return
+        self.global_state.set_sources(
+            mqtt=self.mqtt,
+            device=self.device,
+            mission=self.mission,
+            drc=self.drc,
+            dock=self.dock,
+            nest=self.nest_module,
+            telemetry=self.telemetry,
+            telemetry_module=self.telemetry_module,
+        )
+        logger.info(
+            "Global state machine sources refreshed: nest=%s telemetry_module=%s",
+            bool(self.nest_module),
+            bool(self.telemetry_module),
+        )
 
     def _wire_nest_module_to_business(self):
         """把机巢模块注入业务层；主飞控未连接时也允许单独测试机巢 MAVLink。"""

@@ -1,6 +1,6 @@
 # DJI Dock 3 客户需求迁移进度台账
 
-更新时间：2026-07-09
+更新时间：2026-07-14
 
 本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“客户需求相关网关能力按 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个客户需求相关字段、method、topic、reply 或 smoke test，都必须更新本文档。
 
@@ -20,7 +20,13 @@
 Dock3 49 项属性专项亦为 `status=passed`、`strict_stale_total=0`。由此关闭
 “共享 Broker 重复响应源”和“全链路严格旧消息门禁”两项环境待办。
 
-当前进度估算：**约 84%**。
+2026-07-14 进展：已新增全局状态机/命令准入第一版，包含组合状态快照、
+事件 reducer、MQTT 下行准入 hook、结构化拒绝回包、单元测试入口和独立
+验收脚本。该能力先覆盖急停、任务占用、DRC 占用、OTA 中、飞控/机巢离线、
+未暂停 resume 等跨模块冲突；真机状态枚举、HMS 文案和物理耗时语义仍按后续
+实机对接继续精校。
+
+当前进度估算：**约 85%**。
 
 估算口径：
 
@@ -28,11 +34,11 @@ Dock3 49 项属性专项亦为 `status=passed`、`strict_stale_total=0`。由此
 |---|---:|---|
 | Ubuntu 纯模拟部署与基础链路 | 93% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，服务器已通过 11 段 P0/P1 E2E；当前默认 E2E 已接入一键启航离线闭环；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 Mosquitto 重复 listener 后外围组件启动成功 |
 | Dock3 P0 协议链路 | 98% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令和错误码边界已形成测试入口；OSD/state 已完成协议级字段矩阵、单一映射入口、枚举和值域门禁，共享 Broker 旧回包已清理并完成严格复测，剩真机字段对接 |
-| 客户需求相关 method/字段迁移 | 85% | Dock 3 官方 properties 已形成 49/49 顶层目录，严格按 OSD 37/state 12 分流并新增一键覆盖验收；properties 官方可写/只读边界、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization、CMD/远程调试、Wayline P1、一键启航、Media、Live、HMS/log、firmware/config 已通过专项或服务器验证；7 类机巢故障到 HMS/events/OSD/state/MongoDB 操作记录的完整验收已通过 |
-| 非阻塞、日志、容错基础 | 67% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已通过 Ubuntu 专项复测；数据保留和云同步已补秒级/毫秒级混合时间戳清理工具及单测；NoSQL/MongoDB 仍待迁移 |
+| 客户需求相关 method/字段迁移 | 86% | Dock 3 官方 properties 已形成 49/49 顶层目录，严格按 OSD 37/state 12 分流并新增一键覆盖验收；properties 官方可写/只读边界、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization、CMD/远程调试、Wayline P1、一键启航、Media、Live、HMS/log、firmware/config 已通过专项或服务器验证；7 类机巢故障到 HMS/events/OSD/state/MongoDB 操作记录的完整验收已通过；全局命令准入第一版已实现，待 Ubuntu 验收 |
+| 非阻塞、日志、容错基础 | 70% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表/上传模拟/进度事件已通过 Ubuntu 专项复测；数据保留和云同步已补秒级/毫秒级混合时间戳清理工具及单测；全局状态快照和下行准入 hook 已加入 MQTT 热路径且保留失败开放保护；NoSQL/MongoDB 仍待迁移 |
 | 模拟器和测试工具 | 99% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/Firmware-config/P0 批量测试工具可用，`mqtt_organization_test.py` 已支持 `--bind-sub-devices` 多 SN 绑定和 paired 校验，`e2e_full_chain_test.py` 已扩展到 11 段 P0/P1 域并接入 `takeoff-flow`；11 段全量 E2E 已在共享 EMQX 完成严格零旧回包复测，OSD/state 和 MQTT reply 均已支持严格 stale 统计 |
 
-综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 84%。该百分比不是验收承诺。Dock 3 官方 49 项属性已达到结构级最大模拟覆盖，但其中 17 项物理语义仍明确要求真机确认；后续获得真实 Dock3、飞行器、负载和生产云 MQTT 样本后，按 `docs/DOCK3_OSD_STATE_FIELD_MATRIX.md` 回填实机结论。
+综合按当前目标“服务器内跑通客户需求相关 Dock3 网关模拟链路，不接真实实体设备、不交付平台侧功能”估算为约 85%。该百分比不是验收承诺。Dock 3 官方 49 项属性已达到结构级最大模拟覆盖，但其中 17 项物理语义仍明确要求真机确认；全局状态机第一版也需要 Ubuntu MQTT/E2E 日志确认不影响既有 11 段全链路。后续获得真实 Dock3、飞行器、负载和生产云 MQTT 样本后，按 `docs/DOCK3_OSD_STATE_FIELD_MATRIX.md` 回填实机结论。
 
 ## 0. 客户三文档后的当前状态
 
@@ -77,6 +83,7 @@ Dock3 49 项属性专项亦为 `status=passed`、`strict_stale_total=0`。由此
 | P0 总批量验证入口 | 已通过 Ubuntu 复测 | `tools/mqtt_dock3_p0_batch_test.py --timeout 12` 一次覆盖 `dock_status_query`、properties、DRC、错误 topic，输出 `dock3 p0 batch test ok`；`airport_bind_status` 官方链路单独走云端模拟器 |
 | P0/P1 E2E 回归入口 | 已通过 Ubuntu 共享 EMQX 严格复测 | `tools/e2e_takeoff_flow_test.py` 已在服务器单独及全链路内通过；关闭 `192.168.2.113` 旧响应端后，`tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --timeout 20 --quiet-stale --fail-on-stale --continue-on-fail` 已通过全部 11 段，输出 `dock3 e2e full-chain test ok (steps=11, elapsed=24.0s)` |
 | 旧格式重复回包 | 已定位并清理，严格门禁通过 | 被动抓包确认旧 `property_get result=-2`、无 `method` reply 和旧机场 OSD 来自 `192.168.2.113`；停止该端旧模拟器/旧网关后，属性专项和 11 段 E2E 的竞争、旧回复及严格计数均为 0 |
+| 全局状态机/命令准入 | 代码完成，待 Ubuntu 验收 | 新增 `src/state_machine/global_state.py`、`command_admission.py`、`event_reducer.py`，并在 `src/mqtt/client.py` handler 前接入；拒绝回包包含 `output.status=rejected`、`reason`、`required_state`、`current_state` 和 `3251xx` 结果码；`tools/global_state_machine_admission_audit.py` 覆盖 11 个准入场景 |
 
 ### 1.1 命令链路专用日志
 

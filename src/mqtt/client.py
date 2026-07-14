@@ -24,6 +24,7 @@ from src.utils.dji_error_codes import (
     normalize_reply_error_codes,
 )
 from src.utils.request_trace import get_request_trace_recorder
+from src.state_machine.command_admission import CommandAdmissionEngine
 
 logger = get_logger("mqtt")
 
@@ -74,6 +75,7 @@ class MQTTClient:
         self._dedup_inflight = set()
         self._dedup_ttl_seconds = max(10, int(self.config.get('dedup_ttl_seconds', 300)))
         self._dedup_max_entries = max(32, int(self.config.get('dedup_max_entries', 1024)))
+        self._command_admission: Optional[CommandAdmissionEngine] = None
 
     @staticmethod
     def _dedup_key(source_topic: str, payload: dict):
@@ -130,6 +132,11 @@ class MQTTClient:
             return
         with self._dedup_lock:
             self._dedup_inflight.discard(key)
+
+    def set_command_admission(self, admission: CommandAdmissionEngine):
+        """Inject the global command-admission engine."""
+        self._command_admission = admission
+        logger.info("Command admission engine attached to MQTT client")
 
     def connect(self) -> bool:
         """连接到NanoMQ Broker"""
@@ -875,6 +882,76 @@ class MQTTClient:
                                 payload.get("tid"),
                             )
                             return
+
+                    if is_downstream_command and self._command_admission:
+                        try:
+                            admission = self._command_admission.check(method, payload, msg.topic)
+                        except Exception as admission_error:
+                            self._trace.record(
+                                "mqtt_command_admission_error",
+                                direction="in",
+                                topic=msg.topic,
+                                payload=payload,
+                                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                                error=str(admission_error),
+                            )
+                            trace_command(
+                                "mqtt_command_admission_error",
+                                source_topic=msg.topic,
+                                method=method,
+                                tid=payload.get("tid"),
+                                error=str(admission_error),
+                            )
+                            logger.error(
+                                "Command admission failed open: topic=%s method=%s tid=%s error=%s",
+                                msg.topic,
+                                method,
+                                payload.get("tid"),
+                                admission_error,
+                                exc_info=True,
+                            )
+                        else:
+                            if not admission.accepted:
+                                reply = admission.build_reply(payload, self.gateway_sn)
+                                self._remember_downstream_reply(msg.topic, payload, reply)
+                                self._trace.record(
+                                    "mqtt_command_rejected_by_admission",
+                                    direction="in",
+                                    topic=msg.topic,
+                                    payload=payload,
+                                    result=self._reply_result(reply),
+                                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                                    extra={
+                                        "reason": admission.reason,
+                                        "gateway_phase": (
+                                            admission.snapshot.gateway_phase
+                                            if admission.snapshot else ""
+                                        ),
+                                    },
+                                )
+                                trace_command(
+                                    "mqtt_command_rejected_by_admission",
+                                    source_topic=msg.topic,
+                                    method=method,
+                                    tid=payload.get("tid"),
+                                    reason=admission.reason,
+                                    result=self._reply_result(reply),
+                                    gateway_phase=(
+                                        admission.snapshot.gateway_phase
+                                        if admission.snapshot else ""
+                                    ),
+                                )
+                                logger.info(self._format_log_block("MQTT COMMAND REJECTED BY ADMISSION", [
+                                    ("topic", msg.topic),
+                                    ("method", method),
+                                    ("tid", payload.get("tid")),
+                                    ("reason", admission.reason),
+                                    ("result", self._reply_result(reply)),
+                                    ("current_state", admission.snapshot.to_dict(compact=True) if admission.snapshot else {}),
+                                ]))
+                                if payload.get('need_reply') == 1:
+                                    self._publish_reply_for_downstream_topic(msg.topic, reply)
+                                return
 
                     if method in self._background_methods:
                         self._submit_background_handler(

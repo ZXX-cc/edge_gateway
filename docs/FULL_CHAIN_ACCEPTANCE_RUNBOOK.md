@@ -60,6 +60,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
 | `tests/test_mqtt_background_handlers.py` | P0-16 本地非阻塞回归 | 慢日志/媒体 IO handler 不占用 MQTT 网络回调线程，后台完成后 reply 可达；控制类 handler 保持同步顺序 |
 | `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config |
+| `tools/global_state_machine_admission_audit.py` | 全局状态机/命令准入验收 | 未绑定、飞控离线、急停、任务占用、DRC 占用、OTA 中和非法状态迁移 |
 | `tools/mqtt_smoke_test.py` | 兼容冒烟 | 单 method smoke，不作为最终 P0/P1 正式验收 |
 
 30 天内必须可重复验收：
@@ -85,6 +86,18 @@ python -m unittest tests.test_mqtt_background_handlers
 通过标准：慢日志/媒体 handler 已启动但未完成时，MQTT 回调立即返回；解除 handler 后，同一 `tid` 在正确 reply topic 收到 `result=0`。该单测不替代 Ubuntu 上的长时间 E2E 和 DB/上传超时注入。
 
 2026-07-10 Ubuntu 已通过：`tests.test_mqtt_background_handlers` 为 2/2；随后 `mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` 输出 `accepted=8, events=5`，`mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 输出 `accepted=6, events=2`。该证据确认日志/媒体后台 handler 的 services reply 和事件链路可用，但不替代后续 DB、上传和长时间 E2E 压测。
+
+全局状态机/命令准入第一版验收命令：
+
+```bash
+python -m unittest -v tests.test_global_state_machine
+python tools/global_state_machine_admission_audit.py
+```
+
+通过标准：单测全通过，审计脚本输出 `status=passed`、`passed=11`、`total=11`，
+并在 `logs/acceptance_evidence/global_state_machine_admission_summary.json`
+保存 summary。该脚本只验证准入规则，不替代 MQTT/E2E；状态机代码变更后仍需
+继续跑 11 段全链路确认不会误拦截既有 P0/P1 正常命令。
 
 ## 3. 启动前检查
 
