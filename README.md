@@ -56,22 +56,20 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 | `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 交付 backlog：功能优先级、当前状态、30 天交付要求和验收证据 |
 | `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 实现缺口登记：代码入口、缺口、验收脚本和目标窗口 |
 | `docs/30_DAY_MILESTONE_PLAN.md` | 30 天里程碑计划：P0/P1 100% 可用、P2 风险归档、100% 开发完成和全链路验收安排 |
-| `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板：日级任务、人员分工、缺失脚本顺序和每日证据要求 |
 | `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡：44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 Runbook：启动顺序、P0/P1 验收命令、P2 边界和证据归档 |
 | `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md` | 无实体机巢/负载的故障注入、HMS、独立日志和数据保留一键验收 |
 | `docs/INTERFACE_DESIGN_SPEC.md` | 接口设计说明书：P0 字段映射、API 定义和 DJI 错误码规则 |
-| `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` | Ubuntu 部署、SITL、模拟链路和阶段进度 |
 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` | Ubuntu 服务器已有内容、从头启动、验收和故障处理 |
-| `docs/DJI_CLOUD_API_DEMO_CONNECTION_PROGRESS.md` | DJI Cloud API Demo Docker 接入记录、当前在线状态和后续事项 |
 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 自定义机巢 MAVLink 消息字段映射 |
+| `docs/archive/README.md` | 历史文档归档说明；归档内容只作追溯，不作为当前验收入口 |
 | `DJI_CLOUD_API_INTERFACES.md` | 当前 MQTT method 分组和 Dock3 验收状态 |
 | `ARCHITECTURE_DESIGN.md` | 面向 Dock3 纯模拟目标的系统架构说明 |
 | `web/README.md` | 独立 Web 调试台使用说明 |
 
 ## 快速启动顺序
 
-Ubuntu 首次部署和依赖安装见 `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md`。开发人员接手服务器、从开机状态启动完整链路时，优先看 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。日常联调时按以下顺序启动：
+Ubuntu 服务器启动、依赖和故障处理见 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。完整验收顺序、证据目录和脚本参数以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。日常联调时按以下顺序启动：
 
 ```bash
 # 1. MQTT Broker

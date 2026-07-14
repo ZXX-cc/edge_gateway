@@ -25,7 +25,6 @@
 | `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 交付 backlog，定义功能优先级、当前状态、30 天交付要求和验收证据 |
 | `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 实现缺口登记，绑定代码入口、必补脚本、目标窗口和关项规则 |
 | `docs/30_DAY_MILESTONE_PLAN.md` | 30 天里程碑计划，定义阶段节奏和 P0/P1/P2 出口 |
-| `docs/30_DAY_EXECUTION_BOARD.md` | 30 天开发执行看板，定义日级任务、人员分工、缺失脚本顺序和证据目录 |
 | `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` | 30 天交付验收评分卡，定义 44 项 backlog、90% 可用率、100% 开发完成和 P0/P1 强门禁 |
 | `docs/DOCK3_OSD_STATE_FIELD_MATRIX.md` | OSD/state 单位、枚举、来源、缺省策略和真机待对接字段矩阵 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路验收 runbook，定义启动顺序、验收命令、P2 边界和证据归档 |
@@ -33,6 +32,7 @@
 | `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` | Dock3 客户需求迁移台账和当前验证证据 |
 | `docs/DOCK3_MODULE_STATUS.md` | 模块状态总表和当前专项验收命令 |
 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` | 机巢 v1.3 MAVLink 消息和 Dock3 映射口径 |
+| `docs/archive/README.md` | 历史文档归档说明；归档文档不再作为当前开发、部署或验收入口 |
 
 ## 2. 主入口
 
@@ -183,7 +183,7 @@ src/core/connection.py
 | `tools/mqtt_dock3_wayline_test.py` | Dock3 Wayline 专项验收，覆盖任务准备、执行、进度、暂停、恢复和返航 |
 | `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环，覆盖 mock KMZ、`flighttask_prepare/execute`、机巢 `request_takeoff` 和模拟任务完成 |
 | `tools/mqtt_one_key_takeoff_sitl_test.py` | 一键启航真实 SITL 航线验收，默认使用服务器 `/home/fenghuolun/zwz/HD.kml`，覆盖 `flighttask_prepare`、`one_key_takeoff_flow`、QGC/SITL OSD 高度爬升、真实航点进度和 `flighttask_pause` 暂停 |
-| `tools/e2e_full_chain_test.py` | P0/P1 全链路回归，默认串联 MQTT 专项和一键启航离线闭环 |
+| `tools/e2e_full_chain_test.py` | P0/P1 全链路回归，串联 properties、device、绑定前置、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 等当前主验收阶段 |
 | `tools/mqtt_drc_batch_test.py` | Dock3 DRC 控制数据批量验收工具，覆盖 `stick_control/drone_control/payload_control/drc_speed_push/drc_gimbal_speed_push` |
 | `tools/mqtt_cloud_simulator.py` | 上云 API 模拟器，支持 `requests_reply` 和 `status_reply` 模拟 |
 | `tools/mqtt_organization_test.py` | Dock3 organization 查询、绑定、事件、拓扑和持久化验收工具 |

@@ -13,7 +13,7 @@
 
 最终验收口径：客户总需求定义业务范围，**DJI Dock 3 官方 Cloud API 定义客户需求相关协议和字段标准**。客户暂未提及、当前业务未用到的 Dock3 能力可以标为 Deferred，不纳入 30 天 P0/P1 强迁移。客户未要求 Web 调试台或前端页面，Web/Demo 页面只作为可选联调参考，不作为交付项。
 
-P0/P1/P2 详细功能清单和验收证据以 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 为准。日级开发排期以 `docs/30_DAY_EXECUTION_BOARD.md` 为准。90% 可用率、100% 开发完成和 P0/P1 强门禁以 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` 为准。全链路启动、脚本执行和证据归档以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。本文档只定义 30 天节奏和阶段出口。
+P0/P1/P2 详细功能清单和验收证据以 `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 为准。90% 可用率、100% 开发完成和 P0/P1 强门禁以 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md` 为准。全链路启动、脚本执行和证据归档以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。早期日级执行看板已归档到 `docs/archive/30_DAY_EXECUTION_BOARD.md`，不再作为当前推进入口。本文档只定义 30 天节奏和阶段出口。
 
 ## 0. 优先级口径
 

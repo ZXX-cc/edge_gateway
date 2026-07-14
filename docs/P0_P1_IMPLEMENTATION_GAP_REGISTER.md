@@ -6,7 +6,7 @@
 
 客户三文档章节到 backlog 和 gap 的追溯关系见 `docs/CUSTOMER_REQUIREMENTS_TRACEABILITY_MATRIX.md`。
 
-缺口的日级执行顺序见 `docs/30_DAY_EXECUTION_BOARD.md`。
+缺口关闭顺序以 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`、`docs/DOCK3_MODULE_STATUS.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 的最新验收状态为准。早期日级执行看板已归档到 `docs/archive/30_DAY_EXECUTION_BOARD.md`，仅作追溯。
 
 执行原则：
 

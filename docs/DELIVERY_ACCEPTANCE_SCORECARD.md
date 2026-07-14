@@ -1,6 +1,6 @@
 # 30 天交付验收评分卡
 
-更新时间：2026-07-10
+更新时间：2026-07-14
 
 本文档用于把“90% 功能可用、100% 功能开发完毕、P0/P1 必须可用、P2 可有少量问题”转换成可执行的**网关侧**交付判定规则。它不替代 `docs/P0_P1_P2_DELIVERY_BACKLOG.md`，而是给第 30 天验收提供统一计分口径。
 
@@ -10,7 +10,7 @@
 
 Method 级覆盖以 `docs/METHOD_COVERAGE_LEDGER.md` 为准：当前 `src/main.py` 静态注册 243 个 MQTT method，第 30 天必须全部有 Customer Required、Integration Support、Dock3 official、legacy、adapter、P2 或 Deferred 处置状态。客户暂未提及/当前业务未用到的 Dock3 能力可以 Deferred，不计入 P0/P1 强门禁。
 
-日级开发节奏和每日证据要求以 `docs/30_DAY_EXECUTION_BOARD.md` 为准。
+当前开发节奏、验收命令和证据要求以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md`、`docs/DOCK3_MODULE_STATUS.md` 和 backlog 文档为准。早期日级执行看板已归档到 `docs/archive/30_DAY_EXECUTION_BOARD.md`，不再作为当前交付入口。
 
 ## 1. 计分范围
 
@@ -73,16 +73,16 @@ P2 问题影响 P0/P1 = 0 项
 
 | 优先级 | Usable | Partial / In Progress | Missing / Pending | 当前风险 |
 |---|---:|---:|---:|---|
-| P0 | 12 | 5 | 0 | P0-07/08/12/16 仍需 SITL 模式/飞控、实体机巢耗时动作或非阻塞审计；P0-13 故障状态模拟验收和 P0-17 核心 E2E 已通过 |
-| P1 | 15 | 2 | 0 | DRC、指点飞行、KMZ 基础解析、真实 SITL 下发/起飞/第 1 航点进度、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 P0/P1 E2E 已形成可用证据；真实 HD 航线终止语义、以及一键启航 Ubuntu MQTT 与机巢耗时状态机仍需继续实跑 |
+| P0 | 15 | 2 | 0 | 纯模拟/网关侧 P0 主链路已通过全局状态机、状态清理和 11 段 E2E；P0-07/08 的真实飞控模式/基础飞控行为仍需更完整 SITL/硬件证据，P0-16 仍需生产级非阻塞压测 |
+| P1 | 16 | 1 | 0 | DRC、指点飞行、KMZ 基础解析、真实 SITL 下发/起飞/航点推进、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留、全局状态机和 P0/P1 E2E 已形成可用证据；真实 HD 航线完整终态/返航语义仍需继续实跑 |
 | P2 | 0 | 0 | 10 | P2 目前只有规划口径，仍需 adapter/mock/限制说明 |
-| 合计 | 27 | 7 | 10 | 当前不能声称达到 90% 可用或 100% 开发完成 |
+| 合计 | 31 | 3 | 10 | 纯模拟/网关侧 P0/P1 主链路已显著收敛；因 P2 尚未形成 6 项可用或有限可用，仍不能声称达到最终 90% 总可用或 100% 开发完成 |
 
 当前最重要结论：
 
-- P0 尚未 100% 可用，不能进入交付声明。
-- P1 已形成 DRC、指点飞行、Wayline mock KMZ、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留和 E2E 回归的局部可用闭环。
-- P0/P1 合计已有 27/34 项可用，但 P0/P1 强门禁仍未关闭，不能用“整体模拟链路约 82%”替代交付验收结论。
+- P0/P1 纯模拟/网关侧主链路已经通过全局状态机和 11 段 E2E，但真实硬件、真实推流、真实 OTA、完整真实 SITL 航线终态仍不能用模拟证据替代。
+- P1 已形成 DRC、指点飞行、Wayline、media、live、相机/云台 MAVLink/SITL 控制、HMS/log、firmware/config、多设备/解绑/离线、远程调试进阶失败码、短周期数据保留、全局状态机和 E2E 回归的可用闭环。
+- P0/P1 合计已有 31/34 项可用或基本可用；最终交付仍必须关闭剩余真实行为证据，并补齐 P2 adapter/mock/限制说明。
 - P2 不能空白；即使允许有问题，也必须在第 30 天前补齐入口、日志、错误码和限制说明。
 
 ## 5. P0 评分卡
@@ -162,7 +162,7 @@ P2 可以存在已记录问题，但不能空白。第 30 天至少 6 项要达�
 
 - `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 中所有 P0/P1 命令输出。
 - `docs/METHOD_COVERAGE_LEDGER.md` 中 243 个 method 的处置状态；Deferred method 必须说明客户暂未使用和后续触发条件。
-- `docs/30_DAY_EXECUTION_BOARD.md` 中 Day 1-30 的每日证据和失败清单。
+- `docs/DOCK3_MODULE_STATUS.md`、`docs/DOCK3_FULL_MIGRATION_PROGRESS.md` 和证据目录中的最新专项/E2E 输出。
 - P2 风险清单和影响范围。
 - MQTT 订阅、trace 或数据库证据。
 - 网关日志、operation record、tid/bid trace。

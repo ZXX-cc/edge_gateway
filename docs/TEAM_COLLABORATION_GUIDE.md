@@ -23,8 +23,8 @@
 | `docs/P0_P1_P2_DELIVERY_BACKLOG.md` | P0/P1/P2 功能 backlog 和交付证据 |
 | `docs/P0_P1_IMPLEMENTATION_GAP_REGISTER.md` | P0/P1 代码缺口、必补脚本和目标窗口 |
 | `docs/30_DAY_MILESTONE_PLAN.md` | 30 天阶段计划 |
-| `docs/30_DAY_EXECUTION_BOARD.md` | 日级执行看板、人员分工和每日证据要求 |
 | `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` | 全链路启动、验收命令和证据归档 |
+| `docs/DOCK3_MODULE_STATUS.md` | 当前模块完成度、已通过专项和下一步 |
 
 执行规则：
 
@@ -166,7 +166,7 @@
   - `tools/mqtt_dock3_firmware_config_test.py`
   - `tools/e2e_takeoff_flow_test.py`
   - `tools/e2e_full_chain_test.py`
-- 维护 `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md`。
+- 维护 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 中的服务器启动、SITL、机巢模拟器和验收命令。
 
 ### 交付物
 
@@ -216,7 +216,7 @@
 | P0/P1/P2 优先级或验收状态 | `docs/P0_P1_P2_DELIVERY_BACKLOG.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` |
 | Dock3 字段、method、topic、枚举、错误码 | `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`、`docs/DJI_DOCK3_MIGRATION_GUIDE.md` 和 `DJI_CLOUD_API_INTERFACES.md` |
 | MAVLink 自定义消息字段 | `docs/DRONE_NEST_MAVLINK_MAPPING.md` |
-| 启动命令、端口、部署依赖 | `docs/UBUNTU_DEPLOYMENT_AND_SITL_PLAN.md` |
+| 启动命令、端口、部署依赖 | `docs/UBUNTU_SERVER_STARTUP_GUIDE.md` 和 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` |
 | 模块职责或目录结构 | `docs/PROJECT_FILE_GUIDE.md` |
 | 主线程、异步化、数据存储架构 | `docs/SYSTEM_OVERVIEW.md` 和 `ARCHITECTURE_DESIGN.md` |
 
