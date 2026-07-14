@@ -6,8 +6,8 @@ The DRC official page keeps the control channel under:
     thing/product/{gateway_sn}/drc/down
 
 This module keeps field validation and compatibility mapping in one place.
-The current gateway still keeps legacy simulated fields during migration, but
-official Dock3 fields should be preferred by new tests.
+Runtime handlers must not report simulated success for methods that need a
+real aircraft, payload, or DRC adapter.
 """
 import math
 import time
@@ -33,6 +33,52 @@ DRONE_YAW_SPEED_MAX = 90.0
 TAKEOFF_POINT_MIN_HEIGHT = 5.0
 TAKEOFF_POINT_MAX_HEIGHT = 500.0
 TAKEOFF_POINT_MAX_SPEED = 17.0
+
+OFFICIAL_DOCK3_DRC_METHODS = frozenset({
+    "obstacle_avoidance_notify",
+    "fly_to_point_progress",
+    "takeoff_to_point_progress",
+    "drc_status_notify",
+    "joystick_invalid_notify",
+    "camera_photo_take_progress",
+    "flight_authority_grab",
+    "payload_authority_grab",
+    "drc_mode_enter",
+    "drc_mode_exit",
+    "takeoff_to_point",
+    "fly_to_point",
+    "fly_to_point_stop",
+    "fly_to_point_update",
+    "camera_frame_zoom",
+    "camera_mode_switch",
+    "camera_photo_take",
+    "camera_photo_stop",
+    "camera_recording_start",
+    "camera_recording_stop",
+    "camera_screen_drag",
+    "camera_aim",
+    "camera_focal_length_set",
+    "gimbal_reset",
+    "camera_look_at",
+    "camera_screen_split",
+    "photo_storage_set",
+    "video_storage_set",
+    "camera_exposure_mode_set",
+    "camera_exposure_set",
+    "camera_focus_mode_set",
+    "camera_focus_value_set",
+    "camera_point_focus_action",
+    "ir_metering_mode_set",
+    "ir_metering_point_set",
+    "ir_metering_area_set",
+    "stick_control",
+    "drone_control",
+    "drone_emergency_stop",
+    "heart_beat",
+    "hsi_info_push",
+    "delay_info_push",
+    "osd_info_push",
+})
 
 
 def _is_number(value: Any) -> bool:

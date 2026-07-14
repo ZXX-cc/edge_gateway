@@ -145,6 +145,25 @@ class DrcController:
             return conn.mav, conn
         return None, conn
 
+    def _has_real_flight_adapter(self) -> bool:
+        if self._mode_control and hasattr(self._mode_control, "set_mode"):
+            return True
+        mav, _ = self._get_mav_sender()
+        return bool(mav)
+
+    def _real_adapter_unavailable(self, msg: dict, reason: str) -> dict:
+        logger.warning(
+            "Dock3 DRC real adapter unavailable: method=%s, reason=%s",
+            msg.get("method"),
+            reason,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=DOCK_COMMUNICATION_ERROR,
+            msg_str=reason,
+            data={"output": {"status": "failed"}},
+        )
+
     def _send_mavlink_message(self, msg) -> bool:
         """发送MAVLink消息"""
         conn = self._get_mavlink_connection()
@@ -163,8 +182,8 @@ class DrcController:
         """
         mav, master = self._get_mav_sender()
         if not mav or not hasattr(mav, "set_position_target_local_ned_send"):
-            logger.warning("MAVLink sender not available, DRC velocity command simulated")
-            return False, True, "MAVLink sender not available"
+            logger.warning("MAVLink sender not available, DRC velocity command not sent")
+            return False, False, "MAVLink sender not available"
 
         try:
             mav.set_position_target_local_ned_send(
@@ -190,7 +209,7 @@ class DrcController:
     def _set_safe_mode(self) -> tuple:
         """切到安全悬停模式，优先 LOITER，失败后尝试 QLOITER。"""
         if not self._mode_control or not hasattr(self._mode_control, "set_mode"):
-            return False, True, "mode_control not available"
+            return False, False, "mode_control not available"
 
         last_message = ""
         for mode in ("LOITER", "QLOITER"):
@@ -230,7 +249,7 @@ class DrcController:
                 last_message = result.get("message", f"{mode} failed")
             return False, False, last_message
 
-        return False, True, "mode control not available"
+        return False, False, "mode control not available"
 
     @staticmethod
     def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -541,6 +560,12 @@ class DrcController:
             logger.warning("DRC enter payload invalid: %s", reason)
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
 
+        if not self._has_real_flight_adapter():
+            return self._real_adapter_unavailable(
+                msg,
+                "drc_mode_enter requires a real flight control adapter",
+            )
+
         if self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC already enabled")
 
@@ -669,6 +694,11 @@ class DrcController:
 
     def handle_flight_authority_grab(self, msg: dict) -> dict:
         """获取飞行控制权，供 Dock3 联调脚本验证控制链路。"""
+        if not self._has_real_flight_adapter():
+            return self._real_adapter_unavailable(
+                msg,
+                "flight_authority_grab requires a real flight control adapter",
+            )
         self._flight_authority_grabbed = True
         logger.info("Flight authority grabbed")
         return MessageBuilder.build_reply(
@@ -1174,23 +1204,33 @@ class DrcController:
         }
         logger.info("Fly to point update: id=%s, max_speed=%s, points=%s", fly_to_id, max_speed, points)
 
-        simulated = True
-        warning = ""
-        if self._mode_control and hasattr(self._mode_control, 'guided_goto'):
-            try:
-                result = self._mode_control.guided_goto(
-                    first_point["latitude"],
-                    first_point["longitude"],
-                    first_point["height"],
-                )
-                if result.get("success"):
-                    simulated = False
-                else:
-                    warning = result.get("message", "guided_goto failed")
-                    logger.warning("fly_to_point_update guided_goto failed: %s", warning)
-            except Exception as exc:
-                warning = str(exc)
-                logger.warning("fly_to_point_update guidance dispatch failed: %s", warning)
+        if not self._mode_control or not hasattr(self._mode_control, 'guided_goto'):
+            self.report_flyto_progress(fly_to_id, "wayline_failed", result=DOCK_COMMUNICATION_ERROR)
+            self._active_fly_to_point = None
+            return self._real_adapter_unavailable(
+                msg,
+                "fly_to_point_update requires a real guided flight adapter",
+            )
+
+        try:
+            result = self._mode_control.guided_goto(
+                first_point["latitude"],
+                first_point["longitude"],
+                first_point["height"],
+            )
+        except Exception as exc:
+            self.report_flyto_progress(fly_to_id, "wayline_failed", result=DOCK_COMMUNICATION_ERROR)
+            self._active_fly_to_point = None
+            return self._real_adapter_unavailable(
+                msg,
+                f"fly_to_point_update guided dispatch failed: {exc}",
+            )
+        if not result.get("success"):
+            warning = result.get("message", "guided_goto failed")
+            logger.warning("fly_to_point_update guided_goto failed: %s", warning)
+            self.report_flyto_progress(fly_to_id, "wayline_failed", result=DOCK_COMMUNICATION_ERROR)
+            self._active_fly_to_point = None
+            return self._real_adapter_unavailable(msg, warning)
 
         self.report_flyto_progress(
             fly_to_id,
@@ -1208,8 +1248,8 @@ class DrcController:
                 "target_point": first_point,
                 "output": {
                     "status": "ok",
-                    "simulated": simulated,
-                    "warning": warning,
+                    "simulated": False,
+                    "warning": "",
                 },
             },
         )
@@ -1234,8 +1274,7 @@ class DrcController:
         yaw_speed = data.get('yaw_speed', 0.0)
         logger.info(f"Camera screen drag: index={payload_index}, locked={locked}, "
                    f"pitch={pitch_speed}, yaw={yaw_speed}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "camera_screen_drag requires a real payload adapter")
 
     def handle_camera_aim(self, msg: dict) -> dict:
         """
@@ -1257,8 +1296,7 @@ class DrcController:
         y = data.get('y', 0.5)
         logger.info(f"Camera aim: index={payload_index}, type={camera_type}, locked={locked}, "
                    f"x={x}, y={y}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "camera_aim requires a real payload adapter")
 
     def handle_camera_screen_split(self, msg: dict) -> dict:
         """
@@ -1273,8 +1311,7 @@ class DrcController:
         payload_index = data.get('payload_index', '')
         enable = data.get('enable', False)
         logger.info(f"Camera screen split: index={payload_index}, enable={enable}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "camera_screen_split requires a real payload adapter")
 
     def handle_video_storage_set(self, msg: dict) -> dict:
         """
@@ -1289,8 +1326,7 @@ class DrcController:
         payload_index = data.get('payload_index', '')
         video_storage_settings = data.get('video_storage_settings', [])
         logger.info(f"Video storage set: index={payload_index}, settings={video_storage_settings}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "video_storage_set requires a real payload storage adapter")
 
     def handle_camera_exposure_set(self, msg: dict) -> dict:
         """
@@ -1308,8 +1344,7 @@ class DrcController:
         exposure_value = data.get('exposure_value', 16)
         logger.info(f"Camera exposure set: index={payload_index}, type={camera_type}, "
                    f"exposure={exposure_value}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "camera_exposure_set requires a real camera adapter")
 
     # ---- 红外测温接口 ----
 
@@ -1328,8 +1363,7 @@ class DrcController:
         x = data.get('x', 0.5)
         y = data.get('y', 0.5)
         logger.info(f"IR metering point set: index={payload_index}, x={x}, y={y}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "ir_metering_point_set requires a real infrared payload adapter")
 
     def handle_ir_metering_area_set(self, msg: dict) -> dict:
         """
@@ -1351,8 +1385,7 @@ class DrcController:
         height = data.get('height', 0.5)
         logger.info(f"IR metering area set: index={payload_index}, x={x}, y={y}, "
                    f"width={width}, height={height}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "ir_metering_area_set requires a real infrared payload adapter")
 
     # ---- POI模式接口 ----
 
@@ -1371,8 +1404,7 @@ class DrcController:
         longitude = data.get('longitude', 0)
         height = data.get('height', 50)
         logger.info(f"POI mode enter: lat={latitude}, lon={longitude}, height={height}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "poi_mode_enter requires a real guided flight adapter")
 
     def handle_poi_mode_exit(self, msg: dict) -> dict:
         """
@@ -1381,8 +1413,7 @@ class DrcController:
         Request: { }
         """
         logger.info("POI mode exit")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "poi_mode_exit requires a real guided flight adapter")
 
     def handle_poi_circle_speed_set(self, msg: dict) -> dict:
         """
@@ -1395,8 +1426,58 @@ class DrcController:
         data = msg.get('data', {})
         circle_speed = data.get('circle_speed', 0)
         logger.info(f"POI circle speed set: {circle_speed}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._real_adapter_unavailable(msg, "poi_circle_speed_set requires a real guided flight adapter")
+
+    def handle_payload_authority_grab(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "payload_authority_grab requires a real payload adapter")
+
+    def handle_fly_to_point(self, msg: dict) -> dict:
+        return self.handle_fly_to_point_update(msg)
+
+    def handle_camera_frame_zoom(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_frame_zoom requires a real camera adapter")
+
+    def handle_camera_mode_switch(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_mode_switch requires a real camera adapter")
+
+    def handle_camera_photo_take(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_photo_take requires a real camera adapter")
+
+    def handle_camera_photo_stop(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_photo_stop requires a real camera adapter")
+
+    def handle_camera_recording_start(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_recording_start requires a real camera adapter")
+
+    def handle_camera_recording_stop(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_recording_stop requires a real camera adapter")
+
+    def handle_camera_focal_length_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_focal_length_set requires a real camera adapter")
+
+    def handle_gimbal_reset(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "gimbal_reset requires a real gimbal adapter")
+
+    def handle_camera_look_at(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_look_at requires a real payload adapter")
+
+    def handle_photo_storage_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "photo_storage_set requires a real payload storage adapter")
+
+    def handle_camera_exposure_mode_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_exposure_mode_set requires a real camera adapter")
+
+    def handle_camera_focus_mode_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_focus_mode_set requires a real camera adapter")
+
+    def handle_camera_focus_value_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_focus_value_set requires a real camera adapter")
+
+    def handle_camera_point_focus_action(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "camera_point_focus_action requires a real camera adapter")
+
+    def handle_ir_metering_mode_set(self, msg: dict) -> dict:
+        return self._real_adapter_unavailable(msg, "ir_metering_mode_set requires a real infrared payload adapter")
 
     # ---- 紧急控制接口 ----
 
@@ -1423,8 +1504,8 @@ class DrcController:
                 },
             )
 
-        status = "ok" if land_ok or land_simulated else "failed"
-        result_code = 0 if land_ok or land_simulated else DOCK_COMMUNICATION_ERROR
+        status = "ok" if land_ok else "failed"
+        result_code = 0 if land_ok else DOCK_COMMUNICATION_ERROR
         if self._drc_enabled:
             self._heartbeat_running = False
             self._drc_enabled = False
@@ -1442,7 +1523,7 @@ class DrcController:
                     "status": status,
                     "brake_sent": brake_sent,
                     "land_ok": land_ok,
-                    "simulated": brake_simulated or land_simulated,
+                    "simulated": False,
                     "message": land_message,
                 }
             },
@@ -1517,29 +1598,58 @@ class DrcController:
             }],
         )
 
-        simulated = True
-        guidance_message = "simulated"
-        guidance_warning = ""
-        if self._mode_control and hasattr(self._mode_control, 'guided_goto'):
-            try:
-                can_send_guided_target = True
-                if hasattr(self._mode_control, 'set_mode'):
-                    mode_result = self._mode_control.set_mode("GUIDED")
-                    if not mode_result.get("success"):
-                        guidance_warning = mode_result.get("message", "GUIDED mode switch failed")
-                        can_send_guided_target = False
-                        logger.warning("takeoff_to_point GUIDED mode failed: %s", guidance_warning)
-                if can_send_guided_target:
-                    goto_result = self._mode_control.guided_goto(target_latitude, target_longitude, target_height)
-                    if not goto_result.get("success"):
-                        guidance_warning = goto_result.get("message", "guided_goto failed")
-                        logger.warning("takeoff_to_point guided_goto failed: %s", guidance_warning)
-                    else:
-                        simulated = False
-                        guidance_message = goto_result.get("message", "guided target sent")
-            except Exception as exc:
-                guidance_warning = str(exc)
-                logger.warning("takeoff_to_point guidance dispatch failed: %s", guidance_warning)
+        if not self._mode_control or not hasattr(self._mode_control, 'guided_goto'):
+            self.report_takeoff_to_point_progress(
+                flight_id,
+                "wayline_failed",
+                result=DOCK_COMMUNICATION_ERROR,
+                track_id=track_id,
+            )
+            self._active_takeoff_to_point = None
+            return self._real_adapter_unavailable(
+                msg,
+                "takeoff_to_point requires a real guided flight adapter",
+            )
+
+        guidance_message = "guided target sent"
+        try:
+            if hasattr(self._mode_control, 'set_mode'):
+                mode_result = self._mode_control.set_mode("GUIDED")
+                if not mode_result.get("success"):
+                    guidance_warning = mode_result.get("message", "GUIDED mode switch failed")
+                    logger.warning("takeoff_to_point GUIDED mode failed: %s", guidance_warning)
+                    self.report_takeoff_to_point_progress(
+                        flight_id,
+                        "wayline_failed",
+                        result=DOCK_COMMUNICATION_ERROR,
+                        track_id=track_id,
+                    )
+                    self._active_takeoff_to_point = None
+                    return self._real_adapter_unavailable(msg, guidance_warning)
+            goto_result = self._mode_control.guided_goto(target_latitude, target_longitude, target_height)
+            if not goto_result.get("success"):
+                guidance_warning = goto_result.get("message", "guided_goto failed")
+                logger.warning("takeoff_to_point guided_goto failed: %s", guidance_warning)
+                self.report_takeoff_to_point_progress(
+                    flight_id,
+                    "wayline_failed",
+                    result=DOCK_COMMUNICATION_ERROR,
+                    track_id=track_id,
+                )
+                self._active_takeoff_to_point = None
+                return self._real_adapter_unavailable(msg, guidance_warning)
+            guidance_message = goto_result.get("message", guidance_message)
+        except Exception as exc:
+            guidance_warning = str(exc)
+            logger.warning("takeoff_to_point guidance dispatch failed: %s", guidance_warning)
+            self.report_takeoff_to_point_progress(
+                flight_id,
+                "wayline_failed",
+                result=DOCK_COMMUNICATION_ERROR,
+                track_id=track_id,
+            )
+            self._active_takeoff_to_point = None
+            return self._real_adapter_unavailable(msg, guidance_warning)
 
         self.report_takeoff_to_point_progress(
             flight_id,
@@ -1569,8 +1679,8 @@ class DrcController:
                 "output": {
                     "status": "ok",
                     "message": guidance_message,
-                    "simulated": simulated,
-                    "warning": guidance_warning,
+                    "simulated": False,
+                    "warning": "",
                 },
             },
         )

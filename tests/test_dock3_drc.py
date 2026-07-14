@@ -9,6 +9,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.cloud_api.dock3_drc import (
+    OFFICIAL_DOCK3_DRC_METHODS,
     STICK_CENTER,
     normalize_fly_to_point_update,
     normalize_drone_control,
@@ -31,10 +32,46 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink.mavutil"] = fake_mavutil
 
 from src.drc.controller import DrcController
-from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_TIMEOUT,
+    DOCK_COMMUNICATION_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
+
+
+class FakeModeControl:
+    def __init__(self, *, set_mode_success=True, goto_success=True):
+        self.set_mode_success = set_mode_success
+        self.goto_success = goto_success
+        self.calls = []
+
+    def set_mode(self, mode):
+        self.calls.append(("set_mode", mode))
+        return {"success": self.set_mode_success, "message": mode}
+
+    def guided_goto(self, latitude, longitude, height):
+        self.calls.append(("guided_goto", latitude, longitude, height))
+        return {"success": self.goto_success, "message": "guided target sent"}
 
 
 class Dock3DrcTest(unittest.TestCase):
+    def test_official_dock3_drc_scope_contains_core_methods(self):
+        for method in [
+            "drc_mode_enter",
+            "drc_mode_exit",
+            "takeoff_to_point",
+            "fly_to_point",
+            "fly_to_point_update",
+            "stick_control",
+            "drone_control",
+            "drone_emergency_stop",
+            "heart_beat",
+            "payload_authority_grab",
+            "camera_photo_take",
+            "osd_info_push",
+        ]:
+            self.assertIn(method, OFFICIAL_DOCK3_DRC_METHODS)
+
     def test_drc_mode_enter_accepts_official_broker_payload(self):
         ok, errors = validate_drc_mode_enter({
             "mqtt_broker": {
@@ -122,6 +159,7 @@ class Dock3DrcTest(unittest.TestCase):
 
     def test_flight_authority_grab_returns_status_info(self):
         controller = DrcController()
+        controller.set_mode_control(FakeModeControl())
 
         reply = controller.handle_flight_authority_grab({
             "method": "flight_authority_grab",
@@ -134,6 +172,19 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["status"], "ok")
         self.assertEqual(reply["data"]["authority"], "flight")
         self.assertEqual(reply["data"]["flight_authority"], 1)
+
+    def test_flight_authority_grab_fails_without_real_adapter(self):
+        controller = DrcController()
+
+        reply = controller.handle_flight_authority_grab({
+            "method": "flight_authority_grab",
+            "tid": "tid-authority",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+
+        self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
 
     def test_takeoff_to_point_normalizes_official_payload(self):
         ok, normalized, errors = normalize_takeoff_to_point({
@@ -223,6 +274,7 @@ class Dock3DrcTest(unittest.TestCase):
 
     def test_controller_takeoff_to_point_reports_progress_event(self):
         controller = DrcController()
+        controller.set_mode_control(FakeModeControl())
         events = []
         controller.set_event_callback(events.append)
 
@@ -248,9 +300,34 @@ class Dock3DrcTest(unittest.TestCase):
         ])
         self.assertEqual(events[0]["data"]["status"], "task_ready")
         self.assertEqual(events[1]["data"]["status"], "wayline_progress")
+        self.assertEqual(reply["data"]["output"]["simulated"], False)
+
+    def test_controller_takeoff_to_point_fails_without_guided_adapter(self):
+        controller = DrcController()
+        events = []
+        controller.set_event_callback(events.append)
+
+        reply = controller.handle_takeoff_to_point({
+            "method": "takeoff_to_point",
+            "tid": "tid-takeoff",
+            "gateway": "EDGEGW001",
+            "data": {
+                "flight_id": "flight-001",
+                "target_latitude": -35.3632622,
+                "target_longitude": 149.1652375,
+                "target_height": 50,
+                "max_speed": 12,
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertEqual(events[-1]["data"]["status"], "wayline_failed")
+        self.assertIsNone(controller.get_drc_status()["active_takeoff_to_point"])
 
     def test_controller_fly_to_point_update_and_stop_report_events(self):
         controller = DrcController()
+        controller.set_mode_control(FakeModeControl())
         events = []
         controller.set_event_callback(events.append)
 
@@ -284,6 +361,50 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(stop["data"]["result"], 0)
         self.assertTrue(stop["data"]["output"]["stopped"])
         self.assertEqual(events[-1]["data"]["status"], "wayline_cancel")
+
+    def test_controller_fly_to_point_update_fails_without_guided_adapter(self):
+        controller = DrcController()
+        events = []
+        controller.set_event_callback(events.append)
+
+        reply = controller.handle_fly_to_point_update({
+            "method": "fly_to_point_update",
+            "tid": "tid-flyto",
+            "gateway": "EDGEGW001",
+            "data": {
+                "fly_to_id": "flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertEqual(events[-1]["data"]["status"], "wayline_failed")
+        self.assertIsNone(controller.get_drc_status()["active_fly_to_point"])
+
+    def test_payload_todo_methods_fail_without_real_adapter(self):
+        controller = DrcController()
+        for method, handler in [
+            ("payload_authority_grab", controller.handle_payload_authority_grab),
+            ("camera_screen_drag", controller.handle_camera_screen_drag),
+            ("camera_photo_take", controller.handle_camera_photo_take),
+            ("video_storage_set", controller.handle_video_storage_set),
+            ("ir_metering_point_set", controller.handle_ir_metering_point_set),
+        ]:
+            with self.subTest(method=method):
+                reply = handler({
+                    "method": method,
+                    "tid": f"tid-{method}",
+                    "gateway": "EDGEGW001",
+                    "data": {},
+                })
+                self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
+                self.assertEqual(reply["data"]["output"]["status"], "failed")
 
     def test_controller_takeoff_to_point_rejects_bad_payload(self):
         controller = DrcController()
