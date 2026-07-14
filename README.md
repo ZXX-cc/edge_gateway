@@ -133,7 +133,7 @@ http://Ubuntu服务器IP:8090
 - Ubuntu 服务器内 Dock3 纯模拟链路已形成当前基线，整体进度约 82%。
 - P0/P1 当前 34 项门禁中已有 27 项可用；评分卡口径见 `docs/DELIVERY_ACCEPTANCE_SCORECARD.md`。
 - MQTT topic/reply、设备上线、组织绑定、拓扑、properties、OSD/state、错误码、request trace 已形成可重复脚本证据。
-- 2026-07-14 已新增全局状态机/命令准入第一版：平台下行命令在进入业务 handler 前统一读取 cloud/device/dock/aircraft/mission/DRC/OTA/safety 快照，能够结构化拒绝急停、任务占用、DRC 占用、OTA 中、未暂停 resume 等跨模块冲突；新增 `tools/global_state_machine_admission_audit.py` 和 `tests/test_global_state_machine.py`，待 Ubuntu 验收日志固化。
+- 2026-07-14 已新增全局状态机/命令准入第一版：平台下行命令在进入业务 handler 前统一读取 cloud/device/dock/aircraft/mission/DRC/OTA/safety 快照，能够结构化拒绝急停、任务占用、DRC 占用、OTA 中、未暂停 resume 等跨模块冲突；Ubuntu 已通过 `tests.test_global_state_machine` 7/7 和 `tools/global_state_machine_admission_audit.py` 11/11，下一步用 11 段 E2E 验证不误拦截正常链路。
 - CMD、DRC、Wayline、Media、Live、HMS/log、firmware/config 已有专项脚本通过记录。
 - `tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --timeout 20 --quiet-stale --fail-on-stale` 已在 Ubuntu 共享 EMQX 干净环境严格通过 properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段；2026-07-13 最新输出 `steps=11, elapsed=24.0s`，全部阶段 `exit=0`，可归因旧回包计数均为 0。
 - DRC `takeoff_to_point` 和 `fly_to_point_update` 已用 `property_get` 网关遥测生成目标点并返回 `simulated=false`；共享 MQTT 测试客户端已输出 `stale_samples` 定位旧回包。
