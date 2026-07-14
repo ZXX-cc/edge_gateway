@@ -4,6 +4,7 @@
 import os
 import yaml
 from pathlib import Path
+from copy import deepcopy
 
 
 class Config:
@@ -50,6 +51,25 @@ class Config:
     @classmethod
     def all(cls):
         """获取完整配置"""
+        return Config._data
+
+    @classmethod
+    def merge(cls, overrides: dict):
+        """Merge runtime overrides into loaded configuration."""
+        if not overrides:
+            return Config._data
+
+        def deep_merge(base, patch):
+            for key, value in (patch or {}).items():
+                if isinstance(value, dict) and isinstance(base.get(key), dict):
+                    deep_merge(base[key], value)
+                else:
+                    base[key] = deepcopy(value)
+            return base
+
+        if not isinstance(Config._data, dict):
+            Config._data = {}
+        deep_merge(Config._data, overrides)
         return Config._data
 
     @classmethod

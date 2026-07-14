@@ -8,6 +8,10 @@ gateway:
   name: "EdgeGateway-01" # 网关名称
   product_type: "edge-gateway" # 产品类型
 
+# --- 运行模式 ---
+runtime:
+  mode: "test" # test/production；production 禁止测试 SN 和缺失真实链路拓扑元数据
+
 # --- 运行时数据库（Ubuntu 本机 MongoDB） ---
 database:
   backend: "mongodb"
@@ -100,6 +104,12 @@ nest_mavlink:
 device:
   firmware_version: "1.0.0" # 固件版本
   storage_capacity: 64000 # 存储容量(MB)
+
+  # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
+  # 网关不会自动生成 device_secret/nonce。
+  topology:
+    device_secret: ""
+    nonce: ""
 
   # 飞行限制
   limits:

@@ -32,6 +32,8 @@ sys.path.insert(0, str(project_root))
 from src.utils.config import Config, load_config
 from src.utils.logger import init_logger, get_logger
 from src.utils.message import MessageBuilder
+from src.utils.production_readiness import validate_production_config
+from src.utils.runtime_overrides import build_runtime_overrides
 from src.mqtt.client import MQTTClient
 from src.mqtt.topic_router import TopicRouter
 from src.core.connection import MAVLinkConnection
@@ -163,12 +165,15 @@ class EdgeGateway:
         self.waypoint_manager: WaypointManager = None
         self.rtk_module: RTKModule = None
 
-    def initialize(self, config_path: str = "./config/gateway.yaml") -> bool:
+    def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
         try:
             # 1. 加载配置
             logger.info("Loading configuration...")
             self.config = load_config(config_path)
+            if runtime_overrides:
+                Config.merge(runtime_overrides)
+                self.config = Config.all()
 
             # 数据库必须在业务模块初始化前完成后端选择；SessionLocal 是稳定代理，
             # 后续同步/异步调用都会落到这里选定的 MongoDB 或 SQLite。
@@ -179,6 +184,12 @@ class EdgeGateway:
             init_logger(log_config)
             logger.info("Logger initialized")
             logger.info("Configuration loaded: path=%s", config_path)
+
+            production_errors = validate_production_config(Config.all())
+            if production_errors:
+                for error in production_errors:
+                    logger.error("Production readiness failed: %s", error)
+                return False
 
             # 3. 初始化MQTT客户端
             logger.info("Initializing MQTT client...")
@@ -1156,7 +1167,19 @@ async def main_async():
                        help='Configuration file path')
     parser.add_argument('-d', '--daemon', action='store_true',
                        help='Run as daemon')
+    parser.add_argument('--runtime-mode', choices=['test', 'production'],
+                       help='Runtime mode. production rejects test identities and missing real-chain topology metadata.')
+    parser.add_argument('--gateway-sn',
+                       help='Override gateway.sn for this run')
+    parser.add_argument('--gateway-device-secret',
+                       help='Override device.topology.device_secret for update_topo')
+    parser.add_argument('--gateway-nonce',
+                       help='Override device.topology.nonce for update_topo')
+    parser.add_argument('--sub-device-json', action='append', default=[],
+                       help='Add a real-chain sub-device JSON object with sn/domain/type/sub_type/index/device_secret/nonce/thing_version/online.')
     args = parser.parse_args()
+
+    runtime_overrides = build_runtime_overrides(args)
 
     gateway = EdgeGateway()
 
@@ -1171,13 +1194,14 @@ async def main_async():
     else:
         logger.info("Running in debug mode, signal handlers disabled")
 
-    if not gateway.initialize(args.config):
+    if not gateway.initialize(args.config, runtime_overrides=runtime_overrides):
         sys.exit(1)
 
     if not gateway.start():
         sys.exit(1)
 
     await gateway.run_async()
+
 
 def main():
     """主入口"""

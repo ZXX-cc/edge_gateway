@@ -63,7 +63,10 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.events = []
         self.states = []
         self.config_data = Config._data
-        Config._data = {}
+        Config._data = {
+            "gateway": {"sn": "EDGEGW001"},
+            "device": {"topology": {"device_secret": "gw-secret", "nonce": "gw-nonce"}},
+        }
         self.manager = DeviceManager()
         self.manager._org_data_path = str(Path(self.tmp.name) / "organization.json")
         self.manager._event_callback = self.events.append
@@ -145,6 +148,7 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         Config._data = {
             "gateway": {"sn": "EDGEGW001"},
             "device": {
+                "topology": {"device_secret": "gw-secret", "nonce": "gw-nonce"},
                 "sub_devices": [
                     {
                         "sn": "DRONESIM001",
@@ -168,8 +172,24 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertFalse(sub_device.paired)
 
         payload = manager.build_topo_payload()
+        self.assertEqual(payload["device_secret"], "gw-secret")
+        self.assertEqual(payload["nonce"], "gw-nonce")
         self.assertEqual(payload["sub_devices"][0]["sn"], "DRONESIM001")
         self.assertEqual(manager.get_property("sub_device")["device_sn"], "DRONESIM001")
+
+    def test_topology_does_not_fabricate_missing_credentials(self):
+        Config._data = {"gateway": {"sn": "EDGEGW001"}}
+        manager = DeviceManager()
+        manager.add_sub_device(SubDevice("DRONE-A", device_type=60, index="A"))
+        manager.get_sub_device("DRONE-A").online = True
+
+        payload = manager.build_topo_payload()
+
+        self.assertEqual(payload["device_secret"], "")
+        self.assertEqual(payload["nonce"], "")
+        self.assertEqual(payload["sub_devices"][0]["device_secret"], "")
+        self.assertEqual(payload["sub_devices"][0]["nonce"], "")
+        self.assertFalse(manager.report_update_topo())
 
     def test_empty_topology_marks_known_sub_devices_offline_without_dropping_cache(self):
         online_payload = build_update_topo_payload(
@@ -210,7 +230,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(sub_device_state["device_online_status"], 0)
 
     def test_reconnect_preserves_existing_pairing_state(self):
-        self.manager.add_sub_device(SubDevice("DRONE-A", device_type=60, index="A"))
+        self.manager.add_sub_device(SubDevice(
+            "DRONE-A",
+            device_type=60,
+            index="A",
+            device_secret="DRONE-A-secret",
+            nonce="DRONE-A-nonce",
+        ))
         self.manager._sub_devices["DRONE-A"].paired = True
 
         offline_payload = build_update_topo_payload(device_secret="gw-secret", nonce="gw-nonce", sub_devices=[])
@@ -234,7 +260,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
 
     def test_unbind_clears_sub_devices_bindings_and_reports_empty_topology(self):
         for sn, index in (("DRONE-A", "A"), ("DRONE-B", "B")):
-            sub_device = SubDevice(sn, device_type=60, index=index)
+            sub_device = SubDevice(
+                sn,
+                device_type=60,
+                index=index,
+                device_secret=f"{sn}-secret",
+                nonce=f"{sn}-nonce",
+            )
             sub_device.online = True
             sub_device.paired = True
             self.manager.add_sub_device(sub_device)
@@ -278,7 +310,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
 
     def test_organization_bind_reply_pairs_multiple_sub_devices_and_reports_topology(self):
         for sn, index in (("DRONE-A", "A"), ("DRONE-B", "B")):
-            sub_device = SubDevice(sn, device_type=60, index=index)
+            sub_device = SubDevice(
+                sn,
+                device_type=60,
+                index=index,
+                device_secret=f"{sn}-secret",
+                nonce=f"{sn}-nonce",
+            )
             sub_device.online = True
             self.manager.add_sub_device(sub_device)
         self.manager._org_data["pending_organization"] = {"organization_name": "模拟组织"}
@@ -337,7 +375,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 1)
 
     def test_bind_status_reply_updates_sub_device_pairing_and_topology_state(self):
-        sub_device = SubDevice("DRONE-A", device_type=60, index="A")
+        sub_device = SubDevice(
+            "DRONE-A",
+            device_type=60,
+            index="A",
+            device_secret="DRONE-A-secret",
+            nonce="DRONE-A-nonce",
+        )
         sub_device.online = True
         sub_device.paired = True
         self.manager.add_sub_device(sub_device)
@@ -373,6 +417,92 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(binding["bind_time"], 0)
         self.assertGreater(len(self.update_topo_events()), before_topo_count)
         self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 0)
+
+    def test_bind_status_reply_refreshes_existing_gateway_organization(self):
+        self.manager._device_state = self.manager.STATE_BOUND
+        self.manager._bound_workspace_id = "org-old"
+        self.manager._bound_workspace_name = "Old Org"
+        self.manager._set_organization_info("org-old", "Old Org", bind_code="keep-code", bind_time=1)
+        before_binding_events = len([event for event in self.events if event.get("method") == "device_binding"])
+
+        reply = {
+            "data": {
+                "result": 0,
+                "output": {
+                    "bind_status": [
+                        {
+                            "sn": self.manager.gateway_sn,
+                            "is_device_bind_organization": True,
+                            "organization_id": "org-new",
+                            "organization_name": "New Org",
+                            "device_callsign": "Gateway New",
+                        }
+                    ]
+                },
+            }
+        }
+
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            self.manager._handle_airport_bind_status_reply(reply)
+
+        self.assertEqual(self.manager._bound_workspace_id, "org-new")
+        self.assertEqual(self.manager._bound_workspace_name, "New Org")
+        self.assertEqual(self.manager._org_data["organization"]["device_binding_code"], "keep-code")
+        binding = self.manager._get_device_binding_info(self.manager.gateway_sn)
+        self.assertTrue(binding["is_bound"])
+        self.assertEqual(binding["organization_id"], "org-new")
+        self.assertEqual(binding["organization_name"], "New Org")
+        self.assertEqual(binding["device_callsign"], "Gateway New")
+        self.assertGreaterEqual(len(self.update_topo_events()), 1)
+        after_binding_events = len([event for event in self.events if event.get("method") == "device_binding"])
+        self.assertEqual(after_binding_events, before_binding_events)
+
+    def test_organization_bind_partial_failure_preserves_error_message(self):
+        sub_device = SubDevice("DRONE-A", device_type=60, index="A")
+        sub_device.online = True
+        self.manager.add_sub_device(sub_device)
+        bind_devices = [
+            {
+                "sn": "DRONE-A",
+                "device_binding_code": "bind-code",
+                "organization_id": "org-001",
+                "device_callsign": "DRONE-A",
+                "device_model_key": "0-60-0",
+            }
+        ]
+
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            self.manager._handle_airport_organization_bind_reply(
+                {
+                    "data": {
+                        "result": 0,
+                        "output": {
+                            "err_infos": [
+                                {
+                                    "sn": "DRONE-A",
+                                    "err_code": 327000,
+                                    "err_msg": "binding code invalid",
+                                }
+                            ]
+                        },
+                    }
+                },
+                bind_devices,
+            )
+
+        binding = self.manager._get_device_binding_info("DRONE-A")
+        self.assertFalse(binding["is_bound"])
+        self.assertEqual(binding["last_err_code"], 327000)
+        self.assertEqual(binding["last_err_msg"], "binding code invalid")
+        self.assertFalse(self.manager.get_sub_device("DRONE-A").paired)
 
 
 if __name__ == "__main__":

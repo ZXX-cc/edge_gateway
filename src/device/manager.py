@@ -214,14 +214,8 @@ class DeviceManager:
         self._gateway_domain = GATEWAY_DOMAIN
         self._gateway_type = GATEWAY_TYPE
         self._gateway_sub_type = GATEWAY_SUB_TYPE
-        self._gateway_device_secret = str(
-            Config.get('device.topology.device_secret', '')
-            or f"{self.gateway_sn}-gateway-secret"
-        )
-        self._gateway_nonce = str(
-            Config.get('device.topology.nonce', '')
-            or f"{self.gateway_sn}-gateway-nonce"
-        )
+        self._gateway_device_secret = str(Config.get('device.topology.device_secret', '') or '')
+        self._gateway_nonce = str(Config.get('device.topology.nonce', '') or '')
         self._gateway_thing_version = THING_VERSION
 
         # 子设备列表
@@ -1384,12 +1378,7 @@ class DeviceManager:
         )
 
     def _sub_device_topo_payload(self, dev: SubDevice) -> dict:
-        payload = dev.to_dict()
-        if not payload.get('device_secret'):
-            payload['device_secret'] = f"{dev.sn}-device-secret"
-        if not payload.get('nonce'):
-            payload['nonce'] = f"{dev.sn}-device-nonce"
-        return payload
+        return dev.to_dict()
 
     def report_update_topo(self):
         """主动上报设备拓扑（update_topo）"""
@@ -2294,10 +2283,10 @@ class DeviceManager:
         gateway_binding = self._get_device_binding_info(self.gateway_sn)
 
         return MessageBuilder.build_reply(msg, result=0, data={
-            'workspace_id': self._bound_workspace_id or 'default_workspace',
-            'workspace_name': self._bound_workspace_name or 'Default Workspace',
-            'organization_id': org.get('organization_id', 'default_org'),
-            'organization_name': org.get('organization_name', 'Default Organization'),
+            'workspace_id': self._bound_workspace_id,
+            'workspace_name': self._bound_workspace_name,
+            'organization_id': org.get('organization_id', ''),
+            'organization_name': org.get('organization_name', ''),
             'device_callsign': gateway_binding.get('device_callsign', self.gateway_sn),
             'is_bound': gateway_binding.get('is_bound', False),
             'bind_time': gateway_binding.get('bind_time', 0)
@@ -3232,20 +3221,27 @@ class DeviceManager:
 
             if sn == self.gateway_sn:
                 if is_bound:
-                    # 网关已绑定
-                    if self._device_state < self.STATE_BOUND:
+                    was_unbound = self._device_state < self.STATE_BOUND
+                    org_changed = (
+                        self._bound_workspace_id != org_id
+                        or self._bound_workspace_name != org_name
+                        or self._org_data.get('organization', {}).get('organization_id', '') != org_id
+                    )
+                    if was_unbound or org_changed:
+                        bind_code = self._org_data.get('organization', {}).get('device_binding_code', '')
                         self._device_state = self.STATE_BOUND
                         self._bound_workspace_id = org_id
                         self._bound_workspace_name = org_name
-                        self._set_organization_info(org_id, org_name, bind_time=int(time.time()*1000))
+                        self._set_organization_info(org_id, org_name, bind_code, bind_time=int(time.time()*1000))
                         topology_changed = True
-                        logger.info(f"Gateway bound from cloud reply: org={org_id}")
-                        self._notify_event('device_binding', {
-                            'device_sn': sn,
-                            'organization_id': org_id,
-                            'bind_status': 'success',
-                            'timestamp': int(time.time() * 1000)
-                        })
+                        logger.info(f"Gateway binding refreshed from cloud reply: org={org_id}")
+                        if was_unbound:
+                            self._notify_event('device_binding', {
+                                'device_sn': sn,
+                                'organization_id': org_id,
+                                'bind_status': 'success',
+                                'timestamp': int(time.time() * 1000)
+                            })
                 else:
                     # 网关已解绑（从云端确认）
                     if self._device_state >= self.STATE_BOUND:
@@ -3415,6 +3411,7 @@ class DeviceManager:
             if sn in failed_sns:
                 # 该设备绑定失败，记录错误信息
                 err_code = next((e.get('err_code', -1) for e in err_infos if e.get('sn') == sn), -1)
+                err_msg = next((e.get('err_msg', '') for e in err_infos if e.get('sn') == sn), '')
                 if sn in self._sub_devices:
                     self._sub_devices[sn].paired = False
                 self._set_device_binding_info(sn, {
@@ -3425,9 +3422,10 @@ class DeviceManager:
                     'organization_id': dev.get('organization_id', ''),
                     'organization_name': '',
                     'bind_time': 0,
-                    'last_err_code': err_code
+                    'last_err_code': err_code,
+                    'last_err_msg': err_msg
                 })
-                logger.warning(f"Device bind failed: sn={sn}, err_code={err_code}")
+                logger.warning(f"Device bind failed: sn={sn}, err_code={err_code}, err_msg={err_msg}")
                 continue
 
             org_id = dev.get('organization_id', '')
