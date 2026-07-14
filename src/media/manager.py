@@ -24,6 +24,7 @@ from src.cloud_api.dock3_media import (
     normalize_page,
     normalize_priority_items,
     paginate,
+    storage_config_output,
     upload_progress_event_data,
 )
 from src.cloud_api.dock3_live import (
@@ -34,6 +35,7 @@ from src.cloud_api.dock3_live import (
     live_capability_data,
     live_status_event_data,
     live_task_output,
+    validate_live_camera_payload,
     validate_live_lens_payload,
     validate_live_quality_payload,
     validate_live_start_payload,
@@ -90,6 +92,7 @@ class MediaManager:
         self._live_video_id = ""
         self._live_url = ""
         self._live_video_type = "normal"
+        self._live_camera_position = 0
 
         # ffmpeg 推流进程
         self._ffmpeg_process: Optional[subprocess.Popen] = None
@@ -236,21 +239,17 @@ class MediaManager:
         请求存储配置(OSS临时凭证) - services 兼容模式
 
         Request: { }
-        Response: { endpoint, bucket, access_key, secret_key, token, expiration }
+        Response: { result, output: { bucket, credentials, endpoint, provider, region, object_key_prefix } }
         """
         logger.info("Storage config get (services mode)")
 
-        # TODO: 从云端获取STS临时凭证
-        # 或返回本地MinIO配置
-
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'endpoint': '',
-            'bucket': '',
-            'access_key': '',
-            'secret_key': '',
-            'token': '',
-            'expiration': 3600
-        })
+        # 官方 Dock3 媒体文档要求云端在 requests_reply 中下发 output.credentials。
+        # 这里仅从真实配置透传，不生成临时密钥，避免测试值混入真实链路。
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": storage_config_output(Config.get('media.oss', {}))},
+        )
 
     def report_upload_complete(self, file_info: dict, flight_task: dict = None):
         """
@@ -265,13 +264,30 @@ class MediaManager:
                 {uploaded_file_count, expected_file_count, flight_type}
         """
         if self._event_callback:
+            ext = {
+                'flight_id': '',
+                'drone_model_key': '',
+                'payload_model_key': '',
+                'is_original': None,
+                **(file_info.get('ext') or {}),
+            }
+            metadata = {
+                'gimbal_yaw_degree': None,
+                'absolute_altitude': None,
+                'relative_altitude': None,
+                'create_time': '',
+                'shoot_position': {'lat': None, 'lng': None},
+                **(file_info.get('metadata') or {}),
+            }
+            shoot_position = metadata.get('shoot_position') if isinstance(metadata.get('shoot_position'), dict) else {}
+            metadata['shoot_position'] = {'lat': None, 'lng': None, **shoot_position}
             payload = {
                 'file': {
                     'object_key': file_info.get('object_key', ''),
                     'path': file_info.get('path', ''),
                     'name': file_info.get('name', ''),
-                    'ext': file_info.get('ext', {}),
-                    'metadata': file_info.get('metadata', {}),
+                    'ext': ext,
+                    'metadata': metadata,
                     'cloud_to_cloud_id': file_info.get('cloud_to_cloud_id', 'DEFAULT')
                 }
             }
@@ -509,18 +525,18 @@ class MediaManager:
         """
         上传飞行任务媒体优先化 (upload_flighttask_media_prioritize)
 
-        Request: { flighttask_id: str }
+        Request: { flight_id: str }
         Response: { result }
         """
         data = msg.get('data', {})
-        flighttask_id = data.get('flighttask_id', '')
-        logger.info(f"Upload flighttask media prioritize: {flighttask_id}")
+        flight_id = data.get('flight_id') or data.get('flighttask_id', '')
+        logger.info(f"Upload flighttask media prioritize: {flight_id}")
 
         # 开始上传
-        self.start_upload(flighttask_id)
+        self.start_upload(flight_id)
 
         return MessageBuilder.build_reply(msg, result=0, data=media_task_output("sent", {
-            "flighttask_id": flighttask_id,
+            "flight_id": flight_id,
         }))
 
     # ---- 直播控制 ----
@@ -532,7 +548,7 @@ class MediaManager:
         支持多种输入源：
         - V4L2: /dev/video0, /dev/video1
         - RTSP: rtsp://xxx
-        - 测试源: lavfi/testsrc
+        - 本地视频设备: /dev/video0, /dev/video1
         """
         # 从配置读取视频源映射
         source_map = Config.get('media.video_sources', {
@@ -575,8 +591,7 @@ class MediaManager:
             # HTTP 流
             cmd.extend(['-i', source])
         else:
-            # 测试源（无摄像头时）
-            cmd.extend(['-f', 'lavfi', '-i', f'testsrc=size={resolution}:rate={fps}'])
+            raise ValueError(f"Unsupported live video source for real chain: {source}")
 
         # 视频编码参数
         cmd.extend([
@@ -609,11 +624,16 @@ class MediaManager:
 
         return cmd
 
-    def _start_ffmpeg(self, url: str, url_type: int, quality: int, video_type: str):
+    def _start_ffmpeg(self, url: str, url_type: int, quality: int, video_type: str) -> bool:
         """启动 ffmpeg 推流进程"""
         self._stop_ffmpeg()
 
-        cmd = self._build_ffmpeg_cmd(url, url_type, quality, video_type)
+        try:
+            cmd = self._build_ffmpeg_cmd(url, url_type, quality, video_type)
+        except ValueError as exc:
+            logger.error(str(exc))
+            self._live_streaming = False
+            return False
         logger.info(f"Starting ffmpeg: {' '.join(cmd)}")
 
         try:
@@ -630,13 +650,16 @@ class MediaManager:
                 target=self._ffmpeg_monitor, daemon=True
             )
             self._ffmpeg_monitor_thread.start()
+            return True
 
         except FileNotFoundError:
             logger.error("ffmpeg not found. Please install ffmpeg first.")
             self._live_streaming = False
+            return False
         except Exception as e:
             logger.error(f"Failed to start ffmpeg: {e}")
             self._live_streaming = False
+            return False
 
     def _stop_ffmpeg(self):
         """停止 ffmpeg 推流进程"""
@@ -733,10 +756,28 @@ class MediaManager:
         logger.info(f"Live start: url_type={url_type}, video_id={video_id}, "
                    f"quality={video_quality}, url={url}")
 
+        if is_mock_live_url(url) and str(Config.get('runtime.mode', 'test')).lower() == 'production':
+            self._live_streaming = False
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"reason": "mock live url is disabled in production"}),
+                msg_str="Mock live url is disabled in production",
+            )
+
         if is_mock_live_url(url):
             logger.info("Live mock stream enabled: video_id=%s, url=%s", video_id, url)
         else:
-            self._start_ffmpeg(url, url_type, video_quality, self._live_video_type)
+            if not self._start_ffmpeg(url, url_type, video_quality, self._live_video_type):
+                self._live_session_id = ""
+                self._live_video_id = ""
+                self._live_url = ""
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=INVALID_COMMAND_FORMAT,
+                    data=live_task_output(TASK_STATUS_REJECTED, {"reason": "live video source unavailable"}),
+                    msg_str="Live video source unavailable",
+                )
 
         self._publish_live_status_event(TASK_STATUS_IN_PROGRESS)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_IN_PROGRESS, {
@@ -746,6 +787,10 @@ class MediaManager:
             'video_quality': self._live_quality,
             'video_type': self._live_video_type,
         }))
+
+    def handle_live_start_push(self, msg: dict) -> dict:
+        """官方 Dock3 开始直播方法名。"""
+        return self.handle_live_start(msg)
 
     def handle_live_stop(self, msg: dict) -> dict:
         """
@@ -784,6 +829,38 @@ class MediaManager:
             "video_id": video_id,
         }))
 
+    def handle_live_stop_push(self, msg: dict) -> dict:
+        """官方 Dock3 停止直播方法名。"""
+        return self.handle_live_stop(msg)
+
+    def handle_live_camera_change(self, msg: dict) -> dict:
+        """
+        直播相机切换
+
+        Request: { video_id, camera_position: 0=舱内, 1=舱外 }
+        """
+        ok, data, errors = validate_live_camera_payload(msg.get('data', {}))
+        if not ok:
+            logger.warning("Rejected live_camera_change payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=live_task_output(TASK_STATUS_REJECTED, {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
+
+        self._live_video_id = data["video_id"]
+        self._live_camera_position = data["camera_position"]
+        logger.info(
+            "Live camera change: video_id=%s, camera_position=%s",
+            self._live_video_id,
+            self._live_camera_position,
+        )
+        return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
+            "video_id": self._live_video_id,
+            "camera_position": self._live_camera_position,
+        }))
+
     def handle_set_livestream_lens(self, msg: dict) -> dict:
         """
         切换直播镜头 (live_lens_change)
@@ -804,7 +881,7 @@ class MediaManager:
                 msg_str="; ".join(errors),
             )
 
-        video_id = data["video_id"]
+        video_id = data["video_id"] or self._live_video_id
         video_type = data["video_type"]
 
         logger.info(f"Livestream lens change: video_id={video_id}, type={video_type}")
@@ -961,14 +1038,14 @@ class MediaManager:
         """
         最高优先级上传任务媒体
 
-        Request: { flighttask_id }
+        Request: { flight_id }
         """
         data = msg.get('data', {})
-        flighttask_id = data.get('flighttask_id', '')
-        logger.info(f"Highest priority upload: {flighttask_id}")
-        self.report_priority_media(flighttask_id)
+        flight_id = data.get('flight_id') or data.get('flighttask_id', '')
+        logger.info(f"Highest priority upload: {flight_id}")
+        self.report_priority_media(flight_id)
         return MessageBuilder.build_reply(msg, result=0, data=media_task_output("ok", {
-            "flighttask_id": flighttask_id,
+            "flight_id": flight_id,
         }))
 
     def handle_live_lens_change(self, msg: dict) -> dict:

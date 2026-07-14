@@ -1,10 +1,4 @@
-"""
-DJI Dock 3 live protocol helpers for local gateway simulation.
-
-The production live path may use RTMP/WebRTC/GB28181 backends.  For protocol
-acceptance tests the gateway can run against ``mock://`` URLs and still expose
-the same reply/event shape without requiring ffmpeg or a real streaming server.
-"""
+"""DJI Dock 3 live protocol helpers."""
 from __future__ import annotations
 
 import time
@@ -19,6 +13,7 @@ TASK_STATUS_REJECTED = "rejected"
 SUPPORTED_URL_TYPES = {0, 1, 3, 4}
 SUPPORTED_QUALITIES = {0, 1, 2, 3, 4}
 SUPPORTED_VIDEO_TYPES = {"normal", "wide", "zoom", "ir", "fpv"}
+SUPPORTED_CAMERA_POSITIONS = {0, 1}
 
 
 def _is_int(value: Any) -> bool:
@@ -79,13 +74,27 @@ def validate_live_lens_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[st
     video_id = str(data.get("video_id", "") or "")
     video_type = str(data.get("video_type", data.get("lens", "normal")) or "normal")
     errors: List[str] = []
-    if not video_id:
-        errors.append("live_lens_change missing video_id")
     if video_type not in SUPPORTED_VIDEO_TYPES:
         errors.append("live_lens_change.video_type unsupported")
     return not errors, {
         "video_id": video_id,
         "video_type": video_type if video_type in SUPPORTED_VIDEO_TYPES else "normal",
+    }, errors
+
+
+def validate_live_camera_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[str]]:
+    if not isinstance(data, dict):
+        return False, {}, ["live_camera_change data must be object"]
+    video_id = str(data.get("video_id", "") or "")
+    camera_position = data.get("camera_position")
+    errors: List[str] = []
+    if not video_id:
+        errors.append("live_camera_change missing video_id")
+    if not _is_int(camera_position) or camera_position not in SUPPORTED_CAMERA_POSITIONS:
+        errors.append("live_camera_change.camera_position must be int enum 0/1")
+    return not errors, {
+        "video_id": video_id,
+        "camera_position": int(camera_position) if _is_int(camera_position) else 0,
     }, errors
 
 

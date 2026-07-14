@@ -129,15 +129,24 @@ media:
   storage_path: "/data/media" # 本地存储路径
   auto_upload: true
   upload_quality: "original" # original/high/medium/low
-  video_sources: # 视频源配置
-    main: "camera_main"
-    thermal: "camera_thermal"
+  video_sources: # 真实直播视频源配置；生产环境必须使用 /dev/video*、rtsp://、http:// 或 https://
+    normal: "/dev/video0"
+    wide: "/dev/video0"
+    zoom: "/dev/video0"
+    ir: "/dev/video1"
 
   # OSS配置(上传凭证由云端下发)
   oss:
     provider: "minio" # minio/aliyun/aws
     endpoint: ""
     bucket: ""
+    region: ""
+    object_key_prefix: ""
+    credentials:
+      access_key_id: ""
+      access_key_secret: ""
+      expire: 0
+      security_token: ""
 
 # --- 直播配置 ---
 livestream:

@@ -131,7 +131,7 @@ def run_media_checks(client: Dock3MediaClient, args) -> int:
     priority_before = client.event_count("highest_priority_upload_flighttask_media")
     rc, _ = client.request(
         "highest_priority_upload_flighttask_media",
-        {"flighttask_id": args.flight_id},
+        {"flight_id": args.flight_id},
         args.timeout,
         [0],
         "ok",

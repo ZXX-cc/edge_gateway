@@ -47,7 +47,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
 
     status_before = client.event_count("live_status_notify")
     rc, start = client.request(
-        "live_start",
+        "live_start_push",
         {
             "url": args.url,
             "url_type": args.url_type,
@@ -103,7 +103,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
 
     status_before = client.event_count("live_status_notify")
     rc, _ = client.request(
-        "live_stop",
+        "live_stop_push",
         {"video_id": video_id},
         args.timeout,
         [0],
@@ -116,7 +116,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         return rc
 
     rc, invalid = client.request(
-        "live_start",
+        "live_start_push",
         {"video_id": video_id},
         args.timeout,
         [INVALID_COMMAND_FORMAT],

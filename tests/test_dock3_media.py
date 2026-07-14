@@ -43,9 +43,11 @@ from src.cloud_api.dock3_media import (
     normalize_delete_ids,
     normalize_priority_items,
     paginate,
+    storage_config_output,
 )
 from src.cloud_api.dock3_live import validate_live_start_payload
 from src.media.manager import MediaManager
+from src.utils.config import Config
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 
 
@@ -147,6 +149,27 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertTrue(item["file_id"])
         self.assertEqual(item["fingerprint"], item["file_id"])
 
+    def test_storage_config_output_uses_official_credentials_shape(self):
+        output = storage_config_output({
+            "provider": "minio",
+            "endpoint": "http://minio.local",
+            "bucket": "media",
+            "region": "local",
+            "object_key_prefix": "dock3/",
+            "credentials": {
+                "access_key_id": "ak",
+                "access_key_secret": "sk",
+                "expire": 3600,
+                "security_token": "token",
+            },
+        })
+
+        self.assertEqual(output["bucket"], "media")
+        self.assertEqual(output["credentials"]["access_key_id"], "ak")
+        self.assertEqual(output["credentials"]["access_key_secret"], "sk")
+        self.assertEqual(output["credentials"]["expire"], 3600)
+        self.assertEqual(output["object_key_prefix"], "dock3/")
+
     def test_live_mock_lifecycle_emits_status_events(self):
         events = []
         manager = MediaManager()
@@ -154,7 +177,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         manager.set_event_callback(events.append)
         video_id = "EDGEGW001/0/normal"
 
-        start = manager.handle_live_start(base_msg("live_start", {
+        start = manager.handle_live_start_push(base_msg("live_start_push", {
             "url": "mock://dock3/live",
             "url_type": 4,
             "video_id": video_id,
@@ -172,19 +195,67 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(manager._live_quality, 3)
 
         lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
-            "video_id": video_id,
             "video_type": "zoom",
         }))
         self.assertEqual(lens["data"]["result"], 0)
+        self.assertEqual(lens["data"]["video_id"], video_id)
         self.assertEqual(manager._live_video_type, "zoom")
 
-        stop = manager.handle_live_stop(base_msg("live_stop", {"video_id": video_id}))
+        camera = manager.handle_live_camera_change(base_msg("live_camera_change", {
+            "video_id": video_id,
+            "camera_position": 1,
+        }))
+        self.assertEqual(camera["data"]["result"], 0)
+        self.assertEqual(manager._live_camera_position, 1)
+
+        stop = manager.handle_live_stop_push(base_msg("live_stop_push", {"video_id": video_id}))
         self.assertEqual(stop["data"]["result"], 0)
         self.assertFalse(manager._live_streaming)
         self.assertGreaterEqual(
             len([event for event in events if event.get("method") == "live_status_notify"]),
             4,
         )
+
+    def test_production_rejects_mock_live_url(self):
+        Config.merge({"runtime": {"mode": "production"}})
+        try:
+            manager = MediaManager()
+            reply = manager.handle_live_start_push(base_msg("live_start_push", {
+                "url": "mock://dock3/live",
+                "url_type": 4,
+                "video_id": "EDGEGW001/0/normal",
+                "video_quality": 2,
+            }))
+        finally:
+            Config.merge({"runtime": {"mode": "test"}})
+
+        self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+
+    def test_upload_callback_keeps_official_nested_fields(self):
+        events = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        manager.report_upload_complete({
+            "object_key": "dock3/sample.jpg",
+            "path": "sample.jpg",
+            "name": "sample.jpg",
+        })
+
+        file_data = events[0]["data"]["file"]
+        self.assertEqual(file_data["object_key"], "dock3/sample.jpg")
+        self.assertIn("flight_id", file_data["ext"])
+        self.assertIn("drone_model_key", file_data["ext"])
+        self.assertIn("payload_model_key", file_data["ext"])
+        self.assertIn("is_original", file_data["ext"])
+        self.assertIn("gimbal_yaw_degree", file_data["metadata"])
+        self.assertIn("absolute_altitude", file_data["metadata"])
+        self.assertIn("relative_altitude", file_data["metadata"])
+        self.assertIn("create_time", file_data["metadata"])
+        self.assertIn("lat", file_data["metadata"]["shoot_position"])
+        self.assertIn("lng", file_data["metadata"]["shoot_position"])
 
     def test_live_start_rejects_invalid_payload(self):
         ok, _, errors = validate_live_start_payload({"url": "", "video_id": ""})

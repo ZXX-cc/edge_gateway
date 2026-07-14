@@ -92,3 +92,24 @@ device:
 - 拓扑回包：`sys/product/{sn}/status_reply`
 
 EMQX 侧只需要按上述 topic 接收/转发，不需要 DJI 云端 MQTT 客户端参数。
+
+## 直播与媒体字段
+
+直播按 Dock3 官方方法名接入，兼容旧测试方法名但生产建议只发官方方法名：
+
+- `live_start_push`：`url_type`、`url`、`video_id`、`video_quality`
+- `live_stop_push`：`video_id`
+- `live_camera_change`：`video_id`、`camera_position`
+- `live_lens_change`：`video_type`
+- `live_set_quality`：`video_id`、`video_quality`
+
+生产模式会拒绝 `mock://` 直播地址；真实直播源必须在 `media.video_sources` 配置为 `/dev/video*`、`rtsp://`、`http://` 或 `https://`。如果真实机场链路暂时只能由外部推流服务提供，请把 `live_start_push.url` 填为真实 RTMP、GB28181 或 WebRTC WHIP 参数，不要使用代码内置测试源。
+
+媒体按 Dock3 官方字段接入：
+
+- `highest_priority_upload_flighttask_media` 事件：`flight_id`
+- `upload_flighttask_media_prioritize` 服务：`flight_id`
+- `file_upload_callback` 事件：`file.object_key/path/name/ext/metadata`
+- `storage_config_get` 请求回包：`output.bucket`、`output.credentials.access_key_id`、`output.credentials.access_key_secret`、`output.credentials.expire`、`output.credentials.security_token`、`output.endpoint`、`output.provider`、`output.region`、`output.object_key_prefix`
+
+`storage_config_get` 不会生成模拟 AK/SK。生产环境需要通过 `media.oss` 配置真实对象存储信息，或由上游云端通过 `requests_reply` 返回真实临时凭证。

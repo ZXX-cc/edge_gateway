@@ -1,10 +1,4 @@
-"""
-DJI Dock 3 media protocol helpers.
-
-The real Dock3 media service is backed by object storage and cloud-issued
-upload credentials.  In the local gateway simulation we keep the cloud-facing
-shape stable while the storage backend is a local directory.
-"""
+"""DJI Dock 3 media protocol helpers."""
 from __future__ import annotations
 
 import hashlib
@@ -240,4 +234,22 @@ def upload_progress_event_data(
             "status": status,
             "ext": {"files": event_files},
         },
+    }
+
+
+def storage_config_output(config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    config = config or {}
+    credentials = config.get("credentials") if isinstance(config.get("credentials"), dict) else {}
+    return {
+        "bucket": str(config.get("bucket", "") or ""),
+        "credentials": {
+            "access_key_id": str(credentials.get("access_key_id", config.get("access_key_id", "")) or ""),
+            "access_key_secret": str(credentials.get("access_key_secret", config.get("access_key_secret", "")) or ""),
+            "expire": int(credentials.get("expire", config.get("expire", 0)) or 0),
+            "security_token": str(credentials.get("security_token", config.get("security_token", "")) or ""),
+        },
+        "endpoint": str(config.get("endpoint", "") or ""),
+        "provider": str(config.get("provider", "minio") or "minio"),
+        "region": str(config.get("region", "") or ""),
+        "object_key_prefix": str(config.get("object_key_prefix", "") or ""),
     }
