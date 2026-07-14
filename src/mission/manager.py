@@ -35,6 +35,7 @@ from src.cloud_api.dock3_wayline import (
     STATUS_REJECTED,
     STATUS_SENT,
     normalize_prepare_payload,
+    normalize_in_flight_wayline_payload,
     parse_wayline_file,
     normalize_return_payload,
     normalize_undo_payload,
@@ -3117,6 +3118,34 @@ class MissionManager:
             data=reply_data,
         )
 
+    def handle_flighttask_stop(self, msg: dict) -> dict:
+        """
+        任务终止 (flighttask_stop)
+
+        官方字段: { flight_id, reason }。reason 当前仅作为终止原因透传记录，
+        真正终止动作复用当前航线取消链路，避免无真实飞控动作时伪造成功。
+        """
+        data = msg.get('data', {})
+        ok, flight_id, errors = validate_flight_id_payload(data, 'flighttask_stop')
+        if not ok:
+            error_msg = "; ".join(errors)
+            logger.warning(f"Flighttask stop validation failed: {error_msg}")
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
+        reason = data.get('reason', 0) if isinstance(data, dict) else 0
+        if not isinstance(reason, int) or isinstance(reason, bool) or reason not in (0, 1):
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str="reason must be int enum 0/1",
+            )
+        stop_msg = dict(msg)
+        stop_msg['data'] = {'flight_ids': [flight_id]}
+        reply = self.handle_flighttask_undo(stop_msg)
+        if isinstance(reply, dict):
+            reply['method'] = msg.get('method', 'flighttask_stop')
+            reply.setdefault('data', {})['reason'] = reason
+        return reply
+
     def handle_flighttask_return(self, msg: dict) -> dict:
         """
         飞行任务返航 (flighttask_return)
@@ -3223,6 +3252,34 @@ class MissionManager:
             data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=24)
         )
 
+    def handle_return_specific_home(self, msg: dict) -> dict:
+        """
+        指定 home 点返航 (return_specific_home)
+
+        单机场真实链路只支持返回本网关机场。蛙跳/多机场 home 点需要额外的
+        多机场拓扑和返航规划 adapter，未接入时必须拒绝而不是假成功。
+        """
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        home_dock_sn = str(data.get('home_dock_sn', '') or '')
+        if not home_dock_sn:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str="home_dock_sn must be non-empty string",
+            )
+        if home_dock_sn != self.gateway_sn:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data=self._wayline_reply_data(
+                    STATUS_REJECTED,
+                    current_step=self._current_step,
+                    extra={'home_dock_sn': home_dock_sn},
+                ),
+                msg_str="return_specific_home requires multi-dock home adapter",
+            )
+        return self.handle_return_home(msg)
+
     @serialize_flighttask
     def handle_flighttask_progress(self, msg: dict) -> dict:
         """
@@ -3265,6 +3322,36 @@ class MissionManager:
                 }
             )
         )
+
+    def handle_flighttask_progress_get(self, msg: dict) -> dict:
+        """
+        机场任务状态获取 (flighttask_progress_get)
+
+        官方 requests_reply 输出: { flight_id, progress: {current_step, percent}, status }。
+        本地作为 services 兼容入口时返回同一结构。
+        """
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        target_sn = str(data.get('sn', '') or self.gateway_sn)
+        if target_sn and target_sn != self.gateway_sn:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data={'output': {
+                    'flight_id': '',
+                    'progress': {'current_step': self._current_step, 'percent': 0},
+                    'status': STATUS_REJECTED,
+                }},
+                msg_str="flighttask_progress_get for remote dock is not available",
+            )
+
+        return MessageBuilder.build_reply(msg, result=0, data={'output': {
+            'flight_id': self._current_task_id or '',
+            'progress': {
+                'current_step': self._current_step,
+                'percent': self._current_progress_percent(),
+            },
+            'status': self._wayline_status_name(),
+        }})
 
     def handle_flighttask_pause(self, msg: dict) -> dict:
         """
@@ -3501,6 +3588,61 @@ class MissionManager:
                 }
             }
         })
+
+    def _reject_in_flight_wayline(self, msg: dict, payload: dict) -> dict:
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            data={
+                'output': {'status': STATUS_REJECTED},
+                'in_flight_wayline_id': payload.get('in_flight_wayline_id', ''),
+            },
+            msg_str="in-flight wayline adapter is not connected",
+        )
+
+    def handle_in_flight_wayline_deliver(self, msg: dict) -> dict:
+        """空中下发航线。当前未接真实空中航线 adapter，校验字段后明确拒绝。"""
+        ok, payload, errors = normalize_in_flight_wayline_payload(
+            msg.get('data', {}),
+            'in_flight_wayline_deliver',
+        )
+        if not ok:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str="; ".join(errors),
+            )
+        return self._reject_in_flight_wayline(msg, payload)
+
+    def handle_in_flight_wayline_stop(self, msg: dict) -> dict:
+        """暂停空中航线。"""
+        ok, payload, errors = normalize_in_flight_wayline_payload(
+            msg.get('data', {}),
+            'in_flight_wayline_stop',
+        )
+        if not ok:
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="; ".join(errors))
+        return self._reject_in_flight_wayline(msg, payload)
+
+    def handle_in_flight_wayline_recover(self, msg: dict) -> dict:
+        """恢复空中航线。"""
+        ok, payload, errors = normalize_in_flight_wayline_payload(
+            msg.get('data', {}),
+            'in_flight_wayline_recover',
+        )
+        if not ok:
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="; ".join(errors))
+        return self._reject_in_flight_wayline(msg, payload)
+
+    def handle_in_flight_wayline_cancel(self, msg: dict) -> dict:
+        """取消空中航线。"""
+        ok, payload, errors = normalize_in_flight_wayline_payload(
+            msg.get('data', {}),
+            'in_flight_wayline_cancel',
+        )
+        if not ok:
+            return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="; ".join(errors))
+        return self._reject_in_flight_wayline(msg, payload)
 
     def _get_task_status_name(self) -> str:
         """获取任务状态名称"""

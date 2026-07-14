@@ -113,3 +113,16 @@ EMQX 侧只需要按上述 topic 接收/转发，不需要 DJI 云端 MQTT 客�
 - `storage_config_get` 请求回包：`output.bucket`、`output.credentials.access_key_id`、`output.credentials.access_key_secret`、`output.credentials.expire`、`output.credentials.security_token`、`output.endpoint`、`output.provider`、`output.region`、`output.object_key_prefix`
 
 `storage_config_get` 不会生成模拟 AK/SK。生产环境需要通过 `media.oss` 配置真实对象存储信息，或由上游云端通过 `requests_reply` 返回真实临时凭证。
+
+## 航线字段
+
+Dock3 航线管理按官方 `wayline.html` 方法名接入：
+
+- 事件：`return_home_info`、`flighttask_ready`、`flighttask_progress`、`device_exit_homing_notify`、`in_flight_wayline_progress`
+- 服务：`flighttask_execute`、`return_specific_home`、`flighttask_stop`、`return_home_cancel`、`return_home`、`flighttask_recovery`、`flighttask_pause`、`flighttask_undo`、`flighttask_prepare`、`flighttask_create`
+- 请求：`flighttask_progress_get`、`flighttask_resource_get`
+- 空中航线服务：`in_flight_wayline_deliver`、`in_flight_wayline_stop`、`in_flight_wayline_recover`、`in_flight_wayline_cancel`
+
+真实链路中 `flighttask_prepare` 会拒绝 `simulate_mission.is_enable=1`，并要求航线文件可被真实下载/解析并上传到飞控；没有飞控或航线 adapter 时返回明确错误，不再返回模拟成功。`in_flight_wayline_*` 已按官方字段校验，但当前没有真实空中航线 adapter，生产环境会返回“不支持”错误，避免云端误判为空中航线已执行。
+
+`return_specific_home` 需要多机场 home 点规划能力；当前单机场链路只允许返回本网关 SN，目标为其他机场时会明确拒绝。蛙跳任务需要后续接入多机场拓扑、图传链路和返航规划 adapter 后再打开。

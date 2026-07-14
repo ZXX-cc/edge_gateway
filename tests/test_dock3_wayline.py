@@ -972,6 +972,72 @@ class Dock3WaylineTest(unittest.TestCase):
         bad_resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))
         self.assertEqual(bad_resume["data"]["result"], WAYLINE_RESUME_STATE_INVALID)
 
+    def test_official_wayline_progress_get_shape(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-active"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._current_waypoint_idx = 1
+        manager._current_step = 23
+        manager._status = manager.MISSION_RUNNING
+
+        reply = manager.handle_flighttask_progress_get(base_msg("flighttask_progress_get", {
+            "sn": manager.gateway_sn,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["flight_id"], "flight-active")
+        self.assertEqual(reply["data"]["output"]["progress"]["current_step"], 23)
+        self.assertEqual(reply["data"]["output"]["progress"]["percent"], 50)
+        self.assertEqual(reply["data"]["output"]["status"], "in_progress")
+
+    def test_return_specific_home_rejects_remote_home_without_adapter(self):
+        manager = MissionManager()
+        reply = manager.handle_return_specific_home(base_msg("return_specific_home", {
+            "home_dock_sn": "REMOTE-DOCK-001",
+        }))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+
+    def test_in_flight_wayline_validates_fields_and_rejects_without_adapter(self):
+        manager = MissionManager()
+        invalid = manager.handle_in_flight_wayline_deliver(base_msg("in_flight_wayline_deliver", {
+            "in_flight_wayline_id": "air-001",
+            "file": {"url": "", "fingerprint": ""},
+        }))
+        self.assertEqual(invalid["data"]["result"], INVALID_COMMAND_FORMAT)
+
+        rejected = manager.handle_in_flight_wayline_deliver(base_msg("in_flight_wayline_deliver", {
+            "in_flight_wayline_id": "air-001",
+            "file": {"url": "https://example.invalid/mission.kmz", "fingerprint": "md5"},
+            "out_of_control_action": 0,
+            "exit_wayline_when_rc_lost": 0,
+            "rth_altitude": 120,
+            "rth_mode": 1,
+            "wayline_precision_type": 0,
+        }))
+
+        self.assertEqual(rejected["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(rejected["data"]["output"]["status"], "rejected")
+        self.assertEqual(rejected["data"]["in_flight_wayline_id"], "air-001")
+
+    def test_flighttask_stop_uses_official_fields(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-active"
+        manager._current_wayline = [{"seq": 0}]
+        manager._status = manager.MISSION_RUNNING
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        reply = manager.handle_flighttask_stop(base_msg("flighttask_stop", {
+            "flight_id": "flight-active",
+            "reason": 0,
+        }))
+
+        self.assertEqual(reply["method"], "flighttask_stop")
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["reason"], 0)
+        self.assertEqual(reply["data"]["canceled_flight_id"], "flight-active")
+
 
 if __name__ == "__main__":
     unittest.main()

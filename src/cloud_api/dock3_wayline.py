@@ -529,6 +529,68 @@ def normalize_return_payload(data: Any) -> Tuple[bool, str, int, List[str]]:
     return not errors, flight_id, return_type, errors
 
 
+def normalize_in_flight_wayline_payload(
+    data: Any,
+    method: str,
+) -> Tuple[bool, Dict[str, Any], List[str]]:
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return False, {}, [f"{method} data must be object"]
+
+    errors: List[str] = []
+    normalized = dict(data)
+    in_flight_wayline_id = str(data.get("in_flight_wayline_id", "") or "")
+    if method != "in_flight_wayline_cancel" and not in_flight_wayline_id:
+        errors.append("in_flight_wayline_id must be non-empty string")
+
+    if method == "in_flight_wayline_deliver":
+        file_info = data.get("file", {})
+        if not isinstance(file_info, dict):
+            errors.append("file must be object")
+            file_info = {}
+        else:
+            if not isinstance(file_info.get("url", ""), str) or not file_info.get("url"):
+                errors.append("file.url must be non-empty string")
+            if not isinstance(file_info.get("fingerprint", ""), str) or not file_info.get("fingerprint"):
+                errors.append("file.fingerprint must be non-empty string")
+
+        out_of_control_action = data.get("out_of_control_action", 0)
+        if not _is_int(out_of_control_action) or out_of_control_action not in VALID_OUT_OF_CONTROL_ACTIONS:
+            errors.append("out_of_control_action must be int enum 0/1/2")
+
+        exit_wayline_when_rc_lost = data.get("exit_wayline_when_rc_lost", 0)
+        if (
+            not _is_int(exit_wayline_when_rc_lost)
+            or exit_wayline_when_rc_lost not in VALID_EXIT_WAYLINE_WHEN_RC_LOST
+        ):
+            errors.append("exit_wayline_when_rc_lost must be int enum 0/1")
+
+        rth_altitude = data.get("rth_altitude", 100)
+        if not _is_number(rth_altitude) or not 20 <= float(rth_altitude) <= 1500:
+            errors.append("rth_altitude must be number in range 20..1500")
+
+        rth_mode = data.get("rth_mode", 0)
+        if not _is_int(rth_mode) or rth_mode not in {0, 1}:
+            errors.append("rth_mode must be int enum 0/1")
+
+        wayline_precision_type = data.get("wayline_precision_type", 0)
+        if not _is_int(wayline_precision_type) or wayline_precision_type not in {0, 1}:
+            errors.append("wayline_precision_type must be int enum 0/1")
+
+        normalized.update({
+            "file": file_info,
+            "out_of_control_action": out_of_control_action,
+            "exit_wayline_when_rc_lost": exit_wayline_when_rc_lost,
+            "rth_altitude": rth_altitude,
+            "rth_mode": rth_mode,
+            "wayline_precision_type": wayline_precision_type,
+        })
+
+    normalized["in_flight_wayline_id"] = in_flight_wayline_id
+    return not errors, normalized, errors
+
+
 def progress_percent(current: int, total: int) -> int:
     if total <= 0:
         return 0

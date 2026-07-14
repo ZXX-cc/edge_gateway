@@ -938,14 +938,22 @@ class EdgeGateway:
             'flighttask_prepare': self.mission.handle_flighttask_prepare,
             'flighttask_execute': self.mission.handle_flighttask_execute,
             'flighttask_undo': self.mission.handle_flighttask_undo,
+            'flighttask_stop': self.mission.handle_flighttask_stop,
             'flighttask_return': self.mission.handle_flighttask_return,
             'flighttask_progress': self.mission.handle_flighttask_progress,  # 兼做查询
+            'flighttask_progress_get': self.mission.handle_flighttask_progress_get,
             'flighttask_pause': self.mission.handle_flighttask_pause,
             'flighttask_resume': self.mission.handle_flighttask_resume,
             'flight_setup_abort': self.mission.handle_flight_setup_abort,
             'flighttask_create': self.mission.handle_flighttask_create,
             'flighttask_recovery': self.mission.handle_flighttask_recovery,
             'return_home_cancel': self.mission.handle_return_home_cancel,
+            'return_specific_home': self.mission.handle_return_specific_home,
+            'flighttask_resource_get': self.mission.handle_flighttask_resource_get,
+            'in_flight_wayline_deliver': self.mission.handle_in_flight_wayline_deliver,
+            'in_flight_wayline_stop': self.mission.handle_in_flight_wayline_stop,
+            'in_flight_wayline_recover': self.mission.handle_in_flight_wayline_recover,
+            'in_flight_wayline_cancel': self.mission.handle_in_flight_wayline_cancel,
         }, category='mission')
 
         # ---- 作业管理API (Job Management) ----
