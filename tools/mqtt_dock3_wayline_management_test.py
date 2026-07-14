@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Acceptance test for the Dock3 wayline management page.
+"""Acceptance test for the Dock3 wayline management real chain.
 
-This script drives the gateway through the main Dock3 wayline lifecycle over
-MQTT services:
+This script drives the link:
 
-1. prepare a local mock KMZ wayline
-2. execute the task
-3. query progress
-4. pause and recover
-5. query airport task progress
-6. trigger return and cancel return
-7. stop/cancel the task
-8. verify invalid requests return Dock3 error codes
+platform MQTT -> gateway -> nest simulator -> flight controller.
 
-It is intentionally safe by default: ``simulate_mission.is_enable`` is set to 1
-and no real aircraft or real Dock 3 is required.
+By default ``simulate_mission`` is disabled.  ``flighttask_prepare`` must parse
+the uploaded wayline file and reach the real waypoint upload path.  After
+``flighttask_execute`` the script can inspect the nest simulator drone status
+log to prove that the simulator loaded the mission and forwarded it to the
+flight controller.
 """
 
 from __future__ import annotations
@@ -77,8 +72,8 @@ def local_file_reference(path: str) -> str:
     return str(local_path) if local_path.exists() else path
 
 
-def prepare_payload(flight_id: str, wayline_file: str) -> dict[str, Any]:
-    return {
+def prepare_payload(flight_id: str, wayline_file: str, *, simulate: bool) -> dict[str, Any]:
+    payload = {
         "flight_id": flight_id,
         "task_type": 0,
         "execute_time": now_ms() + 30_000,
@@ -93,12 +88,14 @@ def prepare_payload(flight_id: str, wayline_file: str) -> dict[str, Any]:
         "rth_altitude": 80,
         "out_of_control_action": 0,
         "exit_wayline_when_rc_lost": 0,
-        "simulate_mission": {
-            "is_enable": 1,
+        "simulate_mission": {"is_enable": 1 if simulate else 0},
+    }
+    if simulate:
+        payload["simulate_mission"].update({
             "latitude": -35.363262,
             "longitude": 149.165237,
-        },
-    }
+        })
+    return payload
 
 
 def output_ext(payload: Any) -> dict[str, Any]:
@@ -138,6 +135,88 @@ def assert_file_parsed(payload: Any, min_waypoints: int) -> int:
     return 0
 
 
+def file_size_or_zero(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def read_log_since(path: Path, offset: int) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fp:
+            fp.seek(offset)
+            return fp.read()
+    except OSError:
+        return ""
+
+
+def wait_for_log_patterns(
+    path: Path,
+    offset: int,
+    patterns: list[str],
+    timeout: float,
+) -> tuple[bool, str, list[str]]:
+    deadline = time.monotonic() + max(0.0, timeout)
+    content = ""
+    while time.monotonic() < deadline:
+        content = read_log_since(path, offset)
+        missing = [pattern for pattern in patterns if pattern not in content]
+        if not missing:
+            return True, content, []
+        time.sleep(0.25)
+    content = read_log_since(path, offset)
+    missing = [pattern for pattern in patterns if pattern not in content]
+    return not missing, content, missing
+
+
+def assert_nest_mission_upload(args: argparse.Namespace, offset: int, flight_id: str) -> int:
+    if args.skip_nest_log_check:
+        return 0
+
+    log_path = Path(args.nest_drone_status_log)
+    required = [
+        "takeoff_start_triggers_mission_upload",
+        "mission_start_requested",
+        "mission_file_loaded",
+        "mission_count_sent",
+        "mission_request_received",
+        "mission_item_sent",
+    ]
+    if args.require_nest_mission_ack:
+        required.append("mission_ack_received")
+
+    ok, content, missing = wait_for_log_patterns(log_path, offset, required, args.nest_log_timeout)
+    if not ok:
+        print(
+            "nest simulator mission upload evidence missing: "
+            f"flight_id={flight_id}, log={log_path}, missing={missing}",
+            file=sys.stderr,
+        )
+        if content:
+            print("nest log tail after execute:", file=sys.stderr)
+            print("\n".join(content.splitlines()[-20:]), file=sys.stderr)
+        else:
+            print("no new nest simulator log lines were observed", file=sys.stderr)
+        return 23
+
+    expected_source = args.expect_nest_mission_source or args.wayline_file
+    if expected_source and Path(expected_source).name not in content and str(Path(expected_source)) not in content:
+        print(
+            "nest simulator loaded a mission, but the expected wayline source was not visible: "
+            f"expected={expected_source}",
+            file=sys.stderr,
+        )
+        print("\n".join(content.splitlines()[-20:]), file=sys.stderr)
+        return 24
+
+    print(
+        "nest simulator upload evidence ok: "
+        f"log={log_path}, patterns={len(required)}, source={Path(expected_source).name if expected_source else ''}"
+    )
+    return 0
+
+
 class WaylineManagementClient(MqttRequestClient):
     def service(
         self,
@@ -159,11 +238,12 @@ class WaylineManagementClient(MqttRequestClient):
 
 def run_management_flow(client: WaylineManagementClient, args: argparse.Namespace) -> int:
     flight_id = args.flight_id or f"dock3-wayline-mgmt-{uuid.uuid4().hex[:8]}"
+    nest_log_offset = file_size_or_zero(Path(args.nest_drone_status_log))
 
     print(f"开始 Dock3 航线管理测试: flight_id={flight_id}")
     rc, payload = client.service(
         "flighttask_prepare",
-        prepare_payload(flight_id, args.wayline_file),
+        prepare_payload(flight_id, args.wayline_file, simulate=args.simulate_mission),
         args.timeout,
         expected_status="sent",
     )
@@ -173,8 +253,21 @@ def run_management_flow(client: WaylineManagementClient, args: argparse.Namespac
     if rc != 0:
         return rc
 
+    rc, _ = client.service(
+        "flighttask_execute",
+        {"flight_id": flight_id},
+        args.timeout,
+        {0},
+        "in_progress",
+    )
+    if rc != 0:
+        return rc
+    rc = assert_nest_mission_upload(args, nest_log_offset, flight_id)
+    if rc != 0:
+        return rc
+    time.sleep(args.step_delay)
+
     steps: list[tuple[str, dict[str, Any], set[int], str | None]] = [
-        ("flighttask_execute", {"flight_id": flight_id}, {0}, "in_progress"),
         ("flighttask_progress", {"flight_id": flight_id}, {0}, "in_progress"),
         ("flighttask_pause", {}, {0}, "paused"),
         ("flighttask_progress", {"flight_id": flight_id}, {0}, "paused"),
@@ -293,6 +386,37 @@ def main() -> int:
     parser.add_argument("--expect-waypoint-count", type=int, default=3)
     parser.add_argument("--step-delay", type=float, default=0.1)
     parser.add_argument(
+        "--simulate-mission",
+        action="store_true",
+        help="legacy protocol-only mode; real chain testing should leave this disabled",
+    )
+    parser.add_argument(
+        "--nest-drone-status-log",
+        default="logs/nest_simulator/drone_status.log",
+        help="nest simulator drone status log used to verify mission upload to FC",
+    )
+    parser.add_argument(
+        "--nest-log-timeout",
+        type=float,
+        default=30.0,
+        help="seconds to wait for nest simulator upload evidence after flighttask_execute",
+    )
+    parser.add_argument(
+        "--skip-nest-log-check",
+        action="store_true",
+        help="only verify gateway MQTT replies; do not require nest simulator upload log evidence",
+    )
+    parser.add_argument(
+        "--require-nest-mission-ack",
+        action="store_true",
+        help="also require MISSION_ACK from the flight controller in the nest simulator log",
+    )
+    parser.add_argument(
+        "--expect-nest-mission-source",
+        default="",
+        help="expected mission file path/name in the nest simulator log; defaults to --wayline-file",
+    )
+    parser.add_argument(
         "--use-flighttask-stop",
         action="store_true",
         help="Use official flighttask_stop for cleanup instead of flighttask_undo",
@@ -308,9 +432,19 @@ def main() -> int:
         parser.error("--expect-waypoint-count must be positive")
     if args.step_delay < 0:
         parser.error("--step-delay must be non-negative")
+    if args.nest_log_timeout < 0:
+        parser.error("--nest-log-timeout must be non-negative")
+    if args.simulate_mission and not args.skip_nest_log_check:
+        parser.error("--simulate-mission cannot verify the nest upload chain; add --skip-nest-log-check for legacy mode")
 
     temp_dir = None
     if not args.wayline_file:
+        if not args.skip_nest_log_check:
+            parser.error(
+                "--wayline-file is required for real chain testing so the same file can be "
+                "passed to src/nest_simulator.py --mission-file; use --skip-nest-log-check "
+                "for gateway-only fixture mode"
+            )
         temp_dir = tempfile.TemporaryDirectory()
         mock_path = Path(temp_dir.name) / "dock3-wayline-management.kmz"
         write_mock_kmz(mock_path)
