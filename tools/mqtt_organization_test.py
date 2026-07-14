@@ -122,14 +122,36 @@ def parse_args():
     parser.add_argument("--config", default="config/gateway.yaml")
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--action", choices=["get", "bind", "full"], default="full")
+    parser.add_argument("--action", choices=["status", "get", "bind", "full"], default="full")
     parser.add_argument("--binding-code", default="SIM-BIND-CODE")
     parser.add_argument("--organization-id", default="org_sim_001")
     parser.add_argument("--device-callsign", default="")
     parser.add_argument("--device-model-key", default="dock3-sim")
+    parser.add_argument(
+        "--gateway-device-secret",
+        default="",
+        help="Inject gateway device_secret for generated update_topo during tests.",
+    )
+    parser.add_argument(
+        "--gateway-nonce",
+        default="",
+        help="Inject gateway nonce for generated update_topo during tests.",
+    )
     parser.add_argument("--expect-get-result", type=int, default=0)
     parser.add_argument("--expect-bind-result", type=int, default=0)
     parser.add_argument("--expect-bind-error-count", type=int, default=0)
+    parser.add_argument(
+        "--expect-bind-status",
+        choices=["any", "bound", "unbound"],
+        default="any",
+        help="Validate airport_bind_status bind state when --action status is used.",
+    )
+    parser.add_argument(
+        "--expect-bind-status-sn",
+        action="append",
+        default=[],
+        help="Require a device SN in airport_bind_status output.bind_status. Repeat for multiple SNs.",
+    )
     parser.add_argument("--expect-organization-name", default="")
     parser.add_argument("--expect-timeout", action="store_true")
     parser.add_argument("--expect-event", action="append", default=[], help="Require an emitted event method. Repeat for multiple events.")
@@ -271,6 +293,16 @@ def _unique_ordered(values):
         seen.add(value)
         result.append(value)
     return result
+
+
+def parse_boolish(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "bound"}
+    return bool(value)
 
 
 def verify_device_binding_events(recorded_events, expected_sns=None, expected_count=None):
@@ -583,6 +615,10 @@ def main():
         recorded_states.append(state)
 
     device = DeviceManager()
+    if args.gateway_device_secret:
+        device._gateway_device_secret = args.gateway_device_secret
+    if args.gateway_nonce:
+        device._gateway_nonce = args.gateway_nonce
     status_context["device"] = device
     device.set_event_loop(async_loop)
     device.set_cloud_connection(cloud_conn)
@@ -612,7 +648,50 @@ def main():
             return f"err_infos count expected={args.expect_bind_error_count}, actual={len(err_infos)}"
         return ""
 
+    def validate_bind_status(msg):
+        bind_status = msg.get("data", {}).get("output", {}).get("bind_status", [])
+        if not isinstance(bind_status, list):
+            return "output.bind_status is not a list"
+
+        expected_sns = _unique_ordered(args.expect_bind_status_sn)
+        if expected_sns:
+            actual_sns = {item.get("sn") for item in bind_status if isinstance(item, dict)}
+            missing_sns = sorted(set(expected_sns) - actual_sns)
+            if missing_sns:
+                return f"missing bind_status SNs: {', '.join(missing_sns)}"
+
+        if args.expect_bind_status != "any":
+            expected_bound = args.expect_bind_status == "bound"
+            mismatched = []
+            for item in bind_status:
+                if not isinstance(item, dict):
+                    continue
+                raw_bound = item.get("is_device_bind_organization")
+                actual_bound = parse_boolish(raw_bound)
+                if actual_bound != expected_bound:
+                    mismatched.append(f"{item.get('sn', '<missing-sn>')}={raw_bound!r}")
+            if mismatched:
+                return (
+                    f"bind_status mismatch for {', '.join(mismatched)}: "
+                    f"expected={args.expect_bind_status}"
+                )
+
+        print(json.dumps({"bind_status": bind_status}, ensure_ascii=False, indent=2))
+        return ""
+
     try:
+        if args.action == "status":
+            rc = wait_for_reply(
+                "airport_bind_status",
+                args.timeout,
+                lambda cb: device.query_bind_status_from_cloud(callback=cb),
+                expected_result=args.expect_get_result,
+                expect_timeout=args.expect_timeout,
+                validate_fn=validate_bind_status,
+            )
+            if rc != 0:
+                return rc
+
         if args.action in {"get", "full"}:
             rc = wait_for_reply(
                 "airport_organization_get",
