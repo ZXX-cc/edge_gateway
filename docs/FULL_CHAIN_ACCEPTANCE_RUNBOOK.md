@@ -57,7 +57,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/mqtt_dock3_wayline_test.py` | Wayline 专项 | prepare/execute/progress/pause/resume/return |
 | `tools/mqtt_dock3_media_test.py` | Media 专项，已通过 Ubuntu 复测 | 文件列表、删除、上传优先级、上传事件 |
 | `tools/mqtt_dock3_live_test.py` | Live 专项，已通过 Ubuntu 复测 | `mock://` 直播开始/停止、质量、镜头、状态事件 |
-| `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项，已通过 Ubuntu 复测 | HMS 告警、日志列表、上传模拟、取消、进度事件和非法参数拒绝 |
+| `tools/mqtt_dock3_hms_log_test.py` | HMS/Log 专项 | HMS 告警、日志列表、`fileupload_start` 本地 HTTP 真实字节上传、取消、进度事件和非法参数拒绝 |
 | `tests/test_mqtt_background_handlers.py` | P0-16 本地非阻塞回归 | 慢日志/媒体 IO handler 不占用 MQTT 网络回调线程，后台完成后 reply 可达；控制类 handler 保持同步顺序 |
 | `tools/e2e_full_chain_test.py` | 当前 P0/P1 核心 MQTT 域 E2E 编排 | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config |
 | `tools/global_state_machine_admission_audit.py` | 全局状态机/命令准入验收 | 未绑定、飞控离线、急停、任务占用、DRC 占用、OTA 中和非法状态迁移 |
@@ -70,7 +70,7 @@ DJI Demo Docker 可作为可选联调参考，不进入客户交付判定。
 | `tools/nest_v13_protocol_test.py` | `DRONE_NEST_COMMAND/RESPONSE/ORDER_RESPONSE`、命令条件、状态位、拒绝原因 | P0/P1 |
 | 已通过 `tools/mqtt_dock3_media_test.py` | 文件列表、删除、上传优先级、上传事件 | P1 |
 | 已通过 `tools/mqtt_dock3_live_test.py` | 直播开始/停止、质量、镜头、状态事件 | P1 |
-| Ubuntu 复测 `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表/上传模拟、取消、失败码 | P1 |
+| Ubuntu 复测 `tools/mqtt_dock3_hms_log_test.py` | HMS 告警、远程日志列表、本地 HTTP 真实字节上传、取消、失败码 | P1 |
 | `tools/mqtt_dock3_firmware_config_test.py` | 固件升级模拟、配置下发、持久化、回滚 | P1 |
 | 已通过 `tools/e2e_takeoff_flow_test.py` | 一键启航离线闭环：mock KMZ、机巢 `request_takeoff`、任务完成事件 | P1 |
 | `tools/mqtt_one_key_takeoff_flow_test.py` | 一键启航 MQTT 实跑入口：`--simulate` 跑完整闭环，真实链路默认停在任务执行中 | P1 |
@@ -309,7 +309,7 @@ P1 通过标准：
 | 一键启航 | 当前离线闭环已覆盖 mock KMZ、任务准备、任务执行、机巢 `request_takeoff` 和任务完成事件；真实机巢耗时动作继续实跑 |
 | Media | 文件列表、删除、上传优先级、上传事件可用 |
 | Live | 开始/停止直播、质量、镜头、状态事件可用；当前 Ubuntu 专项已通过 |
-| HMS/Log | 告警事件、日志列表、上传模拟、失败码可用；当前 Ubuntu 专项已通过 |
+| HMS/Log | 告警事件、日志列表、`fileupload_start` 字节上传、失败码可用；生产 OSS/SDK 签名上传仍按真实云存储 adapter 精校 |
 | 故障注入 | 七类机巢故障生成 HMS、dock_operation、OSD；pushMode state、MQTT 断线恢复/重复请求/错误 topic 和数据库操作记录全部通过 |
 | Firmware/Config | 升级模拟、进度、取消、结果事件、配置下发、查询、持久化和回滚可用；当前 Ubuntu 专项已通过 |
 | 当前核心 E2E | properties、device、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、HMS/log、firmware/config 11 段可重复严格通过 |

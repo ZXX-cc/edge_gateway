@@ -3,13 +3,16 @@
 
 import argparse
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, result_code
+from mqtt_test_client import output_status
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 from tool_config import add_config_argument, load_config, resolve_mqtt_settings
 
@@ -67,6 +70,66 @@ def first_fileupload_item(payload: dict, name: str) -> tuple[dict, dict] | tuple
     return None, None
 
 
+def wait_event_status(client, method: str, previous_count: int, timeout: float, status: str):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        events = client.events_by_method.get(method, [])
+        for event in events[previous_count:]:
+            if output_status(event) == status:
+                print(f"event observed: method={method}, status={status}, tid={event.get('tid')}")
+                return 0, event
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        client.event_signal.wait(max(0.05, min(0.5, remaining)))
+        client.event_signal.clear()
+    print(f"timeout waiting for {method} event status={status}", file=sys.stderr)
+    return 6, None
+
+
+class UploadCapture:
+    def __init__(self):
+        self.server: HTTPServer | None = None
+        self.thread: threading.Thread | None = None
+        self.received: list[dict] = []
+
+    def start(self) -> str:
+        capture = self
+
+        class UploadHandler(BaseHTTPRequestHandler):
+            def do_PUT(self):  # noqa: N802
+                size = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(size)
+                capture.received.append({
+                    "path": self.path,
+                    "size": len(body),
+                    "body": body,
+                })
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                return
+
+        self.server = HTTPServer(("127.0.0.1", 0), UploadHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_port}/dock3-log-upload"
+
+    def stop(self):
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+
+    def wait_upload(self, timeout: float, min_size: int = 1) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if any(item.get("size", 0) >= min_size for item in self.received):
+                return True
+            time.sleep(0.05)
+        return False
+
+
 class Dock3HmsLogClient(MqttRequestClient):
     def request(self, method, data, timeout, allowed_results=None, expected_status=None):
         return super().request(
@@ -86,6 +149,12 @@ def run_hms_log_checks(client: Dock3HmsLogClient, args) -> int:
     log_dir = resolve_log_dir(args.config, args.log_dir)
     seeded = seed_log_file(log_dir, args.seed_name)
     print(f"seed log file -> {seeded}")
+    upload_capture = None
+    upload_endpoint = args.upload_endpoint
+    if not args.mock_upload and not upload_endpoint:
+        upload_capture = UploadCapture()
+        upload_endpoint = upload_capture.start()
+        print(f"local log upload endpoint -> {upload_endpoint}")
 
     alarm_id = args.alarm_id
     hms_before = client.event_count("hms")
@@ -185,45 +254,64 @@ def run_hms_log_checks(client: Dock3HmsLogClient, args) -> int:
         print(f"seeded log not found in fileupload_list: {seeded.name}", file=sys.stderr)
         return 14
 
-    progress_before = client.event_count("fileupload_progress")
-    rc, _ = client.request(
-        "fileupload_start",
-        {
-            "provider": "mock",
-            "bucket": "dock3-hms-log-test",
-            "region": "local",
-            "endpoint": "mock://local-log-upload",
-            "credentials": {
-                "access_key_id": "mock",
-                "access_key_secret": "mock",
-                "security_token": "mock",
-                "expire": int(time.time()) + 3600,
-            },
-            "params": {
-                "files": [{
-                    "module": group.get("module", "3"),
-                    "object_key": upload_item.get("object_key", f"logs/{seeded.name}"),
-                    "list": [{
-                        "boot_index": upload_item.get("boot_index"),
-                        "size": upload_item.get("size", 0),
+    try:
+        progress_before = client.event_count("fileupload_progress")
+        object_key = upload_item.get("object_key", f"logs/{args.sn}/{seeded.name}")
+        rc, _ = client.request(
+            "fileupload_start",
+            {
+                "provider": "mock" if args.mock_upload else "minio",
+                "bucket": "dock3-hms-log-test",
+                "region": "local",
+                "endpoint": "mock://local-log-upload" if args.mock_upload else upload_endpoint,
+                "credentials": {
+                    "access_key_id": "dock3-log-test-ak",
+                    "access_key_secret": "dock3-log-test-sk",
+                    "security_token": "dock3-log-test-token",
+                    "expire": int(time.time()) + 3600,
+                },
+                "params": {
+                    "files": [{
+                        "module": group.get("module", "3"),
+                        "object_key": object_key,
+                        "list": [{
+                            "boot_index": upload_item.get("boot_index"),
+                            "size": upload_item.get("size", 0),
+                        }],
                     }],
-                }],
+                },
             },
-        },
-        args.timeout,
-        [0],
-        "in_progress",
-    )
-    if rc != 0:
-        return rc
-    rc, _ = client.wait_event(
-        "fileupload_progress",
-        progress_before,
-        args.timeout,
-        expected_status="in_progress",
-    )
-    if rc != 0:
-        return rc
+            args.timeout,
+            [0],
+            "in_progress",
+        )
+        if rc != 0:
+            return rc
+        rc, _ = wait_event_status(
+            client,
+            "fileupload_progress",
+            progress_before,
+            args.timeout,
+            "in_progress",
+        )
+        if rc != 0:
+            return rc
+        if not args.mock_upload:
+            rc, _ = wait_event_status(
+                client,
+                "fileupload_progress",
+                progress_before + 1,
+                args.timeout,
+                "ok",
+            )
+            if rc != 0:
+                return rc
+            if upload_capture and not upload_capture.wait_upload(args.timeout, seeded.stat().st_size):
+                print("local HTTP upload endpoint did not receive log bytes", file=sys.stderr)
+                return 16
+    finally:
+        if upload_capture:
+            upload_capture.stop()
 
     progress_before = client.event_count("fileupload_progress")
     rc, _ = client.request(
@@ -270,6 +358,8 @@ def main():
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--seed-name", default="")
     parser.add_argument("--alarm-id", default="dock3-sim-hms-001")
+    parser.add_argument("--upload-endpoint", default="")
+    parser.add_argument("--mock-upload", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()

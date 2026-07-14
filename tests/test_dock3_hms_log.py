@@ -5,6 +5,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +43,7 @@ if "src.database.operation_db" not in sys.modules:
 from src.cloud_api.dock3_hms_log import (
     TASK_STATUS_CANCELED,
     TASK_STATUS_IN_PROGRESS,
+    TASK_STATUS_OK,
     normalize_fileupload_start_files,
     normalize_hms_alarm,
     scan_log_files,
@@ -157,6 +159,60 @@ class Dock3LogManagerTest(unittest.TestCase):
                 event.get("data", {}).get("output", {}).get("status") == TASK_STATUS_CANCELED
                 for event in events
             ))
+
+    def test_fileupload_start_puts_real_log_bytes_to_endpoint(self):
+        uploaded = {}
+        events = []
+        manager = LogManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager.log_dir = tmp
+            payload = b"dock3 real log upload bytes\n"
+            path = Path(tmp) / "edge_gateway_real_upload.log"
+            path.write_bytes(payload)
+
+            listed = manager.handle_fileupload_list(base_msg("fileupload_list", {"module_list": [3]}))
+            upload_item = listed["data"]["files"][0]["list"][0]
+
+            def capture_upload(filepath, target_url):
+                uploaded["target_url"] = target_url
+                uploaded["body"] = Path(filepath).read_bytes()
+                return True
+
+            with patch.object(manager, "_upload_file_http", side_effect=capture_upload):
+                started = manager.handle_fileupload_start(base_msg("fileupload_start", {
+                    "provider": "minio",
+                    "bucket": "dock3-test",
+                    "region": "local",
+                    "endpoint": "http://127.0.0.1:18080/dock3-log-upload",
+                    "credentials": {
+                        "access_key_id": "test-access-key",
+                        "access_key_secret": "test-secret-key",
+                        "security_token": "test-token",
+                        "expire": int(time.time()) + 3600,
+                    },
+                    "params": {
+                        "files": [{
+                            "module": "3",
+                            "object_key": "logs/EDGEGW001/edge_gateway_real_upload.log",
+                            "list": [{"boot_index": upload_item["boot_index"]}],
+                        }],
+                    },
+                }))
+
+                deadline = time.time() + 3
+                while time.time() < deadline and "body" not in uploaded:
+                    time.sleep(0.05)
+
+        self.assertEqual(started["data"]["result"], 0)
+        self.assertEqual(uploaded.get("body"), payload)
+        self.assertTrue(uploaded.get("target_url", "").endswith("/logs/EDGEGW001/edge_gateway_real_upload.log"))
+        self.assertTrue(any(
+            event.get("data", {}).get("output", {}).get("status") == TASK_STATUS_OK
+            for event in events
+        ))
 
 
 class Dock3HmsManagerTest(unittest.TestCase):

@@ -68,6 +68,11 @@ def stable_id(value: str, length: int = 24) -> str:
     return hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:length]
 
 
+def stable_boot_index(value: str) -> int:
+    """Return a stable positive int boot index for Dock3 log file selection."""
+    return int(hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:8], 16)
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -236,7 +241,8 @@ def build_log_file(path: str | Path, log_root: str | Path, device_sn: str, modul
     stat = filepath.stat()
     relative = filepath.relative_to(root) if filepath.is_relative_to(root) else Path(filepath.name)
     relative_key = relative.as_posix()
-    file_id = stable_id(str(filepath.resolve()))
+    resolved = str(filepath.resolve())
+    file_id = stable_id(resolved)
     update_time = int(stat.st_mtime * 1000)
 
     return {
@@ -248,7 +254,7 @@ def build_log_file(path: str | Path, log_root: str | Path, device_sn: str, modul
         "file_name": filepath.name,
         "object_key": f"logs/{device_sn}/{relative_key}",
         "path": relative_key,
-        "boot_index": file_id,
+        "boot_index": stable_boot_index(resolved),
         "start_time": update_time,
         "end_time": update_time,
         "create_time": int(stat.st_ctime * 1000),
@@ -361,8 +367,10 @@ def upload_progress_event_data(
             "fingerprint": item.get("fingerprint") or item.get("file_id") or item.get("boot_index") or "",
             "size": int(item.get("size", item.get("file_size", 0)) or 0),
             "progress": {
+                "current_step": progress_value,
                 "progress": progress_value,
                 "finish_time": now_ms if progress_value >= 100 or status in {TASK_STATUS_OK, TASK_STATUS_CANCELED} else 0,
+                "total_step": 100,
                 "upload_rate": 0,
                 "status": status,
                 "result": result,

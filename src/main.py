@@ -88,6 +88,7 @@ def _normalize_udp_target_host(host: str) -> str:
 # 网络回调线程；飞控、DRC 和机巢控制仍保持原有同步顺序，避免状态机并发。
 BACKGROUND_IO_METHODS = frozenset({
     'fileupload_list',
+    'fileupload_start',
     'device_log_list_get',
     'device_log_upload',
     'file_list_get',

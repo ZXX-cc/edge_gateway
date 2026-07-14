@@ -6,6 +6,11 @@
 - fileupload_start: 开始上传日志
 - fileupload_update: 更新日志上传状态
 """
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
@@ -13,6 +18,7 @@ from src.utils.message import MessageBuilder
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 from src.cloud_api.dock3_hms_log import (
     TASK_STATUS_CANCELED,
+    TASK_STATUS_FAILED,
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_OK,
     TASK_STATUS_REJECTED,
@@ -61,6 +67,80 @@ class LogManager:
         event = MessageBuilder.build_event('fileupload_progress', event_data, self.gateway_sn)
         self._event_callback(event)
         logger.info(f"Fileupload progress reported: status={status}, files={len(files)}")
+
+    def _known_logs_by_boot_index(self) -> Dict[str, Dict[str, Any]]:
+        logs = scan_log_files(self.log_dir, self.gateway_sn, module=3)
+        indexed: Dict[str, Dict[str, Any]] = {}
+        for item in logs:
+            for key in ("boot_index", "file_id", "fingerprint"):
+                value = item.get(key)
+                if value not in (None, ""):
+                    indexed[str(value)] = item
+        return indexed
+
+    def _upload_target_url(self, endpoint: str, object_key: str) -> str:
+        endpoint = str(endpoint or "").strip()
+        object_key = str(object_key or "").lstrip("/")
+        if not endpoint:
+            return ""
+        if endpoint.startswith("mock://"):
+            return endpoint
+        if endpoint.startswith(("http://", "https://")):
+            return urllib.parse.urljoin(endpoint.rstrip("/") + "/", object_key)
+        return ""
+
+    def _upload_file_http(self, filepath: str, target_url: str) -> bool:
+        try:
+            with open(filepath, "rb") as handle:
+                data = handle.read()
+            request = urllib.request.Request(target_url, data=data, method="PUT")
+            request.add_header("Content-Type", "application/octet-stream")
+            request.add_header("Content-Length", str(len(data)))
+            with urllib.request.urlopen(request, timeout=300) as response:
+                return 200 <= int(response.status) < 300
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            logger.warning("Fileupload HTTP PUT failed: url=%s, error=%s", target_url, exc)
+            return False
+
+    def _run_upload_task(self, task_key: str):
+        task = self._upload_tasks.get(task_key)
+        if not task:
+            return
+
+        files = task.get("files", [])
+        target = task.get("target", {})
+        endpoint = target.get("endpoint", "")
+        provider = target.get("provider", "")
+        object_key = target.get("object_key", "")
+        target_url = self._upload_target_url(endpoint, object_key)
+
+        if not files:
+            task["status"] = TASK_STATUS_REJECTED
+            return
+
+        if str(endpoint).startswith("mock://") or str(provider).lower() == "mock":
+            task["status"] = TASK_STATUS_OK
+            task["progress"] = 100
+            self.report_fileupload_progress(TASK_STATUS_OK, files)
+            return
+
+        ok = bool(target_url)
+        for item in files:
+            if task.get("status") == TASK_STATUS_CANCELED:
+                self.report_fileupload_progress(TASK_STATUS_CANCELED, files)
+                return
+            local_path = item.get("local_path", "")
+            if not local_path or not Path(local_path).exists():
+                logger.warning("Fileupload source missing: %s", local_path)
+                ok = False
+                break
+            if not self._upload_file_http(local_path, target_url):
+                ok = False
+                break
+
+        task["status"] = TASK_STATUS_OK if ok else TASK_STATUS_FAILED
+        task["progress"] = 100 if ok else 0
+        self.report_fileupload_progress(TASK_STATUS_OK if ok else TASK_STATUS_FAILED, files)
 
     def handle_fileupload_list(self, msg: dict) -> dict:
         """
@@ -113,15 +193,25 @@ class LogManager:
                    f"files={len(files)}, creds_expire={credentials.get('expire', 0)}")
 
         task_files = []
+        known_logs = self._known_logs_by_boot_index()
+        new_task_keys = []
         for f in files:
             task_key = f"{f.get('module')}_{f.get('object_key')}"
+            new_task_keys.append(task_key)
             flattened = []
             for item in f.get('list', []):
+                boot_index = str(item.get('boot_index') or '')
+                source = known_logs.get(boot_index, {})
                 flattened.append({
+                    **source,
                     **item,
                     'device_sn': self.gateway_sn,
                     'module': f.get('module', '3'),
                     'object_key': f.get('object_key', ''),
+                    'key': f.get('object_key', ''),
+                    'local_path': str(Path(self.log_dir) / source.get('path', '')) if source.get('path') else '',
+                    'fingerprint': source.get('fingerprint') or item.get('fingerprint') or boot_index,
+                    'size': int(source.get('size', item.get('size', 0)) or 0),
                 })
             self._upload_tasks[task_key] = {
                 'status': TASK_STATUS_IN_PROGRESS,
@@ -132,11 +222,20 @@ class LogManager:
                     'region': region,
                     'endpoint': endpoint,
                     'provider': provider,
+                    'object_key': f.get('object_key', ''),
                 },
             }
             task_files.extend(flattened)
 
         self.report_fileupload_progress(TASK_STATUS_IN_PROGRESS, task_files)
+        for task_key in new_task_keys:
+            thread = threading.Thread(
+                target=self._run_upload_task,
+                args=(task_key,),
+                name=f"dock3-log-upload-{task_key}",
+                daemon=True,
+            )
+            thread.start()
 
         return MessageBuilder.build_reply(msg, result=0, data=task_output(
             TASK_STATUS_IN_PROGRESS,
