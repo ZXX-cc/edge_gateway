@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,34 @@ from pathlib import Path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+if "src.database.connection" not in sys.modules:
+    connection = types.ModuleType("src.database.connection")
+
+    async def init_database_async():
+        return None
+
+    def get_async_session_local():
+        return None
+
+    connection.init_database_async = init_database_async
+    connection.get_async_session_local = get_async_session_local
+    sys.modules["src.database.connection"] = connection
+
+if "src.database.device_db" not in sys.modules:
+    device_db = types.ModuleType("src.database.device_db")
+    device_db.DeviceDB = type("DeviceDB", (), {})
+    sys.modules["src.database.device_db"] = device_db
+
+if "src.database.alarm_db" not in sys.modules:
+    alarm_db = types.ModuleType("src.database.alarm_db")
+    alarm_db.AlarmDB = type("AlarmDB", (), {})
+    sys.modules["src.database.alarm_db"] = alarm_db
+
+if "src.database.operation_db" not in sys.modules:
+    operation_db = types.ModuleType("src.database.operation_db")
+    operation_db.OperationDB = type("OperationDB", (), {})
+    sys.modules["src.database.operation_db"] = operation_db
 
 from src.cloud_api.dock3_hms_log import (
     TASK_STATUS_CANCELED,
@@ -18,7 +47,9 @@ from src.cloud_api.dock3_hms_log import (
     scan_log_files,
     upload_progress_event_data,
 )
+from src.device.manager import DeviceManager
 from src.modules.log_manager import LogManager
+from src.utils.config import Config
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 
 
@@ -36,15 +67,22 @@ class Dock3HmsLogHelperTest(unittest.TestCase):
     def test_normalize_hms_alarm_has_stable_contract_fields(self):
         alarm = normalize_hms_alarm({
             "id": "alarm-1",
-            "level": "3",
+            "level": "2",
+            "code": "0x16100083",
             "content": "battery warning",
         }, "EDGEGW001")
 
         self.assertEqual(alarm["id"], "alarm-1")
         self.assertEqual(alarm["alarm_id"], "alarm-1")
         self.assertEqual(alarm["device_sn"], "EDGEGW001")
-        self.assertEqual(alarm["level"], 3)
+        self.assertEqual(alarm["level"], 2)
         self.assertTrue(alarm["hms_key"])
+        self.assertIn("code", alarm)
+        self.assertIn("device_type", alarm)
+        self.assertIn("in_the_sky", alarm)
+        self.assertIn("imminent", alarm)
+        self.assertIn("component_index", alarm["args"])
+        self.assertIn("sensor_index", alarm["args"])
 
     def test_scan_log_files_and_progress_event_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,6 +157,51 @@ class Dock3LogManagerTest(unittest.TestCase):
                 event.get("data", {}).get("output", {}).get("status") == TASK_STATUS_CANCELED
                 for event in events
             ))
+
+
+class Dock3HmsManagerTest(unittest.TestCase):
+    def test_hms_get_injection_is_disabled_in_production(self):
+        Config.merge({"runtime": {"mode": "production"}})
+        try:
+            manager = DeviceManager()
+            reply = manager.handle_hms_get(base_msg("hms_get", {
+                "simulate": True,
+                "alarms": [{"id": "alarm-1", "level": 2, "code": "0x16100083"}],
+            }))
+        finally:
+            Config.merge({"runtime": {"mode": "test"}})
+
+        self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+
+    def test_hms_event_uses_official_alarm_fields(self):
+        events = []
+        manager = DeviceManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_callbacks(events.append, lambda event: None)
+
+        reply = manager.handle_hms_get(base_msg("hms_get", {
+            "simulate": True,
+            "alarms": [{
+                "id": "alarm-1",
+                "level": 2,
+                "module": 3,
+                "code": "0x16100083",
+                "device_type": "0-67-0",
+                "in_the_sky": 0,
+                "imminent": 1,
+                "args": {"component_index": 0, "sensor_index": 1},
+            }],
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        alarm = events[0]["data"]["list"][0]
+        self.assertEqual(alarm["code"], "0x16100083")
+        self.assertEqual(alarm["device_type"], "0-67-0")
+        self.assertEqual(alarm["module"], 3)
+        self.assertEqual(alarm["in_the_sky"], 0)
+        self.assertEqual(alarm["imminent"], 1)
+        self.assertEqual(alarm["args"]["sensor_index"], 1)
 
     def test_fileupload_start_rejects_missing_files(self):
         manager = LogManager()

@@ -1,10 +1,4 @@
-"""DJI Dock 3 HMS and remote-log protocol helpers.
-
-The gateway can validate HMS/log cloud contracts before a real log uploader or
-hardware fault source is attached.  These helpers keep payload shape,
-pagination, stable ids, and fileupload progress events consistent across
-device and log managers.
-"""
+"""DJI Dock 3 HMS and remote-log protocol helpers."""
 from __future__ import annotations
 
 import hashlib
@@ -74,6 +68,13 @@ def stable_id(value: str, length: int = 24) -> str:
     return hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:length]
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_alarm_ids(data: Any) -> List[str]:
     if not isinstance(data, dict):
         return []
@@ -107,6 +108,31 @@ def normalize_hms_alarm(raw: Any, device_sn: str, index: int = 0) -> Dict[str, A
         level_value = int(level)
     except (TypeError, ValueError):
         level_value = 2
+    level_value = max(0, min(2, level_value))
+
+    module = item.get("module", 3)
+    if isinstance(module, str):
+        module = {"flighttask": 0, "device": 1, "media": 2, "hms": 3, "dock": 3}.get(module.lower(), module)
+    try:
+        module_value = int(module)
+    except (TypeError, ValueError):
+        module_value = 3
+    if module_value not in {0, 1, 2, 3}:
+        module_value = 3
+
+    in_the_sky = item.get("in_the_sky", 0)
+    try:
+        in_the_sky_value = int(in_the_sky)
+    except (TypeError, ValueError):
+        in_the_sky_value = 0
+    in_the_sky_value = 1 if in_the_sky_value == 1 else 0
+
+    imminent = item.get("imminent", 1)
+    try:
+        imminent_value = int(imminent)
+    except (TypeError, ValueError):
+        imminent_value = 1
+    imminent_value = 1 if imminent_value == 1 else 0
 
     create_time = item.get("create_time", item.get("timestamp", now_ms))
     try:
@@ -114,10 +140,11 @@ def normalize_hms_alarm(raw: Any, device_sn: str, index: int = 0) -> Dict[str, A
     except (TypeError, ValueError):
         create_time_value = now_ms
 
-    hms_key = str(item.get("hms_key") or item.get("key") or "dock3.hms.simulation.warning")
-    content = str(item.get("content") or item.get("message") or "Dock3 simulated HMS alarm")
-    module = str(item.get("module") or "dock")
+    hms_key = str(item.get("hms_key") or item.get("key") or item.get("code") or "")
+    code = str(item.get("code") or item.get("hms_key") or item.get("key") or alarm_id)
+    content = str(item.get("content") or item.get("message") or "")
     status = str(item.get("status") or "active")
+    args = item.get("args") if isinstance(item.get("args"), dict) else {}
 
     update_time = item.get("update_time", now_ms)
     try:
@@ -130,9 +157,17 @@ def normalize_hms_alarm(raw: Any, device_sn: str, index: int = 0) -> Dict[str, A
         "alarm_id": alarm_id,
         "device_sn": str(item.get("device_sn") or device_sn),
         "domain": str(item.get("domain", "3")),
-        "module": module,
+        "module": module_value,
         "type": str(item.get("type") or "hms"),
-        "level": max(0, level_value),
+        "level": level_value,
+        "in_the_sky": in_the_sky_value,
+        "code": code,
+        "device_type": str(item.get("device_type") or ""),
+        "imminent": imminent_value,
+        "args": {
+            "component_index": _safe_int(args.get("component_index", item.get("component_index", 0))),
+            "sensor_index": _safe_int(args.get("sensor_index", item.get("sensor_index", 0))),
+        },
         "hms_key": hms_key,
         "content": content,
         "message": content,
@@ -151,11 +186,12 @@ def normalize_hms_alarms(raw_alarms: Any, device_sn: str) -> List[Dict[str, Any]
 
 
 def hms_event_data(alarms: List[Dict[str, Any]], status: str = TASK_STATUS_OK) -> Dict[str, Any]:
+    event_alarms = list(alarms or [])[:20]
     data = task_output(status, {
         "result": 0,
-        "list": alarms,
-        "alarms": alarms,
-        "total": len(alarms),
+        "list": event_alarms,
+        "alarms": event_alarms,
+        "total": len(alarms or []),
     })
     return data
 

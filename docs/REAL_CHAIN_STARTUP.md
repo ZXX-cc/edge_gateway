@@ -126,3 +126,17 @@ Dock3 航线管理按官方 `wayline.html` 方法名接入：
 真实链路中 `flighttask_prepare` 会拒绝 `simulate_mission.is_enable=1`，并要求航线文件可被真实下载/解析并上传到飞控；没有飞控或航线 adapter 时返回明确错误，不再返回模拟成功。`in_flight_wayline_*` 已按官方字段校验，但当前没有真实空中航线 adapter，生产环境会返回“不支持”错误，避免云端误判为空中航线已执行。
 
 `return_specific_home` 需要多机场 home 点规划能力；当前单机场链路只允许返回本网关 SN，目标为其他机场时会明确拒绝。蛙跳任务需要后续接入多机场拓扑、图传链路和返航规划 adapter 后再打开。
+
+## HMS 字段
+
+Dock3 HMS 官方页只有设备上报事件 `hms`，Topic 为 `thing/product/{gateway_sn}/events`。事件 `data.list` 最多 20 条，每条告警包含以下官方字段：
+
+- `level`：告警等级，`0=通知`、`1=提醒`、`2=警告`
+- `module`：事件模块，`0=飞行任务`、`1=设备管理`、`2=媒体`、`3=hms`
+- `in_the_sky`：是否飞行，`0=在地上`、`1=在天上`
+- `code`：告警码
+- `device_type`：设备类型，格式 `{domain-type-subtype}`
+- `imminent`：是否及时性告警，`0=否`、`1=是`
+- `args.component_index`、`args.sensor_index`：用于 HMS 文案变量
+
+项目内 `hms_get/hms_clear` 是现有查询/清除服务入口，不属于该 HMS 官方页的下行服务。生产模式禁止通过 `hms_get` 的 `simulate/inject_alarm` 字段注入告警；真实 HMS 只能来自机巢/飞控/设备侧故障源或显式的业务上报。

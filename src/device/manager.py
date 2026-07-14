@@ -2990,6 +2990,15 @@ class DeviceManager:
         page, page_size = normalize_hms_log_page(data)
 
         if data.get('simulate') or data.get('inject_alarm'):
+            if str(Config.get('runtime.mode', 'test')).lower() == 'production':
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=INVALID_COMMAND_FORMAT,
+                    data=hms_log_task_output(HMS_LOG_STATUS_REJECTED, {
+                        'reason': 'HMS alarm injection is disabled in production',
+                    }),
+                    msg_str='HMS alarm injection is disabled in production',
+                )
             simulated = normalize_hms_alarms(data.get('alarms', data.get('alarm')), self.gateway_sn)
             self._hms_alarms = simulated
             self._notify_event('hms', hms_event_data(simulated))
