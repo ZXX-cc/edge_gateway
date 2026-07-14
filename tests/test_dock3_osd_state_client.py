@@ -13,7 +13,8 @@ for path in (PROJECT_ROOT, TOOLS_DIR):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from mqtt_dock3_osd_state_test import Dock3OsdStateClient  # noqa: E402
+from mqtt_dock3_osd_state_test import Dock3OsdStateClient, build_update_topo_payload  # noqa: E402
+from src.cloud_api.dock3_device import GATEWAY_DOMAIN, GATEWAY_SUB_TYPE, GATEWAY_TYPE, THING_VERSION  # noqa: E402
 
 
 class FakeMqttClient:
@@ -180,6 +181,30 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertIn("thing/product/EDGEGW001/osd", topics)
         self.assertIn("thing/product/DRONESIM001/osd", topics)
         self.assertIn("thing/product/EDGEGW001/state", topics)
+
+    def test_topology_seed_uses_dock3_gateway_constants(self):
+        args = types.SimpleNamespace(
+            gateway_domain=GATEWAY_DOMAIN,
+            gateway_type=GATEWAY_TYPE,
+            gateway_sub_type=GATEWAY_SUB_TYPE,
+            gateway_secret="gw-secret",
+            gateway_nonce="gw-nonce",
+            thing_version=THING_VERSION,
+            drone_sn="DRONESIM001",
+            drone_domain="0",
+            drone_type=91,
+            drone_sub_type=0,
+            drone_index="A",
+            drone_secret="drone-secret",
+            drone_nonce="drone-nonce",
+        )
+
+        payload = build_update_topo_payload(args)
+
+        self.assertEqual(payload["domain"], GATEWAY_DOMAIN)
+        self.assertEqual(payload["type"], GATEWAY_TYPE)
+        self.assertEqual(payload["sub_type"], GATEWAY_SUB_TYPE)
+        self.assertEqual(payload["thing_version"], THING_VERSION)
 
     def test_drone_osd_observation_can_be_disabled_for_dock_only_acceptance(self):
         client = Dock3OsdStateClient(

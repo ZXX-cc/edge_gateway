@@ -9,7 +9,13 @@ TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
-from e2e_full_chain_test import STEPS, build_command, selected_steps  # noqa: E402
+from e2e_full_chain_test import (  # noqa: E402
+    STEPS,
+    build_binding_precondition_command,
+    build_command,
+    selected_steps,
+    step_requires_bound_device,
+)
 
 
 class E2EFullChainTest(unittest.TestCase):
@@ -28,6 +34,9 @@ class E2EFullChainTest(unittest.TestCase):
             "osd_allow_invalid": False,
             "device_extra_sub_device_json": [],
             "device_include_unbind_check": False,
+            "skip_device_binding_precondition": False,
+            "binding_workspace_id": "full_chain_workspace",
+            "binding_workspace_name": "全链路验收工作空间",
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -105,6 +114,27 @@ class E2EFullChainTest(unittest.TestCase):
         self.assertEqual(step.phase, "p1")
         self.assertIn("e2e_takeoff_flow_test.py", command[1])
         self.assertNotIn("--fail-on-stale", command)
+
+    def test_binding_precondition_command_uses_common_mqtt_args(self):
+        command = build_binding_precondition_command(
+            self.args(host="192.168.2.188", port=1883, sn="EDGEGW001", fail_on_stale=True)
+        )
+
+        self.assertIn("mqtt_dock3_binding_precondition.py", command[1])
+        self.assertIn("--workspace-id", command)
+        self.assertIn("full_chain_workspace", command)
+        self.assertIn("192.168.2.188", command)
+        self.assertIn("EDGEGW001", command)
+        self.assertIn("--fail-on-stale", command)
+
+    def test_step_requires_bound_device_only_for_business_steps(self):
+        properties = next(step for step in STEPS if step.key == "properties")
+        device = next(step for step in STEPS if step.key == "device")
+        osd_state = next(step for step in STEPS if step.key == "osd-state")
+
+        self.assertFalse(step_requires_bound_device(properties))
+        self.assertFalse(step_requires_bound_device(device))
+        self.assertTrue(step_requires_bound_device(osd_state))
 
 
 if __name__ == "__main__":

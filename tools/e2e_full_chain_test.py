@@ -120,6 +120,34 @@ def build_command(step: Step, args) -> List[str]:
     return command
 
 
+def build_binding_precondition_command(args) -> List[str]:
+    command = [
+        args.python,
+        str(TOOLS_DIR / "mqtt_dock3_binding_precondition.py"),
+        "--config",
+        args.config,
+        "--timeout",
+        str(args.timeout),
+        "--qos",
+        str(args.qos),
+        "--workspace-id",
+        args.binding_workspace_id,
+        "--workspace-name",
+        args.binding_workspace_name,
+    ]
+    if args.host:
+        command.extend(["--host", args.host])
+    if args.port is not None:
+        command.extend(["--port", str(args.port)])
+    if args.sn:
+        command.extend(["--sn", args.sn])
+    if args.quiet_stale:
+        command.append("--quiet-stale")
+    if args.fail_on_stale:
+        command.append("--fail-on-stale")
+    return command
+
+
 def run_step(step: Step, command: List[str], process_timeout: float, dry_run: bool) -> int:
     print(f"\n=== {step.title} [{step.key}] ===")
     print("+ " + " ".join(command))
@@ -137,6 +165,10 @@ def run_step(step: Step, command: List[str], process_timeout: float, dry_run: bo
     elapsed = time.monotonic() - started
     print(f"--- {step.key} exit={completed.returncode} elapsed={elapsed:.1f}s ---")
     return completed.returncode
+
+
+def step_requires_bound_device(step: Step) -> bool:
+    return step.key not in {"properties", "device"}
 
 
 def main() -> int:
@@ -171,6 +203,13 @@ def main() -> int:
             "use the standalone device script for dedicated unbind acceptance."
         ),
     )
+    parser.add_argument(
+        "--skip-device-binding-precondition",
+        action="store_true",
+        help="Do not send device_binding before business steps that require bound/online state.",
+    )
+    parser.add_argument("--binding-workspace-id", default="full_chain_workspace")
+    parser.add_argument("--binding-workspace-name", default="全链路验收工作空间")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--python", default=sys.executable)
     args = parser.parse_args()
@@ -192,7 +231,27 @@ def main() -> int:
 
     failures: list[tuple[str, int]] = []
     started = time.monotonic()
+    binding_precondition_done = False
     for step in steps:
+        if (
+            step_requires_bound_device(step)
+            and not binding_precondition_done
+            and not args.skip_device_binding_precondition
+        ):
+            binding_command = build_binding_precondition_command(args)
+            binding_step = Step(
+                "binding-precondition",
+                "P0 device binding precondition",
+                "p0",
+                "mqtt_dock3_binding_precondition.py",
+            )
+            rc = run_step(binding_step, binding_command, args.process_timeout, args.dry_run)
+            binding_precondition_done = True
+            if rc != 0:
+                failures.append((binding_step.key, rc))
+                if not args.continue_on_fail:
+                    break
+
         command = build_command(step, args)
         rc = run_step(step, command, args.process_timeout, args.dry_run)
         if rc != 0:

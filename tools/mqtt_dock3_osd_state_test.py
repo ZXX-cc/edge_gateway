@@ -18,6 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from mqtt_test_client import MqttRequestClient, property_result
 from tool_config import add_config_argument, resolve_mqtt_settings
+from src.cloud_api.dock3_device import (
+    GATEWAY_DOMAIN,
+    GATEWAY_SUB_TYPE,
+    GATEWAY_TYPE,
+    THING_VERSION as DOCK3_THING_VERSION,
+)
 from src.cloud_api.dock3_properties import (
     DOCK3_PROPERTY_SPECS,
     official_property_names,
@@ -25,7 +31,7 @@ from src.cloud_api.dock3_properties import (
 
 
 DEFAULT_DRONE_SN = "DRONESIM001"
-THING_VERSION = "1.1.2"
+THING_VERSION = DOCK3_THING_VERSION
 
 
 def is_number(value: Any) -> bool:
@@ -589,9 +595,9 @@ def main() -> int:
     parser.add_argument("--allow-invalid", action="store_true", help="Do not fail when invalid samples are observed before valid samples.")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true", help="Fail if legacy/irrelevant OSD or state samples are observed.")
-    parser.add_argument("--gateway-domain", default="3")
-    parser.add_argument("--gateway-type", type=int, default=2)
-    parser.add_argument("--gateway-sub-type", type=int, default=0)
+    parser.add_argument("--gateway-domain", default=GATEWAY_DOMAIN)
+    parser.add_argument("--gateway-type", type=int, default=GATEWAY_TYPE)
+    parser.add_argument("--gateway-sub-type", type=int, default=GATEWAY_SUB_TYPE)
     parser.add_argument("--gateway-secret", default="gw-secret")
     parser.add_argument("--gateway-nonce", default="gw-nonce")
     parser.add_argument("--thing-version", default=THING_VERSION)

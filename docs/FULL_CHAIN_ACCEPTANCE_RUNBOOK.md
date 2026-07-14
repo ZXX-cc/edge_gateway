@@ -104,13 +104,14 @@ python tools/global_state_machine_admission_audit.py
 `passed=11`、`total=11`，两项退出码均为 0。下一步必须跑 11 段全链路
 确认 MQTT 接入点不会误拦截正常 P0/P1 命令。
 
-2026-07-14 服务器全链路首轮显示：device 阶段执行 `device_unbinding` 后，
-全局状态机把后续 OSD/CMD/DRC/Wayline/Media/Live/HMS/config 识别为
-`device_unbound` 并返回 `325100`。这是全局准入生效后的编排问题，不是
-网关状态机误判。`tools/e2e_full_chain_test.py` 已调整为默认跳过 device
-阶段中的破坏性解绑检查，保持后续 11 段链路处于已绑定状态；如需专门验收
-解绑语义，继续使用 `tools/mqtt_dock3_device_test.py` 或在 E2E 中显式增加
-`--device-include-unbind-check`。
+2026-07-14 服务器全链路复测显示：全局状态机接入后，E2E 必须显式满足
+“先绑定、再执行业务命令”的前置条件。`tools/e2e_full_chain_test.py` 已调整为：
+默认跳过 device 阶段中的破坏性解绑检查，并在第一个业务阶段前自动执行
+`device_binding` 绑定前置；如需专门验收解绑语义，继续使用
+`tools/mqtt_dock3_device_test.py` 或在 E2E 中显式增加
+`--device-include-unbind-check`。同时 `tools/mqtt_dock3_osd_state_test.py` 的
+拓扑种子已改为复用 Dock3 gateway 官方常量，避免 `domain=3,type=2` 旧口径
+被网关严格校验拒绝。
 
 ## 3. 启动前检查
 
@@ -313,8 +314,8 @@ python tools/e2e_full_chain_test.py --only device --timeout 12 --quiet-stale --d
 ```
 
 服务器已验证该命令输出 `dock3 e2e full-chain test ok (steps=1, elapsed=1.4s)`。
-注意：E2E 编排默认跳过 `device_unbinding`，避免单段 device 阶段破坏后续
-全链路绑定状态。解绑/空拓扑验收应执行：
+注意：E2E 编排默认跳过 `device_unbinding`，并会在后续业务阶段前自动发送
+`device_binding` 作为全局状态机准入前置。解绑/空拓扑验收应执行：
 
 ```bash
 python tools/mqtt_dock3_device_test.py --timeout 12 --quiet-stale --fail-on-stale
