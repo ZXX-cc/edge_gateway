@@ -27,6 +27,7 @@ class E2EFullChainTest(unittest.TestCase):
             "fail_on_stale": False,
             "osd_allow_invalid": False,
             "device_extra_sub_device_json": [],
+            "device_include_unbind_check": False,
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -82,12 +83,20 @@ class E2EFullChainTest(unittest.TestCase):
         command = build_command(device_step, self.args(device_extra_sub_device_json=[extra]))
 
         self.assertIn("mqtt_dock3_device_test.py", command[1])
+        self.assertIn("--skip-unbind-check", command)
         self.assertIn("--extra-sub-device-json", command)
         self.assertIn(extra, command)
 
         wayline_step = next(step for step in STEPS if step.key == "wayline")
         wayline_command = build_command(wayline_step, self.args(device_extra_sub_device_json=[extra]))
         self.assertNotIn("--extra-sub-device-json", wayline_command)
+
+    def test_build_command_can_include_device_unbind_check(self):
+        device_step = next(step for step in STEPS if step.key == "device")
+        command = build_command(device_step, self.args(device_include_unbind_check=True))
+
+        self.assertIn("mqtt_dock3_device_test.py", command[1])
+        self.assertNotIn("--skip-unbind-check", command)
 
     def test_takeoff_flow_step_is_p1_and_omits_stale_flag(self):
         step = next(step for step in STEPS if step.key == "takeoff-flow")

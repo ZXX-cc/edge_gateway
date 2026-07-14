@@ -108,6 +108,8 @@ def build_command(step: Step, args) -> List[str]:
     if args.fail_on_stale and step.supports_fail_on_stale:
         command.append("--fail-on-stale")
     if step.key == "device":
+        if not args.device_include_unbind_check:
+            command.append("--skip-unbind-check")
         for sub_device_json in args.device_extra_sub_device_json:
             command.extend(["--extra-sub-device-json", sub_device_json])
     if step.key == "osd-state":
@@ -159,6 +161,15 @@ def main() -> int:
         action="append",
         default=[],
         help="Additional sub-device JSON passed only to the device topology step. Repeat for multi-device checks.",
+    )
+    parser.add_argument(
+        "--device-include-unbind-check",
+        action="store_true",
+        help=(
+            "Run the destructive device_unbinding check inside the device step. "
+            "Full-chain runs skip it by default so downstream steps remain bound; "
+            "use the standalone device script for dedicated unbind acceptance."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--python", default=sys.executable)
