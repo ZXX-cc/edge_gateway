@@ -720,7 +720,7 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | `device_binding_code` | 设备绑定码 | string | - | 测试工具/云端输入 | `requests.airport_organization_get/bind` | Batch 2.1 Ubuntu 已验证 |
 | `bind_devices[]` | 绑定设备列表 | array | - | `DeviceManager.bind_to_organization()` | `requests.airport_organization_bind` | Batch 2.1 Ubuntu 已验证 |
 | `device_model_key` | 设备型号 Key | string | Dock3 设备型号标识 | 测试工具/云端输入 | `requests.airport_organization_bind` | Batch 2.1 Ubuntu 已验证 |
-| `data.output.err_infos[]` | 绑定失败信息 | array | 含 `sn`、`err_code`、`err_msg` | 云端或云端模拟器 | `requests_reply.airport_organization_bind` | Batch 2.1 Ubuntu 已验证；本地缓存保存 `last_err_code/last_err_msg` |
+| `data.output.err_infos[]` | 绑定失败信息 | array | 官方含 `sn`、`err_code` | 云端或云端模拟器 | `requests_reply.airport_organization_bind` | Batch 2.1 Ubuntu 已验证；本地缓存保存 `last_err_code`，兼容非官方 `err_msg` |
 | `domain` | 设备域 | string | Dock3 设备域枚举 | `DeviceManager.build_topo_payload()` | `status.update_topo` | Batch 4 Ubuntu 基础链路已验证，待官方字段精校 |
 | `type` | 设备类型 | int | Dock3 设备类型枚举 | `DeviceManager.build_topo_payload()` | `status.update_topo` | Batch 4 Ubuntu 基础链路已验证，待官方字段精校 |
 | `sub_type` | 设备子类型 | int | Dock3 设备子类型枚举 | `DeviceManager.build_topo_payload()` | `status.update_topo` | Batch 4 Ubuntu 基础链路已验证，待官方字段精校 |

@@ -28,7 +28,7 @@ class Dock3OrganizationCatalogTest(unittest.TestCase):
         fields = organization_official_fields()
         self.assertIn("data.bind_devices[].device_model_key", fields)
         self.assertIn("data.output.err_infos[].err_code", fields)
-        self.assertIn("data.output.err_infos[].err_msg", fields)
+        self.assertNotIn("data.output.err_infos[].err_msg", fields)
 
 
 if __name__ == "__main__":

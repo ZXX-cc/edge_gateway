@@ -59,7 +59,6 @@ ORGANIZATION_METHOD_SPECS: Mapping[str, OrganizationMethodSpec] = {
             {
                 "err_infos[].sn",
                 "err_infos[].err_code",
-                "err_infos[].err_msg",
             }
         ),
     ),
