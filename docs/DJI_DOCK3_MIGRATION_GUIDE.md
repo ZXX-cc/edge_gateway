@@ -171,7 +171,7 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 | D3-AUDIT-005 | DRC | 前一轮将 `drc_mode_enter/exit` 当作 `drc/down -> drc/up` 测试 | 官方对照后已修正并通过 Ubuntu 复测：`drc_mode_enter/exit` 走 `services -> services_reply`；误发到 `drc/down` 应返回 DJI 错误码 `325001` |
 | D3-AUDIT-006 | DRC 与飞控状态 | `drc_mode_enter` 返回 `result=0`，并可通过 `property_get` 读到 `drc_state=2`；`drc_mode_exit` 后 `property_get` 返回 `drc_state=0` | MQTT 协议链路和状态同步已通，飞控是否真正切到可控模式和 `mode_code/gear` 映射交由人员2继续核对 |
 | D3-AUDIT-007 | Properties | Dock3 `property/set_reply` 示例按属性名逐项返回 `{state:{result}}`，不是通用 `data.result/results` | 代码已改为 Dock3 property reply 结构，同时兼容旧 `{properties:{...}}` 请求体 |
-| D3-AUDIT-008 | DRC 状态 | Dock3 文档提示 `drc_status_notify` 已废弃，更准确状态来自机场属性 `drc_state` 或 DRC 心跳 | 代码保留兼容事件，同时在事件触发时同步更新 `drc_state` 属性并上报 state；Ubuntu 复测 enter=2、exit=0 |
+| D3-AUDIT-008 | DRC 状态 | Dock3 文档提示 `drc_status_notify` 已废弃，更准确状态来自机场属性 `drc_state` 或 DRC 心跳 | 代码保留兼容事件，同时在事件触发时同步更新 `drc_state` 属性；`drc_state` 属于 `pushMode=0`，随 OSD/property_get 表达，Ubuntu 复测 enter=2、exit=0 |
 | D3-AUDIT-009 | 日志可追踪性 | 协议迁移需要按 tid/bid 追踪 request、handler、reply、state/event | 日志已改为 `logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log`，关键 MQTT payload/reply/state/event 输出 `字段名(中文名)`，便于按 Dock3 字段审计 |
 | D3-AUDIT-010 | 设备拓扑 | `update_topo` 应走 `sys/product/{sn}/status -> status_reply`，不是普通 services reply | 已通过 Ubuntu 复测：绑定后发布 `update_topo tid=f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b` 到 status topic，并收到 `status_reply result=0` |
 | D3-AUDIT-011 | Properties 可写边界 | Dock3 properties 当前确认的顶层 `rw` 属性为 `air_transfer_enable`、`silent_mode`、`user_experience_improvement` | 已通过 Ubuntu 专项复测：`python tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)` |

@@ -33,7 +33,6 @@ from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
-    get_property_spec,
     official_property_names,
     validate_property_set,
     writable_property_names,
@@ -840,9 +839,9 @@ class DeviceManager:
             return
 
         state_properties = {}
+        official_state_names = official_property_names(push_mode=1)
         for name, value in properties.items():
-            spec = get_property_spec(name)
-            if spec and spec.push_mode == 1:
+            if name in official_state_names:
                 state_properties[name] = value
             else:
                 logger.debug("Keep pushMode=0 property on OSD only: %s", name)
@@ -888,7 +887,7 @@ class DeviceManager:
         )
         updates = self._merge_updates_with_current(updates)
         updates = self._filter_pending_nest_command_targets(updates)
-        state_updates = self._extract_nest_state_updates(updates)
+        state_updates = self._extract_state_updates(updates)
         changed_state = {
             key: value
             for key, value in state_updates.items()
@@ -953,20 +952,14 @@ class DeviceManager:
         return filtered
 
     @staticmethod
-    def _extract_nest_state_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Return discrete nest-driven fields that should emit Dock3 state."""
-        state_fields = {
-            'alarm_state',
-            'air_conditioner',
-            'charging_state',
-            'cover_state',
-            'drone_charge_state',
-            'drone_in_dock',
-            'emergency_stop_state',
-            'putter_state',
-            'supplement_light_state',
+    def _extract_state_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Return only official Dock3 pushMode=1 properties for state."""
+        official_state_names = official_property_names(push_mode=1)
+        return {
+            key: value
+            for key, value in updates.items()
+            if key in official_state_names
         }
-        return {key: value for key, value in updates.items() if key in state_fields}
 
     def _sync_nest_hms_alarms(self, nest_data: dict):
         """Synchronize active nest status alarms into the HMS cache."""

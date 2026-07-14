@@ -50,7 +50,7 @@ PROPERTY_SOURCE_MAP: Dict[str, Dict[str, Any]] = {
     "flighttask_step_code": {"source": "internal.mission.step_code", "pushMode": 0},
     "job_number": {"source": "internal.database.job_number", "pushMode": 0},
     "drc_state": {"source": "internal.drc.state", "pushMode": 0},
-    "acc_time": {"source": "internal.runtime.acc_time", "pushMode": 0},
+    "acc_time": {"source": "internal.runtime.acc_time", "pushMode": 1},
 }
 
 

@@ -148,13 +148,13 @@
 
 ## 7. `机巢协议v1.3.docx` 协议追溯
 
-该文档是设备侧协议，不是云端最终标准。它必须通过 adapter 映射到 Dock3 `cmd/properties/state/events/hms`。
+该文档是设备侧协议，不是云端最终标准。它必须通过 adapter 映射到 Dock3 `cmd/properties/osd/events/hms/state`，其中 state 只由官方 `pushMode=1` 属性触发。
 
 | 协议项 | 设备侧含义 | Dock3 落点 | Backlog | Gap | 验收 |
 |---|---|---|---|---|---|
 | 通信关系 | 地面站作为 TCP client，机巢为 server `192.168.1.11` | 设备侧 adapter 配置 | P0-12、P1-02 | G-P0-04、G-P1-02 | 机巢 v1.3 专项 |
 | `DRONE_NEST_COMMAND` 12003 | 地面站发送机巢控制命令 | Dock3 `cmd` 或业务 service 触发 | P0-11、P0-12、P1-02 | G-P0-04、G-P1-02 | 命令帧发送和参数校验 |
-| `DRONE_NEST_RESPONSE` 12004 | 机巢周期状态 | Dock3 `properties/state/hms/events` | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位、HMS 和 `dock_operation` 映射 |
+| `DRONE_NEST_RESPONSE` 12004 | 机巢周期状态 | Dock3 `properties`/OSD、HMS、events、`dock_operation`；state 仅按官方 `pushMode=1` 属性触发 | P0-13、P1-02、P1-10 | G-P0-05、G-P1-02、G-P1-10 | 状态位、HMS 和 `dock_operation` 映射 |
 | `DRONE_NEST_ORDER_RESPONSE` 12005 | 单次命令应答 | Dock3 `services_reply`、events、operation record | P0-11、P0-14、P0-15、P1-15 | G-P0-06、G-P1-15 | 成功、拒绝、超时、失败码 |
 | 起飞/降落相关命令 | 起飞、起飞中止、降落中止 | 一键启航、Wayline、events/state | P0-08、P1-01、P1-02 | G-P0-03、G-P1-01、G-P1-02 | 起飞流程 E2E |
 | 舱盖命令 | 开盖、关盖、停止 | Dock3 `cmd`、`cover_state` | P0-11、P0-13 | G-P0-05 | CMD + 机巢状态 |

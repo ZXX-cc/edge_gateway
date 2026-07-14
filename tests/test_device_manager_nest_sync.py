@@ -144,6 +144,18 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             self.assertEqual(cleared_hms["data"]["total"], 0)
             self.assertFalse([alarm for alarm in self.manager._hms_alarms if is_nest_hms_alarm(alarm)])
 
+    def test_state_updates_follow_official_dock3_push_mode(self):
+        updates = self.manager._extract_state_updates({
+            "cover_state": 1,
+            "alarm_state": 1,
+            "drone_charge_state": {"state": 1, "capacity_percent": 90},
+            "silent_mode": 1,
+            "acc_time": 10,
+            "wireless_link_topo": {"leaf_nodes": []},
+        })
+
+        self.assertEqual(set(updates), {"silent_mode", "acc_time", "wireless_link_topo"})
+
     def test_build_nest_hms_alarms_uses_stable_ids(self):
         alarms = build_nest_hms_alarms(
             nest_snapshot(fault_state=True, error_code=7, plc_heartbeat=False),

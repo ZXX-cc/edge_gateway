@@ -21,7 +21,7 @@
 | 字节序 | 多字节小端 |
 | 命令应答 | 网关发送 `DRONE_NEST_COMMAND` 后，机巢应回复一次 `DRONE_NEST_ORDER_RESPONSE` |
 | 状态上报 | 机巢周期发送 `DRONE_NEST_RESPONSE` |
-| 云端关系 | 该协议只负责设备侧动作和状态，不能替代 Dock3 云端 `cmd/properties/state/events/hms` |
+| 云端关系 | 该协议只负责设备侧动作和状态，不能替代 Dock3 云端 `cmd/properties/osd/events/hms/state`；其中 state 只按官方 `pushMode=1` 属性触发 |
 
 ## `DRONE_NEST_COMMAND` 字段
 
@@ -50,7 +50,7 @@
 | 急停 | `ordinary_order=0x0A01` | 任意状态可下发 | 必须立即更新急停状态和 HMS 事件 |
 | 解除急停 | `ordinary_order=0x0A02` | 急停状态 | 成功后恢复可控状态，但不能自动继续危险动作 |
 | 初始化 | `ordinary_order=0x0A04` | 按机巢主控内部条件执行 | 映射为维护类操作和进度事件 |
-| 故障恢复 | `ordinary_order=0x0A05` | 故障状态 | 成功后清理故障状态并上报 state/HMS |
+| 故障恢复 | `ordinary_order=0x0A05` | 故障状态 | 成功后清理故障状态并上报 OSD/HMS/dock_operation |
 | 大灯开/关 | `ordinary_order=0x0A06/0x0A07` | 非急停/故障约束按主控执行 | 映射到补光灯或机场灯状态 |
 | 飞机上电/下电 | `ordinary_order=0x0B01/0x0B02` | v1.3 新增，按机巢状态约束执行 | 映射到 Dock3 飞行器电源控制类命令和状态 |
 
@@ -147,5 +147,5 @@
 |---|---|
 | 类型一致性 | 当前 XML 中 `DRONE_NEST_RESPONSE` 温度字段是 `uint16_t`，历史生成文件或其他分支可能存在 `int16_t` 差异，联调前必须以目标硬件协议为准 |
 | 端口占用 | 当前脚本把网关/机巢自定义链路固定为 `14551`，SITL 标准 MAVLink 输入固定为 `14552`；两类 dialect 分 socket 解析 |
-| 业务状态落地 | 机巢状态进入 `DroneNestModule` 后，需要同步到 `DeviceManager`、MQTT state/event 和 operation record |
+| 业务状态落地 | 机巢状态进入 `DroneNestModule` 后，需要同步到 `DeviceManager`、Dock3 OSD/HMS/events 和 operation record；MQTT state 只由官方 `pushMode=1` 属性触发 |
 | 解析异常 | 自定义 MAVLink 消息解析失败时，应记录消息 ID、原始长度、来源 sysid/compid 和异常原因 |

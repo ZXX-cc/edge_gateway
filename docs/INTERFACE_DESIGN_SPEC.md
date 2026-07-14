@@ -730,7 +730,7 @@ python tools/mqtt_organization_test.py --action full --organization-id org_sim_0
 | `sub_devices[]` | 子设备列表 | array | 官方在线非空、离线为空 | `DeviceManager` 子设备缓存 | `status.update_topo` | device/topology 专项待复测，覆盖在线/离线/必填字段 |
 | `air_transfer_enable` | 空中回传 | bool | `false/true` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；state 由 OSD/state 专项覆盖 |
 | `silent_mode` | 静音模式 | int | `0/1` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；OSD/state 专项会主动触发并验证 state |
-| `drc_state` | DRC 链路状态 | int | `0` 关闭，`2` 已进入 | DrcController -> DeviceManager | `property_get`、`state/events` | P0 已跑通 |
+| `drc_state` | DRC 链路状态 | int | `0` 关闭，`2` 已进入 | DrcController -> DeviceManager | `property_get`、OSD、events | P0 已跑通；`drc_state` 为 `pushMode=0`，不触发 MQTT state |
 | `user_experience_improvement` | 用户体验改善计划 | int | `0/1/2` | DeviceManager 属性缓存 | `property_set`、`property_get`、`state` | 官方 `rw`，properties 专项已通过；state 仍按属性变化统一验证 |
 | `battery_store_mode` | 电池运行模式 | int | `1/2` | DeviceManager 属性缓存 | `property_get`、`property_set` 拒绝 | 官方 `r`，property/set 返回 `state.result=1` |
 | `alarm_state` | 机场声光报警状态 | int | `0/1` | DeviceManager 属性缓存 | `property_get`、`property_set` 拒绝 | 官方 `r`，property/set 返回 `state.result=1` |

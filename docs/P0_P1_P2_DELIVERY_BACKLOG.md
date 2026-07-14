@@ -42,7 +42,7 @@ P0/P1 具体代码缺口、目标窗口和缺失脚本优先级见 `docs/P0_P1_I
 
 | 执行顺序 | 客户原始优先级 | 网关侧工作项 | 对应 backlog/gap | 当前判断 |
 |---:|---|---|---|---|
-| 1 | 高 | 机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | P0-11、P0-12、P0-13、P1-02、P1-15 / G-P0-04、G-P0-05、G-P1-02、G-P1-15 | CMD 基础可用；机巢状态到 Dock3 state/HMS/dock_operation 已有本地桥接和离线专项，Ubuntu 网关 + 机巢模拟器实跑仍需前置 |
+| 1 | 高 | 机巢物理控制联动、机巢状态真实同步、机巢告警真实获取 | P0-11、P0-12、P0-13、P1-02、P1-15 / G-P0-04、G-P0-05、G-P1-02、G-P1-15 | CMD 基础可用；机巢状态到 Dock3 OSD/HMS/dock_operation 已有本地桥接和离线专项，state 只按官方 `pushMode=1` 属性触发，Ubuntu 网关 + 机巢模拟器实跑仍需前置 |
 | 2 | 高 | 航线任务真实上传、KMZ/WPML 解析、MAVLink Mission 上传、任务/flyto/takeoff_to_point 真实进度 | P0-08、P0-10、P1-04、P1-05、P1-06 / G-P0-03、G-P1-04、G-P1-05、G-P1-06 | mock 闭环可用，真实 SITL 航点和进度计算必须提前 |
 | 3 | 高 | DRC 速度控制、航向/高度控制优化，坐标系和 type_mask 精校 | P0-09、P1-03、P1-04 / G-P1-03、G-P1-04 | 云端模拟已通过，真实 MAVLink 语义继续前置验证 |
 | 4 | 高 | OTA 真实下载、校验、刷写、备份、回滚，含飞机 OTA 透传 | P1-12、P1-13 / G-P1-12、G-P1-13 | 模拟闭环已通过 Ubuntu 专项；真实 OTA adapter 和操作记录继续推进 |
@@ -78,8 +78,8 @@ P0 是交付阻塞项。30 天内任意 P0 不可用，都不能声称主链路�
 | P0-09 | DRC 建链和杆量 | F-007、F-059 | `drc_mode_enter/exit`、`drc/down`、`drc/up` | 已可用 | 官方 payload、值域、错误 topic 和 `drc_state` 同步可用 | `mqtt_dock3_drc_test.py` |
 | P0-10 | Wayline 基础闭环 | 航线飞行、任务执行 | `flighttask_prepare/execute/progress/pause/resume/return/undo` | 已可用 | 纯模拟任务不误触发真实飞控，进度和错误码符合 Dock3 | `mqtt_dock3_wayline_test.py` |
 | P0-11 | CMD 基础控制 | 机巢控制、远程调试 | Dock3 `cmd` | 已可用 | 舱盖、充电、推杆、灯、报警、设备动作有 Dock3 回包和事件 | `mqtt_dock3_cmd_test.py` |
-| P0-12 | 机巢 v1.3 基础通信 | `机巢协议v1.3` | 设备侧 `DRONE_NEST_*`，云端映射到 `cmd/properties/state` | 部分可用 | 12003/12004/12005、命令应答、周期状态、关键 bit 位可解析 | `nest_v13_protocol_test.py` |
-| P0-13 | 机巢关键状态 | D 类机场状态、I 类交互 | `cover_state`、`drone_charge_state`、急停、故障、ready/busy | 已可用 | 7 类模拟故障及恢复已进入 Dock3 HMS、events/OSD/state，并由 MongoDB 操作记录回读验证；真机枚举和阈值后续精校 | `scripts/fault_hms_acceptance.sh` 已通过 |
+| P0-12 | 机巢 v1.3 基础通信 | `机巢协议v1.3` | 设备侧 `DRONE_NEST_*`，云端映射到 `cmd`、Dock3 properties/OSD、HMS/events | 部分可用 | 12003/12004/12005、命令应答、周期状态、关键 bit 位可解析；state 只按官方 `pushMode=1` 属性触发 | `nest_v13_protocol_test.py` |
+| P0-13 | 机巢关键状态 | D 类机场状态、I 类交互 | `cover_state`、`drone_charge_state`、急停、故障、ready/busy | 已可用 | 7 类模拟故障及恢复已进入 Dock3 HMS、events/OSD/dock_operation，并由 MongoDB 操作记录回读验证；真机枚举和阈值后续精校 | `scripts/fault_hms_acceptance.sh` 已通过 |
 | P0-14 | 错误码边界 | DJI 错误码、异常分支 | `services_reply`、`property/set_reply`、`drc/up` | 已可用 | 对外不暴露内部负数；未知 method、topic 错误、参数错误有官方码 | `tests/test_dji_error_codes.py` |
 | P0-15 | Request Trace 和日志 | 第六章风险、运维要求 | 日志、operation record、trace | 已可用 | 每个 tid/bid 能串起 request、handler、reply/event、耗时和错误；properties 专项后 trace 已能统计三段事件和 `result=0/1` | `request_trace_query.py`、Ubuntu trace 断言通过 |
 | P0-16 | 非阻塞主链路 | 第六章技术栈和风险 | MQTT/MAVLink/DB/文件后台化 | 部分可用 | MQTT 回调、MAVLink 接收、状态机不得被 DB、文件、上传、压缩、升级阻塞 | 代码审计 + E2E 压测 |
@@ -92,7 +92,7 @@ P1 是业务闭环项。30 天内必须可用，允许少量不影响闭环的�
 | ID | 功能域 | 客户来源 | Dock3 落点 | 当前状态 | 30 天交付要求 | 证据 |
 |---|---|---|---|---|---|---|
 | P1-01 | 一键启航主流程 | `BUSINESS_FLOW.docx` 一键启航 | `wayline` + `cmd` + `events/state` | Needs Test | `one_key_takeoff_flow` 已串联起飞前检查、开盖、断充、释放、起飞、任务、返航、降落、充电；仍需 Ubuntu MQTT 和真实 SITL/机巢证据 | `e2e_takeoff_flow_test.py`、`mqtt_one_key_takeoff_flow_test.py` |
-| P1-02 | 机巢 v1.3 完整状态机 | 机巢协议 v1.3 | 设备侧 adapter -> Dock3 state/HMS/events | 部分可用 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞、HMS 告警和 operation 事件全部落地；一键启航本地闭环已接入，Ubuntu 状态机证据仍需补 | `nest_v13_protocol_test.py`、`e2e_takeoff_flow_test.py` |
+| P1-02 | 机巢 v1.3 完整状态机 | 机巢协议 v1.3 | 设备侧 adapter -> Dock3 OSD/HMS/events/dock_operation | 部分可用 | 使用条件、拒绝原因、busy/fault/estop/R 轴/允许起飞、HMS 告警和 operation 事件全部落地；一键启航本地闭环已接入，Ubuntu 状态机证据仍需补 | `nest_v13_protocol_test.py`、`e2e_takeoff_flow_test.py` |
 | P1-03 | DRC 心跳和超时恢复 | DRC 业务流程 | `drc`、`drc_state`、events | 已可用 | 官方心跳、状态事件和超时退出基础闭环已进入专项与 E2E；真实链路抖动边界继续精校 | DRC 专项 |
 | P1-04 | `takeoff_to_point` 和指点飞行 | 指令飞行 | `drc` / remote control | 已可用 | Dock3 云端模拟下起飞到点、导航中、取消/停止状态可用；真实 SITL 航点语义归入 P1-06 | DRC + SITL |
 | P1-05 | KMZ/WPML 基础解析 | 航线管理 | `wayline` | 已可用 | mock KMZ 下载/校验/解析并转换到内部 mission 已通过 Wayline 与 E2E 复测 | Wayline 专项 |
