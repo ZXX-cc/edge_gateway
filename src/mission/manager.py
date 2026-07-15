@@ -844,6 +844,146 @@ class MissionManager:
                 time.sleep(interval)
         return False
 
+    def _request_takeoff_from_nest_for_flow(self, steps: list, flow_name: str) -> bool:
+        if self._nest_module and hasattr(self._nest_module, 'request_takeoff'):
+            try:
+                self._nest_module.request_takeoff()
+                self._record_takeoff_flow_step(
+                    steps,
+                    'nest_takeoff_request',
+                    detail={'success': True, 'simulated': False, 'flow': flow_name},
+                )
+                return True
+            except Exception as exc:
+                self._record_takeoff_flow_step(
+                    steps,
+                    'nest_takeoff_request',
+                    status=STATUS_FAILED,
+                    result=-1,
+                    detail={'success': False, 'simulated': False, 'message': str(exc), 'flow': flow_name},
+                )
+                return False
+
+        self._record_takeoff_flow_step(
+            steps,
+            'nest_takeoff_request',
+            status=STATUS_FAILED,
+            result=-1,
+            detail={
+                'success': False,
+                'simulated': False,
+                'message': 'nest_module_not_available',
+                'flow': flow_name,
+            },
+        )
+        return False
+
+    def _run_real_wayline_takeoff_flow(self, msg: dict, flight_id: str) -> dict:
+        """
+        Execute a prepared wayline through the real dock + flight-controller flow.
+
+        The ordering mirrors docs/业务流程.md: preflight self-check, dock prepare,
+        dock takeoff permission, aircraft takeoff, then AUTO wayline execution.
+        """
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
+        steps: List[dict] = []
+        self._last_takeoff_flow_steps = steps
+        self._record_takeoff_flow_step(
+            steps,
+            'flighttask_execute_precheck',
+            detail={
+                'flight_id': flight_id,
+                'waypoint_count': len(self._current_wayline),
+                'simulate_mission': False,
+            },
+        )
+
+        self_check_ok, self_check_reasons, self_check_details = self._run_prepare_self_check(False)
+        if not self_check_ok:
+            self._record_takeoff_flow_step(
+                steps,
+                'self_check',
+                status=STATUS_FAILED,
+                result=-1,
+                detail={'success': False, 'errors': self_check_reasons, 'details': self_check_details},
+            )
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'self_check',
+                '; '.join(self_check_reasons) or 'self check failed',
+            )
+        self._record_takeoff_flow_step(
+            steps,
+            'self_check',
+            detail={'success': True, 'details': self_check_details},
+        )
+
+        for command_name in ('charge_close', 'cover_open', 'putter_open'):
+            if not self._run_takeoff_flow_nest_step(steps, command_name):
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    command_name,
+                    f'{command_name} failed',
+                )
+
+        if not self._request_takeoff_from_nest_for_flow(steps, 'flighttask_execute'):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'nest_takeoff_request',
+                'Nest takeoff request failed',
+            )
+
+        if not self._run_takeoff_flow_flight_step(steps, 'flight_takeoff', 'takeoff', takeoff_height):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'flight_takeoff',
+                'flight_takeoff failed',
+            )
+
+        # The monitor must be alive before AUTO starts consuming the uploaded
+        # mission, otherwise waypoint progress and completion recovery can be missed.
+        if self.start_mission_monitor() is False:
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'mission_monitor',
+                'Mission monitor unavailable',
+            )
+
+        if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'auto_mode',
+                'flighttask_execute failed',
+            )
+
+        self._status = self.MISSION_RUNNING
+        self._wayline_mission_state = 6  # 航线执行
+        self._current_step = 23  # 航线执行中
+        self._emit_wayline_progress(
+            STATUS_IN_PROGRESS,
+            current_step=23,
+            percent=self._current_progress_percent(),
+            flight_id=flight_id,
+            extra={'takeoff_flow_steps': list(steps)},
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=self._wayline_reply_data(
+                STATUS_IN_PROGRESS,
+                current_step=23,
+                flight_id=flight_id,
+                extra={'takeoff_flow_steps': list(steps)},
+            ),
+        )
+
     def _bool_config(self, key: str, default: bool = True) -> bool:
         value = Config.get(key, default)
         if isinstance(value, str):
@@ -3236,16 +3376,6 @@ class MissionManager:
                 ),
             )
 
-        # 在解锁和 AUTO 前预留唯一监控 owner。线程会等到下面把状态切为
-        # RUNNING 后才消费航点，因此失败时尚未对真实飞控产生副作用。
-        if self.start_mission_monitor() is False:
-            return self._fail_real_wayline_execute(
-                msg,
-                flight_id,
-                "mission_monitor",
-                "Mission monitor unavailable",
-            )
-
         if not self._flight_control:
             return self._fail_real_wayline_execute(
                 msg,
@@ -3253,32 +3383,7 @@ class MissionManager:
                 "flight_control",
                 "FlightControl not available",
             )
-        armed_ok, armed_reason = self._ensure_armed_for_real_wayline()
-        if not armed_ok:
-            logger.warning(f"启动航线任务前解锁失败: {armed_reason}")
-            return self._fail_real_wayline_execute(msg, flight_id, "pre_arm", armed_reason)
-
-        result = self._flight_control.set_mode("AUTO")
-        if not result.get("success"):
-            logger.warning(f"启动航线任务失败: {result.get('message')}")
-            return self._fail_real_wayline_execute(
-                msg,
-                flight_id,
-                "auto_mode",
-                result.get('message') or "AUTO mode switch failed",
-            )
-
-        self._status = self.MISSION_RUNNING
-        self._wayline_mission_state = 6  # 航线执行
-        self._current_step = 23  # 航线执行中
-        self._call_nest_action("request_takeoff", "flighttask_execute")
-
-        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=23, percent=self._current_progress_percent())
-        return MessageBuilder.build_reply(
-            msg,
-            result=0,
-            data=self._wayline_reply_data(STATUS_IN_PROGRESS, current_step=23)
-        )
+        return self._run_real_wayline_takeoff_flow(msg, flight_id)
 
     @serialize_flighttask
     def handle_flighttask_undo(self, msg: dict) -> dict:
