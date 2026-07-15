@@ -2074,12 +2074,28 @@ class MissionManager:
             logger.warning(reason)
             return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str=reason)
 
-        result = self._flight_control.set_mode(mode_name)
+        mode_timeout = self._as_float(mode_payload.get("timeout", 10.0), 10.0)
+        result = self._flight_control.set_mode(mode_name, timeout=mode_timeout)
         if not result.get("success"):
             reason = result.get("message") or "set flight mode failed"
             logger.warning(f"设置飞行模式失败: {reason}")
             error_code = DEVICE_COMMAND_TIMEOUT if "超时" in reason or "timeout" in reason.lower() else DEVICE_STATE_UNSUPPORTED
-            return MessageBuilder.build_reply(msg, result=error_code, msg_str=reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=error_code,
+                data={
+                    "mode": mode_name,
+                    "mode_code": mode_to_dji_code(mode_name),
+                    "requested_mode": requested_mode,
+                    "target_mode_id": result.get("mode_id"),
+                    "target_mode_name": result.get("mode_name"),
+                    "mode_profile": result.get("mode_profile"),
+                    "current_mode_id": result.get("current_mode_id"),
+                    "current_mode_name": result.get("current_mode_name"),
+                    "elapsed_time": result.get("elapsed_time"),
+                },
+                msg_str=reason,
+            )
 
         armed = self._flight_control.is_armed_status() if hasattr(self._flight_control, "is_armed_status") else None
         if should_arm:

@@ -717,8 +717,22 @@ class FlightControl(BaseModule):
             modenum = self.mode_mapping[mode_upper]
             mode_name = mode_upper
 
+        result["mode_id"] = modenum
+        result["mode_name"] = mode_name
+        result["mode_profile"] = self.mode_profile
+
         # 发送模式切换命令
-        self.log(f"切换模式: {mode_name} (ID={modenum})")
+        self.log(
+            "切换模式: {mode_name} (ID={mode_id}, profile={profile}, "
+            "target_system={target_system}, 当前={current_name}({current_id}))".format(
+                mode_name=mode_name,
+                mode_id=modenum,
+                profile=self.mode_profile,
+                target_system=self.target_system,
+                current_name=self.current_mode_name,
+                current_id=self.current_mode,
+            )
+        )
 
         msg = mavutil.mavlink.MAVLink_set_mode_message(
             self.target_system,
@@ -734,13 +748,16 @@ class FlightControl(BaseModule):
         # 等待模式切换完成
         mode_result = self._wait_for_mode(modenum, timeout=mode_timeout)
         if not mode_result["success"]:
+            result.update(mode_result)
+            result["current_mode_id"] = self.current_mode
+            result["current_mode_name"] = self.current_mode_name
             result["message"] = mode_result["message"]
             return result
 
         result["success"] = True
         result["message"] = f"成功切换到 {mode_name} 模式"
-        result["mode_id"] = modenum
-        result["mode_name"] = mode_name
+        result["current_mode_id"] = self.current_mode
+        result["current_mode_name"] = self.current_mode_name
         self.log(result["message"])
 
         return result

@@ -75,10 +75,12 @@ class RecordingFlightControl:
         self.success = success
         self.message = message
         self.calls = []
+        self.timeouts = []
         self.armed = False
 
-    def set_mode(self, mode):
+    def set_mode(self, mode, timeout=10.0):
         self.calls.append(mode)
+        self.timeouts.append(timeout)
         return {"success": self.success, "message": self.message}
 
     def get_available_modes(self):
@@ -180,6 +182,18 @@ class FlightModeMappingTest(unittest.TestCase):
             self.assertEqual(reply["data"]["mode_code"], 4)
 
         self.assertEqual(flight_control.calls, ["GUIDED", "GUIDED", "GUIDED", "GUIDED"])
+        self.assertEqual(flight_control.timeouts, [10.0, 10.0, 10.0, 10.0])
+
+    def test_set_flight_mode_passes_timeout_to_flight_control(self):
+        manager = MissionManager()
+        flight_control = RecordingFlightControl()
+        manager.set_flight_control(flight_control)
+
+        reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED", "timeout": 18}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(flight_control.calls, ["GUIDED"])
+        self.assertEqual(flight_control.timeouts, [18.0])
 
     def test_set_flight_mode_rejects_invalid_payload(self):
         manager = MissionManager()
