@@ -662,6 +662,8 @@ class MAVLinkConnection:
                             count=_msg_field(msg, "count"),
                             target_system=_msg_field(msg, "target_system"),
                             target_component=_msg_field(msg, "target_component"),
+                            source_system=self.source_system,
+                            source_component=self.source_component,
                         )
                     mav.send(msg)
                     _log_raw_mavlink("TX", self.connection_string, msg)
