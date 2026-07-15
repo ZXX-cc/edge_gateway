@@ -1231,11 +1231,16 @@ class NestSimulator:
     def _is_gateway_standard_message(self, msg, addr=None):
         """网关到飞机的标准 MAVLink 也必须经由机巢转发给 SITL。"""
         msg_type = msg.get_type()
+        msg_id = msg.get_msgId() if hasattr(msg, "get_msgId") else None
         if msg_type in {
             'DRONE_NEST_COMMAND',
             'DRONE_NEST_RESPONSE',
             'DRONE_NEST_ORDER_RESPONSE',
         }:
+            return False
+        if msg_type == 'BAD_DATA' or str(msg_type).startswith('UNKNOWN_'):
+            return False
+        if isinstance(msg_id, int) and msg_id < 0:
             return False
         return msg.get_srcComponent() == 190 or (self.client_addr is not None and addr == self.client_addr)
 
