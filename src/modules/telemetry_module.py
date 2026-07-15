@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
 from src.mavlink.flight_modes import parse_flight_mode
+from src.utils.config import Config
 from web.mavlink.telemetry.mapping import apply_mavlink_message, new_telemetry_state
 
 class TelemetryModule(BaseModule):
@@ -54,6 +55,14 @@ class TelemetryModule(BaseModule):
         self.last_push_time = 0.0
         self.push_interval = 0.3  # ⭐ 300ms推送一次（0.3秒）
 
+        # 飞控节点日志：定频输出可读字段说明，避免 HEARTBEAT 原始帧刷屏。
+        self.telemetry_log_interval = float(
+            Config.get('logging.flight_telemetry_interval_seconds', 5.0) or 5.0
+        )
+        self._last_telemetry_log_time = 0.0
+        self._last_logged_mode = None
+        self._last_logged_armed = None
+
 
     def on_message(self, message: MAVLinkMessage):
         """消息回调（推送机制）"""
@@ -72,6 +81,7 @@ class TelemetryModule(BaseModule):
         is_updated = self.telemetry_data.get("timestamp", 0.0) != previous_timestamp
 
         if is_updated:
+            self._log_flight_controller_snapshot(message.msg_type, message.sysid, message.compid)
             # 节流控制推送
             current_time = time.time()
             if current_time - self.last_push_time >= self.push_interval:
@@ -185,6 +195,61 @@ class TelemetryModule(BaseModule):
                 callback(self.telemetry_data.copy())
             except Exception as e:
                 self.log(f"回调执行错误: {e}", "ERROR")
+
+    @staticmethod
+    def _fmt_float(value, digits=6, default="-"):
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _fmt_value(value, default="-"):
+        if value is None:
+            return default
+        return value
+
+    def _log_flight_controller_snapshot(self, source_msg: str, sysid=None, compid=None):
+        """定频记录飞控节点状态，字段包含含义和单位。"""
+        now = time.time()
+        mode = self.telemetry_data.get("flight_mode", "UNKNOWN")
+        armed = bool(self.telemetry_data.get("armed", False))
+        state_changed = mode != self._last_logged_mode or armed != self._last_logged_armed
+        if not state_changed and now - self._last_telemetry_log_time < self.telemetry_log_interval:
+            return
+
+        self._last_telemetry_log_time = now
+        self._last_logged_mode = mode
+        self._last_logged_armed = armed
+        data = self.telemetry_data
+        fields = [
+            f"source_msg={source_msg}(触发本次更新的MAVLink消息)",
+            f"sysid={self._fmt_value(sysid)}(飞控系统ID)",
+            f"compid={self._fmt_value(compid)}(飞控组件ID)",
+            f"connection_status={data.get('connection_status')}(连接状态)",
+            f"armed={int(armed)}(解锁状态:1已解锁/0未解锁)",
+            f"flight_mode={mode}(飞行模式)",
+            f"mav_type={self._fmt_value(data.get('mav_type'))}(机型类型)",
+            f"lat={self._fmt_float(data.get('latitude'))}deg(纬度)",
+            f"lon={self._fmt_float(data.get('longitude'))}deg(经度)",
+            f"alt_abs={self._fmt_float(data.get('altitude'), 2)}m(海拔高度)",
+            f"alt_rel={self._fmt_float(data.get('altitudeRelative'), 2)}m(相对起飞点高度)",
+            f"alt_agl={self._fmt_float(data.get('altitudeAGL'), 2)}m(离地高度)",
+            f"ground_speed={self._fmt_float(data.get('groundSpeed'), 2)}m/s(地速)",
+            f"airspeed={self._fmt_float(data.get('airspeed'), 2)}m/s(空速)",
+            f"climb_rate={self._fmt_float(data.get('climbRate'), 2)}m/s(垂直速度)",
+            f"roll={self._fmt_float(data.get('roll'), 2)}deg(横滚)",
+            f"pitch={self._fmt_float(data.get('pitch'), 2)}deg(俯仰)",
+            f"yaw={self._fmt_float(data.get('yaw'), 2)}deg(航向)",
+            f"battery={self._fmt_value(data.get('batteryRemaining'))}%(电量)",
+            f"voltage={self._fmt_float(data.get('voltage'), 2)}V(电压)",
+            f"current={self._fmt_float(data.get('current'), 2)}A(电流)",
+            f"satellites={self._fmt_value(data.get('satelliteNumber'))}(GPS卫星数)",
+            f"gps_fixed={self._fmt_value(data.get('gps_fixed'))}(GPS定位:1有效/0无效)",
+            f"rtk_flag={self._fmt_value(data.get('rtk_flag'))}(RTK状态:1有效/0无效)",
+            f"flight_time={self._fmt_value(data.get('flight_time'))}s(累计飞行时间)",
+        ]
+        self.logger.info("[飞控节点] 遥测快照 | %s", " | ".join(fields))
 
     @staticmethod
     def _parse_flight_mode(custom_mode: int, mav_type: int = None) -> str:

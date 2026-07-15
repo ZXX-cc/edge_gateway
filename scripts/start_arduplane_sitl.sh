@@ -8,12 +8,15 @@ SITL_PYTHON="${SITL_PYTHON:-/usr/bin/python3}"
 SITL_VEHICLE="${SITL_VEHICLE:-ArduPlane}"
 SITL_FRAME="${SITL_FRAME:-quadplane}"
 SITL_LOCATION="${SITL_LOCATION:-Changchun_HD}"
-SITL_NEST_HOST="${SITL_NEST_HOST:-$(nest_sitl_host)}"
-SITL_NEST_PORT="${SITL_NEST_PORT:-$(nest_sitl_port)}"
+SITL_GATEWAY_HOST="${SITL_GATEWAY_HOST:-127.0.0.1}"
+SITL_GATEWAY_PORT="${SITL_GATEWAY_PORT:-$(mavlink_port)}"
 NEST_LINK_HOST="${NEST_LINK_HOST:-127.0.0.1}"
 NEST_LINK_PORT="${NEST_LINK_PORT:-$(nest_port)}"
-SITL_LOCAL_NEST_OUT="${SITL_LOCAL_NEST_OUT:-1}"
-SITL_EXTRA_OUT_PORT="${SITL_EXTRA_OUT_PORT:-${NEST_LINK_PORT}}"
+SITL_LEGACY_NEST_OUT="${SITL_LEGACY_NEST_OUT:-0}"
+SITL_LEGACY_NEST_HOST="${SITL_LEGACY_NEST_HOST:-$(nest_sitl_host)}"
+SITL_LEGACY_NEST_PORT="${SITL_LEGACY_NEST_PORT:-$(nest_sitl_port)}"
+SITL_LOCAL_NEST_OUT="${SITL_LOCAL_NEST_OUT:-0}"
+SITL_EXTRA_OUT_PORT="${SITL_EXTRA_OUT_PORT:-${SITL_GATEWAY_PORT}}"
 SIM_VEHICLE="${ARDUPILOT_DIR}/Tools/autotest/sim_vehicle.py"
 
 if [[ ! -f "${SIM_VEHICLE}" ]]; then
@@ -72,11 +75,15 @@ CMD=(
   -L "${SITL_LOCATION}"
   --no-rebuild
   --no-extra-ports
-  "--out=udp:${SITL_NEST_HOST}:${SITL_NEST_PORT}"
+  "--out=udp:${SITL_GATEWAY_HOST}:${SITL_GATEWAY_PORT}"
 )
 
-# 按当前联调命令保留 14551 本机镜像；14552 才是机巢模拟器解析
-# SITL 标准 MAVLink 的主入口。可设 SITL_LOCAL_NEST_OUT=0 关闭镜像。
+# 旧串联链路兼容：需要复现 SITL -> 机巢模拟器 -> 网关时显式打开。
+if [[ "${SITL_LEGACY_NEST_OUT}" == "1" || "${SITL_LEGACY_NEST_OUT}" == "true" ]]; then
+  CMD+=("--out=udp:${SITL_LEGACY_NEST_HOST}:${SITL_LEGACY_NEST_PORT}")
+fi
+
+# 旧调试镜像：默认关闭，避免标准飞控 MAVLink 打到机巢自定义链路端口。
 if [[ "${SITL_LOCAL_NEST_OUT}" == "1" || "${SITL_LOCAL_NEST_OUT}" == "true" ]]; then
   CMD+=("--out=udp:${NEST_LINK_HOST}:${NEST_LINK_PORT}")
 fi
@@ -91,9 +98,12 @@ done
 
 echo "[INFO] ArduPilot SITL"
 echo "[INFO] vehicle=${SITL_VEHICLE}, frame=${SITL_FRAME}, location=${SITL_LOCATION}"
-echo "[INFO] SITL -> nest simulator=udp:${SITL_NEST_HOST}:${SITL_NEST_PORT}"
+echo "[INFO] SITL -> gateway mavlink=udp:${SITL_GATEWAY_HOST}:${SITL_GATEWAY_PORT}"
+if [[ "${SITL_LEGACY_NEST_OUT}" == "1" || "${SITL_LEGACY_NEST_OUT}" == "true" ]]; then
+  echo "[INFO] legacy SITL -> nest simulator=udp:${SITL_LEGACY_NEST_HOST}:${SITL_LEGACY_NEST_PORT}"
+fi
 if [[ "${SITL_LOCAL_NEST_OUT}" == "1" || "${SITL_LOCAL_NEST_OUT}" == "true" ]]; then
-  echo "[INFO] local nest-link mirror=udp:${NEST_LINK_HOST}:${NEST_LINK_PORT}"
+  echo "[INFO] legacy local nest-link mirror=udp:${NEST_LINK_HOST}:${NEST_LINK_PORT}"
 fi
 if ((${#EXTRA_OUT_IPS[@]} > 0)); then
   for ip in "${EXTRA_OUT_IPS[@]}"; do

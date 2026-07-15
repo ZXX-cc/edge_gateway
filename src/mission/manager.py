@@ -40,6 +40,7 @@ from src.cloud_api.dock3_wayline import (
     normalize_return_payload,
     normalize_undo_payload,
     output_data as wayline_output_data,
+    parse_wayline_file,
     progress_percent,
     validate_flight_id_payload,
 )
@@ -994,6 +995,41 @@ class MissionManager:
             "files": [],
             "warnings": [],
         }
+
+    @staticmethod
+    def _should_delegate_wayline_to_nest() -> bool:
+        """Use the legacy nest-exec path only when the gateway has no FC link."""
+        return (
+            not bool(Config.get('mavlink.enabled', True))
+            and bool(Config.get('nest_mavlink.enabled', False))
+        )
+
+    def _upload_wayline_to_flight_controller(self, waypoints: List[dict]) -> Tuple[bool, str]:
+        if not self._waypoint_manager:
+            return False, "WaypointManager not available"
+        if not waypoints:
+            return False, "No waypoints parsed from wayline file"
+
+        self._waypoint_manager.clear_waypoints()
+        for wp in waypoints:
+            wp_dict = {
+                'seq': wp.get('seq', 0),
+                'lat': wp.get('latitude', 0.0),
+                'lon': wp.get('longitude', 0.0),
+                'alt': wp.get('altitude', 50.0),
+                'command': wp.get('command', 16),
+                'frame': wp.get('frame', 3),
+                'param1': wp.get('param1', 0.0),
+                'param2': wp.get('param2', 0.0),
+                'param3': wp.get('param3', 0.0),
+                'param4': wp.get('param4', 0.0),
+                'autocontinue': wp.get('autocontinue', 1),
+            }
+            self._waypoint_manager.add_waypoint_from_dict(wp_dict)
+
+        if not self._waypoint_manager.upload_mission(timeout=15.0):
+            return False, "Waypoint upload to flight controller failed"
+        return True, ""
 
     def _available_storage_mb(self) -> Optional[int]:
         for path in (
@@ -3005,24 +3041,8 @@ class MissionManager:
         self._task_type = task_type
         self._execute_time = execute_time
         self._task_file = file_info
-        self._wayline_delegated_to_nest = True
-        self._task_file_summary = self._delegated_wayline_summary(file_info)
-        self._current_wayline = []
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0
-        logger.info(
-            "Wayline parsing/upload delegated to nest: flight_id=%s, source=%s",
-            flight_id,
-            self._task_file_summary.get('source'),
-        )
-        trace_command(
-            "wayline_delegated_to_nest",
-            label="航线委托机巢",
-            method="flighttask_prepare",
-            flight_id=flight_id,
-            source=self._task_file_summary.get('source'),
-            reason="gateway_does_not_parse_wayline",
-        )
         self._ready_conditions = ready_conditions
         self._executable_conditions = executable_conditions
         self._break_point = break_point
@@ -3035,14 +3055,64 @@ class MissionManager:
         self._wayline_mission_state = 2  # 航线准备状态
         self._current_step = 5  # 航线执行进入准备状态
 
-        logger.info("Skip gateway waypoint upload: delegated_to=nest, flight_id=%s", flight_id)
-        trace_command(
-            "gateway_wayline_upload_skipped",
-            label="网关跳过航线上传",
-            method="flighttask_prepare",
-            flight_id=flight_id,
-            reason="delegated_to_nest",
-        )
+        self._wayline_delegated_to_nest = self._should_delegate_wayline_to_nest()
+        if self._wayline_delegated_to_nest:
+            self._task_file_summary = self._delegated_wayline_summary(file_info)
+            self._current_wayline = []
+            logger.info(
+                "Wayline parsing/upload delegated to nest: flight_id=%s, source=%s",
+                flight_id,
+                self._task_file_summary.get('source'),
+            )
+            trace_command(
+                "wayline_delegated_to_nest",
+                label="航线委托机巢",
+                method="flighttask_prepare",
+                flight_id=flight_id,
+                source=self._task_file_summary.get('source'),
+                reason="main_mavlink_disabled",
+            )
+        else:
+            try:
+                summary, parsed_waypoints = parse_wayline_file(file_info)
+            except Exception as exc:
+                summary, parsed_waypoints = {}, []
+                logger.warning("Wayline parse failed: flight_id=%s error=%s", flight_id, exc)
+            self._task_file_summary = summary or {}
+            self._current_wayline = list(parsed_waypoints or [])
+            if not self._current_wayline:
+                self._status = self.MISSION_FAILED
+                self._wayline_mission_state = 1
+                reason = "; ".join(self._task_file_summary.get("warnings", [])) or "No waypoints parsed from wayline file"
+                return self._fail_prepare_self_check(
+                    msg,
+                    flight_id,
+                    ["wayline_parse"],
+                    {"wayline_parse": reason},
+                )
+            upload_ok, upload_reason = self._upload_wayline_to_flight_controller(self._current_wayline)
+            if not upload_ok:
+                self._status = self.MISSION_FAILED
+                self._wayline_mission_state = 1
+                return self._fail_prepare_self_check(
+                    msg,
+                    flight_id,
+                    ["wayline_upload"],
+                    {"wayline_upload": upload_reason},
+                )
+            logger.info(
+                "Wayline parsed and uploaded to flight controller: flight_id=%s waypoints=%s",
+                flight_id,
+                len(self._current_wayline),
+            )
+            trace_command(
+                "gateway_wayline_uploaded",
+                label="网关上传航线到飞控",
+                method="flighttask_prepare",
+                flight_id=flight_id,
+                waypoint_count=len(self._current_wayline),
+                source=self._task_file_summary.get('source'),
+            )
 
         # 断点续飞设置
         if break_point:

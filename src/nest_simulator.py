@@ -139,6 +139,7 @@ class NestSimulator:
         system_id=101,
         component_id=1,
         command_log='logs/nest_simulator/command_trace.log',
+        nest_status_log='logs/nest_simulator/nest_status.log',
         drone_host=None,
         drone_port=None,
         drone_status_log='logs/nest_simulator/drone_status.log',
@@ -152,6 +153,7 @@ class NestSimulator:
         self.system_id = system_id
         self.component_id = component_id
         self.command_log = Path(command_log) if command_log else None
+        self.nest_status_log = Path(nest_status_log) if nest_status_log else None
         self.drone_status_log = Path(drone_status_log) if drone_status_log else None
         self.fault_state_file = Path(fault_state_file) if fault_state_file else None
         self.fault_log = Path(fault_log) if fault_log else None
@@ -180,6 +182,7 @@ class NestSimulator:
         self.drone_battery_remaining = None
         self.drone_connected = False
         self.last_drone_status_print_at = 0.0
+        self.last_nest_status_trace_at = 0.0
         self.pending_mission_items = []
         self.mission_upload_event = threading.Event()
         self.mission_upload_active = False
@@ -523,6 +526,22 @@ class NestSimulator:
         print(f"\n{title}")
         for key, value in rows:
             print(f"  {key}: {value}")
+
+    def _trace_nest_status(self, env_data):
+        if not self.nest_status_log:
+            return
+        now = time.time()
+        if now - self.last_nest_status_trace_at < 10:
+            return
+        self.last_nest_status_trace_at = now
+        try:
+            self.nest_status_log.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
+            rows = " | ".join(f"{key}={value}" for key, value in self._state_lines(env_data))
+            with self.nest_status_log.open("a", encoding="utf-8") as file:
+                file.write(f"{timestamp} nest_status {rows}\n")
+        except Exception:
+            pass
 
     def _trace_command(self, event, **fields):
         if not self.command_log:
@@ -921,7 +940,7 @@ class NestSimulator:
         )
         # 关键：直接调用 self.mav 的 pack 方法，不要用 self.mav.mav
         self._send_raw(msg.pack(self.mav))
-        self._print_block("已发送 DRONE_NEST_RESPONSE 状态上报", self._state_lines(env_data))
+        self._trace_nest_status(env_data)
 
     def _send_order_response(
         self,
@@ -1038,7 +1057,7 @@ class NestSimulator:
             ordinary_response, takeoff_response = self._evaluate_command_response(ordinary, takeoff_land)
             if ordinary_response == 0 and takeoff_response == 0:
                 self._update_state_from_command(ordinary, takeoff_land)
-                if takeoff_land == 0x01:
+                if takeoff_land == 0x01 and self.drone_sock:
                     self._trace_drone_event("takeoff_start_triggers_mission_upload")
                     self._start_sitl_mission()
             else:
@@ -1363,6 +1382,11 @@ if __name__ == '__main__':
         help="只记录非心跳命令的机巢模拟器日志文件；设为空字符串可关闭",
     )
     parser.add_argument(
+        "--nest-status-log",
+        default="logs/nest_simulator/nest_status.log",
+        help="机巢状态快照日志文件；10秒一条，设为空字符串可关闭",
+    )
+    parser.add_argument(
         "--drone-status-log",
         default="logs/nest_simulator/drone_status.log",
         help="SITL 飞机连接和状态日志文件；设为空字符串可关闭",
@@ -1394,6 +1418,7 @@ if __name__ == '__main__':
         host=args.host,
         port=args.port,
         command_log=args.command_log,
+        nest_status_log=args.nest_status_log,
         drone_host=args.drone_host,
         drone_port=args.drone_port,
         drone_status_log=args.drone_status_log,

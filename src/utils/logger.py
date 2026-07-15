@@ -27,6 +27,17 @@ _listener: Optional[QueueListener] = None
 
 
 _CATEGORY_DEFAULTS = {
+    "gateway": {
+        "prefixes": (
+            "edge_gateway.main",
+            "edge_gateway.connection",
+            "edge_gateway.state_machine",
+            "edge_gateway.exception",
+            "edge_gateway.thread",
+            "edge_gateway.stdout",
+            "edge_gateway.stderr",
+        ),
+    },
     "mqtt": {
         "prefixes": (
             "edge_gateway.mqtt",

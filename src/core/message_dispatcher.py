@@ -10,6 +10,10 @@ from collections import defaultdict
 from .connection import MAVLinkConnection
 from .message_cache import MessageCache, MAVLinkMessage
 from .observer import MessageObserver
+from src.utils.logger import get_logger
+
+
+logger = get_logger("mavlink.dispatcher")
 
 
 class MessageDispatcher:
@@ -51,7 +55,10 @@ class MessageDispatcher:
         # ⭐⭐⭐ 新增：根据连接类型设置心跳检查策略 ⭐⭐⭐
         self._check_heartbeat = not connection.use_custom_dialect
         if not self._check_heartbeat:
-            print(f"[Dispatcher] 自定义dialect连接，已禁用心跳超时检查")
+            logger.info(
+                "Dispatcher heartbeat timeout check disabled for custom dialect: connection=%s",
+                connection.connection_string,
+            )
 
     def register_hook(self, msg_type: str, observer):
         """
@@ -65,11 +72,11 @@ class MessageDispatcher:
             if msg_type == "*":
                 self._wildcard_hooks.add(observer)
                 name = getattr(observer, 'name', repr(observer))
-                print(f"[Dispatcher] {name} 订阅所有消息")
+                logger.debug("Observer subscribed: observer=%s msg_type=*", name)
             else:
                 self._hooks[msg_type].add(observer)
                 name = getattr(observer, 'name', repr(observer))
-                print(f"[Dispatcher] {name} 订阅消息: {msg_type}")
+                logger.debug("Observer subscribed: observer=%s msg_type=%s", name, msg_type)
 
     def unregister_hook(self, msg_type: str, observer):
         """
@@ -95,7 +102,7 @@ class MessageDispatcher:
         with self._lock:
             if module not in self._modules:
                 self._modules.append(module)
-                print(f"[Dispatcher] 添加模块: {module.name}")
+                logger.info("Dispatcher module added: module=%s", module.name)
 
     def remove_module(self, module: MessageObserver):
         """
@@ -107,16 +114,16 @@ class MessageDispatcher:
         with self._lock:
             if module in self._modules:
                 self._modules.remove(module)
-                print(f"[Dispatcher] 移除模块: {module.name}")
+                logger.info("Dispatcher module removed: module=%s", module.name)
 
     def start(self):
         """启动消息分发器"""
         if self._running:
-            print("[Dispatcher] 分发器已在运行")
+            logger.info("Dispatcher already running: connection=%s", self.connection.connection_string)
             return
 
         if not self.connection.is_connected():
-            print("[Dispatcher] 连接未建立，无法启动")
+            logger.warning("Dispatcher start skipped: connection not established: %s", self.connection.connection_string)
             return
 
         self._running = True
@@ -135,13 +142,18 @@ class MessageDispatcher:
             try:
                 module.on_start()
             except Exception as e:
-                print(f"[Dispatcher] {module.name}.on_start() 错误: {e}")
+                logger.error("Dispatcher module on_start failed: module=%s error=%s", module.name, e, exc_info=True)
 
-        print("[Dispatcher] 消息分发器已启动")
+        logger.info(
+            "Dispatcher started: connection=%s modules=%s heartbeat_check=%s",
+            self.connection.connection_string,
+            [getattr(module, "name", repr(module)) for module in self._modules],
+            self._check_heartbeat,
+        )
 
     def stop(self):
         """停止消息分发器"""
-        print("[Dispatcher] 正在停止分发器...")
+        logger.info("Dispatcher stopping: connection=%s", self.connection.connection_string)
         self._running = False
 
         # 等待线程结束
@@ -155,13 +167,13 @@ class MessageDispatcher:
             try:
                 module.on_stop()
             except Exception as e:
-                print(f"[Dispatcher] {module.name}.on_stop() 错误: {e}")
+                logger.error("Dispatcher module on_stop failed: module=%s error=%s", module.name, e, exc_info=True)
 
-        print("[Dispatcher] 分发器已停止")
+        logger.info("Dispatcher stopped: connection=%s", self.connection.connection_string)
 
     def _receive_loop(self):
         """消息接收循环（推送机制实现）"""
-        print("[Dispatcher] 接收线程已启动")
+        logger.info("Dispatcher receive loop started: connection=%s", self.connection.connection_string)
 
         while self._running:
             try:
@@ -211,18 +223,14 @@ class MessageDispatcher:
                 self._message_count += 1
 
             except TypeError as e:
-                print(f"[Dispatcher] 类型错误: {e}")
+                logger.error("Dispatcher receive type error: %s", e, exc_info=True)
                 if 'raw_msg' in locals():
-                    print(f"[Dispatcher] 问题消息: {raw_msg}")
-                import traceback
-                print(traceback.format_exc())
+                    logger.error("Dispatcher problematic message: %s", raw_msg)
                 time.sleep(0.1)
 
             except Exception as e:
                 if self._running:
-                    print(f"[Dispatcher] 接收循环错误: {e}")
-                    import traceback
-                    print(traceback.format_exc())
+                    logger.error("Dispatcher receive loop error: %s", e, exc_info=True)
                 time.sleep(0.1)
 
     def _extract_message_type(self, raw_msg) -> str:
@@ -265,7 +273,7 @@ class MessageDispatcher:
             return "UNKNOWN"
 
         except Exception as e:
-            print(f"[Dispatcher] 提取消息类型失败: {e}")
+            logger.warning("Dispatcher extract message type failed: %s", e)
             return "ERROR"
 
     def _extract_message_id(self, raw_msg) -> Optional[int]:
@@ -302,7 +310,13 @@ class MessageDispatcher:
                 try:
                     observer.on_message(message)
                 except Exception as e:
-                    print(f"[Dispatcher] {observer.name}.on_message(ID={msg_id}) 错误: {e}")
+                    logger.error(
+                        "Observer on_message failed: observer=%s msg_id=%s error=%s",
+                        getattr(observer, "name", repr(observer)),
+                        msg_id,
+                        e,
+                        exc_info=True,
+                    )
 
     def _notify_observers(self, message: MAVLinkMessage):
         """
@@ -325,7 +339,7 @@ class MessageDispatcher:
                     observer(message)
             except Exception as e:
                 name = getattr(observer, 'name', repr(observer))
-                print(f"[Dispatcher] {name}.on_message({msg_type}) 错误: {e}")
+                logger.error("Observer on_message failed: observer=%s msg_type=%s error=%s", name, msg_type, e, exc_info=True)
 
         # 通知通配符观察者
         for observer in self._wildcard_hooks.copy():
@@ -338,18 +352,22 @@ class MessageDispatcher:
                     observer(message)
             except Exception as e:
                 name = getattr(observer, 'name', repr(observer))
-                print(f"[Dispatcher] {name}.on_message(*) 错误: {e}")
+                logger.error("Observer on_message failed: observer=%s msg_type=* error=%s", name, e, exc_info=True)
 
     def _idle_loop(self):
         """空闲任务循环（拉取机制实现）"""
-        print("[Dispatcher] 空闲任务线程已启动")
+        logger.info("Dispatcher idle loop started: connection=%s", self.connection.connection_string)
 
         while self._running:
             try:
                 # ⭐⭐⭐ 修改：只对需要心跳检查的连接进行检查 ⭐⭐⭐
                 if self._check_heartbeat:
                     if self._should_log_heartbeat_timeout(self.connection.check_heartbeat_timeout()):
-                        print(f"[Dispatcher] 警告: 心跳超时! (连续第 {self._heartbeat_timeout_count} 次)")
+                        logger.warning(
+                            "Heartbeat timeout: connection=%s consecutive=%s",
+                            self.connection.connection_string,
+                            self._heartbeat_timeout_count,
+                        )
 
                 # 调用所有模块的idle_task
                 modules_copy = self._modules.copy()
@@ -358,14 +376,14 @@ class MessageDispatcher:
                         try:
                             module.idle_task(self)
                         except Exception as e:
-                            print(f"[Dispatcher] {module.name}.idle_task() 错误: {e}")
+                            logger.error("Dispatcher module idle_task failed: module=%s error=%s", module.name, e, exc_info=True)
 
                 # 控制循环频率（10Hz）
                 time.sleep(0.1)
 
             except Exception as e:
                 if self._running:
-                    print(f"[Dispatcher] 空闲循环错误: {e}")
+                    logger.error("Dispatcher idle loop error: %s", e, exc_info=True)
 
     def _should_log_heartbeat_timeout(self, timed_out: bool) -> bool:
         """连续心跳超时时按固定间隔降频打印，恢复后重置计数。"""

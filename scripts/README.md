@@ -2,7 +2,18 @@
 
 这些脚本只启动网关外围组件，不启动 `src/main.py`，也不管理 Docker 启动的飞控/云平台。
 
-默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`nanomq.host/port`、`nest_mavlink.connection.port` 和 `nest_mavlink.sitl.host/port`。当前端口流向为：SITL 标准 MAVLink 输出到 `14552`，机巢模拟器解析飞机状态，网关通过 `14551` 获取机巢链路数据；`mavlink.connection.port=14550` 只保留关闭状态下的兼容配置。
+默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`nanomq.host/port`、`mavlink.connection.port` 和 `nest_mavlink.connection.port`。当前端口流向为：SITL/飞控标准 MAVLink 直接输出到网关 `14550`，网关通过独立 `14551` 与机巢/机巢模拟器交换自定义机巢 MAVLink。`nest_mavlink.sitl.port=14552` 只作为旧串联代理兼容端口。
+
+## 日志分工
+
+- 网关主日志：`logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log`
+- 网关节点日志：`logs/gateway/YYYY-MM/gateway_YYYY-MM-DD.log`，包含主控启动、连接调度、状态机和未捕获异常。
+- 飞控节点日志：`logs/flight_control/YYYY-MM/flight_control_YYYY-MM-DD.log`，包含飞控遥测字段解释快照、模式切换、解锁和控制命令。
+- 机巢节点日志：`logs/nest_plc/YYYY-MM/nest_plc_YYYY-MM-DD.log`，包含机巢协议收发和业务映射。
+- MAVLink 原始帧：`logs/mavlink_raw/YYYY-MM/mavlink_raw_YYYY-MM-DD.log`，只落盘不刷控制台。
+- 机巢模拟器状态：`logs/nest_simulator/nest_status.log`，默认 10 秒一条状态快照；命令轨迹在 `logs/nest_simulator/command_trace.log`。
+
+启动后控制台只保留启动结果、错误、命令回复等高价值信息；飞控心跳不会以原始 `HEARTBEAT` 形式刷屏，飞控状态看 `flight_control` 日志里的字段解释快照。
 
 ## 单独启动
 
@@ -24,7 +35,7 @@ scripts/start_web_console.sh
 # 机巢模拟器，默认使用 config 中的 nest_mavlink.connection.port，当前通常是 14551
 scripts/start_nest_simulator.sh
 
-# ArduPlane QuadPlane SITL：默认 Changchun_HD，主输出 14552 给机巢模拟器
+# ArduPlane QuadPlane SITL：默认 Changchun_HD，主输出 14550 给网关
 scripts/start_arduplane_sitl.sh
 
 # 可选：不用 Docker 飞控平台时，启动 ArduCopter SITL
@@ -82,12 +93,13 @@ BIND_STATUS=unbound scripts/start_cloud_simulator.sh
 
 NEST_PORT=14551 scripts/start_nest_simulator.sh
 
-# 默认输出 udp:127.0.0.1:14552、udp:127.0.0.1:14551、udp:192.168.2.59:14551；
-# 机巢模拟器会忽略 14551 上的非网关标准 SITL 镜像，避免抢占网关回包地址。
+# 默认输出 udp:127.0.0.1:14550 给网关主 MAVLink；
+# 不再把标准飞控 MAVLink 镜像到机巢自定义链路。
 scripts/start_arduplane_sitl.sh
 
-# 关闭本机 14551 镜像和远端观察输出，只保留 SITL -> 机巢模拟器 14552
-SITL_LOCAL_NEST_OUT=0 SITL_EXTRA_OUT_IPS="" scripts/start_arduplane_sitl.sh
+# 需要复现旧串联代理时，显式打开机巢模拟器 SITL 入口和 SITL legacy 输出
+DRONE_PORT=14552 scripts/start_nest_simulator.sh
+SITL_LEGACY_NEST_OUT=1 SITL_EXTRA_OUT_IPS="" scripts/start_arduplane_sitl.sh
 
 WEB_PORT=8091 scripts/start_web_console.sh
 ```
