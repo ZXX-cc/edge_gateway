@@ -919,7 +919,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_flighttask_prepare_delegates_wayline_to_nest_when_main_mavlink_disabled(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": False}}
+        Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
         try:
             manager = MissionManager()
             nest = RecordingNest()
@@ -955,6 +955,32 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(execute["data"]["output"]["status"], "in_progress")
             self.assertEqual(nest.calls, ["request_takeoff"])
             self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
+        finally:
+            Config._data = original_config
+
+    def test_flighttask_prepare_does_not_upload_when_nest_link_configured_before_module_injection(self):
+        original_config = Config._data
+        Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
+        try:
+            manager = MissionManager()
+            waypoint_manager = RecordingWaypointManager()
+            manager.set_waypoint_manager(waypoint_manager)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                kmz_path = Path(tmp) / "mission.kmz"
+                write_mock_kmz(kmz_path)
+                prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+                    "flight_id": "delegated-flight-no-nest-module",
+                    "task_type": 0,
+                    "execute_time": int(time.time() * 1000),
+                    "file": {"url": kmz_path.as_uri(), "fingerprint": "fp"},
+                    "simulate_mission": {"is_enable": 0},
+                }))
+
+            self.assertEqual(prepare["data"]["result"], 0)
+            self.assertEqual(prepare["data"]["output"]["ext"]["file"]["delegated_to"], "nest")
+            self.assertFalse(prepare["data"]["output"]["ext"]["file"]["parsed"])
+            self.assertEqual(waypoint_manager.upload_calls, [])
         finally:
             Config._data = original_config
 

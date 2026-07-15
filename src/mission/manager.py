@@ -983,8 +983,8 @@ class MissionManager:
     def _should_delegate_wayline_to_nest(self) -> bool:
         """Return whether route parsing/upload belongs to the dock/nest side."""
         return (
-            bool(self._nest_module)
-            and not bool(Config.get('mavlink.enabled', True))
+            not bool(Config.get('mavlink.enabled', True))
+            and bool(Config.get('nest_mavlink.enabled', False))
         )
 
     @staticmethod
