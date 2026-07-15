@@ -275,7 +275,7 @@ class MAVLinkConnection:
                     srcComponent=self.source_component
                 )
                 standard_mav_instance = ardupilotmega.MAVLink(
-                    None,
+                    writer,
                     srcSystem=self.source_system,
                     srcComponent=self.source_component,
                 )
@@ -430,7 +430,7 @@ class MAVLinkConnection:
                     srcComponent=self.source_component
                 )
                 standard_mav_instance = ardupilotmega.MAVLink(
-                    None,
+                    file,
                     srcSystem=self.source_system,
                     srcComponent=self.source_component,
                 )
@@ -589,10 +589,23 @@ class MAVLinkConnection:
         with self.lock:
             if self.master and self.status == ConnectionStatus.CONNECTED:
                 try:
-                    self.master.mav.send(msg)
+                    mav = self._select_sender_for_message(msg)
+                    mav.send(msg)
                     _log_raw_mavlink("TX", self.connection_string, msg)
                 except Exception as e:
                     print(f"[Connection] 发送消息错误: {e}")
+
+    def _select_sender_for_message(self, msg):
+        """Select the matching MAVLink encoder for mixed nest/aircraft links."""
+        custom_ids = self._custom_valid_message_ids or set()
+        msg_id = _extract_msg_id(msg)
+        if (
+            self.use_custom_dialect
+            and msg_id not in custom_ids
+            and hasattr(self.master, "standard_mav")
+        ):
+            return self.master.standard_mav
+        return self.master.mav
 
     def is_connected(self) -> bool:
         """检查是否已连接"""
