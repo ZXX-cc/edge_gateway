@@ -1176,12 +1176,33 @@ class NestSimulator:
                             print(f"自定义 MAVLink 解析错误: {e}")
                     try:
                         standard_msg = self.gateway_standard_mav.parse_char(chunk) if self.gateway_standard_mav else None
-                        if standard_msg and self._is_gateway_standard_message(standard_msg):
-                            if self.client_addr != addr:
+                        if standard_msg:
+                            if self._is_gateway_standard_message(standard_msg, addr):
+                                if self.client_addr != addr:
+                                    self.client_addr = addr
+                                    print(f"已注册网关地址: {addr}")
+                                    self._send_heartbeat()
+                                should_forward_to_drone = True
+                                self._trace_command(
+                                    "gateway_standard_forward_matched",
+                                    msg_type=standard_msg.get_type(),
+                                    msg_id=standard_msg.get_msgId() if hasattr(standard_msg, "get_msgId") else "-",
+                                    src=f"{standard_msg.get_srcSystem()}/{standard_msg.get_srcComponent()}",
+                                    addr=addr,
+                                )
+                            elif standard_msg.get_type() != "BAD_DATA":
+                                self._trace_command(
+                                    "gateway_standard_ignored",
+                                    msg_type=standard_msg.get_type(),
+                                    msg_id=standard_msg.get_msgId() if hasattr(standard_msg, "get_msgId") else "-",
+                                    src=f"{standard_msg.get_srcSystem()}/{standard_msg.get_srcComponent()}",
+                                    addr=addr,
+                                    client_addr=self.client_addr,
+                                )
+                            if self.client_addr is None and self._is_gateway_link_message(standard_msg):
                                 self.client_addr = addr
                                 print(f"已注册网关地址: {addr}")
                                 self._send_heartbeat()
-                            should_forward_to_drone = True
                     except Exception as e:
                         error_str = str(e).lower()
                         if 'invalid' not in error_str and 'prefix' not in error_str:
@@ -1207,8 +1228,7 @@ class NestSimulator:
             or msg.get_type() == 'DRONE_NEST_COMMAND'
         )
 
-    @staticmethod
-    def _is_gateway_standard_message(msg):
+    def _is_gateway_standard_message(self, msg, addr=None):
         """网关到飞机的标准 MAVLink 也必须经由机巢转发给 SITL。"""
         msg_type = msg.get_type()
         if msg_type in {
@@ -1217,7 +1237,7 @@ class NestSimulator:
             'DRONE_NEST_ORDER_RESPONSE',
         }:
             return False
-        return msg.get_srcComponent() == 190
+        return msg.get_srcComponent() == 190 or (self.client_addr is not None and addr == self.client_addr)
 
     def start(self):
         print(f"启动 MAVLink 机巢模拟器 (UDP)，监听 {self.host}:{self.port}")
