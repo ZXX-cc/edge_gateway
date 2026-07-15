@@ -19,7 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(GENERATED_DIALECT_DIR))
 from pymavlink.dialects.v20 import ardupilotmega
 from src.cloud_api.dock3_wayline import parse_wayline_file
-from src.mavlink.flight_modes import flight_mode_profile, mode_name_to_custom_mode
+from src.mavlink.flight_modes import flight_mode_profile, mode_name_to_custom_mode, parse_flight_mode
 import drone_nest
 
 
@@ -174,6 +174,8 @@ class NestSimulator:
         self.drone_mav_type = None
         self.drone_armed = False
         self.drone_relative_alt_m = 0.0
+        self.drone_previous_alt_m = 0.0
+        self.drone_flight_mode = "UNKNOWN"
         self.drone_current_waypoint = -1
         self.drone_battery_remaining = None
         self.drone_connected = False
@@ -568,6 +570,7 @@ class NestSimulator:
             "peer": self.drone_peer_addr,
             "system": self.drone_system_id,
             "component": self.drone_component_id,
+            "mode": self.drone_flight_mode,
             "armed": self.drone_armed,
             "relative_alt_m": self.drone_relative_alt_m,
             "current_waypoint": self.drone_current_waypoint,
@@ -584,7 +587,7 @@ class NestSimulator:
         return (
             f"SITL={connected} peer={status['peer'] or '-'} "
             f"sys/comp={status['system'] or '-'}/{status['component'] or '-'} "
-            f"armed={int(status['armed'])} alt={status['relative_alt_m']:.1f}m "
+            f"mode={status['mode']} armed={int(status['armed'])} alt={status['relative_alt_m']:.1f}m "
             f"wp={waypoint} battery={battery} last_seen={age}"
         )
 
@@ -1001,10 +1004,11 @@ class NestSimulator:
             print("模拟器：起飞流程开始")
         elif takeoff_land_order == 0x02:
             self.env_data['boolstate2'] &= ~(1 << 0)
+            self.env_data['boolstate2'] &= ~(1 << BIT_TAKEOFF_ABORT_PROGRESS)
             print("模拟器：起飞流程终止")
         elif takeoff_land_order == 0x04:
             self.env_data['boolstate2'] &= ~(1 << 1)
-            self.env_data['boolstate2'] |= (1 << 3)
+            self.env_data['boolstate2'] &= ~(1 << BIT_LANDING_ABORT_PROGRESS)
             print("模拟器：降落流程终止")
         elif takeoff_land_order:
             print(f"模拟器：未识别起降命令 0x{takeoff_land_order:02X}")
@@ -1071,6 +1075,29 @@ class NestSimulator:
         else:
             self.env_data['boolstate2'] &= ~(1 << bit)
 
+    def _sync_flight_process_bits_from_drone(self):
+        # 机巢流程状态应跟随飞机状态，而不是长期保留终止命令的瞬时标志。
+        airborne = self.drone_armed and self.drone_relative_alt_m > 1.0
+        landing_modes = {"LAND", "QLAND", "RTL", "QRTL", "LOITER_ALT_QLAND"}
+        descending = self.drone_relative_alt_m < self.drone_previous_alt_m - 0.2
+        landing = airborne and (
+            self.drone_flight_mode in landing_modes
+            or (descending and self.drone_relative_alt_m < 10.0)
+        )
+        takeoff = airborne and not landing
+
+        self._set_boolstate2_bit(BIT_TAKEOFF_IN_PROGRESS, takeoff)
+        self._set_boolstate2_bit(BIT_LANDING_IN_PROGRESS, landing)
+        self._set_boolstate2_bit(BIT_TAKEOFF_ABORT_PROGRESS, False)
+        self._set_boolstate2_bit(BIT_LANDING_ABORT_PROGRESS, False)
+
+        if airborne:
+            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, False)
+            self.env_data['charge_current'] = 0
+            self._set_boolstate1_bit(BIT_CHARGING, False)
+        elif self.drone_armed:
+            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, True)
+
     def _handle_drone_message(self, msg):
         msg_type = msg.get_type()
         was_connected = self.drone_connected
@@ -1084,8 +1111,13 @@ class NestSimulator:
             base_mode = int(getattr(msg, 'base_mode', 0) or 0)
             self.drone_mav_type = self._message_int_attr(msg, 'type', None)
             self.drone_armed = bool(base_mode & ardupilotmega.MAV_MODE_FLAG_SAFETY_ARMED)
+            self.drone_flight_mode = parse_flight_mode(
+                self._message_int_attr(msg, 'custom_mode', 0),
+                mav_type=self.drone_mav_type,
+            )
             self._set_boolstate1_bit(BIT_READY, True)
         elif msg_type == 'GLOBAL_POSITION_INT':
+            self.drone_previous_alt_m = self.drone_relative_alt_m
             self.drone_relative_alt_m = float(getattr(msg, 'relative_alt', 0) or 0) / 1000.0
         elif msg_type == 'MISSION_CURRENT':
             self.drone_current_waypoint = self._message_int_attr(msg, 'seq', -1)
@@ -1109,14 +1141,7 @@ class NestSimulator:
                 else:
                     print(f"[SITL] 收到 MISSION_ACK: type={ack_type}")
 
-        airborne = self.drone_armed and self.drone_relative_alt_m > 1.0
-        self._set_boolstate2_bit(BIT_TAKEOFF_IN_PROGRESS, airborne)
-        if airborne:
-            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, False)
-            self.env_data['charge_current'] = 0
-            self._set_boolstate1_bit(BIT_CHARGING, False)
-        elif self.drone_armed:
-            self._set_boolstate2_bit(BIT_ALLOW_TAKEOFF, True)
+        self._sync_flight_process_bits_from_drone()
 
         if not was_connected:
             self._trace_drone_status("connected")
