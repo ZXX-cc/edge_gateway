@@ -37,7 +37,6 @@ from src.cloud_api.dock3_wayline import (
     STATUS_SENT,
     normalize_prepare_payload,
     normalize_in_flight_wayline_payload,
-    parse_wayline_file,
     normalize_return_payload,
     normalize_undo_payload,
     output_data as wayline_output_data,
@@ -979,13 +978,6 @@ class MissionManager:
                 exc,
             )
             return False
-
-    def _should_delegate_wayline_to_nest(self) -> bool:
-        """Return whether route parsing/upload belongs to the dock/nest side."""
-        return (
-            not bool(Config.get('mavlink.enabled', True))
-            and bool(Config.get('nest_mavlink.enabled', False))
-        )
 
     @staticmethod
     def _delegated_wayline_summary(file_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -2997,44 +2989,24 @@ class MissionManager:
         self._task_type = task_type
         self._execute_time = execute_time
         self._task_file = file_info
-        self._wayline_delegated_to_nest = self._should_delegate_wayline_to_nest()
-        if self._wayline_delegated_to_nest:
-            self._task_file_summary = self._delegated_wayline_summary(file_info)
-            parsed_waypoints = []
-            self._current_wayline = []
-            self._current_waypoint_idx = 0
-            self._breakpoint_waypoint_idx = 0
-            logger.info(
-                "Wayline parsing/upload delegated to nest: flight_id=%s, source=%s",
-                flight_id,
-                self._task_file_summary.get('source'),
-            )
-            trace_command(
-                "wayline_delegated_to_nest",
-                label="航线委托机巢",
-                method="flighttask_prepare",
-                flight_id=flight_id,
-                source=self._task_file_summary.get('source'),
-                reason="mavlink.enabled=false",
-            )
-        else:
-            self._task_file_summary, parsed_waypoints = parse_wayline_file(file_info)
-        if parsed_waypoints:
-            self._current_wayline = parsed_waypoints
-            self._current_waypoint_idx = 0
-            self._breakpoint_waypoint_idx = 0
-            logger.info(
-                "Parsed wayline file: flight_id=%s, format=%s, waypoints=%s",
-                flight_id,
-                self._task_file_summary.get('format'),
-                len(parsed_waypoints),
-            )
-        elif self._task_file_summary.get('warnings'):
-            logger.info(
-                "Wayline file parse skipped: flight_id=%s, warnings=%s",
-                flight_id,
-                "; ".join(self._task_file_summary.get('warnings', [])),
-            )
+        self._wayline_delegated_to_nest = True
+        self._task_file_summary = self._delegated_wayline_summary(file_info)
+        self._current_wayline = []
+        self._current_waypoint_idx = 0
+        self._breakpoint_waypoint_idx = 0
+        logger.info(
+            "Wayline parsing/upload delegated to nest: flight_id=%s, source=%s",
+            flight_id,
+            self._task_file_summary.get('source'),
+        )
+        trace_command(
+            "wayline_delegated_to_nest",
+            label="航线委托机巢",
+            method="flighttask_prepare",
+            flight_id=flight_id,
+            source=self._task_file_summary.get('source'),
+            reason="gateway_does_not_parse_wayline",
+        )
         self._ready_conditions = ready_conditions
         self._executable_conditions = executable_conditions
         self._break_point = break_point
@@ -3047,77 +3019,14 @@ class MissionManager:
         self._wayline_mission_state = 2  # 航线准备状态
         self._current_step = 5  # 航线执行进入准备状态
 
-        # ---- 实际航线上传到飞控 ----
-        # 网关直连飞控时才由 WaypointManager 上传。当前机巢主链路中，
-        # 航线文件解析和 mission protocol 上传属于机巢侧职责。
-        if self._wayline_delegated_to_nest:
-            logger.info("Skip gateway waypoint upload: delegated_to=nest, flight_id=%s", flight_id)
-            trace_command(
-                "gateway_wayline_upload_skipped",
-                label="网关跳过航线上传",
-                method="flighttask_prepare",
-                flight_id=flight_id,
-                reason="delegated_to_nest",
-            )
-        elif self._current_wayline and self._waypoint_manager:
-            self._waypoint_manager.clear_waypoints()
-            for wp in self._current_wayline:
-                wp_dict = {
-                    'seq': wp.get('seq', 0),
-                    'lat': wp.get('latitude', 0.0),
-                    'lon': wp.get('longitude', 0.0),
-                    'alt': wp.get('altitude', 50.0),
-                    'command': wp.get('command', 16),
-                    'frame': wp.get('frame', 3),
-                    'param1': wp.get('param1', 0.0),
-                    'param2': wp.get('param2', 0.0),
-                    'param3': wp.get('param3', 0.0),
-                    'param4': wp.get('param4', 0.0),
-                    'autocontinue': wp.get('autocontinue', 1),
-                }
-                self._waypoint_manager.add_waypoint_from_dict(wp_dict)
-
-            upload_ok = self._waypoint_manager.upload_mission(timeout=15.0)
-            if not upload_ok:
-                self._status = self.MISSION_FAILED
-                self._wayline_mission_state = 1  # 不支持该航点
-                self._current_step = 5
-                logger.error("Waypoint upload to FC failed")
-                self.report_setup_exception(flight_id, flight_type=1, timeout_time=6)
-                self._emit_wayline_progress(STATUS_FAILED, current_step=5, percent=0, flight_id=flight_id)
-                return MessageBuilder.build_reply(
-                    msg,
-                    result=-1,
-                    data=self._wayline_reply_data(
-                        STATUS_FAILED,
-                        current_step=5,
-                        percent=0,
-                        flight_id=flight_id,
-                        extra={'errors': ['航线上传到飞控失败']},
-                    ),
-                    msg_str="航线上传到飞控失败",
-                )
-            logger.info(f"Waypoint uploaded to FC: {len(self._current_wayline)} waypoints")
-        elif self._waypoint_manager and file_info.get('url'):
-            logger.info(
-                "No local wayline coordinates available for waypoint upload: %s",
-                file_info.get('url', '')[:80],
-            )
-        elif self._current_wayline and not self._waypoint_manager:
-            reason = "WaypointManager not available"
-            logger.warning("Flighttask prepare failed: %s", reason)
-            return MessageBuilder.build_reply(
-                msg,
-                result=WAYLINE_EXECUTION_FAILED,
-                data=self._wayline_reply_data(
-                    STATUS_FAILED,
-                    current_step=5,
-                    percent=0,
-                    flight_id=flight_id,
-                    extra={"errors": [reason]},
-                ),
-                msg_str=reason,
-            )
+        logger.info("Skip gateway waypoint upload: delegated_to=nest, flight_id=%s", flight_id)
+        trace_command(
+            "gateway_wayline_upload_skipped",
+            label="网关跳过航线上传",
+            method="flighttask_prepare",
+            flight_id=flight_id,
+            reason="delegated_to_nest",
+        )
 
         # 断点续飞设置
         if break_point:

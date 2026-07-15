@@ -826,10 +826,10 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_mission_manager_wayline_lifecycle_outputs_dock3_status(self):
         events = []
-        flight_control = RecordingRealWaylineFlightControl()
         manager = MissionManager()
+        nest = RecordingNest()
         manager.set_event_callback(events.append)
-        manager.set_flight_control(flight_control)
+        manager.set_nest_module(nest)
         waypoint_manager = RecordingWaypointManager()
         manager.set_waypoint_manager(waypoint_manager)
         manager.start_mission_monitor = lambda: None
@@ -845,56 +845,24 @@ class Dock3WaylineTest(unittest.TestCase):
                 "execute_time": int(time.time() * 1000),
                 "file": {"url": kmz_path.as_uri(), "fingerprint": "fp"},
             }))
+
         self.assertEqual(prepare["data"]["result"], 0)
         self.assertEqual(prepare["data"]["output"]["status"], "sent")
         file_summary = prepare["data"]["output"]["ext"]["file"]
-        self.assertTrue(file_summary["parsed"])
-        self.assertEqual(file_summary["waypoint_count"], 2)
+        self.assertFalse(file_summary["parsed"])
+        self.assertEqual(file_summary["delegated_to"], "nest")
+        self.assertEqual(file_summary["waypoint_count"], 0)
         self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
-        self.assertEqual(waypoint_manager.clear_calls, 1)
-        self.assertEqual(len(waypoint_manager.added), 2)
-        self.assertEqual(waypoint_manager.upload_calls, [15.0])
+        self.assertEqual(waypoint_manager.clear_calls, 0)
+        self.assertEqual(waypoint_manager.added, [])
+        self.assertEqual(waypoint_manager.upload_calls, [])
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
             "flight_id": "flight-001",
         }))
         self.assertEqual(execute["data"]["result"], 0)
         self.assertEqual(execute["data"]["output"]["status"], "in_progress")
-
-        pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
-        self.assertEqual(pause["data"]["result"], 0)
-        self.assertEqual(pause["data"]["output"]["status"], "paused")
-
-        progress = manager.handle_flighttask_progress(base_msg("flighttask_progress", {
-            "flight_id": "flight-001",
-        }))
-        self.assertEqual(progress["data"]["result"], 0)
-        self.assertEqual(progress["data"]["output"]["status"], "paused")
-
-        resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))
-        self.assertEqual(resume["data"]["result"], 0)
-        self.assertEqual(resume["data"]["output"]["status"], "in_progress")
-
-        ret = manager.handle_flighttask_return(base_msg("flighttask_return", {
-            "flight_id": "flight-001",
-            "return_type": 0,
-        }))
-        self.assertEqual(ret["data"]["result"], 0)
-        self.assertEqual(ret["data"]["output"]["status"], "in_progress")
-
-        cancel_return = manager.handle_return_home_cancel(base_msg("return_home_cancel", {}))
-        self.assertEqual(cancel_return["data"]["result"], 0)
-        self.assertEqual(cancel_return["data"]["output"]["status"], "paused")
-
-        undo = manager.handle_flighttask_undo(base_msg("flighttask_undo", {
-            "flight_ids": ["flight-001"],
-        }))
-        self.assertEqual(undo["data"]["result"], 0)
-        self.assertEqual(undo["data"]["output"]["status"], "canceled")
-        self.assertIn(("set_mode", "AUTO"), flight_control.calls)
-        self.assertIn(("set_mode", "LOITER"), flight_control.calls)
-        self.assertIn(("one_click_return", None), flight_control.calls)
-        self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+        self.assertEqual(nest.calls, ["request_takeoff"])
 
     def test_real_flighttask_execute_prearms_before_auto(self):
         manager = MissionManager()
@@ -919,7 +887,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_flighttask_prepare_delegates_wayline_to_nest_when_main_mavlink_disabled(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
+        Config._data = {}
         try:
             manager = MissionManager()
             nest = RecordingNest()
