@@ -741,15 +741,15 @@ class DroneNestModule(BaseModule):
     # ⭐ 便捷命令方法
     def request_takeoff(self):
         """请求起飞"""
-        self.send_gcs_command(GCSCommand.TAKEOFF_START)
+        return self.send_gcs_command(GCSCommand.TAKEOFF_START)
 
     def abort_takeoff(self):
         """终止起飞"""
-        self.send_gcs_command(GCSCommand.TAKEOFF_ABORT)
+        return self.send_gcs_command(GCSCommand.TAKEOFF_ABORT)
 
     def abort_landing(self):
         """终止降落"""
-        self.send_gcs_command(GCSCommand.LANDING_ABORT)
+        return self.send_gcs_command(GCSCommand.LANDING_ABORT)
 
     def manual_open_door(self):
         """手动开门"""

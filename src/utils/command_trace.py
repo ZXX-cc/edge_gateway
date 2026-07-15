@@ -26,6 +26,12 @@ _EVENT_LABELS = {
     "nest_command_encoded": "网关编码机巢命令",
     "nest_command_mavlink_sent": "网关发送MAVLink",
     "nest_order_response_received": "网关收到机巢回复",
+    "wayline_delegated_to_nest": "航线委托机巢",
+    "gateway_wayline_upload_skipped": "网关跳过航线上传",
+    "nest_wayline_execute_requested": "请求机巢执行航线",
+    "mavlink_custom_rx": "收到机巢MAVLink",
+    "mavlink_standard_rx": "收到标准MAVLink",
+    "mavlink_message_tx": "发送MAVLink",
 }
 _RESET = "\033[0m"
 _COLORS = {
@@ -250,6 +256,16 @@ _DETAIL_LABELS = {
     "reason": "reason",
     "msg": "msg",
     "error": "error",
+    "flight_id": "flight_id",
+    "source": "source",
+    "connection": "connection",
+    "encoder": "encoder",
+    "msg_type": "msg_type",
+    "msg_id": "msg_id",
+    "seq": "seq",
+    "count": "count",
+    "ack_type": "ack_type",
+    "peer": "peer",
 }
 
 
@@ -418,10 +434,20 @@ def _format_trace_line(timestamp: str, event: str, label: str, fields: dict[str,
 
     preferred_keys = (
         "method",
+        "flight_id",
         "tid",
         "result",
         "topic",
         "reason",
+        "source",
+        "connection",
+        "encoder",
+        "msg_type",
+        "msg_id",
+        "seq",
+        "count",
+        "ack_type",
+        "peer",
     )
     details = _format_details(fields, preferred_keys)
     return f"{timestamp} {_color('[网关]', 'gateway')} {label}：{details}"

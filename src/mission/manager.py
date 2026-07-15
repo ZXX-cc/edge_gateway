@@ -16,6 +16,7 @@ from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.command_trace import trace_command
 from src.utils.dji_error_codes import (
     DEVICE_COMMAND_TIMEOUT,
     DEVICE_STATE_UNSUPPORTED,
@@ -264,6 +265,7 @@ class MissionManager:
         self._execute_time = 0
         self._task_file = {}  # {url, fingerprint}
         self._task_file_summary = {}
+        self._wayline_delegated_to_nest = False
         self._ready_conditions = {}
         self._executable_conditions = {}
         self._break_point = {}
@@ -959,7 +961,14 @@ class MissionManager:
             )
             return False
         try:
-            action()
+            result = action()
+            if result is False:
+                logger.warning(
+                    "Nest action reported failure: action=%s, context=%s",
+                    action_name,
+                    context,
+                )
+                return False
             logger.info("Nest action sent: action=%s, context=%s", action_name, context)
             return True
         except Exception as exc:
@@ -970,6 +979,29 @@ class MissionManager:
                 exc,
             )
             return False
+
+    def _should_delegate_wayline_to_nest(self) -> bool:
+        """Return whether route parsing/upload belongs to the dock/nest side."""
+        return (
+            bool(self._nest_module)
+            and not bool(Config.get('mavlink.enabled', True))
+        )
+
+    @staticmethod
+    def _delegated_wayline_summary(file_info: Dict[str, Any]) -> Dict[str, Any]:
+        source = ""
+        if isinstance(file_info, dict):
+            source = str(file_info.get("url") or file_info.get("local_path") or file_info.get("path") or "")
+        return {
+            "source": source,
+            "format": "",
+            "available": bool(source),
+            "parsed": False,
+            "delegated_to": "nest",
+            "waypoint_count": 0,
+            "files": [],
+            "warnings": [],
+        }
 
     def _available_storage_mb(self) -> Optional[int]:
         for path in (
@@ -2965,7 +2997,28 @@ class MissionManager:
         self._task_type = task_type
         self._execute_time = execute_time
         self._task_file = file_info
-        self._task_file_summary, parsed_waypoints = parse_wayline_file(file_info)
+        self._wayline_delegated_to_nest = self._should_delegate_wayline_to_nest()
+        if self._wayline_delegated_to_nest:
+            self._task_file_summary = self._delegated_wayline_summary(file_info)
+            parsed_waypoints = []
+            self._current_wayline = []
+            self._current_waypoint_idx = 0
+            self._breakpoint_waypoint_idx = 0
+            logger.info(
+                "Wayline parsing/upload delegated to nest: flight_id=%s, source=%s",
+                flight_id,
+                self._task_file_summary.get('source'),
+            )
+            trace_command(
+                "wayline_delegated_to_nest",
+                label="航线委托机巢",
+                method="flighttask_prepare",
+                flight_id=flight_id,
+                source=self._task_file_summary.get('source'),
+                reason="mavlink.enabled=false",
+            )
+        else:
+            self._task_file_summary, parsed_waypoints = parse_wayline_file(file_info)
         if parsed_waypoints:
             self._current_wayline = parsed_waypoints
             self._current_waypoint_idx = 0
@@ -2995,7 +3048,18 @@ class MissionManager:
         self._current_step = 5  # 航线执行进入准备状态
 
         # ---- 实际航线上传到飞控 ----
-        if self._current_wayline and self._waypoint_manager:
+        # 网关直连飞控时才由 WaypointManager 上传。当前机巢主链路中，
+        # 航线文件解析和 mission protocol 上传属于机巢侧职责。
+        if self._wayline_delegated_to_nest:
+            logger.info("Skip gateway waypoint upload: delegated_to=nest, flight_id=%s", flight_id)
+            trace_command(
+                "gateway_wayline_upload_skipped",
+                label="网关跳过航线上传",
+                method="flighttask_prepare",
+                flight_id=flight_id,
+                reason="delegated_to_nest",
+            )
+        elif self._current_wayline and self._waypoint_manager:
             self._waypoint_manager.clear_waypoints()
             for wp in self._current_wayline:
                 wp_dict = {
@@ -3133,6 +3197,49 @@ class MissionManager:
         self._current_task_id = flight_id
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
+
+        if self._wayline_delegated_to_nest:
+            if not self._nest_module:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    "nest",
+                    "Nest module not available",
+                )
+
+            self._status = self.MISSION_RUNNING
+            self._wayline_mission_state = 6  # 航线执行
+            self._current_step = 23  # 航线执行中
+            trace_command(
+                "nest_wayline_execute_requested",
+                label="请求机巢执行航线",
+                method="flighttask_execute",
+                flight_id=flight_id,
+            )
+            if not self._call_nest_action("request_takeoff", "flighttask_execute"):
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    "nest_takeoff",
+                    "Nest takeoff request failed",
+                )
+            self._emit_wayline_progress(
+                STATUS_IN_PROGRESS,
+                current_step=23,
+                percent=self._current_progress_percent(),
+                flight_id=flight_id,
+                extra={"delegated_to": "nest"},
+            )
+            return MessageBuilder.build_reply(
+                msg,
+                result=0,
+                data=self._wayline_reply_data(
+                    STATUS_IN_PROGRESS,
+                    current_step=23,
+                    flight_id=flight_id,
+                    extra={"delegated_to": "nest"},
+                ),
+            )
 
         # 在解锁和 AUTO 前预留唯一监控 owner。线程会等到下面把状态切为
         # RUNNING 后才消费航点，因此失败时尚未对真实飞控产生副作用。

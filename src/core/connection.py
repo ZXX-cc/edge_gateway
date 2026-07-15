@@ -12,9 +12,36 @@ from threading import Lock
 from queue import Queue
 
 from src.utils.logger import get_logger
+from src.utils.command_trace import trace_command
 
 
 mavlink_raw_logger = get_logger("mavlink.raw")
+
+MISSION_DIAGNOSTIC_IDS = {39, 40, 43, 44, 46, 47, 51}
+
+
+def _msg_type(msg) -> str:
+    try:
+        if hasattr(msg, "get_type"):
+            return str(msg.get_type())
+    except Exception:
+        pass
+    return type(msg).__name__
+
+
+def _msg_field(msg, name: str, default=None):
+    try:
+        return getattr(msg, name, default)
+    except Exception:
+        return default
+
+
+def _trace_mission_link(event: str, **fields) -> None:
+    """Write concise diagnostics for MAVLink mission upload routing."""
+    try:
+        trace_command(event, **fields)
+    except Exception:
+        pass
 
 
 class ConnectionStatus:
@@ -219,7 +246,7 @@ class MAVLinkConnection:
                     def _receiver_loop(self):
                         while self._running:
                             try:
-                                data, _ = self._sock.recvfrom(4096)
+                                data, addr = self._sock.recvfrom(4096)
                                 for byte in data:
                                     chunk = bytes([byte])
                                     try:
@@ -227,6 +254,17 @@ class MAVLinkConnection:
                                         if msg:
                                             msg_id = _extract_msg_id(msg)
                                             if msg_id in self._valid_ids:
+                                                _trace_mission_link(
+                                                    "mavlink_custom_rx",
+                                                    connection="nest_udp",
+                                                    peer=str(addr),
+                                                    msg_type=_msg_type(msg),
+                                                    msg_id=msg_id,
+                                                    sysid=_msg_field(msg, "get_srcSystem", lambda: None)()
+                                                    if hasattr(msg, "get_srcSystem") else None,
+                                                    compid=_msg_field(msg, "get_srcComponent", lambda: None)()
+                                                    if hasattr(msg, "get_srcComponent") else None,
+                                                )
                                                 self._message_queue.append(msg)
                                     except Exception as e:
                                         error_str = str(e).lower()
@@ -237,6 +275,21 @@ class MAVLinkConnection:
                                         if standard_msg:
                                             msg_id = _extract_msg_id(standard_msg)
                                             if msg_id not in self._valid_ids:
+                                                if msg_id in MISSION_DIAGNOSTIC_IDS:
+                                                    _trace_mission_link(
+                                                        "mavlink_standard_rx",
+                                                        connection="nest_udp",
+                                                        peer=str(addr),
+                                                        msg_type=_msg_type(standard_msg),
+                                                        msg_id=msg_id,
+                                                        sysid=standard_msg.get_srcSystem(),
+                                                        compid=standard_msg.get_srcComponent(),
+                                                        seq=_msg_field(standard_msg, "seq"),
+                                                        count=_msg_field(standard_msg, "count"),
+                                                        ack_type=_msg_field(standard_msg, "type"),
+                                                        target_system=_msg_field(standard_msg, "target_system"),
+                                                        target_component=_msg_field(standard_msg, "target_component"),
+                                                    )
                                                 self._remember_aircraft_target(standard_msg)
                                                 self._message_queue.append(standard_msg)
                                     except Exception as e:
@@ -590,6 +643,26 @@ class MAVLinkConnection:
             if self.master and self.status == ConnectionStatus.CONNECTED:
                 try:
                     mav = self._select_sender_for_message(msg)
+                    msg_id = _extract_msg_id(msg)
+                    encoder = (
+                        "standard"
+                        if self.use_custom_dialect
+                        and hasattr(self.master, "standard_mav")
+                        and mav is self.master.standard_mav
+                        else "custom" if self.use_custom_dialect else "standard"
+                    )
+                    if msg_id in MISSION_DIAGNOSTIC_IDS or self.use_custom_dialect:
+                        _trace_mission_link(
+                            "mavlink_message_tx",
+                            connection=self.connection_string,
+                            encoder=encoder,
+                            msg_type=_msg_type(msg),
+                            msg_id=msg_id,
+                            seq=_msg_field(msg, "seq"),
+                            count=_msg_field(msg, "count"),
+                            target_system=_msg_field(msg, "target_system"),
+                            target_component=_msg_field(msg, "target_component"),
+                        )
                     mav.send(msg)
                     _log_raw_mavlink("TX", self.connection_string, msg)
                 except Exception as e:

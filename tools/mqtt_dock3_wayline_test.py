@@ -226,6 +226,11 @@ def wayline_file_summary(payload):
         return {}
 
 
+def is_delegated_to_nest(payload) -> bool:
+    summary = wayline_file_summary(payload)
+    return summary.get("delegated_to") == "nest"
+
+
 def is_real_sitl_upload_failure(payload) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -275,10 +280,14 @@ def validate_real_sitl_progress(progress, flight_id, expected_file):
         )
         return 19, progress_status, ext if isinstance(ext, dict) else {}
 
+    delegated_to_nest = expected_file.get("delegated_to") == "nest"
     expected_waypoint_count = expected_file.get("waypoint_count")
     current_file = ext.get("file") if isinstance(ext.get("file"), dict) else {}
     waypoint_count = ext.get("waypoint_count")
-    if waypoint_count != expected_waypoint_count or current_file.get("source") != expected_file.get("source"):
+    if (
+        not delegated_to_nest
+        and (waypoint_count != expected_waypoint_count or current_file.get("source") != expected_file.get("source"))
+    ):
         print(
             "real SITL progress task file changed: "
             f"expected_file={expected_file}, actual_file={current_file}, "
@@ -288,6 +297,8 @@ def validate_real_sitl_progress(progress, flight_id, expected_file):
         return 20, progress_status, ext
 
     waypoint_index = ext.get("current_waypoint_index")
+    if delegated_to_nest and (not isinstance(waypoint_count, int) or waypoint_count <= 0):
+        return 0, progress_status, ext
     if not isinstance(waypoint_index, int) or not isinstance(waypoint_count, int) or not (0 <= waypoint_index < waypoint_count):
         print(
             "real SITL progress contains invalid waypoint index: "
@@ -394,9 +405,16 @@ def run_real_sitl_prepare_check(client, args):
     )
     if rc != 0:
         return rc
-    rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
-    if rc != 0:
-        return rc
+    if is_delegated_to_nest(prepare_payload):
+        print(
+            "real SITL prepare delegated to nest "
+            f"(flight_id={flight_id}, source={wayline_file_summary(prepare_payload).get('source')}); "
+            "gateway did not parse/upload the wayline"
+        )
+    else:
+        rc = assert_wayline_file_parsed(prepare_payload, args.expect_waypoint_count)
+        if rc != 0:
+            return rc
     if is_real_sitl_upload_failure(prepare_payload):
         if not args.allow_real_sitl_upload_failure:
             print(f"real SITL waypoint upload failed: {prepare_payload}", file=sys.stderr)
