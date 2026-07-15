@@ -13,6 +13,7 @@ from src.cloud_api.dock3_hms_log import normalize_hms_alarm
 
 
 NEST_HMS_KEY_PREFIX = "dock3.nest."
+DEFAULT_DOCK_DEVICE_TYPE = "3-119-0"
 
 
 def is_nest_hms_alarm(alarm: Dict[str, Any]) -> bool:
@@ -44,6 +45,7 @@ def build_nest_hms_alarms(nest_data: Dict[str, Any], device_sn: str) -> List[Dic
             "domain": "3",
             "module": "dock",
             "type": "nest_status",
+            "device_type": DEFAULT_DOCK_DEVICE_TYPE,
             "level": level,
             "hms_key": hms_key,
             "content": content,
