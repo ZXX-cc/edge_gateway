@@ -206,6 +206,17 @@ class NestSimulator:
         }
 
     @staticmethod
+    def _raw_mavlink_msg_id(data):
+        if not data:
+            return None
+        magic = data[0]
+        if magic == 0xFE and len(data) >= 6:
+            return data[5]
+        if magic == 0xFD and len(data) >= 10:
+            return data[7] | (data[8] << 8) | (data[9] << 16)
+        return None
+
+    @staticmethod
     def _bit(mask, bit):
         return bool(mask & (1 << bit))
 
@@ -1154,6 +1165,21 @@ class NestSimulator:
                 if not data:
                     continue
                 should_forward_to_drone = False
+                raw_msg_id = self._raw_mavlink_msg_id(data)
+                if raw_msg_id == 11:
+                    should_forward_to_drone = True
+                    if self.client_addr != addr:
+                        self.client_addr = addr
+                        print(f"已注册网关地址: {addr}")
+                        self._send_heartbeat()
+                    self._trace_command(
+                        "gateway_raw_set_mode_seen",
+                        msg_type="SET_MODE",
+                        msg_id=raw_msg_id,
+                        addr=addr,
+                        bytes=len(data),
+                        raw=data[:16].hex(),
+                    )
                 for byte in data:
                     chunk = bytes([byte])
                     try:
