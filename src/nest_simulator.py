@@ -217,6 +217,13 @@ class NestSimulator:
         return None
 
     @staticmethod
+    def _raw_standard_msg_type(msg_id):
+        return {
+            11: "SET_MODE",
+            76: "COMMAND_LONG",
+        }.get(msg_id, f"STANDARD_{msg_id}")
+
+    @staticmethod
     def _bit(mask, bit):
         return bool(mask & (1 << bit))
 
@@ -1166,15 +1173,16 @@ class NestSimulator:
                     continue
                 should_forward_to_drone = False
                 raw_msg_id = self._raw_mavlink_msg_id(data)
-                if raw_msg_id == 11:
+                if raw_msg_id in {11, 76}:
                     should_forward_to_drone = True
                     if self.client_addr != addr:
                         self.client_addr = addr
                         print(f"已注册网关地址: {addr}")
                         self._send_heartbeat()
+                    msg_type = self._raw_standard_msg_type(raw_msg_id)
                     self._trace_command(
-                        "gateway_raw_set_mode_seen",
-                        msg_type="SET_MODE",
+                        "gateway_raw_standard_seen",
+                        msg_type=msg_type,
                         msg_id=raw_msg_id,
                         addr=addr,
                         bytes=len(data),
