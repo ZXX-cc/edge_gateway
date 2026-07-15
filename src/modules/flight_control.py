@@ -459,8 +459,7 @@ class FlightControl(BaseModule):
 
     def _send_message(self, msg) -> bool:
         if self.dispatcher and self.dispatcher.connection:
-            self.dispatcher.connection.send_message(msg)
-            return True
+            return bool(self.dispatcher.connection.send_message(msg))
         self.log("未连接到MAVLink设备", "ERROR")
         return False
 

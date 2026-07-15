@@ -632,7 +632,7 @@ class MAVLinkConnection:
                 print(f"[Connection] 接收消息错误: {e}")
             return None
 
-    def send_message(self, msg):
+    def send_message(self, msg) -> bool:
         """
         发送消息
 
@@ -667,8 +667,11 @@ class MAVLinkConnection:
                         )
                     mav.send(msg)
                     _log_raw_mavlink("TX", self.connection_string, msg)
+                    return True
                 except Exception as e:
                     print(f"[Connection] 发送消息错误: {e}")
+                    return False
+        return False
 
     def _select_sender_for_message(self, msg):
         """Select the matching MAVLink encoder for mixed nest/aircraft links."""
