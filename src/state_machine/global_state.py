@@ -189,7 +189,9 @@ class GatewayStateProvider:
 
     def _read_dock(self) -> tuple[str, Dict[str, Any]]:
         nest = self.sources.get("nest")
-        status = _call(nest, "get_uav_nest_status", {}) or {}
+        env_status = _call(nest, "get_environment_data", {}) or {}
+        uav_status = _call(nest, "get_uav_nest_status", {}) or {}
+        status = {**env_status, **uav_status}
         if status:
             data_valid = bool(status.get("data_valid"))
             estop = bool(status.get("estop_state"))
