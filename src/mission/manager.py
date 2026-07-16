@@ -627,6 +627,11 @@ class MissionManager:
             ext['file'] = self._task_file_summary
         if self._break_point:
             ext['break_point'] = self._break_point
+        if self._last_task_failure:
+            ext['failure'] = {
+                key: value for key, value in self._last_task_failure.items()
+                if key != "raw_result"
+            }
         return ext
 
     def _wayline_reply_data(self, status: str, current_step: int = None,
