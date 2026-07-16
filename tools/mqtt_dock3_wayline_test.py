@@ -357,6 +357,47 @@ def cleanup_real_sitl_mission(client, args, flight_id: str) -> int:
     return rc
 
 
+def wait_until_real_sitl_waypoint_reaches(client, args, flight_id: str, expected_file: dict, target_index: int):
+    deadline = time.monotonic() + args.return_at_waypoint_timeout
+    last_progress = None
+    last_status = None
+    last_ext = {}
+    while time.monotonic() < deadline:
+        rc, progress = client.request(
+            "flighttask_progress",
+            {"flight_id": flight_id},
+            args.timeout,
+            [0],
+            None,
+        )
+        if rc != 0:
+            return rc, progress, last_status, last_ext
+        rc, progress_status, ext = validate_real_sitl_progress(progress, flight_id, expected_file)
+        if rc != 0:
+            return rc, progress, progress_status, ext
+        last_progress = progress
+        last_status = progress_status
+        last_ext = ext
+        current_index = ext.get("current_waypoint_index")
+        print(
+            "real SITL waypoint observation "
+            f"(status={progress_status}, waypoint_index={current_index}, target={target_index})"
+        )
+        if isinstance(current_index, int) and current_index >= target_index:
+            return 0, progress, progress_status, ext
+        if progress_status == "ok":
+            return 0, progress, progress_status, ext
+        time.sleep(args.return_at_waypoint_poll_seconds)
+
+    print(
+        "timeout waiting target waypoint: "
+        f"target={target_index}, last_status={last_status}, "
+        f"last_waypoint={last_ext.get('current_waypoint_index')}",
+        file=sys.stderr,
+    )
+    return 25, last_progress, last_status, last_ext
+
+
 def run_wayline_checks(client, args):
     flight_id = args.flight_id or f"dock3-wayline-{int(time.time())}"
     rc, prepare_payload = client.request(
@@ -519,6 +560,57 @@ def run_real_sitl_prepare_check(client, args):
         cleanup_real_sitl_mission(client, args, flight_id)
         return rc
 
+    if args.return_at_waypoint_index is not None:
+        rc, progress, progress_status, ext = wait_until_real_sitl_waypoint_reaches(
+            client,
+            args,
+            flight_id,
+            expected_file,
+            args.return_at_waypoint_index,
+        )
+        if rc != 0:
+            cleanup_real_sitl_mission(client, args, flight_id)
+            return rc
+        if progress_status == "ok":
+            print(
+                "target waypoint return skipped because mission already completed "
+                f"(flight_id={flight_id}, waypoint_index={ext.get('current_waypoint_index')})",
+                file=sys.stderr,
+            )
+            return 26
+
+        rc, _ = client.request(
+            "flighttask_return",
+            {"flight_id": flight_id, "return_type": args.return_type},
+            args.timeout,
+            [0],
+            "in_progress",
+        )
+        if rc != 0:
+            cleanup_real_sitl_mission(client, args, flight_id)
+            return rc
+        print(
+            "target waypoint return accepted "
+            f"(flight_id={flight_id}, return_type={args.return_type}, "
+            f"waypoint_index={ext.get('current_waypoint_index')})"
+        )
+        if args.land_after_return_seconds >= 0:
+            time.sleep(args.land_after_return_seconds)
+            rc, _ = client.request(
+                "landing",
+                {},
+                args.timeout,
+                [0],
+                None,
+            )
+            if rc != 0:
+                return rc
+            print(
+                "landing requested after return "
+                f"(delay_seconds={args.land_after_return_seconds})"
+            )
+        return 0
+
     if args.require_completion:
         deadline = time.monotonic() + args.completion_timeout
         while progress_status != "ok" and time.monotonic() < deadline:
@@ -630,6 +722,11 @@ def main():
     parser.add_argument("--sitl-origin-lat", type=float, default=None, help="override generated real-SITL route origin latitude")
     parser.add_argument("--sitl-origin-lon", type=float, default=None, help="override generated real-SITL route origin longitude")
     parser.add_argument("--sitl-route-bearing", type=float, default=None, help="override generated short SITL route bearing in degrees clockwise from north; default uses current OSD attitude_head/course")
+    parser.add_argument("--return-at-waypoint-index", type=int, default=None, help="with --execute-real, request flighttask_return when current_waypoint_index reaches this value")
+    parser.add_argument("--return-type", type=int, choices=[0, 1], default=0, help="return_type for --return-at-waypoint-index: 0=return home, 1=land")
+    parser.add_argument("--return-at-waypoint-timeout", type=float, default=180.0, help="maximum seconds to wait for --return-at-waypoint-index")
+    parser.add_argument("--return-at-waypoint-poll-seconds", type=float, default=2.0, help="progress poll interval for --return-at-waypoint-index")
+    parser.add_argument("--land-after-return-seconds", type=float, default=-1.0, help="after --return-at-waypoint-index return is accepted, wait this many seconds then request landing; negative disables")
     parser.add_argument("--skip-prearm-verify", action="store_true", help="skip the QLAND-to-armable-mode verification before real execution")
     parser.add_argument("--arm-timeout", type=float, default=10.0, help="arm confirmation timeout for real-SITL pre-arm verification")
     parser.add_argument("--prearm-timeout", type=float, default=30.0, help="pre-arm readiness wait for real-SITL verification")
@@ -646,6 +743,8 @@ def main():
         parser.error("--execute-real requires --real-sitl")
     if args.require_completion and not args.execute_real:
         parser.error("--require-completion requires --execute-real")
+    if args.return_at_waypoint_index is not None and not args.execute_real:
+        parser.error("--return-at-waypoint-index requires --execute-real")
     if (args.sitl_origin_lat is None) != (args.sitl_origin_lon is None):
         parser.error("--sitl-origin-lat and --sitl-origin-lon must be provided together")
     if args.execute_observe_seconds < 0:
@@ -654,6 +753,12 @@ def main():
         parser.error("--completion-timeout must be positive")
     if args.completion_poll_seconds <= 0:
         parser.error("--completion-poll-seconds must be positive")
+    if args.return_at_waypoint_index is not None and args.return_at_waypoint_index < 0:
+        parser.error("--return-at-waypoint-index must be non-negative")
+    if args.return_at_waypoint_timeout <= 0:
+        parser.error("--return-at-waypoint-timeout must be positive")
+    if args.return_at_waypoint_poll_seconds <= 0:
+        parser.error("--return-at-waypoint-poll-seconds must be positive")
     if args.osd_wait < 0:
         parser.error("--osd-wait must be non-negative")
     if args.arm_timeout <= 0 or args.prearm_timeout < 0:
