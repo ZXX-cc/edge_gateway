@@ -27,10 +27,10 @@ from mqtt_dock3_real_wayline_breakpoint_test import (  # noqa: E402
     assert_status,
     break_point_from,
     current_waypoint,
+    data_output,
     output_ext,
     prepare_payload,
     progress_percent,
-    wait_until_progress_observed,
 )
 from mqtt_test_client import MqttRequestClient, result_code  # noqa: E402
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED  # noqa: E402
@@ -87,6 +87,55 @@ def assert_min_breakpoint_index(payload: Any, min_index: int) -> int:
     return 0
 
 
+def wait_until_waypoint_reaches(
+    client: RelaunchBreakpointClient,
+    flight_id: str,
+    target_index: int,
+    args: argparse.Namespace,
+    label: str,
+) -> tuple[int, dict[str, Any] | None]:
+    last_payload = None
+    while True:
+        rc, payload = client.service(
+            "flighttask_progress",
+            {"flight_id": flight_id},
+            args.timeout,
+            allowed_results={0},
+            expected_status=None,
+        )
+        if rc != 0:
+            return rc, payload
+        last_payload = payload
+        waypoint = current_waypoint(payload)
+        percent = progress_percent(payload)
+        status = data_output(payload).get("status")
+        print(
+            f"{label} progress observed: "
+            f"status={status}, target_waypoint>={target_index}, "
+            f"current_waypoint={waypoint}, percent={percent}"
+        )
+        if isinstance(waypoint, int) and waypoint >= target_index:
+            return 0, payload
+
+        if status in {"failed", "canceled", "rejected", "timeout"}:
+            print(
+                f"{label} ended before reaching target waypoint: "
+                f"status={status}, target>={target_index}, current={waypoint}",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 39, payload
+        if status == "ok":
+            print(
+                f"{label} completed before reaching target waypoint: "
+                f"target>={target_index}, current={waypoint}",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 39, payload
+        time.sleep(args.progress_poll_interval)
+
+
 def wait_until_reexecute_advances(
     client: RelaunchBreakpointClient,
     flight_id: str,
@@ -96,40 +145,50 @@ def wait_until_reexecute_advances(
     if not isinstance(breakpoint_index, int):
         print(f"breakpoint index is not int: {breakpoint_index}", file=sys.stderr)
         return 38, None
-
     target_index = breakpoint_index + args.min_reexecute_waypoint_advance
-    deadline = time.time() + max(0.0, args.reexecute_advance_wait)
-    last_payload = None
-    while time.time() < deadline:
+    return wait_until_waypoint_reaches(client, flight_id, target_index, args, "post-reexecute")
+
+
+def wait_until_paused_with_breakpoint(
+    client: RelaunchBreakpointClient,
+    flight_id: str,
+    args: argparse.Namespace,
+) -> tuple[int, dict[str, Any] | None]:
+    while True:
         rc, payload = client.service(
             "flighttask_progress",
             {"flight_id": flight_id},
             args.timeout,
             allowed_results={0},
-            expected_status="in_progress",
+            expected_status=None,
         )
         if rc != 0:
             return rc, payload
-        last_payload = payload
+        status = data_output(payload).get("status")
         waypoint = current_waypoint(payload)
         percent = progress_percent(payload)
+        breakpoint = break_point_from(payload)
         print(
-            "post-reexecute progress observed: "
-            f"target_waypoint>={target_index}, current_waypoint={waypoint}, percent={percent}"
+            "return progress observed: "
+            f"status={status}, current_waypoint={waypoint}, "
+            f"percent={percent}, breakpoint_index={breakpoint.get('index')}"
         )
-        if isinstance(waypoint, int) and waypoint >= target_index:
+        if status == "paused":
+            rc = assert_breakpoint(payload, args)
+            if rc != 0:
+                return rc, payload
+            rc = assert_min_breakpoint_index(payload, args.min_breakpoint_index)
+            if rc != 0:
+                return rc, payload
             return 0, payload
+        if status in {"failed", "canceled", "rejected", "timeout", "ok"}:
+            print(
+                f"return did not reach paused state: status={status}",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 42, payload
         time.sleep(args.progress_poll_interval)
-
-    print(
-        "re-executed task did not advance beyond breakpoint: "
-        f"breakpoint={breakpoint_index}, target>={target_index}, "
-        f"wait={args.reexecute_advance_wait}s",
-        file=sys.stderr,
-    )
-    if last_payload:
-        print(json.dumps(last_payload, ensure_ascii=False, indent=2), file=sys.stderr)
-    return 39, last_payload
 
 
 def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
@@ -164,7 +223,13 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         f"percent={progress_percent(execute)}, current_waypoint={current_waypoint(execute)}"
     )
 
-    rc, _ = wait_until_progress_observed(client, flight_id, args)
+    rc, _ = wait_until_waypoint_reaches(
+        client,
+        flight_id,
+        args.min_breakpoint_index,
+        args,
+        "initial execute",
+    )
     if rc != 0:
         return rc
 
@@ -188,19 +253,7 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         f"percent={progress_percent(returned)}, current_waypoint={current_waypoint(returned)}"
     )
 
-    rc, paused_progress = client.service(
-        "flighttask_progress",
-        {"flight_id": flight_id},
-        args.timeout,
-        allowed_results={0},
-        expected_status="paused",
-    )
-    if rc != 0:
-        return rc
-    rc = assert_breakpoint(paused_progress, args)
-    if rc != 0:
-        return rc
-    rc = assert_min_breakpoint_index(paused_progress, args.min_breakpoint_index)
+    rc, paused_progress = wait_until_paused_with_breakpoint(client, flight_id, args)
     if rc != 0:
         return rc
     paused_index = break_point_from(paused_progress).get("index")
@@ -222,10 +275,6 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
             "reprepare accepted for breakpoint re-execute: "
             f"percent={progress_percent(reprepare)}, current_waypoint={current_waypoint(reprepare)}"
         )
-
-    if args.relaunch_delay > 0:
-        print(f"waiting {args.relaunch_delay:.1f}s before re-execute")
-        time.sleep(args.relaunch_delay)
 
     rc, relaunched = client.service(
         "flighttask_execute",
@@ -322,14 +371,11 @@ def main() -> int:
     parser.add_argument("--wayline-file", default=DEFAULT_REAL_WAYLINE_FILE)
     parser.add_argument("--file-fingerprint", default="")
     parser.add_argument("--expect-waypoint-count", type=int, default=10)
-    parser.add_argument("--execute-delay-seconds", type=float, default=30.0)
+    parser.add_argument("--execute-delay-seconds", type=float, default=0.0)
     parser.add_argument("--rth-altitude", type=float, default=100.0)
     parser.add_argument("--out-of-control-action", type=int, default=0)
     parser.add_argument("--exit-wayline-when-rc-lost", type=int, default=0)
     parser.add_argument("--return-type", type=int, choices=[0, 1], default=0)
-    parser.add_argument("--relaunch-delay", type=float, default=0.0)
-    parser.add_argument("--reexecute-advance-wait", type=float, default=120.0)
-    parser.add_argument("--progress-wait", type=float, default=15.0)
     parser.add_argument("--progress-poll-interval", type=float, default=1.0)
     parser.add_argument("--min-progress-percent", type=int, default=1)
     parser.add_argument("--min-breakpoint-index", type=int, default=1)
@@ -351,12 +397,6 @@ def main() -> int:
         parser.error("--execute-delay-seconds must be non-negative")
     if args.expect_waypoint_count <= 0:
         parser.error("--expect-waypoint-count must be positive")
-    if args.relaunch_delay < 0:
-        parser.error("--relaunch-delay must be non-negative")
-    if args.reexecute_advance_wait < 0:
-        parser.error("--reexecute-advance-wait must be non-negative")
-    if args.progress_wait < 0:
-        parser.error("--progress-wait must be non-negative")
     if args.progress_poll_interval <= 0:
         parser.error("--progress-poll-interval must be positive")
     if args.min_breakpoint_index < 0:
