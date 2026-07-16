@@ -43,15 +43,23 @@ Ubuntu 已通过 `tests.test_global_state_machine` 9/9、
 和 `output.ext.failure` 中携带失败阶段、分类、是否可重试、尝试次数和原因，平台
 可据此展示失败原因，并由用户选择取消任务或重新执行。
 
+2026-07-16 验收补充：`task_retry_v3` 已在 Ubuntu 通过任务重试改造后的全链路
+复测。`tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --timeout 20
+--quiet-stale --fail-on-stale --continue-on-fail` 输出
+`dock3 e2e full-chain test ok (steps=11, elapsed=15.6s)`，properties、device、
+binding-precondition、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、
+HMS/log、firmware/config 全部 exit=0；OSD/state 已接受当前任务步骤码 0..33，
+解决 `flighttask_step_code=33` 被旧枚举误判的问题。
+
 当前进度估算：**约 88%**。
 
 估算口径：
 
 | 范围 | 进度 | 说明 |
 |---|---:|---|
-| Ubuntu 纯模拟部署与基础链路 | 95% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，状态机接入后服务器已再次通过 11 段 P0/P1 E2E；当前默认 E2E 已接入一键启航离线闭环和 Wayline real-SITL 上传入口留证；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 Mosquitto 重复 listener 后外围组件启动成功 |
+| Ubuntu 纯模拟部署与基础链路 | 96% | MQTT、SITL、网关、OSD、基础 command/reply 已跑通，状态机和任务重试接入后服务器已再次通过 11 段 P0/P1 E2E；当前默认 E2E 已接入一键启航离线闭环和 Wayline real-SITL 上传入口留证；device 多设备拓扑专项和 E2E device 单段已通过服务器验证；`scripts/start_support_stack.sh` 已能中文汇总启动结果，修复 Mosquitto 重复 listener 后外围组件启动成功 |
 | Dock3 P0 协议链路 | 98% | property、services、requests、status、events、OSD/state、DRC 控制数据、CMD 控制命令和错误码边界已形成测试入口；OSD/state 已完成协议级字段矩阵、单一映射入口、枚举和值域门禁，共享 Broker 旧回包已清理并完成严格复测，剩真机字段对接 |
-| 客户需求相关 method/字段迁移 | 88% | Dock 3 官方 properties 已形成 49/49 顶层目录，严格按 OSD 37/state 12 分流并新增一键覆盖验收；properties 官方可写/只读边界、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization、CMD/远程调试、Wayline P1、一键启航、Media、Live、HMS/log、firmware/config 已通过专项或服务器验证；7 类机巢故障到 HMS/events/OSD/dock_operation/MongoDB 操作记录的完整验收已通过，state 另按官方 `pushMode=1` 属性单独验证；全局命令准入已通过 Ubuntu 单测、审计脚本和 11 段 MQTT E2E，当前已把全链路编排改为默认绑定前置和互斥状态清理 |
+| 客户需求相关 method/字段迁移 | 89% | Dock 3 官方 properties 已形成 49/49 顶层目录，严格按 OSD 37/state 12 分流并新增一键覆盖验收；properties 官方可写/只读边界、device topology、多子设备离线重连、DRC 官方字段和批量链路、organization、CMD/远程调试、Wayline P1、一键启航、Media、Live、HMS/log、firmware/config 已通过专项或服务器验证；7 类机巢故障到 HMS/events/OSD/dock_operation/MongoDB 操作记录的完整验收已通过，state 另按官方 `pushMode=1` 属性单独验证；全局命令准入和任务重试已通过 Ubuntu 单测/专项与 11 段 MQTT E2E，当前已把全链路编排改为默认绑定前置和互斥状态清理 |
 | 非阻塞、日志、容错基础 | 77% | 日志落盘、字段中文名、部分 async warning 已修复；非阻塞 JSONL request trace 和查询工具已实现；远程日志列表和进度事件已通过 Ubuntu 专项复测，本轮新增本地 HTTP 字节上传测试链路；数据保留和云同步已补秒级/毫秒级混合时间戳清理工具及单测；全局状态快照和下行准入 hook 已加入 MQTT 热路径，并已通过 11 段全链路确认；任务执行链路已补失败分类、可重试错误自动重试和 FAILED 进度上报；NoSQL/MongoDB 仍需继续实跑和长期稳定性复测 |
 | 模拟器和测试工具 | 99% | 云端模拟器、organization/status/topology/properties/OSD-state/DRC/CMD/Wayline/Media/Live/HMS-log/Firmware-config/P0 批量测试工具可用，`mqtt_organization_test.py` 已支持 `--bind-sub-devices` 多 SN 绑定和 paired 校验，`e2e_full_chain_test.py` 已扩展到 11 段 P0/P1 域并接入 `takeoff-flow`；11 段全量 E2E 已在共享 EMQX 完成严格零旧回包复测，OSD/state 和 MQTT reply 均已支持严格 stale 统计；全链路 device 阶段默认跳过破坏性解绑，并自动执行 `device_binding` 前置，互斥阶段前自动执行 DRC 退出清理，解绑验收保留在专项脚本或 `--device-include-unbind-check`；OSD/state 拓扑种子已统一到 Dock3 gateway 官方 type/sub_type 常量 |
 

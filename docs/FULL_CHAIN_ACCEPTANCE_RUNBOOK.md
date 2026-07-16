@@ -183,6 +183,14 @@ python -m unittest -v \
 用例证明飞控拒绝归为 `hardware_or_rejected`，不会重复下发，且 MQTT 事件包含
 `flighttask_progress status=failed` 和失败原因。
 
+2026-07-16 `task_retry_v3` 已完成任务重试改造后的全链路复测：
+`tools/e2e_full_chain_test.py --host 192.168.2.188 --port 1883 --timeout 20
+--quiet-stale --fail-on-stale --continue-on-fail` 输出
+`dock3 e2e full-chain test ok (steps=11, elapsed=15.6s)`。properties、device、
+binding-precondition、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、live、
+HMS/log、firmware/config 全部 exit=0。OSD/state 阶段已验证当前
+`flighttask_step_code` 任务步骤码 0..33 不再被旧枚举误判。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：
