@@ -4,6 +4,9 @@
 This covers the business flow where a running wayline is interrupted by
 ``flighttask_return`` and the next ``flighttask_execute`` for the same
 ``flight_id`` should take off again and continue from the persisted breakpoint.
+The script drives the gateway over MQTT and expects the gateway to be connected
+to the real SITL/flight-controller chain; ``--real-sitl`` is accepted as a
+readability/compatibility flag.
 """
 
 from __future__ import annotations
@@ -370,6 +373,11 @@ def main() -> int:
     parser.add_argument("--flight-id", default="")
     parser.add_argument("--wayline-file", default=DEFAULT_REAL_WAYLINE_FILE)
     parser.add_argument("--file-fingerprint", default="")
+    parser.add_argument(
+        "--real-sitl",
+        action="store_true",
+        help="Compatibility flag: this script already targets the real SITL gateway chain",
+    )
     parser.add_argument("--expect-waypoint-count", type=int, default=10)
     parser.add_argument("--execute-delay-seconds", type=float, default=0.0)
     parser.add_argument("--rth-altitude", type=float, default=100.0)
