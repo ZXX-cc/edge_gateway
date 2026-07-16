@@ -33,8 +33,12 @@ def _candidate_drone_sns(primary: str) -> list[str]:
     return list(dict.fromkeys(sn for sn in candidates if sn))
 
 
-def osd_topics(drone_sn: str) -> list[str]:
-    return [f"thing/product/{sn}/osd" for sn in _candidate_drone_sns(drone_sn)]
+def osd_topics(gateway_sn: str, drone_sn: str, *, include_gateway: bool = True) -> list[str]:
+    candidates = []
+    if include_gateway:
+        candidates.append(gateway_sn)
+    candidates.extend(_candidate_drone_sns(drone_sn))
+    return [f"thing/product/{sn}/osd" for sn in dict.fromkeys(sn for sn in candidates if sn)]
 
 
 def print_step(label: str, ok: bool, detail: dict[str, Any] | None = None) -> None:
@@ -86,6 +90,16 @@ def osd_snapshot(topic: str | None, payload: Any) -> dict[str, Any]:
         "longitude": _field_value(payload, "longitude"),
         "timestamp": _field_value(payload, "timestamp"),
     }
+
+
+def observed_summary(client: MqttRequestClient, topics: Iterable[str]) -> dict[str, Any]:
+    counts = {topic: client.observed_count(topic) for topic in topics}
+    latest = {}
+    for topic in topics:
+        messages = client.observed_by_topic.get(topic, [])
+        if messages:
+            latest[topic] = osd_snapshot(topic, messages[-1])
+    return {"counts": counts, "latest": latest}
 
 
 def _latest_observed(client: MqttRequestClient, topics: Iterable[str]) -> tuple[str | None, Any | None]:
@@ -198,7 +212,7 @@ def observe_qland(
 
 
 def run(args) -> int:
-    topics = osd_topics(args.drone_sn)
+    topics = osd_topics(args.sn, args.drone_sn, include_gateway=not args.drone_osd_only)
     client = MqttRequestClient(
         args.host,
         args.port,
@@ -215,7 +229,11 @@ def run(args) -> int:
     try:
         topic, initial_osd = wait_for_osd(client, topics, args.osd_wait)
         if initial_osd is None:
-            print_step("返航前 OSD 观察", False, {"topics": topics, "reason": "未收到飞行器 OSD"})
+            print_step("返航前 OSD 观察", False, {
+                "topics": topics,
+                "reason": "未收到 OSD；如果只看到网关在线，请先 update_topo 或确认子设备 online",
+                "observed": observed_summary(client, topics),
+            })
             return 2
         print_step("返航前 OSD 观察", True, osd_snapshot(topic, initial_osd))
 
@@ -275,6 +293,11 @@ def main() -> int:
     parser.add_argument("--osd-wait", type=float, default=10.0)
     parser.add_argument("--observe-timeout", type=float, default=180.0)
     parser.add_argument("--step-delay", type=float, default=0.5)
+    parser.add_argument(
+        "--drone-osd-only",
+        action="store_true",
+        help="只观察飞行器 SN 的 OSD；默认也观察网关 SN 的 dock OSD。",
+    )
     parser.add_argument(
         "--strict-name",
         action="store_true",
