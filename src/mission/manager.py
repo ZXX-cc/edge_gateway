@@ -887,6 +887,8 @@ class MissionManager:
         """
         data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
         takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
+        resume_from_breakpoint = bool(self._break_point or self._breakpoint_waypoint_idx > 0)
+        breakpoint_index = max(0, int(self._breakpoint_waypoint_idx or 0))
         steps: List[dict] = []
         self._last_takeoff_flow_steps = steps
         self._record_takeoff_flow_step(
@@ -896,6 +898,8 @@ class MissionManager:
                 'flight_id': flight_id,
                 'waypoint_count': len(self._current_wayline),
                 'simulate_mission': False,
+                'resume_from_breakpoint': resume_from_breakpoint,
+                'breakpoint_index': breakpoint_index if resume_from_breakpoint else None,
             },
         )
 
@@ -919,6 +923,43 @@ class MissionManager:
             'self_check',
             detail={'success': True, 'details': self_check_details},
         )
+
+        if resume_from_breakpoint:
+            if not self._current_wayline:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_wayline',
+                    'Breakpoint resume requires a restored wayline',
+                )
+            if breakpoint_index >= len(self._current_wayline):
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_index',
+                    f'Breakpoint index out of range: {breakpoint_index}/{len(self._current_wayline)}',
+                )
+            upload_ok, upload_reason = self._upload_wayline_to_flight_controller(self._current_wayline)
+            self._record_takeoff_flow_step(
+                steps,
+                'breakpoint_wayline_upload',
+                status=STATUS_OK if upload_ok else STATUS_FAILED,
+                result=0 if upload_ok else -1,
+                detail={
+                    'success': upload_ok,
+                    'flight_id': flight_id,
+                    'waypoint_count': len(self._current_wayline),
+                    'breakpoint_index': breakpoint_index,
+                    'message': upload_reason,
+                },
+            )
+            if not upload_ok:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_wayline_upload',
+                    upload_reason or 'Waypoint upload to flight controller failed',
+                )
 
         for command_name in ('charge_close', 'cover_open', 'putter_open'):
             if not self._run_takeoff_flow_nest_step(steps, command_name):
@@ -954,6 +995,35 @@ class MissionManager:
                 'mission_monitor',
                 'Mission monitor unavailable',
             )
+
+        if resume_from_breakpoint:
+            if not self._waypoint_manager:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_seek',
+                    'WaypointManager not available for breakpoint resume',
+                )
+            seek_ok = self._waypoint_manager.set_current_waypoint(breakpoint_index)
+            self._record_takeoff_flow_step(
+                steps,
+                'breakpoint_seek',
+                status=STATUS_OK if seek_ok else STATUS_FAILED,
+                result=0 if seek_ok else -1,
+                detail={
+                    'success': seek_ok,
+                    'flight_id': flight_id,
+                    'breakpoint_index': breakpoint_index,
+                },
+            )
+            if not seek_ok:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_seek',
+                    'Set current waypoint for breakpoint resume failed',
+                )
+            self._current_waypoint_idx = breakpoint_index
 
         if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
             return self._fail_real_wayline_execute(
@@ -3316,7 +3386,34 @@ class MissionManager:
                 result,
                 f"flight_id 与已准备任务不匹配: requested={flight_id}, active={active or 'none'}",
             )
-        if self._status != self.MISSION_IDLE:
+
+        relaunch_from_breakpoint = False
+        if self._status == self.MISSION_PAUSED:
+            saved_breakpoint = self._load_breakpoint_file()
+            saved_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
+            if saved_task_id and saved_task_id != flight_id:
+                return self._reject_flighttask_request(
+                    msg,
+                    flight_id,
+                    DEVICE_STATE_UNSUPPORTED,
+                    f"断点任务与执行任务不匹配: breakpoint={saved_task_id}, requested={flight_id}",
+                )
+            relaunch_from_breakpoint = bool(
+                saved_breakpoint or self._break_point or self._breakpoint_waypoint_idx > 0
+            )
+            if not relaunch_from_breakpoint:
+                return self._reject_flighttask_request(
+                    msg,
+                    flight_id,
+                    WAYLINE_RESUME_STATE_INVALID,
+                    "当前任务已暂停，但没有可用于下次执行的断点",
+                )
+            logger.info(
+                "Flighttask execute relaunches paused task from breakpoint: flight_id=%s waypoint=%s",
+                flight_id,
+                self._breakpoint_waypoint_idx,
+            )
+        elif self._status != self.MISSION_IDLE:
             result = DOCK_BUSY if self._status in (
                 self.MISSION_PREPARING,
                 self.MISSION_RUNNING,
@@ -3350,6 +3447,7 @@ class MissionManager:
                 label="请求机巢执行航线",
                 method="flighttask_execute",
                 flight_id=flight_id,
+                resume_from_breakpoint=relaunch_from_breakpoint,
             )
             if not self._call_nest_action("request_takeoff", "flighttask_execute"):
                 return self._fail_real_wayline_execute(
