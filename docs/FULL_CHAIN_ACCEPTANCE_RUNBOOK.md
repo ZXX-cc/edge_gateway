@@ -213,6 +213,9 @@ ignored_total=0`。
 本轮修复已把 Dock3 `flighttask_prepare` 主路径接入任务/航点落库，同时允许
 `MissionCreate.device_id` 使用网关 SN（如 `EDGEGW001`），并对 execute/return
 后立即写入 `running/paused` 状态和 MongoDB breakpoint 增加短重试，避免异步落库竞态。
+续飞脚本新增 `--wait-completion --completion-timeout <秒>`：默认仍只验证断点后至少推进
+一个航点；需要让飞机继续飞完整条航线时加该参数，脚本会轮询到 `completed/ok/100%`
+或失败终态。
 
 ## 3. 启动前检查
 

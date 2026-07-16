@@ -151,6 +151,78 @@ def assert_reprepare_from_saved_breakpoint(
     return assert_prepare_file(payload, wayline_file, args)
 
 
+def task_status_from(payload: Any) -> str:
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    value = data.get("task_status")
+    return value if isinstance(value, str) else ""
+
+
+def is_completion_payload(payload: Any) -> bool:
+    status = data_output(payload).get("status")
+    task_status = task_status_from(payload)
+    percent = progress_percent(payload)
+    if status in {"ok", "completed"}:
+        return True
+    if task_status == "completed":
+        return True
+    return percent == 100 and status not in {"failed", "canceled", "rejected"}
+
+
+def is_failed_terminal_payload(payload: Any) -> bool:
+    status = data_output(payload).get("status")
+    task_status = task_status_from(payload)
+    return status in {"failed", "canceled", "rejected"} or task_status in {
+        "failed",
+        "canceled",
+        "rejected",
+    }
+
+
+def wait_until_mission_completion(
+    client: RelaunchBreakpointClient,
+    flight_id: str,
+    args: argparse.Namespace,
+) -> tuple[int, dict[str, Any] | None]:
+    deadline = time.time() + args.completion_timeout
+    last_payload = None
+    while time.time() < deadline:
+        rc, payload = client.service(
+            "flighttask_progress",
+            {"flight_id": flight_id},
+            args.timeout,
+            allowed_results={0, DEVICE_STATE_UNSUPPORTED},
+            expected_status=None,
+        )
+        last_payload = payload
+        if rc == 0 and payload:
+            status = data_output(payload).get("status")
+            task_status = task_status_from(payload)
+            current = current_waypoint(payload)
+            percent = progress_percent(payload)
+            print(
+                "completion progress observed: "
+                f"status={status}, task_status={task_status}, "
+                f"current_waypoint={current}, percent={percent}"
+            )
+            if is_completion_payload(payload):
+                return 0, payload
+            if is_failed_terminal_payload(payload):
+                print("mission reached failed terminal state before completion", file=sys.stderr)
+                print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+                return 47, payload
+        else:
+            print(f"waiting mission completion: rc={rc}, flight_id={flight_id}", file=sys.stderr)
+        time.sleep(args.progress_poll_interval)
+
+    print(
+        f"timeout waiting mission completion: flight_id={flight_id}, timeout={args.completion_timeout}",
+        file=sys.stderr,
+    )
+    if last_payload:
+        print(json.dumps(last_payload, ensure_ascii=False, indent=2), file=sys.stderr)
+    return 48, last_payload
+
+
 def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
     state = read_state(args.state_file)
     flight_id = args.flight_id or str(state.get("flight_id") or "")
@@ -239,6 +311,15 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         f"percent={progress_percent(progress)}"
     )
 
+    if args.wait_completion:
+        rc, completed = wait_until_mission_completion(client, flight_id, args)
+        if rc != 0:
+            return rc
+        print(
+            "saved breakpoint mission completed: "
+            f"current_waypoint={current_waypoint(completed)}, percent={progress_percent(completed)}"
+        )
+
     if args.cleanup:
         method = "flighttask_stop" if args.use_flighttask_stop else "flighttask_undo"
         payload = (
@@ -279,10 +360,16 @@ def main() -> int:
     parser.add_argument("--exit-wayline-when-rc-lost", type=int, default=0)
     parser.add_argument("--progress-poll-interval", type=float, default=1.0)
     parser.add_argument("--recovery-wait-seconds", type=float, default=20.0)
+    parser.add_argument("--completion-timeout", type=float, default=300.0)
     parser.add_argument("--min-waypoint-advance", type=int, default=1)
     parser.add_argument("--require-gateway-parse", action="store_true")
     parser.add_argument("--skip-recovery-wait", action="store_true")
     parser.add_argument("--skip-reprepare", action="store_true")
+    parser.add_argument(
+        "--wait-completion",
+        action="store_true",
+        help="after breakpoint relaunch advances, keep polling until the mission completes",
+    )
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--use-flighttask-stop", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
@@ -296,6 +383,8 @@ def main() -> int:
         parser.error("--progress-poll-interval must be positive")
     if args.recovery_wait_seconds <= 0:
         parser.error("--recovery-wait-seconds must be positive")
+    if args.completion_timeout <= 0:
+        parser.error("--completion-timeout must be positive")
     if args.min_waypoint_advance <= 0:
         parser.error("--min-waypoint-advance must be positive")
 
