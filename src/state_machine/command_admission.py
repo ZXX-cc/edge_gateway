@@ -305,7 +305,7 @@ class CommandAdmissionEngine:
                 return self._reject(snapshot, "drc_active", "DRC 控制权占用中，不能执行 OTA/配置类命令", ["drc.idle"], GLOBAL_STATE_CONFLICT)
 
         if method in self.MISSION_START_METHODS:
-            return self._check_mission_start(method, snapshot)
+            return self._check_mission_start(method, request, snapshot)
 
         if method in self.MISSION_CONTROL_METHODS:
             return self._check_mission_control(method, snapshot)
@@ -322,10 +322,29 @@ class CommandAdmissionEngine:
 
         return self._accept(snapshot)
 
-    def _check_mission_start(self, method: str, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
+    @staticmethod
+    def _request_flight_id(request: dict) -> str:
+        data = request.get("data") if isinstance(request, dict) else {}
+        if not isinstance(data, dict):
+            return ""
+        value = data.get("flight_id", data.get("flighttask_id", data.get("task_id", "")))
+        return value if isinstance(value, str) else ""
+
+    def _check_mission_start(self, method: str, request: dict, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
         if snapshot.drc == "active":
             return self._reject(snapshot, "drc_active", "DRC 控制权占用中，不能开始新的航线/飞行任务", ["drc.idle"], GLOBAL_STATE_CONFLICT)
         if snapshot.mission in self.MISSION_BUSY_STATES:
+            mission_details = snapshot.details.get("mission", {}) if isinstance(snapshot.details, dict) else {}
+            active_task_id = mission_details.get("task_id") if isinstance(mission_details, dict) else ""
+            requested_flight_id = self._request_flight_id(request)
+            if (
+                snapshot.mission == "paused"
+                and method in {"flighttask_prepare", "flighttask_execute"}
+                and requested_flight_id
+                and active_task_id
+                and requested_flight_id == active_task_id
+            ):
+                return self._accept(snapshot)
             return self._reject(snapshot, "mission_busy", "当前航线任务正在执行或暂停，不能覆盖新的航线任务", ["mission.idle"], GLOBAL_STATE_CONFLICT)
         if snapshot.ota in self.OTA_BUSY_STATES:
             return self._reject(snapshot, "ota_in_progress", "OTA/配置升级进行中，不能开始航线/飞行任务", ["ota.idle"], GLOBAL_STATE_CONFLICT)

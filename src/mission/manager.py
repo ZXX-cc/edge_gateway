@@ -3239,6 +3239,63 @@ class MissionManager:
         # A second producer (for example the local HD demo) must not replace
         # the currently flying task's file, waypoints or task ID.
         if self._status in (self.MISSION_PREPARING, self.MISSION_RUNNING, self.MISSION_PAUSED):
+            if self._status == self.MISSION_PAUSED and self._current_task_id == flight_id:
+                saved_breakpoint = self._load_breakpoint_file()
+                saved_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
+                if saved_task_id and saved_task_id != flight_id:
+                    return self._reject_flighttask_request(
+                        msg,
+                        flight_id,
+                        DEVICE_STATE_UNSUPPORTED,
+                        f"断点任务与准备任务不匹配: breakpoint={saved_task_id}, requested={flight_id}",
+                    )
+                has_breakpoint = bool(
+                    saved_breakpoint or self._break_point or self._breakpoint_waypoint_idx > 0
+                )
+                if has_breakpoint:
+                    current_fp = self._task_file.get("fingerprint") if isinstance(self._task_file, dict) else ""
+                    incoming_fp = file_info.get("fingerprint") if isinstance(file_info, dict) else ""
+                    if current_fp and incoming_fp and current_fp != incoming_fp:
+                        return self._reject_flighttask_request(
+                            msg,
+                            flight_id,
+                            DOCK_BUSY,
+                            "同一断点任务不允许更换航线文件",
+                        )
+
+                    self._task_type = task_type
+                    self._execute_time = execute_time
+                    if file_info and not self._task_file:
+                        self._task_file = file_info
+                    self._ready_conditions = ready_conditions
+                    self._executable_conditions = executable_conditions
+                    self._rth_altitude = rth_altitude
+                    self._out_of_control_action = out_of_control_action
+                    self._exit_wayline_when_rc_lost = exit_wayline_when_rc_lost
+                    logger.info(
+                        "Flighttask prepare accepted as breakpoint relaunch: flight_id=%s waypoint=%s",
+                        flight_id,
+                        self._breakpoint_waypoint_idx,
+                    )
+                    self._emit_wayline_progress(
+                        STATUS_SENT,
+                        current_step=5,
+                        percent=self._current_progress_percent(),
+                        flight_id=flight_id,
+                        extra={"resume_from_breakpoint": True},
+                    )
+                    self.report_flighttask_ready([flight_id])
+                    return MessageBuilder.build_reply(
+                        msg,
+                        result=0,
+                        data=self._wayline_reply_data(
+                            STATUS_SENT,
+                            current_step=5,
+                            percent=self._current_progress_percent(),
+                            flight_id=flight_id,
+                            extra={"resume_from_breakpoint": True},
+                        ),
+                    )
             return self._reject_flighttask_request(
                 msg,
                 flight_id,

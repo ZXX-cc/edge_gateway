@@ -549,6 +549,18 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(ret["data"]["result"], 0)
             self.assertEqual(manager._status, manager.MISSION_PAUSED)
 
+            reprepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+                "flight_id": "flight-001",
+                "task_type": 0,
+                "execute_time": int(time.time() * 1000),
+                "file": {"url": "/tmp/mock.kml", "fingerprint": ""},
+                "simulate_mission": {"is_enable": 0},
+            }))
+            self.assertEqual(reprepare["data"]["result"], 0)
+            self.assertEqual(reprepare["data"]["output"]["status"], "sent")
+            self.assertEqual(manager._status, manager.MISSION_PAUSED)
+            self.assertEqual(manager._breakpoint_waypoint_idx, 1)
+
             execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
                 "flight_id": "flight-001",
             }))

@@ -40,7 +40,14 @@ def build_snapshot(**overrides) -> GatewayStateSnapshot:
     return GatewayStateSnapshot(**base)
 
 
-def run_case(name: str, method: str, snapshot: GatewayStateSnapshot, expected_accept: bool, expected_reason: str = "") -> dict:
+def run_case(
+    name: str,
+    method: str,
+    snapshot: GatewayStateSnapshot,
+    expected_accept: bool,
+    expected_reason: str = "",
+    data: dict | None = None,
+) -> dict:
     engine = CommandAdmissionEngine(StaticReducer(snapshot))
     request = {
         "tid": f"audit-{name}",
@@ -48,7 +55,7 @@ def run_case(name: str, method: str, snapshot: GatewayStateSnapshot, expected_ac
         "gateway": "EDGEGW001",
         "method": method,
         "need_reply": 1,
-        "data": {},
+        "data": data or {},
     }
     decision = engine.check(method, request, "thing/product/EDGEGW001/services")
     passed = decision.accepted == expected_accept
@@ -88,14 +95,40 @@ def main() -> int:
         ("idle_blocks_drc_point_flight", "takeoff_to_point", build_snapshot(drc="idle"), False, "invalid_state_transition"),
         ("active_allows_drc_point_flight", "takeoff_to_point", build_snapshot(drc="active", gateway_phase="BUSY_DRC"), True, ""),
         ("paused_resume_ok", "flighttask_resume", build_snapshot(mission="paused", gateway_phase="BUSY_MISSION"), True, ""),
+        (
+            "paused_same_task_prepare_ok",
+            "flighttask_prepare",
+            build_snapshot(
+                mission="paused",
+                gateway_phase="BUSY_MISSION",
+                details={"mission": {"task_id": "flight-001"}},
+            ),
+            True,
+            "",
+            {"flight_id": "flight-001"},
+        ),
+        (
+            "paused_other_task_prepare_rejected",
+            "flighttask_prepare",
+            build_snapshot(
+                mission="paused",
+                gateway_phase="BUSY_MISSION",
+                details={"mission": {"task_id": "flight-001"}},
+            ),
+            False,
+            "mission_busy",
+            {"flight_id": "flight-002"},
+        ),
         ("idle_resume_rejected", "flighttask_resume", build_snapshot(mission="idle"), False, "invalid_state_transition"),
         ("idle_pause_rejected", "flighttask_pause", build_snapshot(mission="idle"), False, "invalid_state_transition"),
         ("ota_blocks_drc", "drc_mode_enter", build_snapshot(ota="upgrading", gateway_phase="BUSY_OTA"), False, "ota_in_progress"),
     ]
 
     results = [
-        run_case(name, method, snapshot, expected_accept, expected_reason)
-        for name, method, snapshot, expected_accept, expected_reason in cases
+        run_case(name, method, snapshot, expected_accept, expected_reason, data if len(item) > 5 else None)
+        for item in cases
+        for name, method, snapshot, expected_accept, expected_reason, *data_items in [item]
+        for data in [data_items[0] if data_items else None]
     ]
     passed = sum(1 for item in results if item["passed"])
     summary = {

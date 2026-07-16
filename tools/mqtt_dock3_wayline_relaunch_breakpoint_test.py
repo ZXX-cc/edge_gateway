@@ -141,6 +141,24 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         return rc
     paused_index = break_point_from(paused_progress).get("index")
 
+    if not args.skip_reprepare:
+        rc, reprepare = client.service(
+            "flighttask_prepare",
+            prepare_payload(flight_id, wayline_file, args),
+            args.timeout,
+            allowed_results={0},
+            expected_status="sent",
+        )
+        if rc != 0:
+            return rc
+        rc = assert_prepare_file(reprepare, wayline_file, args)
+        if rc != 0:
+            return rc
+        print(
+            "reprepare accepted for breakpoint relaunch: "
+            f"percent={progress_percent(reprepare)}, current_waypoint={current_waypoint(reprepare)}"
+        )
+
     if args.relaunch_delay > 0:
         print(f"waiting {args.relaunch_delay:.1f}s before relaunch execute")
         time.sleep(args.relaunch_delay)
@@ -259,6 +277,7 @@ def main() -> int:
     parser.add_argument("--expect-breakpoint-index", type=int, default=None)
     parser.add_argument("--require-gateway-parse", action="store_true")
     parser.add_argument("--require-resume-index", action="store_true")
+    parser.add_argument("--skip-reprepare", action="store_true")
     parser.add_argument("--use-flighttask-stop", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")

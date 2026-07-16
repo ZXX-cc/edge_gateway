@@ -49,9 +49,13 @@ def snapshot(**overrides):
 
 
 class GlobalStateMachineAdmissionTest(unittest.TestCase):
-    def check(self, method, state, accepted, reason=""):
+    def check(self, method, state, accepted, reason="", data=None):
         engine = CommandAdmissionEngine(StaticReducer(state))
-        decision = engine.check(method, {"method": method, "need_reply": 1}, "thing/product/EDGEGW001/services")
+        decision = engine.check(
+            method,
+            {"method": method, "need_reply": 1, "data": data or {}},
+            "thing/product/EDGEGW001/services",
+        )
         self.assertEqual(decision.accepted, accepted)
         if reason:
             self.assertEqual(decision.reason, reason)
@@ -92,6 +96,16 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
     def test_resume_requires_paused_mission(self):
         self.check("flighttask_resume", snapshot(mission="idle"), False, "invalid_state_transition")
         self.check("flighttask_resume", snapshot(mission="paused"), True)
+
+    def test_paused_same_task_can_prepare_or_execute_for_breakpoint_relaunch(self):
+        state = snapshot(
+            mission="paused",
+            details={"mission": {"task_id": "flight-001"}},
+        )
+
+        self.check("flighttask_prepare", state, True, data={"flight_id": "flight-001"})
+        self.check("flighttask_execute", state, True, data={"flight_id": "flight-001"})
+        self.check("flighttask_prepare", state, False, "mission_busy", data={"flight_id": "flight-002"})
 
     def test_pause_requires_running_mission(self):
         self.check("flighttask_pause", snapshot(mission="idle"), False, "invalid_state_transition")
