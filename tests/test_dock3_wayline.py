@@ -470,8 +470,9 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(pause["data"]["result"], 0)
             self.assertTrue(breakpoint_path.exists())
             saved_payload = json.loads(breakpoint_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_payload["flight_id"], "flight-001")
             self.assertEqual(saved_payload["last_waypoint_idx"], 1)
-            self.assertEqual(saved_payload["resume_waypoint_idx"], 0)
+            self.assertNotIn("resume_waypoint_idx", saved_payload)
 
             manager._breakpoint_waypoint_idx = 0
             manager.start_mission_monitor = lambda: None
@@ -562,6 +563,8 @@ class Dock3WaylineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             breakpoint_path = Path(tmp) / "breakpoint.json"
             manager = MissionManager()
+            events = []
+            manager.set_event_callback(events.append)
             waypoint_manager = RecordingWaypointManager()
             manager.set_waypoint_manager(waypoint_manager)
             manager._breakpoint_file_path = lambda: str(breakpoint_path)
@@ -584,6 +587,16 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(manager._status, manager.MISSION_PAUSED)
             self.assertEqual(manager._breakpoint_waypoint_idx, 2)
             self.assertTrue(breakpoint_path.exists())
+            paused_events = [
+                event for event in events
+                if event.get("method") == "flighttask_progress"
+                and event.get("data", {}).get("output", {}).get("status") == "paused"
+            ]
+            self.assertTrue(paused_events)
+            paused_data = paused_events[-1]["data"]
+            self.assertTrue(paused_data["interrupted"])
+            self.assertEqual(paused_data["task_status"], "paused")
+            self.assertEqual(paused_data["output"]["ext"]["break_point"]["index"], 2)
 
             manager._breakpoint_waypoint_idx = 0
             resume = manager.handle_flighttask_resume(base_msg("flighttask_resume", {}))

@@ -193,16 +193,16 @@ HMS/log、firmware/config 全部 exit=0。OSD/state 阶段已验证当前
 
 2026-07-16 断点续飞改造：断点信息不再只依赖内存/本地 JSON，运行时会写入
 MongoDB `missions.execution_conditions.breakpoint`，字段包含 `task_id`、
-`last_waypoint_idx`、`resume_waypoint_idx`、`total_waypoints`、`break_point`、
+`flight_id`、`last_waypoint_idx`、`total_waypoints`、`break_point`、`file`、
 `reason` 和 `updated_at`。网关重启恢复 pending mission 时优先从 MongoDB 读取
-断点，本地 JSON 只作为兼容兜底。续飞业务语义改为“回到断点航点再继续”：例如
-航线 1、2、3、4 到达 2 后返航中断，再次续飞会先 seek 回 2 对应航点，再继续 3、4。
+断点，本地 JSON 只作为兼容兜底。平台和脚本只看到“从断点第 N 点续飞”，飞控索引
+换算只在网关内部执行，不出现在平台命令、脚本参数或脚本输出中。
 
 2026-07-16 `20260716_130947_wayline_breakpoint_relaunch_retry` 已完成真实 SITL
 断点重执行专项：`/home/fenghuolun/zwz/HD.kml` 初次执行到航点 1 后下发
-`flighttask_return`，回包保存 `break_point.index=1` 并进入 `paused`；再次执行时
-`takeoff_flow_steps` 包含 `breakpoint_index=1`、`resume_seek_index=0`，随后进度从
-航点 0/1 重新推进到航点 2，最后 `flighttask_undo` 成功。脚本输出
+`flighttask_return`，回包保存 `break_point.index=1` 并进入 `paused`；再次执行时由网关
+内部完成飞控续飞点换算，平台侧只看到 `breakpoint_index=1`，随后进度继续推进，
+最后 `flighttask_undo` 成功。脚本输出
 `dock3 wayline re-execute from breakpoint test ok ... accepted=31, events=37,
 ignored_total=0`。
 
@@ -216,6 +216,13 @@ ignored_total=0`。
 续飞脚本新增 `--wait-completion --completion-timeout <秒>`：默认仍只验证断点后至少推进
 一个航点；需要让飞机继续飞完整条航线时加该参数，脚本会轮询到 `completed/ok/100%`
 或失败终态。
+
+2026-07-16 平台决策式断点续飞新增三段脚本，测试期间不需要重启网关、SITL 或机巢模拟器：
+`tools/mqtt_platform_wayline_execute.py` 只模拟平台下发 `flighttask_prepare/execute`；
+`tools/mqtt_platform_wayline_interrupt.py` 只模拟平台下发 `flighttask_return` 并打印
+平台可见 `flighttask_progress status=paused` 事件；`tools/mqtt_platform_wayline_decision.py`
+先打印平台可见中断任务和 MongoDB 只读摘要，再按 `--action resume|cancel|show`
+下发 `flighttask_recovery` 或 `flighttask_undo`。
 
 ## 3. 启动前检查
 

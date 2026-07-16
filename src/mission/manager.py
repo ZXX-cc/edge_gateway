@@ -1139,7 +1139,6 @@ class MissionManager:
                 'simulate_mission': False,
                 'resume_from_breakpoint': resume_from_breakpoint,
                 'breakpoint_index': breakpoint_index if resume_from_breakpoint else None,
-                'resume_seek_index': resume_seek_index if resume_from_breakpoint else None,
             },
         )
 
@@ -1190,7 +1189,6 @@ class MissionManager:
                     'flight_id': flight_id,
                     'waypoint_count': len(self._current_wayline),
                     'breakpoint_index': breakpoint_index,
-                    'resume_seek_index': resume_seek_index,
                     'message': upload_reason,
                 },
             )
@@ -1255,7 +1253,6 @@ class MissionManager:
                     'success': seek_ok,
                     'flight_id': flight_id,
                     'breakpoint_index': breakpoint_index,
-                    'resume_seek_index': resume_seek_index,
                 },
             )
             if not seek_ok:
@@ -1275,7 +1272,6 @@ class MissionManager:
                     'success': confirmed,
                     'flight_id': flight_id,
                     'breakpoint_index': breakpoint_index,
-                    'resume_seek_index': resume_seek_index,
                     'current_waypoint_index': self._current_waypoint_idx,
                 },
             )
@@ -1284,7 +1280,7 @@ class MissionManager:
                     msg,
                     flight_id,
                     'breakpoint_seek_confirm',
-                    f'Flight controller did not confirm resume waypoint {resume_seek_index}',
+                    'Flight controller did not confirm breakpoint resume',
                 )
             self._current_waypoint_idx = resume_seek_index
 
@@ -1589,10 +1585,11 @@ class MissionManager:
             return None
         return {
             "task_id": self._current_task_id,
+            "flight_id": self._current_task_id,
             "last_waypoint_idx": self._breakpoint_waypoint_idx,
-            "resume_waypoint_idx": self._resume_seek_waypoint_index(),
             "total_waypoints": len(self._current_wayline),
             "break_point": self._break_point or {},
+            "file": self._task_file_summary or self._task_file or {},
             "reason": reason,
             "updated_at": int(time.time() * 1000),
         }
@@ -4185,7 +4182,18 @@ class MissionManager:
                 msg_str=reason,
             )
 
-        self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent(), flight_id=task_id)
+        self._emit_wayline_progress(
+            STATUS_PAUSED,
+            current_step=24,
+            percent=self._current_progress_percent(),
+            flight_id=task_id,
+            extra={
+                'flight_id': task_id,
+                'task_status': self._get_task_status_name(),
+                'interrupted': True,
+                'return_type': return_type,
+            },
+        )
         self.report_return_home_info(
             planned_path_points=[],
             last_point_type=0,
