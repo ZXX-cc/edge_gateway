@@ -198,6 +198,14 @@ MongoDB `missions.execution_conditions.breakpoint`，字段包含 `task_id`、
 断点，本地 JSON 只作为兼容兜底。续飞业务语义改为“回到断点航点再继续”：例如
 航线 1、2、3、4 到达 2 后返航中断，再次续飞会先 seek 回 2 对应航点，再继续 3、4。
 
+2026-07-16 `20260716_130947_wayline_breakpoint_relaunch_retry` 已完成真实 SITL
+断点重执行专项：`/home/fenghuolun/zwz/HD.kml` 初次执行到航点 1 后下发
+`flighttask_return`，回包保存 `break_point.index=1` 并进入 `paused`；再次执行时
+`takeoff_flow_steps` 包含 `breakpoint_index=1`、`resume_seek_index=0`，随后进度从
+航点 0/1 重新推进到航点 2，最后 `flighttask_undo` 成功。脚本输出
+`dock3 wayline re-execute from breakpoint test ok ... accepted=31, events=37,
+ignored_total=0`。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：
