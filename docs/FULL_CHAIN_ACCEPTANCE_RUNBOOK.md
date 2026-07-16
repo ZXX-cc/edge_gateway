@@ -206,6 +206,14 @@ MongoDB `missions.execution_conditions.breakpoint`，字段包含 `task_id`、
 `dock3 wayline re-execute from breakpoint test ok ... accepted=31, events=37,
 ignored_total=0`。
 
+2026-07-16 `20260716_134520_wayline_mongodb_restart_resume` 暴露出重启恢复缺口：
+断点创建阶段正常到达 `/home/fenghuolun/zwz/HD.kml` 第 3 个航点并保存
+`break_point.index=3`，但网关和模拟器重启后查询该 `flight_id` 返回
+`active_flight_id=""`、`task_status="idle"`，说明重启后没有恢复 pending mission。
+本轮修复已把 Dock3 `flighttask_prepare` 主路径接入任务/航点落库，同时允许
+`MissionCreate.device_id` 使用网关 SN（如 `EDGEGW001`），并对 execute/return
+后立即写入 `running/paused` 状态和 MongoDB breakpoint 增加短重试，避免异步落库竞态。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：

@@ -56,6 +56,9 @@ from src.database.schemas import MissionCreate, WaypointCreate
 
 logger = get_logger("mission")
 
+DB_WRITE_RETRY_COUNT = 10
+DB_WRITE_RETRY_INTERVAL_SECONDS = 0.2
+
 
 def serialize_flighttask(handler):
     """Keep one Dock3 flighttask request from replacing another task mid-flight."""
@@ -432,11 +435,16 @@ class MissionManager:
             AsyncSessionLocal = get_async_session_local()
 
             async with AsyncSessionLocal() as session:
-                mission = await MissionDB.get_mission_by_external_id(session, task_id)
-                if mission:
-                    await MissionDB.update_mission_status(session, UUID(mission.id), status)
-                    await session.commit()
-                    logger.info(f"Mission status updated: {task_id} -> {status}")
+                for attempt in range(1, DB_WRITE_RETRY_COUNT + 1):
+                    mission = await MissionDB.get_mission_by_external_id(session, task_id)
+                    if mission:
+                        await MissionDB.update_mission_status(session, UUID(mission.id), status)
+                        await session.commit()
+                        logger.info(f"Mission status updated: {task_id} -> {status}")
+                        return
+                    if attempt < DB_WRITE_RETRY_COUNT:
+                        await asyncio.sleep(DB_WRITE_RETRY_INTERVAL_SECONDS)
+                logger.warning("Mission status update skipped, mission not found: %s -> %s", task_id, status)
         except Exception as e:
             logger.error(f"Update mission status failed: {e}")
 
@@ -1596,19 +1604,23 @@ class MissionManager:
             await self._init_database()
             AsyncSessionLocal = get_async_session_local()
             async with AsyncSessionLocal() as session:
-                saved = await MissionDB.update_mission_breakpoint(
-                    session,
-                    str(data.get("task_id")),
-                    data,
-                )
-                await session.commit()
-                if saved:
-                    logger.info("Breakpoint saved to database: %s", data)
-                else:
-                    logger.warning(
-                        "Breakpoint database save skipped, mission not found: %s",
-                        data.get("task_id"),
+                task_id = str(data.get("task_id"))
+                for attempt in range(1, DB_WRITE_RETRY_COUNT + 1):
+                    saved = await MissionDB.update_mission_breakpoint(
+                        session,
+                        task_id,
+                        data,
                     )
+                    await session.commit()
+                    if saved:
+                        logger.info("Breakpoint saved to database: %s", data)
+                        return
+                    if attempt < DB_WRITE_RETRY_COUNT:
+                        await asyncio.sleep(DB_WRITE_RETRY_INTERVAL_SECONDS)
+                logger.warning(
+                    "Breakpoint database save skipped, mission not found: %s",
+                    task_id,
+                )
         except Exception as exc:
             logger.warning("Save breakpoint to database failed: %s", exc)
 
@@ -3822,6 +3834,12 @@ class MissionManager:
                 self_check_reasons,
                 self_check_details,
             )
+
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._save_mission_to_database(flight_id, self._current_wayline),),
+            daemon=True
+        ).start()
 
         self._status = self.MISSION_IDLE
         self._emit_wayline_progress(STATUS_SENT, current_step=5, percent=0, flight_id=flight_id)

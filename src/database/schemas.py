@@ -1,6 +1,7 @@
 """
 Pydantic 数据校验模型（用于创建和响应）
-所有 UUID 字段均以字符串形式处理，兼容 SQLite 等数据库
+主键 UUID 字段以字符串形式处理，兼容 SQLite/MongoDB 等数据库。
+业务侧 device_id 允许使用网关 SN；不能强制按 UUID 校验。
 """
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
@@ -10,23 +11,21 @@ import uuid
 
 class MissionCreate(BaseModel):
     name: str
-    device_id: str  # 任意合法 UUID 字符串
+    device_id: str  # 网关 SN 或设备 UUID 字符串
     status: str = "created"
     execution_conditions: Optional[Dict[str, Any]] = None
 
     @field_validator('device_id', mode='before')
     @classmethod
     def validate_device_id(cls, v):
-        """验证是否为合法 UUID（任意版本），返回字符串"""
+        """接受网关 SN 或 UUID 字符串，返回非空字符串。"""
         if isinstance(v, uuid.UUID):
             return str(v)
         if isinstance(v, str):
-            try:
-                uuid.UUID(v)  # 仅校验格式
-                return v
-            except ValueError:
-                raise ValueError(f"Invalid UUID format: {v}")
-        raise ValueError("device_id must be a valid UUID string or UUID object")
+            value = v.strip()
+            if value:
+                return value
+        raise ValueError("device_id must be a non-empty gateway SN or UUID string")
 
 
 class MissionResponse(BaseModel):
