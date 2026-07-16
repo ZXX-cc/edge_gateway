@@ -613,6 +613,40 @@ class MissionManager:
             )
             self._current_waypoint_idx = waypoint_index
 
+    def _confirm_current_waypoint_at_least(self, waypoint_index: int, timeout: float = 5.0) -> bool:
+        """等待飞控上报当前航点已到达或超过断点，避免断点续飞实际从 0/1 点重新开始。"""
+        if not self._waypoint_manager:
+            return False
+        deadline = time.time() + max(0.0, timeout)
+        revision = None
+        try:
+            if hasattr(self._waypoint_manager, "get_current_waypoint_snapshot"):
+                current, revision = self._waypoint_manager.get_current_waypoint_snapshot()
+                if self._is_valid_current_waypoint_index(current) and int(current) >= waypoint_index:
+                    self._current_waypoint_idx = int(current)
+                    return True
+        except Exception as exc:
+            logger.warning("Read current waypoint snapshot failed: %s", exc)
+
+        while time.time() < deadline:
+            current = None
+            try:
+                if revision is not None and hasattr(self._waypoint_manager, "wait_for_current_waypoint"):
+                    current, revision = self._waypoint_manager.wait_for_current_waypoint(
+                        revision,
+                        timeout=min(0.5, max(0.0, deadline - time.time())),
+                    )
+                else:
+                    current = getattr(self._waypoint_manager, "current_waypoint", None)
+                    time.sleep(0.2)
+            except Exception as exc:
+                logger.warning("Wait for current waypoint failed: %s", exc)
+                return False
+            if self._is_valid_current_waypoint_index(current) and int(current) >= waypoint_index:
+                self._current_waypoint_idx = int(current)
+                return True
+        return False
+
     def _wayline_ext(self, flight_id: str = None) -> dict:
         ext = {
             'flight_id': flight_id or self._current_task_id or '',
@@ -1176,6 +1210,26 @@ class MissionManager:
                     flight_id,
                     'breakpoint_seek',
                     'Set current waypoint for breakpoint resume failed',
+                )
+            confirmed = self._confirm_current_waypoint_at_least(breakpoint_index)
+            self._record_takeoff_flow_step(
+                steps,
+                'breakpoint_seek_confirm',
+                status=STATUS_OK if confirmed else STATUS_FAILED,
+                result=0 if confirmed else -1,
+                detail={
+                    'success': confirmed,
+                    'flight_id': flight_id,
+                    'breakpoint_index': breakpoint_index,
+                    'current_waypoint_index': self._current_waypoint_idx,
+                },
+            )
+            if not confirmed:
+                return self._fail_real_wayline_execute(
+                    msg,
+                    flight_id,
+                    'breakpoint_seek_confirm',
+                    f'Flight controller did not confirm breakpoint waypoint {breakpoint_index}',
                 )
             self._current_waypoint_idx = breakpoint_index
 

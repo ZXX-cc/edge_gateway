@@ -198,6 +198,12 @@ class RecordingWaypointManager:
         return self.current_waypoint, self.current_waypoint_revision
 
 
+class NonConfirmingWaypointManager(RecordingWaypointManager):
+    def set_current_waypoint(self, wp_num: int, reset: bool = False):
+        self.current_waypoints.append((wp_num, reset))
+        return True
+
+
 class RecordingCamera:
     def __init__(self):
         self.photos = 0
@@ -632,6 +638,37 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(waypoint_manager.current_waypoints, [(1, False)])
             self.assertIn(("takeoff", 30.0), flight_control.calls)
             self.assertIn(("set_mode", "AUTO"), flight_control.calls)
+
+    def test_flighttask_execute_rejects_when_breakpoint_seek_not_confirmed(self):
+        manager = MissionManager()
+        waypoint_manager = NonConfirmingWaypointManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        manager.set_waypoint_manager(waypoint_manager)
+        manager.set_flight_control(flight_control)
+        manager.start_mission_monitor = lambda: None
+        manager._run_prepare_self_check = lambda simulate_enabled: (True, [], {})
+        manager._run_takeoff_flow_nest_step = lambda steps, command_name: True
+        manager._request_takeoff_from_nest_for_flow = lambda steps, flow_name: True
+        manager._confirm_current_waypoint_at_least = lambda waypoint_index, timeout=5.0: False
+
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [
+            {"seq": 0, "latitude": 44.0, "longitude": 125.0, "altitude": 50},
+            {"seq": 1, "latitude": 44.1, "longitude": 125.1, "altitude": 60},
+            {"seq": 2, "latitude": 44.2, "longitude": 125.2, "altitude": 70},
+        ]
+        manager._status = manager.MISSION_PAUSED
+        manager._breakpoint_waypoint_idx = 2
+        manager._break_point = {"index": 2, "total_waypoints": 3, "progress": 2 / 3}
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
+            "flight_id": "flight-001",
+        }))
+
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
+        self.assertEqual(execute["data"]["output"]["status"], "failed")
+        self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
+        self.assertNotIn(("set_mode", "AUTO"), flight_control.calls)
 
     def test_real_flighttask_pause_does_not_report_success_when_fc_fails(self):
         manager = MissionManager()
