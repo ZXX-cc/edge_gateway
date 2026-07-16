@@ -91,6 +91,25 @@ class MissionProgressBoundsTest(unittest.TestCase):
         self.assertFalse(manager._handle_battery_safety())
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
 
+    def test_zero_battery_available_sentinel_does_not_abort_sitl_mission(self):
+        manager = MissionManager()
+        manager._status = manager.MISSION_RUNNING
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._get_telemetry_snapshot = lambda: {
+            "batteryRemaining": 0,
+            "battery_available": True,
+            "flight_mode": "AUTO",
+        }
+
+        self.assertFalse(manager._handle_battery_safety())
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+
+    def test_low_battery_failure_is_non_retryable(self):
+        failure = MissionManager._classify_task_failure("严重低电量自动降落: 0% <= 15%", "battery_safety")
+
+        self.assertEqual(failure["category"], "hardware_or_rejected")
+        self.assertFalse(failure["retryable"])
+
     def test_mission_current_revision_advances_for_repeated_sequence(self):
         waypoint_manager = WaypointManager()
         _, initial_revision = waypoint_manager.get_current_waypoint_snapshot()

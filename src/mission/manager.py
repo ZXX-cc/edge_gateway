@@ -856,7 +856,7 @@ class MissionManager:
             "armability", "hardware", "fault", "estop", "emergency",
             "battery", "geofence", "fence", "no mission", "not available",
             "自检未通过", "拒绝", "不支持", "参数", "非法", "硬件", "故障",
-            "急停", "电量不足", "地理围栏", "飞控预解锁", "不可用",
+            "急停", "电量不足", "低电量", "自动降落", "地理围栏", "飞控预解锁", "不可用",
         )
         adapter_unavailable = message in {
             'nest_module_not_available',
@@ -1816,6 +1816,15 @@ class MissionManager:
 
         battery = self._as_float(telemetry.get('batteryRemaining'), -1.0)
         if battery < 0:
+            return False
+        if battery <= 0 and not self._bool_config('mission.safety.allow_zero_battery', False):
+            logger.info(
+                "Ignore zero battery safety sentinel: battery=%s available=%s source=%s mode=%s",
+                telemetry.get('batteryRemaining'),
+                telemetry.get('battery_available'),
+                telemetry.get('battery_source', telemetry.get('source_msg', 'unknown')),
+                telemetry.get('flight_mode'),
+            )
             return False
 
         rtl_threshold = self._as_float(
