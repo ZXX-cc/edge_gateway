@@ -74,6 +74,19 @@ def assert_relaunch_index(
     return 0
 
 
+def assert_min_breakpoint_index(payload: Any, min_index: int) -> int:
+    breakpoint = break_point_from(payload)
+    index = breakpoint.get("index")
+    if not isinstance(index, int) or index < min_index:
+        print(
+            f"breakpoint index did not reach minimum: expected>={min_index}, actual={index}",
+            file=sys.stderr,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 37
+    return 0
+
+
 def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
     flight_id = args.flight_id or f"real-hd-relaunch-breakpoint-{uuid.uuid4().hex[:8]}"
     wayline_file = args.wayline_file
@@ -122,6 +135,9 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
     rc = assert_breakpoint(returned, args)
     if rc != 0:
         return rc
+    rc = assert_min_breakpoint_index(returned, args.min_breakpoint_index)
+    if rc != 0:
+        return rc
     print(
         "return requested with breakpoint: "
         f"percent={progress_percent(returned)}, current_waypoint={current_waypoint(returned)}"
@@ -137,6 +153,9 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
     rc = assert_breakpoint(paused_progress, args)
+    if rc != 0:
+        return rc
+    rc = assert_min_breakpoint_index(paused_progress, args.min_breakpoint_index)
     if rc != 0:
         return rc
     paused_index = break_point_from(paused_progress).get("index")
@@ -273,7 +292,8 @@ def main() -> int:
     parser.add_argument("--relaunch-delay", type=float, default=0.0)
     parser.add_argument("--progress-wait", type=float, default=15.0)
     parser.add_argument("--progress-poll-interval", type=float, default=1.0)
-    parser.add_argument("--min-progress-percent", type=int, default=0)
+    parser.add_argument("--min-progress-percent", type=int, default=1)
+    parser.add_argument("--min-breakpoint-index", type=int, default=1)
     parser.add_argument("--expect-breakpoint-index", type=int, default=None)
     parser.add_argument("--require-gateway-parse", action="store_true")
     parser.add_argument("--require-resume-index", action="store_true")
@@ -296,6 +316,8 @@ def main() -> int:
         parser.error("--progress-wait must be non-negative")
     if args.progress_poll_interval <= 0:
         parser.error("--progress-poll-interval must be positive")
+    if args.min_breakpoint_index < 0:
+        parser.error("--min-breakpoint-index must be non-negative")
     if not args.wayline_file:
         parser.error("--wayline-file must be provided")
 

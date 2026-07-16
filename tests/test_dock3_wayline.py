@@ -175,6 +175,8 @@ class RecordingWaypointManager:
         self.added = []
         self.upload_calls = []
         self.current_waypoints = []
+        self.current_waypoint = -1
+        self.current_waypoint_revision = 0
 
     def clear_waypoints(self):
         self.clear_calls += 1
@@ -188,7 +190,12 @@ class RecordingWaypointManager:
 
     def set_current_waypoint(self, wp_num: int, reset: bool = False):
         self.current_waypoints.append((wp_num, reset))
+        self.current_waypoint = wp_num
+        self.current_waypoint_revision += 1
         return True
+
+    def get_current_waypoint_snapshot(self):
+        return self.current_waypoint, self.current_waypoint_revision
 
 
 class RecordingCamera:
@@ -516,6 +523,34 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(resume["data"]["result"], 0)
             self.assertEqual(manager._breakpoint_waypoint_idx, 2)
             self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
+
+    def test_flighttask_return_syncs_latest_waypoint_before_breakpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            breakpoint_path = Path(tmp) / "breakpoint.json"
+            manager = MissionManager()
+            waypoint_manager = RecordingWaypointManager()
+            waypoint_manager.current_waypoint = 2
+            waypoint_manager.current_waypoint_revision = 7
+            manager.set_waypoint_manager(waypoint_manager)
+            manager.set_flight_control(RecordingRealWaylineFlightControl())
+            manager._breakpoint_file_path = lambda: str(breakpoint_path)
+            manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+            manager.stop_mission_monitor = lambda: None
+
+            manager._current_task_id = "flight-001"
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}, {"seq": 3}]
+            manager._current_waypoint_idx = 0
+            manager._status = manager.MISSION_RUNNING
+
+            ret = manager.handle_flighttask_return(base_msg("flighttask_return", {
+                "flight_id": "flight-001",
+                "return_type": 0,
+            }))
+
+            self.assertEqual(ret["data"]["result"], 0)
+            self.assertEqual(manager._current_waypoint_idx, 2)
+            self.assertEqual(manager._breakpoint_waypoint_idx, 2)
+            self.assertEqual(manager._break_point["index"], 2)
 
     def test_flighttask_execute_relaunches_paused_task_from_breakpoint(self):
         with tempfile.TemporaryDirectory() as tmp:

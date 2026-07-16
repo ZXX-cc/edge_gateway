@@ -588,6 +588,30 @@ class MissionManager:
             return False
         return 0 <= waypoint_index < len(self._current_wayline)
 
+    def _sync_current_waypoint_from_manager(self) -> None:
+        """Best-effort sync before persisting a breakpoint."""
+        if not self._waypoint_manager:
+            return
+        waypoint_index = None
+        try:
+            if hasattr(self._waypoint_manager, "get_current_waypoint_snapshot"):
+                waypoint_index, _revision = self._waypoint_manager.get_current_waypoint_snapshot()
+            else:
+                waypoint_index = getattr(self._waypoint_manager, "current_waypoint", None)
+        except Exception as exc:
+            logger.warning("Sync current waypoint from manager failed: %s", exc)
+            return
+        if not self._is_valid_current_waypoint_index(waypoint_index):
+            return
+        waypoint_index = int(waypoint_index)
+        if waypoint_index > self._current_waypoint_idx:
+            logger.info(
+                "Sync breakpoint waypoint from WaypointManager: %s -> %s",
+                self._current_waypoint_idx,
+                waypoint_index,
+            )
+            self._current_waypoint_idx = waypoint_index
+
     def _wayline_ext(self, flight_id: str = None) -> dict:
         ext = {
             'flight_id': flight_id or self._current_task_id or '',
@@ -1261,6 +1285,7 @@ class MissionManager:
 
     def _record_breakpoint(self, reason: str, break_reason: int = 0):
         """记录当前航点断点，确保返航或重启后可以从断点继续执行。"""
+        self._sync_current_waypoint_from_manager()
         self._breakpoint_waypoint_idx = self._current_waypoint_idx
         self._break_point = {
             **(self._break_point or {}),
