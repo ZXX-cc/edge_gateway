@@ -24,6 +24,7 @@ import signal
 import threading
 import asyncio
 from pathlib import Path
+from typing import Any
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -75,6 +76,17 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from src.state_machine import CommandAdmissionEngine, GatewayEventReducer, GatewayStateProvider
 
 logger = get_logger("main")
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert runtime diagnostics to values that MQTT JSON publishing accepts."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def _normalize_udp_target_host(host: str) -> str:
@@ -577,7 +589,7 @@ class EdgeGateway:
             msg,
             result=0,
             data={
-                'state': snapshot.to_dict(compact=compact),
+                'state': _json_safe(snapshot.to_dict(compact=compact)),
                 'ready': (
                     snapshot.dock == 'ready'
                     and snapshot.aircraft == 'online'
