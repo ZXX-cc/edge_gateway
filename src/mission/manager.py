@@ -463,6 +463,83 @@ class MissionManager:
             if hasattr(coro, "close"):
                 coro.close()
 
+    def _mission_waypoints_to_wayline(self, waypoints) -> List[dict]:
+        restored_wayline = []
+        for wp in waypoints:
+            restored_wayline.append({
+                'seq': wp.sequence,
+                'latitude': wp.latitude,
+                'longitude': wp.longitude,
+                'altitude': wp.altitude,
+                'command': wp.command,
+                'frame': wp.frame,
+                'param1': wp.param1,
+                'param2': wp.param2,
+                'param3': wp.param3,
+                'param4': wp.param4,
+                'autocontinue': wp.autocontinue,
+                'action_type': wp.action_type,
+                'speed': wp.flight_speed,
+            })
+        return restored_wayline
+
+    async def _restore_mission_context_from_database(self, session, mission) -> bool:
+        if not mission or mission.status not in ('running', 'paused'):
+            return False
+        logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
+        waypoints = await WaypointDB.get_waypoints_by_mission(session, UUID(mission.id))
+        restored_wayline = self._mission_waypoints_to_wayline(waypoints)
+
+        if not self._install_recovered_mission_context(
+            mission.name,
+            restored_wayline,
+        ):
+            return False
+
+        saved_breakpoint = await MissionDB.get_mission_breakpoint(session, mission.name)
+        if saved_breakpoint:
+            self._apply_loaded_breakpoint(saved_breakpoint)
+        else:
+            saved_breakpoint = self._load_breakpoint_file()
+        breakpoint_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
+        if breakpoint_task_id and breakpoint_task_id != mission.name:
+            logger.warning(
+                "Ignore breakpoint for different mission: breakpoint=%s mission=%s",
+                breakpoint_task_id,
+                mission.name,
+            )
+            self._breakpoint_waypoint_idx = 0
+            self._break_point = {}
+        self._current_waypoint_idx = self._breakpoint_waypoint_idx
+
+        logger.info(f"Mission {mission.name} recovered with {len(self._current_wayline)} waypoints")
+        return True
+
+    async def _recover_mission_by_external_id(self, task_id: str) -> bool:
+        """Recover a specific mission when runtime memory is empty."""
+        if not task_id:
+            return False
+        await self._init_database()
+        AsyncSessionLocal = get_async_session_local()
+        async with AsyncSessionLocal() as session:
+            mission = await MissionDB.get_mission_by_external_id(session, task_id)
+            return await self._restore_mission_context_from_database(session, mission)
+
+    def _recover_mission_by_external_id_sync(self, task_id: str) -> bool:
+        """Synchronous wrapper used by MQTT request handlers."""
+        try:
+            self._ensure_event_loop()
+            if self._main_loop and self._main_loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(
+                    self._recover_mission_by_external_id(task_id),
+                    self._main_loop,
+                )
+                return bool(future.result(timeout=3.0))
+            return bool(asyncio.run(self._recover_mission_by_external_id(task_id)))
+        except Exception as exc:
+            logger.warning("Recover mission by flight_id failed: %s error=%s", task_id, exc)
+            return False
+
     async def _recover_pending_missions(self):
         """恢复上次中断的任务"""
         try:
@@ -474,51 +551,7 @@ class MissionManager:
                 if pending_missions:
                     logger.info(f"Found {len(pending_missions)} pending missions for recovery")
                     for mission in pending_missions:
-                        logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
-                        if mission.status in ('running', 'paused'):
-                            waypoints = await WaypointDB.get_waypoints_by_mission(session, UUID(mission.id))
-                            restored_wayline = []
-                            for wp in waypoints:
-                                restored_wayline.append({
-                                    'seq': wp.sequence,
-                                    'latitude': wp.latitude,
-                                    'longitude': wp.longitude,
-                                    'altitude': wp.altitude,
-                                    'command': wp.command,
-                                    'frame': wp.frame,
-                                    'param1': wp.param1,
-                                    'param2': wp.param2,
-                                    'param3': wp.param3,
-                                    'param4': wp.param4,
-                                    'autocontinue': wp.autocontinue,
-                                    'action_type': wp.action_type,
-                                    'speed': wp.flight_speed,
-                                })
-
-                            if not self._install_recovered_mission_context(
-                                mission.name,
-                                restored_wayline,
-                            ):
-                                return
-
-                            saved_breakpoint = await MissionDB.get_mission_breakpoint(session, mission.name)
-                            if saved_breakpoint:
-                                self._apply_loaded_breakpoint(saved_breakpoint)
-                            else:
-                                saved_breakpoint = self._load_breakpoint_file()
-                            breakpoint_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
-                            if breakpoint_task_id and breakpoint_task_id != mission.name:
-                                logger.warning(
-                                    "Ignore breakpoint for different mission: breakpoint=%s mission=%s",
-                                    breakpoint_task_id,
-                                    mission.name,
-                                )
-                                self._breakpoint_waypoint_idx = 0
-                                self._break_point = {}
-                            self._current_waypoint_idx = self._breakpoint_waypoint_idx
-
-                            logger.info(f"Mission {mission.name} recovered with {len(self._current_wayline)} waypoints")
-
+                        if await self._restore_mission_context_from_database(session, mission):
                             if self._event_callback:
                                 event = MessageBuilder.build_event(
                                     'flighttask_progress',
@@ -4246,6 +4279,10 @@ class MissionManager:
         data = msg.get('data', {})
         task_id = data.get('flight_id', data.get('flighttask_id', self._current_task_id or ''))
         logger.info(f"Flighttask progress query: {task_id}")
+
+        if task_id and not self._current_task_id:
+            logger.info("No active flight_id in memory, try recovering from database: %s", task_id)
+            self._recover_mission_by_external_id_sync(task_id)
 
         if task_id and task_id != self._current_task_id:
             return self._reject_flighttask_request(

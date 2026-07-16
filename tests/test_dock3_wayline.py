@@ -530,6 +530,34 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(undo["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._current_task_id, "flight-active")
 
+    def test_flighttask_progress_recovers_requested_task_when_memory_is_empty(self):
+        manager = MissionManager()
+        recover_calls = []
+
+        def recover(task_id):
+            recover_calls.append(task_id)
+            manager._current_task_id = task_id
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+            manager._current_waypoint_idx = 2
+            manager._breakpoint_waypoint_idx = 2
+            manager._break_point = {"index": 2}
+            manager._status = manager.MISSION_PAUSED
+            manager._wayline_mission_state = 7
+            return True
+
+        manager._recover_mission_by_external_id_sync = recover
+
+        progress = manager.handle_flighttask_progress(base_msg("flighttask_progress", {
+            "flight_id": "flight-recovered",
+        }))
+
+        self.assertEqual(recover_calls, ["flight-recovered"])
+        self.assertEqual(progress["data"]["result"], 0)
+        self.assertEqual(progress["data"]["output"]["status"], "paused")
+        self.assertEqual(progress["data"]["output"]["ext"]["flight_id"], "flight-recovered")
+        self.assertEqual(progress["data"]["output"]["ext"]["current_waypoint_index"], 2)
+        self.assertEqual(progress["data"]["output"]["ext"]["break_point"]["index"], 2)
+
     def test_flighttask_return_saves_breakpoint_for_later_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             breakpoint_path = Path(tmp) / "breakpoint.json"
