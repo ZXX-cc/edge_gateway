@@ -164,6 +164,25 @@ Wayline 阶段采用 `--real-sitl --allow-real-sitl-upload-failure`，证明文�
 真实 MAVLink 上传入口已到达；严格真实 SITL mission upload/execute 仍需单项
 不加放宽参数继续验收。
 
+2026-07-16 已新增任务重试与失败上报机制：真实任务执行过程中，网络断开、通信异常、
+ACK/指令超时和飞控上传握手失败会按默认 3 次、间隔 2 秒自动重试；硬件故障、
+急停、电量/围栏/自检失败、飞控/无人机拒绝、adapter 不存在和状态/参数非法不重试。
+最终 FAILED 会主动上报 `flighttask_progress`，其中 `output.status=failed`，
+`output.ext.break_point.reason` 与 `output.ext.failure` 包含失败阶段、分类、是否可重试、
+尝试次数和原因。
+
+任务重试专项回归命令：
+
+```bash
+python -m unittest -v \
+  tests.test_dock3_wayline.Dock3WaylineTest.test_real_flighttask_execute_retries_timeout_and_continues_on_success \
+  tests.test_dock3_wayline.Dock3WaylineTest.test_real_flighttask_execute_does_not_retry_flight_controller_rejection
+```
+
+通过标准：第一个用例证明 `network_or_timeout` 会重试并在后续成功时继续任务；第二个
+用例证明飞控拒绝归为 `hardware_or_rejected`，不会重复下发，且 MQTT 事件包含
+`flighttask_progress status=failed` 和失败原因。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：

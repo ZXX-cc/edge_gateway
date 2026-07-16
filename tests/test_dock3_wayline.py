@@ -268,6 +268,28 @@ class RecordingRealWaylineFlightControl:
         return {"success": self.armed == target_state, "message": "ok"}
 
 
+class RetryThenSuccessFlightControl(RecordingRealWaylineFlightControl):
+    def __init__(self):
+        super().__init__()
+        self.auto_attempts = 0
+
+    def set_mode(self, mode):
+        self.calls.append(("set_mode", mode))
+        if mode == "AUTO":
+            self.auto_attempts += 1
+            if self.auto_attempts == 1:
+                return {"success": False, "message": "AUTO 指令超时，未收到 ACK"}
+        return {"success": True, "message": "ok"}
+
+
+class RejectingFlightControl(RecordingRealWaylineFlightControl):
+    def set_mode(self, mode):
+        self.calls.append(("set_mode", mode))
+        if mode == "AUTO":
+            return {"success": False, "message": "飞控拒绝执行 AUTO"}
+        return {"success": True, "message": "ok"}
+
+
 class UnreadyRealWaylineFlightControl(RecordingRealWaylineFlightControl):
     def takeoff(self, altitude=50.0):
         self.calls.append(("takeoff", altitude))
@@ -822,6 +844,76 @@ class Dock3WaylineTest(unittest.TestCase):
             ("set_mode", "AUTO"),
             ("set_mode", "AUTO"),
         ])
+
+    def test_real_flighttask_execute_retries_timeout_and_continues_on_success(self):
+        manager = MissionManager()
+        flight_control = RetryThenSuccessFlightControl()
+        nest = RecordingNest()
+        events = []
+        manager.set_flight_control(flight_control)
+        manager.set_nest_module(nest)
+        manager.set_event_callback(events.append)
+        manager._current_task_id = "flight-retry"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        manager._flow_retry_settings = lambda: (3, 0.0)
+        manager.start_mission_monitor = lambda: True
+        manager.stop_mission_monitor = lambda: True
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {"flight_id": "flight-retry"}))
+
+        self.assertEqual(execute["data"]["result"], 0)
+        self.assertEqual(execute["data"]["output"]["status"], "in_progress")
+        self.assertEqual(manager._status, manager.MISSION_RUNNING)
+        self.assertEqual(flight_control.auto_attempts, 2)
+        timeout_steps = [
+            event for event in events
+            if event.get("method") == "one_key_takeoff_progress"
+            and event.get("data", {}).get("output", {}).get("step") == "flighttask_execute"
+            and event.get("data", {}).get("output", {}).get("status") == "failed"
+        ]
+        self.assertEqual(timeout_steps[-1]["data"]["output"]["steps"][-1]["failure_category"], "network_or_timeout")
+
+    def test_real_flighttask_execute_does_not_retry_flight_controller_rejection(self):
+        manager = MissionManager()
+        flight_control = RejectingFlightControl()
+        nest = RecordingNest()
+        events = []
+        manager.set_flight_control(flight_control)
+        manager.set_nest_module(nest)
+        manager.set_event_callback(events.append)
+        manager._current_task_id = "flight-reject"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        manager._flow_retry_settings = lambda: (3, 0.0)
+        manager.start_mission_monitor = lambda: True
+        manager.stop_mission_monitor = lambda: True
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {"flight_id": "flight-reject"}))
+
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
+        self.assertEqual(execute["data"]["output"]["status"], "failed")
+        self.assertEqual(manager._status, manager.MISSION_FAILED)
+        self.assertEqual(
+            [call for call in flight_control.calls if call == ("set_mode", "AUTO")],
+            [("set_mode", "AUTO")],
+        )
+        failure = execute["data"]["failure"]
+        self.assertEqual(failure["category"], "hardware_or_rejected")
+        self.assertFalse(failure["retryable"])
+        failed_progress = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+            and event.get("data", {}).get("output", {}).get("status") == "failed"
+        ]
+        self.assertTrue(failed_progress)
+        self.assertEqual(
+            failed_progress[-1]["data"]["output"]["ext"]["failure"]["category"],
+            "hardware_or_rejected",
+        )
 
     def test_real_flighttask_execute_starts_monitor_after_dock_and_takeoff(self):
         manager = MissionManager()

@@ -308,6 +308,7 @@ class MissionManager:
         self._telemetry_reporter = None
         self._last_takeoff_flow_steps: List[dict] = []
         self._last_completion_flow_steps: List[dict] = []
+        self._last_task_failure: Dict[str, Any] = {}
 
     def set_flight_control(self, flight_control):
         """注入飞行控制模块"""
@@ -789,13 +790,67 @@ class MissionManager:
         return attempts, max(0.0, self._as_float(interval, 2.0))
 
     @staticmethod
-    def _is_non_retryable_adapter_error(result: dict) -> bool:
-        message = str((result or {}).get('message', ''))
-        return message in {
+    def _classify_task_failure(reason: Any, stage: str = "", result: dict = None) -> dict:
+        """Classify task execution failures for retry and platform visibility."""
+        message = str(reason or "")
+        result = result or {}
+        lowered = message.lower()
+        retryable_markers = (
+            "timeout", "timed out", "超时", "ack", "未收到", "no response",
+            "not responding", "disconnected", "disconnect", "connection",
+            "network", "mqtt", "temporarily unavailable", "暂时不可用",
+            "链路", "连接", "断开", "通信", "握手失败", "upload to flight controller failed",
+            "航线上传到飞控失败",
+        )
+        non_retryable_markers = (
+            "reject", "rejected", "denied", "refused", "unsupported",
+            "not supported", "invalid", "forbidden", "prearm", "pre-arm",
+            "armability", "hardware", "fault", "estop", "emergency",
+            "battery", "geofence", "fence", "no mission", "not available",
+            "自检未通过", "拒绝", "不支持", "参数", "非法", "硬件", "故障",
+            "急停", "电量不足", "地理围栏", "飞控预解锁", "不可用",
+        )
+        adapter_unavailable = message in {
             'nest_module_not_available',
             'nest_module_missing_send_gcs_command',
             'flight_control_not_available',
+            'WaypointManager not available',
+            'FlightControl not available',
+            'FlightControl safe arm gate unavailable',
         } or message.startswith('flight_control_missing_')
+        if adapter_unavailable:
+            category = "adapter_unavailable"
+            retryable = False
+        elif any(marker in lowered for marker in retryable_markers):
+            category = "network_or_timeout"
+            retryable = True
+        elif any(marker in lowered for marker in non_retryable_markers):
+            category = "hardware_or_rejected"
+            retryable = False
+        else:
+            category = "unknown_retryable"
+            retryable = True
+        return {
+            "stage": stage,
+            "reason": message or "unknown task failure",
+            "category": category,
+            "retryable": retryable,
+            "raw_result": result,
+        }
+
+    def _remember_task_failure(self, stage: str, reason: Any, result: dict = None,
+                               attempt: int = None, max_attempts: int = None) -> dict:
+        failure = self._classify_task_failure(reason, stage=stage, result=result)
+        if attempt is not None:
+            failure["attempt"] = attempt
+        if max_attempts is not None:
+            failure["max_attempts"] = max_attempts
+            failure["retry_exhausted"] = bool(failure["retryable"] and attempt == max_attempts)
+        self._last_task_failure = failure
+        return failure
+
+    def _clear_task_failure(self):
+        self._last_task_failure = {}
 
     def _run_takeoff_flow_nest_step(self, steps: list, command_name: str) -> bool:
         attempts, interval = self._flow_retry_settings()
@@ -807,6 +862,19 @@ class MissionManager:
                 'attempt': attempt,
                 'max_attempts': attempts,
             }
+            failure = None if success else self._remember_task_failure(
+                command_name,
+                result.get('message') or f'{command_name} failed',
+                result,
+                attempt,
+                attempts,
+            )
+            if failure:
+                detail.update({
+                    'failure_category': failure['category'],
+                    'retryable': failure['retryable'],
+                    'retry_exhausted': failure.get('retry_exhausted', False),
+                })
             self._record_takeoff_flow_step(
                 steps,
                 command_name,
@@ -815,8 +883,9 @@ class MissionManager:
                 detail=detail,
             )
             if success:
+                self._clear_task_failure()
                 return True
-            if self._is_non_retryable_adapter_error(result):
+            if failure and not failure.get('retryable'):
                 return False
             if attempt < attempts and interval > 0:
                 time.sleep(interval)
@@ -850,6 +919,13 @@ class MissionManager:
                 result = {'success': False, 'message': str(exc)}
             success = bool(result.get('success', result is True)) if isinstance(result, dict) else bool(result)
             detail = result if isinstance(result, dict) else {'success': success}
+            failure = None if success else self._remember_task_failure(
+                name,
+                detail.get('message') or f'{name} failed',
+                detail,
+                attempt,
+                attempts,
+            )
             self._record_takeoff_flow_step(
                 steps,
                 name,
@@ -860,34 +936,79 @@ class MissionManager:
                     'attempt': attempt,
                     'max_attempts': attempts,
                     'simulated': False,
+                    **({
+                        'failure_category': failure['category'],
+                        'retryable': failure['retryable'],
+                        'retry_exhausted': failure.get('retry_exhausted', False),
+                    } if failure else {}),
                 },
             )
             if success:
+                self._clear_task_failure()
                 return True
+            if failure and not failure.get('retryable'):
+                return False
             if attempt < attempts and interval > 0:
                 time.sleep(interval)
         return False
 
     def _request_takeoff_from_nest_for_flow(self, steps: list, flow_name: str) -> bool:
+        attempts, interval = self._flow_retry_settings()
         if self._nest_module and hasattr(self._nest_module, 'request_takeoff'):
-            try:
-                self._nest_module.request_takeoff()
-                self._record_takeoff_flow_step(
-                    steps,
-                    'nest_takeoff_request',
-                    detail={'success': True, 'simulated': False, 'flow': flow_name},
-                )
-                return True
-            except Exception as exc:
-                self._record_takeoff_flow_step(
-                    steps,
-                    'nest_takeoff_request',
-                    status=STATUS_FAILED,
-                    result=-1,
-                    detail={'success': False, 'simulated': False, 'message': str(exc), 'flow': flow_name},
-                )
-                return False
+            last_failure = None
+            for attempt in range(1, attempts + 1):
+                try:
+                    self._nest_module.request_takeoff()
+                    self._record_takeoff_flow_step(
+                        steps,
+                        'nest_takeoff_request',
+                        detail={
+                            'success': True,
+                            'simulated': False,
+                            'flow': flow_name,
+                            'attempt': attempt,
+                            'max_attempts': attempts,
+                        },
+                    )
+                    self._clear_task_failure()
+                    return True
+                except Exception as exc:
+                    result = {'success': False, 'message': str(exc), 'flow': flow_name}
+                    last_failure = self._remember_task_failure(
+                        'nest_takeoff_request',
+                        result['message'],
+                        result,
+                        attempt,
+                        attempts,
+                    )
+                    self._record_takeoff_flow_step(
+                        steps,
+                        'nest_takeoff_request',
+                        status=STATUS_FAILED,
+                        result=-1,
+                        detail={
+                            **result,
+                            'simulated': False,
+                            'attempt': attempt,
+                            'max_attempts': attempts,
+                            'failure_category': last_failure['category'],
+                            'retryable': last_failure['retryable'],
+                            'retry_exhausted': last_failure.get('retry_exhausted', False),
+                        },
+                    )
+                    if not last_failure.get('retryable'):
+                        return False
+                    if attempt < attempts and interval > 0:
+                        time.sleep(interval)
+            return False
 
+        failure = self._remember_task_failure(
+            'nest_takeoff_request',
+            'nest_module_not_available',
+            {'success': False, 'message': 'nest_module_not_available', 'flow': flow_name},
+            1,
+            attempts,
+        )
         self._record_takeoff_flow_step(
             steps,
             'nest_takeoff_request',
@@ -898,6 +1019,10 @@ class MissionManager:
                 'simulated': False,
                 'message': 'nest_module_not_available',
                 'flow': flow_name,
+                'attempt': 1,
+                'max_attempts': attempts,
+                'failure_category': failure['category'],
+                'retryable': failure['retryable'],
             },
         )
         return False
@@ -1135,13 +1260,32 @@ class MissionManager:
         self._wayline_mission_state = 7  # 航线执行失败
         self._current_step = 33  # 通知任务结果
         self._last_completion_flow_steps = list(steps)
+        failure = self._last_task_failure or self._remember_task_failure("completion_flow", reason)
+        self._break_point = {
+            **(self._break_point or {}),
+            'index': self._current_waypoint_idx,
+            'total_waypoints': len(self._current_wayline),
+            'break_reason': 2,
+            'reason': reason,
+            'failure': {
+                key: value for key, value in failure.items()
+                if key != "raw_result"
+            },
+        }
         logger.warning("Mission completion flow failed: flight_id=%s, reason=%s", flight_id, reason)
         self._emit_wayline_progress(
             STATUS_FAILED,
             current_step=self._current_step,
             percent=100,
             flight_id=flight_id,
-            extra={'completion_steps': list(steps), 'reason': reason},
+            extra={
+                'completion_steps': list(steps),
+                'reason': reason,
+                'failure': {
+                    key: value for key, value in failure.items()
+                    if key != "raw_result"
+                },
+            },
         )
         if flight_id:
             threading.Thread(
@@ -1261,9 +1405,38 @@ class MissionManager:
             }
             self._waypoint_manager.add_waypoint_from_dict(wp_dict)
 
-        if not self._waypoint_manager.upload_mission(timeout=15.0):
-            return False, "Waypoint upload to flight controller failed"
-        return True, ""
+        attempts, interval = self._flow_retry_settings()
+        last_reason = "Waypoint upload to flight controller failed"
+        for attempt in range(1, attempts + 1):
+            try:
+                uploaded = bool(self._waypoint_manager.upload_mission(timeout=15.0))
+            except Exception as exc:
+                uploaded = False
+                last_reason = str(exc) or last_reason
+            if uploaded:
+                self._clear_task_failure()
+                return True, ""
+
+            failure = self._remember_task_failure(
+                "wayline_upload",
+                last_reason,
+                {"success": False, "message": last_reason},
+                attempt,
+                attempts,
+            )
+            logger.warning(
+                "Waypoint upload attempt failed: attempt=%s/%s category=%s retryable=%s reason=%s",
+                attempt,
+                attempts,
+                failure["category"],
+                failure["retryable"],
+                last_reason,
+            )
+            if not failure.get("retryable"):
+                break
+            if attempt < attempts and interval > 0:
+                time.sleep(interval)
+        return False, last_reason
 
     def _available_storage_mb(self) -> Optional[int]:
         for path in (
@@ -1483,6 +1656,7 @@ class MissionManager:
         if battery <= land_threshold and self._battery_safety_action != 'land':
             reason = f"严重低电量自动降落: {battery:.0f}% <= {land_threshold:.0f}%"
             logger.warning(reason)
+            failure = self._remember_task_failure("battery_safety", reason)
             self._battery_safety_action = 'land'
             self._status = self.MISSION_FAILED
             self._wayline_mission_state = 7
@@ -1492,6 +1666,10 @@ class MissionManager:
                 'index': self._current_waypoint_idx,
                 'break_reason': 773,
                 'reason': reason,
+                'failure': {
+                    key: value for key, value in failure.items()
+                    if key != "raw_result"
+                },
             }
             self._breakpoint_waypoint_idx = self._current_waypoint_idx
             self._save_breakpoint_file(reason)
@@ -2495,22 +2673,41 @@ class MissionManager:
         self._wayline_mission_state = 1
         self._current_step = 23
         diagnostics = self._real_wayline_flight_diagnostics(stage, reason)
+        failure = self._last_task_failure or self._remember_task_failure(stage, reason)
+        failure_payload = {
+            key: value for key, value in failure.items()
+            if key != "raw_result"
+        }
+        self._break_point = {
+            **(self._break_point or {}),
+            'index': self._current_waypoint_idx,
+            'total_waypoints': len(self._current_wayline),
+            'break_reason': 2,
+            'reason': reason,
+            'failure': failure_payload,
+        }
         self._emit_wayline_progress(
             STATUS_FAILED,
             current_step=23,
             percent=self._current_progress_percent(),
             flight_id=flight_id,
-            extra={"errors": [reason], "flight_control": diagnostics},
+            extra={"errors": [reason], "failure": failure_payload, "flight_control": diagnostics},
         )
+        if flight_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(flight_id, 'failed'),),
+                daemon=True,
+            ).start()
         return MessageBuilder.build_reply(
             msg,
-            result=-1,
+            result=WAYLINE_EXECUTION_FAILED,
             data=self._wayline_reply_data(
                 STATUS_FAILED,
                 current_step=23,
                 percent=self._current_progress_percent(),
                 flight_id=flight_id,
-                extra={"errors": [reason], "flight_control": diagnostics},
+                extra={"errors": [reason], "failure": failure_payload, "flight_control": diagnostics},
             ),
             msg_str=reason,
         )
@@ -3046,6 +3243,7 @@ class MissionManager:
             self._status = self.MISSION_COMPLETED
             self._wayline_mission_state = 9  # 航线停止
             self._current_step = 33  # 通知任务结果
+            self._clear_task_failure()
             self._report_mission_progress(status='completed')
             self._emit_wayline_progress(
                 STATUS_OK,
@@ -3185,6 +3383,11 @@ class MissionManager:
                     break_reason, f'未知({break_reason})'
                 )
             ext['break_point'] = bp
+        if status == 'failed' and self._last_task_failure:
+            ext['failure'] = {
+                key: value for key, value in self._last_task_failure.items()
+                if key != "raw_result"
+            }
 
         if self._event_callback:
             event = MessageBuilder.build_event(
@@ -3260,6 +3463,7 @@ class MissionManager:
 
         logger.info(f"Flighttask prepare: flight_id={flight_id}, type={task_type}, "
                    f"execute_time={execute_time}")
+        self._clear_task_failure()
 
         # A second producer (for example the local HD demo) must not replace
         # the currently flying task's file, waypoints or task ID.
@@ -3455,6 +3659,7 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=error_msg)
 
         logger.info(f"Flighttask execute: {flight_id}")
+        self._clear_task_failure()
         if self._current_task_id != flight_id:
             active = self._current_task_id or ''
             result = DOCK_BUSY if self._status in (
@@ -3648,6 +3853,7 @@ class MissionManager:
         self._simulate_mission = {}
         self._battery_safety_action = None
         self._executed_waypoint_actions.clear()
+        self._clear_task_failure()
 
         return MessageBuilder.build_reply(
             msg,
