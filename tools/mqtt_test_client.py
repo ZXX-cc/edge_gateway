@@ -190,7 +190,17 @@ class MqttRequestClient:
     def connect(self, timeout: float) -> bool:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
-        self.client.connect(self.host, self.port, keepalive=30)
+        try:
+            self.client.connect(self.host, self.port, keepalive=30)
+        except OSError as exc:
+            self.connect_rc = -1
+            self.connected = False
+            self.connected_event.set()
+            print(
+                f"connect failed: host={self.host} port={self.port} error={exc}",
+                file=sys.stderr,
+            )
+            return False
         self.client.loop_start()
         return self.connected_event.wait(timeout) and self.connect_rc == 0
 
