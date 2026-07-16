@@ -191,6 +191,13 @@ binding-precondition、OSD/state、CMD、DRC、Wayline、takeoff-flow、media、
 HMS/log、firmware/config 全部 exit=0。OSD/state 阶段已验证当前
 `flighttask_step_code` 任务步骤码 0..33 不再被旧枚举误判。
 
+2026-07-16 断点续飞改造：断点信息不再只依赖内存/本地 JSON，运行时会写入
+MongoDB `missions.execution_conditions.breakpoint`，字段包含 `task_id`、
+`last_waypoint_idx`、`resume_waypoint_idx`、`total_waypoints`、`break_point`、
+`reason` 和 `updated_at`。网关重启恢复 pending mission 时优先从 MongoDB 读取
+断点，本地 JSON 只作为兼容兜底。续飞业务语义改为“回到断点航点再继续”：例如
+航线 1、2、3、4 到达 2 后返航中断，再次续飞会先 seek 回 2 对应航点，再继续 3、4。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：

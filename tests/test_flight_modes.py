@@ -25,8 +25,16 @@ if "src.database.connection" not in sys.modules:
     def get_async_session_local():
         return None
 
+    def get_database_backend():
+        return "sqlite"
+
+    def get_mongo_database():
+        raise RuntimeError("MongoDB not available in unit stub")
+
     connection.init_database_async = init_database_async
     connection.get_async_session_local = get_async_session_local
+    connection.get_database_backend = get_database_backend
+    connection.get_mongo_database = get_mongo_database
     sys.modules["src.database.connection"] = connection
 
 if "src.database.mission_db" not in sys.modules:

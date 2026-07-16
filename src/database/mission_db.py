@@ -75,6 +75,110 @@ class MissionDB:
         return result.rowcount > 0
 
     @staticmethod
+    async def update_mission_breakpoint(
+        session: AsyncSession,
+        external_id: str,
+        breakpoint_data: dict,
+    ) -> bool:
+        """Persist the latest wayline breakpoint on the mission document.
+
+        ``external_id`` is the DJI ``flight_id`` stored as ``Mission.name``.
+        MongoDB stores the full breakpoint under
+        ``execution_conditions.breakpoint``.  SQLite fallback keeps the same
+        shape in the JSON column so the recovery code stays backend-neutral.
+        """
+        if not external_id:
+            return False
+        breakpoint_data = dict(breakpoint_data or {})
+        if is_mongo_session(session):
+            def write_latest_breakpoint(database):
+                collection = database["missions"]
+                document = collection.find_one({"name": external_id}, sort=[("created_at", -1)])
+                if not document:
+                    return 0
+                selector = {"id": document.get("id")} if document.get("id") else {"_id": document.get("_id")}
+                result = collection.update_one(
+                    selector,
+                    {
+                        "$set": {
+                            "execution_conditions.breakpoint": breakpoint_data,
+                            "execution_conditions.breakpoint_updated_at": breakpoint_data.get(
+                                "updated_at", int(time.time() * 1000)
+                            ),
+                        }
+                    },
+                    upsert=False,
+                )
+                return result.matched_count
+
+            matched_count = await session.run(write_latest_breakpoint)
+            return matched_count > 0
+
+        mission = await MissionDB.get_mission_by_external_id(session, external_id)
+        if not mission:
+            return False
+        execution_conditions = dict(mission.execution_conditions or {})
+        execution_conditions["breakpoint"] = breakpoint_data
+        execution_conditions["breakpoint_updated_at"] = breakpoint_data.get(
+            "updated_at", int(time.time() * 1000)
+        )
+        result = await session.execute(
+            update(Mission)
+            .where(Mission.id == str(mission.id))
+            .values(execution_conditions=execution_conditions)
+        )
+        return result.rowcount > 0
+
+    @staticmethod
+    async def get_mission_breakpoint(session: AsyncSession, external_id: str) -> dict | None:
+        if not external_id:
+            return None
+        mission = await MissionDB.get_mission_by_external_id(session, external_id)
+        if not mission:
+            return None
+        execution_conditions = mission.execution_conditions or {}
+        breakpoint_data = execution_conditions.get("breakpoint")
+        return dict(breakpoint_data) if isinstance(breakpoint_data, dict) else None
+
+    @staticmethod
+    async def clear_mission_breakpoint(session: AsyncSession, external_id: str) -> bool:
+        if not external_id:
+            return False
+        if is_mongo_session(session):
+            def clear_latest_breakpoint(database):
+                collection = database["missions"]
+                document = collection.find_one({"name": external_id}, sort=[("created_at", -1)])
+                if not document:
+                    return 0
+                selector = {"id": document.get("id")} if document.get("id") else {"_id": document.get("_id")}
+                result = collection.update_one(
+                    selector,
+                    {
+                        "$unset": {
+                            "execution_conditions.breakpoint": "",
+                            "execution_conditions.breakpoint_updated_at": "",
+                        }
+                    },
+                )
+                return result.matched_count
+
+            matched_count = await session.run(clear_latest_breakpoint)
+            return matched_count > 0
+
+        mission = await MissionDB.get_mission_by_external_id(session, external_id)
+        if not mission:
+            return False
+        execution_conditions = dict(mission.execution_conditions or {})
+        execution_conditions.pop("breakpoint", None)
+        execution_conditions.pop("breakpoint_updated_at", None)
+        result = await session.execute(
+            update(Mission)
+            .where(Mission.id == str(mission.id))
+            .values(execution_conditions=execution_conditions)
+        )
+        return result.rowcount > 0
+
+    @staticmethod
     async def get_pending_missions(session: AsyncSession) -> list:
         if is_mongo_session(session):
             documents = await session.run(

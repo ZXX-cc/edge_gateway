@@ -44,7 +44,12 @@ from src.cloud_api.dock3_wayline import (
     progress_percent,
     validate_flight_id_payload,
 )
-from src.database.connection import get_async_session_local, init_database_async
+from src.database.connection import (
+    get_async_session_local,
+    get_database_backend,
+    get_mongo_database,
+    init_database_async,
+)
 from src.database.mission_db import MissionDB
 from src.database.waypoint_db import WaypointDB
 from src.database.schemas import MissionCreate, WaypointCreate
@@ -488,7 +493,11 @@ class MissionManager:
                             ):
                                 return
 
-                            saved_breakpoint = self._load_breakpoint_file()
+                            saved_breakpoint = await MissionDB.get_mission_breakpoint(session, mission.name)
+                            if saved_breakpoint:
+                                self._apply_loaded_breakpoint(saved_breakpoint)
+                            else:
+                                saved_breakpoint = self._load_breakpoint_file()
                             breakpoint_task_id = saved_breakpoint.get("task_id") if saved_breakpoint else None
                             if breakpoint_task_id and breakpoint_task_id != mission.name:
                                 logger.warning(
@@ -1077,6 +1086,7 @@ class MissionManager:
         takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
         resume_from_breakpoint = bool(self._break_point or self._breakpoint_waypoint_idx > 0)
         breakpoint_index = max(0, int(self._breakpoint_waypoint_idx or 0))
+        resume_seek_index = self._resume_seek_waypoint_index() if resume_from_breakpoint else 0
         steps: List[dict] = []
         self._last_takeoff_flow_steps = steps
         self._record_takeoff_flow_step(
@@ -1088,6 +1098,7 @@ class MissionManager:
                 'simulate_mission': False,
                 'resume_from_breakpoint': resume_from_breakpoint,
                 'breakpoint_index': breakpoint_index if resume_from_breakpoint else None,
+                'resume_seek_index': resume_seek_index if resume_from_breakpoint else None,
             },
         )
 
@@ -1138,6 +1149,7 @@ class MissionManager:
                     'flight_id': flight_id,
                     'waypoint_count': len(self._current_wayline),
                     'breakpoint_index': breakpoint_index,
+                    'resume_seek_index': resume_seek_index,
                     'message': upload_reason,
                 },
             )
@@ -1192,7 +1204,7 @@ class MissionManager:
                     'breakpoint_seek',
                     'WaypointManager not available for breakpoint resume',
                 )
-            seek_ok = self._waypoint_manager.set_current_waypoint(breakpoint_index)
+            seek_ok = self._waypoint_manager.set_current_waypoint(resume_seek_index)
             self._record_takeoff_flow_step(
                 steps,
                 'breakpoint_seek',
@@ -1202,6 +1214,7 @@ class MissionManager:
                     'success': seek_ok,
                     'flight_id': flight_id,
                     'breakpoint_index': breakpoint_index,
+                    'resume_seek_index': resume_seek_index,
                 },
             )
             if not seek_ok:
@@ -1211,7 +1224,7 @@ class MissionManager:
                     'breakpoint_seek',
                     'Set current waypoint for breakpoint resume failed',
                 )
-            confirmed = self._confirm_current_waypoint_at_least(breakpoint_index)
+            confirmed = self._confirm_current_waypoint_at_least(resume_seek_index)
             self._record_takeoff_flow_step(
                 steps,
                 'breakpoint_seek_confirm',
@@ -1221,6 +1234,7 @@ class MissionManager:
                     'success': confirmed,
                     'flight_id': flight_id,
                     'breakpoint_index': breakpoint_index,
+                    'resume_seek_index': resume_seek_index,
                     'current_waypoint_index': self._current_waypoint_idx,
                 },
             )
@@ -1229,9 +1243,9 @@ class MissionManager:
                     msg,
                     flight_id,
                     'breakpoint_seek_confirm',
-                    f'Flight controller did not confirm breakpoint waypoint {breakpoint_index}',
+                    f'Flight controller did not confirm resume waypoint {resume_seek_index}',
                 )
-            self._current_waypoint_idx = breakpoint_index
+            self._current_waypoint_idx = resume_seek_index
 
         if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
             return self._fail_real_wayline_execute(
@@ -1515,6 +1529,49 @@ class MissionManager:
     def _breakpoint_file_path(self) -> str:
         return str(Config.get('mission.breakpoint_path', './data/mission_breakpoint.json'))
 
+    def _resume_seek_waypoint_index(self) -> int:
+        """Return the FC mission index used for breakpoint resume.
+
+        Business rule: if a mission has reached waypoint N and then returns to
+        dock, relaunch must first fly back to waypoint N, then continue with
+        N+1.  ArduPilot's ``MISSION_CURRENT=N`` means the FC has already
+        advanced to the next item, so we seek to ``N-1`` to make the aircraft
+        revisit the reached/interrupted waypoint.
+        """
+        breakpoint_index = max(0, int(self._breakpoint_waypoint_idx or 0))
+        if breakpoint_index <= 0:
+            return 0
+        return max(0, breakpoint_index - 1)
+
+    def _breakpoint_payload(self, reason: str = "") -> Optional[Dict[str, Any]]:
+        if not self._current_task_id:
+            return None
+        return {
+            "task_id": self._current_task_id,
+            "last_waypoint_idx": self._breakpoint_waypoint_idx,
+            "resume_waypoint_idx": self._resume_seek_waypoint_index(),
+            "total_waypoints": len(self._current_wayline),
+            "break_point": self._break_point or {},
+            "reason": reason,
+            "updated_at": int(time.time() * 1000),
+        }
+
+    def _apply_loaded_breakpoint(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(data, dict):
+            return None
+        try:
+            idx = int(data.get("last_waypoint_idx", data.get("index", 0)) or 0)
+        except (TypeError, ValueError):
+            logger.warning("Ignore invalid breakpoint waypoint index: %s", data)
+            return None
+        self._breakpoint_waypoint_idx = max(0, idx)
+        break_point = data.get("break_point")
+        self._break_point = break_point if isinstance(break_point, dict) else {}
+        if data.get("task_id") and not self._current_task_id:
+            self._current_task_id = str(data.get("task_id"))
+        logger.info("Breakpoint loaded: %s", data)
+        return data
+
     def _record_breakpoint(self, reason: str, break_reason: int = 0):
         """记录当前航点断点，确保返航或重启后可以从断点继续执行。"""
         self._sync_current_waypoint_from_manager()
@@ -1532,17 +1589,72 @@ class MissionManager:
         }
         self._save_breakpoint_file(reason)
 
-    def _save_breakpoint_file(self, reason: str = ""):
-        if not self._current_task_id:
+    async def _save_breakpoint_to_database(self, data: Dict[str, Any]):
+        if not data or not data.get("task_id"):
             return
-        data = {
-            "task_id": self._current_task_id,
-            "last_waypoint_idx": self._breakpoint_waypoint_idx,
-            "total_waypoints": len(self._current_wayline),
-            "break_point": self._break_point or {},
-            "reason": reason,
-            "updated_at": int(time.time() * 1000),
-        }
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+            async with AsyncSessionLocal() as session:
+                saved = await MissionDB.update_mission_breakpoint(
+                    session,
+                    str(data.get("task_id")),
+                    data,
+                )
+                await session.commit()
+                if saved:
+                    logger.info("Breakpoint saved to database: %s", data)
+                else:
+                    logger.warning(
+                        "Breakpoint database save skipped, mission not found: %s",
+                        data.get("task_id"),
+                    )
+        except Exception as exc:
+            logger.warning("Save breakpoint to database failed: %s", exc)
+
+    async def _clear_breakpoint_from_database(self, task_id: str):
+        if not task_id:
+            return
+        try:
+            await self._init_database()
+            AsyncSessionLocal = get_async_session_local()
+            async with AsyncSessionLocal() as session:
+                cleared = await MissionDB.clear_mission_breakpoint(session, task_id)
+                await session.commit()
+                if cleared:
+                    logger.info("Breakpoint cleared from database: %s", task_id)
+        except Exception as exc:
+            logger.warning("Clear breakpoint from database failed: %s", exc)
+
+    def _load_breakpoint_from_mongodb_sync(self, task_id: str) -> Optional[Dict[str, Any]]:
+        if not task_id or get_database_backend() != "mongodb":
+            return None
+        try:
+            database = get_mongo_database()
+            document = database["missions"].find_one(
+                {"name": task_id, "execution_conditions.breakpoint": {"$type": "object"}},
+                sort=[("created_at", -1)],
+            )
+            if not document:
+                return None
+            execution_conditions = document.get("execution_conditions") or {}
+            breakpoint_data = execution_conditions.get("breakpoint")
+            if not isinstance(breakpoint_data, dict):
+                return None
+            return self._apply_loaded_breakpoint(breakpoint_data)
+        except Exception as exc:
+            logger.warning("Load breakpoint from MongoDB failed: %s", exc)
+            return None
+
+    def _save_breakpoint_file(self, reason: str = ""):
+        data = self._breakpoint_payload(reason)
+        if not data:
+            return
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._save_breakpoint_to_database(data),),
+            daemon=True,
+        ).start()
         path = self._breakpoint_file_path()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1553,26 +1665,29 @@ class MissionManager:
             logger.warning("Save breakpoint failed: %s", exc)
 
     def _load_breakpoint_file(self) -> Optional[Dict[str, Any]]:
+        if self._current_task_id:
+            db_breakpoint = self._load_breakpoint_from_mongodb_sync(self._current_task_id)
+            if db_breakpoint:
+                return db_breakpoint
         path = self._breakpoint_file_path()
         try:
             if not os.path.exists(path):
                 return None
             with open(path, "r", encoding="utf-8") as fp:
                 data = json.load(fp)
-            if not isinstance(data, dict):
-                return None
-            idx = int(data.get("last_waypoint_idx", 0))
-            self._breakpoint_waypoint_idx = max(0, idx)
-            self._break_point = data.get("break_point") if isinstance(data.get("break_point"), dict) else {}
-            if data.get("task_id") and not self._current_task_id:
-                self._current_task_id = str(data.get("task_id"))
-            logger.info("Breakpoint loaded: %s", data)
-            return data
+            return self._apply_loaded_breakpoint(data)
         except Exception as exc:
             logger.warning("Load breakpoint failed: %s", exc)
             return None
 
     def _clear_breakpoint_file(self):
+        task_id = self._current_task_id
+        if task_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._clear_breakpoint_from_database(task_id),),
+                daemon=True,
+            ).start()
         path = self._breakpoint_file_path()
         try:
             if os.path.exists(path):
@@ -2232,10 +2347,17 @@ class MissionManager:
 
         # 断点续飞：使用 WaypointManager 设置当前航点
         if self._waypoint_manager and self._breakpoint_waypoint_idx > 0:
-            logger.info(f"Breakpoint resume: set current waypoint to {self._breakpoint_waypoint_idx}")
-            ok = self._waypoint_manager.set_current_waypoint(self._breakpoint_waypoint_idx)
+            resume_seek_index = self._resume_seek_waypoint_index()
+            logger.info(
+                "Breakpoint resume: break=%s seek=%s",
+                self._breakpoint_waypoint_idx,
+                resume_seek_index,
+            )
+            ok = self._waypoint_manager.set_current_waypoint(resume_seek_index)
             if not ok:
                 logger.warning("Breakpoint set_current_waypoint failed, continuing with existing mission")
+            else:
+                self._current_waypoint_idx = resume_seek_index
 
         if hasattr(self._flight_control, "resume_mission"):
             result = self._flight_control.resume_mission()
@@ -2267,7 +2389,11 @@ class MissionManager:
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 8  # 航线恢复
         self._current_step = 22  # 触发执行航线
-        logger.info(f"Mission resumed from breakpoint: waypoint {self._breakpoint_waypoint_idx}, wayline_state=8(航线恢复)")
+        logger.info(
+            "Mission resumed from breakpoint: breakpoint=%s seek=%s, wayline_state=8(航线恢复)",
+            self._breakpoint_waypoint_idx,
+            self._resume_seek_waypoint_index(),
+        )
 
         # 更新数据库状态
         if self._current_task_id:

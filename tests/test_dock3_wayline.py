@@ -6,6 +6,7 @@ import types
 import unittest
 import tempfile
 import zipfile
+import json
 from pathlib import Path
 
 
@@ -34,8 +35,16 @@ if "src.database.connection" not in sys.modules:
     def get_async_session_local():
         return None
 
+    def get_database_backend():
+        return "sqlite"
+
+    def get_mongo_database():
+        raise RuntimeError("MongoDB not available in unit stub")
+
     connection.init_database_async = init_database_async
     connection.get_async_session_local = get_async_session_local
+    connection.get_database_backend = get_database_backend
+    connection.get_mongo_database = get_mongo_database
     sys.modules["src.database.connection"] = connection
 
 if "src.database.mission_db" not in sys.modules:
@@ -444,7 +453,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(len(flight_control.commands), 1)
         self.assertEqual(flight_control.commands[0][1]["param2"], 6.0)
 
-    def test_breakpoint_file_saved_loaded_and_cleared(self):
+    def test_breakpoint_saved_loaded_and_cleared(self):
         with tempfile.TemporaryDirectory() as tmp:
             breakpoint_path = Path(tmp) / "breakpoint.json"
             manager = MissionManager()
@@ -460,6 +469,9 @@ class Dock3WaylineTest(unittest.TestCase):
             pause = manager.handle_pause_wayline(base_msg("flighttask_pause", {}))
             self.assertEqual(pause["data"]["result"], 0)
             self.assertTrue(breakpoint_path.exists())
+            saved_payload = json.loads(breakpoint_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_payload["last_waypoint_idx"], 1)
+            self.assertEqual(saved_payload["resume_waypoint_idx"], 0)
 
             manager._breakpoint_waypoint_idx = 0
             manager.start_mission_monitor = lambda: None
@@ -550,7 +562,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
             self.assertEqual(resume["data"]["result"], 0)
             self.assertEqual(manager._breakpoint_waypoint_idx, 2)
-            self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
+            self.assertEqual(waypoint_manager.current_waypoints, [(1, False)])
 
     def test_flighttask_return_syncs_latest_waypoint_before_breakpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -631,11 +643,11 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(execute["data"]["result"], 0)
             self.assertEqual(execute["data"]["output"]["status"], "in_progress")
             self.assertEqual(manager._status, manager.MISSION_RUNNING)
-            self.assertEqual(manager._current_waypoint_idx, 1)
+            self.assertEqual(manager._current_waypoint_idx, 0)
             self.assertEqual(waypoint_manager.clear_calls, 1)
             self.assertEqual(len(waypoint_manager.added), 3)
             self.assertEqual(waypoint_manager.upload_calls, [15.0])
-            self.assertEqual(waypoint_manager.current_waypoints, [(1, False)])
+            self.assertEqual(waypoint_manager.current_waypoints, [(0, False)])
             self.assertIn(("takeoff", 30.0), flight_control.calls)
             self.assertIn(("set_mode", "AUTO"), flight_control.calls)
 
