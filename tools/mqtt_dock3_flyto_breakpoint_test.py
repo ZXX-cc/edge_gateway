@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Acceptance test for Dock3 command flight breakpoint/resume flow.
 
-The tested chain is:
+The tested independent links are:
 
-platform MQTT -> gateway -> nest simulator -> flight controller
+platform MQTT -> gateway
+gateway <-> flight controller/SITL
+gateway <-> nest simulator
 
 The script covers the Dock3 command-flight controls shown in the UI:
 

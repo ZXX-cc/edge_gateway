@@ -5,9 +5,11 @@ Default real wayline file:
 
     /home/fenghuolun/zwz/HD.kml
 
-The script drives the chain:
+The script drives the independent links:
 
-platform MQTT -> gateway -> nest simulator -> flight controller
+platform MQTT -> gateway
+gateway <-> flight controller/SITL
+gateway <-> nest simulator
 
 Flow:
 
@@ -15,9 +17,11 @@ Flow:
 2. flighttask_execute
 3. wait/query in-progress state
 4. flighttask_pause and assert break_point is reported
-5. flighttask_recovery or flighttask_resume
-6. assert the same flight_id continues in_progress
-7. cleanup by flighttask_undo or flighttask_stop
+5. save the break_point as external/cloud-side resume evidence
+6. cancel the interrupted task to release gateway runtime state
+7. flighttask_prepare again with the saved break_point
+8. flighttask_execute and assert it continues from the breakpoint context
+9. cleanup by flighttask_undo or flighttask_stop
 """
 
 from __future__ import annotations
@@ -54,8 +58,13 @@ def local_file_reference(path: str) -> str:
     return str(resolved)
 
 
-def prepare_payload(flight_id: str, wayline_file: str, args: argparse.Namespace) -> dict[str, Any]:
-    return {
+def prepare_payload(
+    flight_id: str,
+    wayline_file: str,
+    args: argparse.Namespace,
+    break_point: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
         "flight_id": flight_id,
         "task_type": 0,
         "execute_time": now_ms() + int(args.execute_delay_seconds * 1000),
@@ -72,6 +81,9 @@ def prepare_payload(flight_id: str, wayline_file: str, args: argparse.Namespace)
         "exit_wayline_when_rc_lost": args.exit_wayline_when_rc_lost,
         "simulate_mission": {"is_enable": 0},
     }
+    if break_point:
+        payload["break_point"] = break_point
+    return payload
 
 
 def data_output(payload: Any) -> dict[str, Any]:
@@ -190,6 +202,62 @@ def assert_breakpoint(payload: Any, args: argparse.Namespace) -> int:
     return 0
 
 
+def normalize_saved_breakpoint(break_point: dict[str, Any]) -> dict[str, Any]:
+    saved = dict(break_point)
+    saved.setdefault("state", 1)
+    saved.setdefault("progress", 0)
+    if "index" not in saved:
+        saved["index"] = 0
+    return saved
+
+
+def save_breakpoint_evidence(
+    flight_id: str,
+    wayline_file: str,
+    break_point: dict[str, Any],
+    args: argparse.Namespace,
+) -> Path:
+    output = args.breakpoint_output
+    if not output:
+        output = f"logs/wayline_breakpoint/{flight_id}_breakpoint.json"
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "flight_id": flight_id,
+        "wayline_file": wayline_file,
+        "break_point": break_point,
+        "saved_at": now_ms(),
+        "source": "flighttask_pause/flighttask_progress",
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"breakpoint saved for resume: {path}")
+    return path
+
+
+def assert_resume_uses_breakpoint(payload: Any, expected_breakpoint: dict[str, Any]) -> int:
+    ext = output_ext(payload)
+    resumed_bp = ext.get("break_point")
+    if not isinstance(resumed_bp, dict) or not resumed_bp:
+        print("resume reply/progress did not carry output.ext.break_point", file=sys.stderr)
+        print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 37
+
+    expected_index = expected_breakpoint.get("index")
+    actual_index = resumed_bp.get("index")
+    if isinstance(expected_index, int) and actual_index != expected_index:
+        print(
+            f"resume breakpoint index mismatch: expected={expected_index}, actual={actual_index}",
+            file=sys.stderr,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 38
+    print(
+        "resume breakpoint context ok: "
+        f"index={actual_index}, progress={resumed_bp.get('progress')}, reason={resumed_bp.get('reason')}"
+    )
+    return 0
+
+
 def wait_until_progress_observed(
     client: MqttRequestClient,
     flight_id: str,
@@ -304,12 +372,50 @@ def run_flow(client: RealWaylineBreakpointClient, args: argparse.Namespace) -> i
     rc = assert_breakpoint(paused_progress, args)
     if rc != 0:
         return rc
-    paused_index = break_point_from(paused_progress).get("index")
+    saved_breakpoint = normalize_saved_breakpoint(break_point_from(paused_progress))
+    paused_index = saved_breakpoint.get("index")
+    save_breakpoint_evidence(flight_id, wayline_file, saved_breakpoint, args)
 
-    resume_method = "flighttask_resume" if args.use_flighttask_resume else "flighttask_recovery"
+    release_method = "flighttask_stop" if args.use_flighttask_stop else "flighttask_undo"
+    release_payload = (
+        {"flight_id": flight_id, "reason": 0}
+        if release_method == "flighttask_stop"
+        else {"flight_ids": [flight_id]}
+    )
+    rc, release = client.service(
+        release_method,
+        release_payload,
+        args.timeout,
+        allowed_results={0},
+        expected_status="canceled",
+    )
+    if rc != 0:
+        return rc
+    print(
+        "interrupted task released after breakpoint save: "
+        f"method={release_method}, status={output_status(release)}"
+    )
+
+    resume_flight_id = args.resume_flight_id or flight_id
+    rc, resume_prepare = client.service(
+        "flighttask_prepare",
+        prepare_payload(resume_flight_id, wayline_file, args, break_point=saved_breakpoint),
+        args.timeout,
+        allowed_results={0},
+        expected_status="sent",
+    )
+    if rc != 0:
+        return rc
+    rc = assert_prepare_file(resume_prepare, wayline_file, args)
+    if rc != 0:
+        return rc
+    rc = assert_resume_uses_breakpoint(resume_prepare, saved_breakpoint)
+    if rc != 0:
+        return rc
+
     rc, resumed = client.service(
-        resume_method,
-        {},
+        "flighttask_execute",
+        {"flight_id": resume_flight_id},
         args.timeout,
         allowed_results={0},
         expected_status="in_progress",
@@ -317,10 +423,6 @@ def run_flow(client: RealWaylineBreakpointClient, args: argparse.Namespace) -> i
     if rc != 0:
         return rc
     resumed_index = current_waypoint(resumed)
-    resumed_ext = output_ext(resumed)
-    if resumed_ext.get("flight_id") not in ("", None, flight_id):
-        print(f"resumed flight_id mismatch: {resumed_ext.get('flight_id')} != {flight_id}", file=sys.stderr)
-        return 35
     if args.require_resume_index and isinstance(paused_index, int) and resumed_index is not None:
         if resumed_index < paused_index:
             print(
@@ -328,19 +430,25 @@ def run_flow(client: RealWaylineBreakpointClient, args: argparse.Namespace) -> i
                 file=sys.stderr,
             )
             return 36
+    rc = assert_resume_uses_breakpoint(resumed, saved_breakpoint)
+    if rc != 0:
+        return rc
     print(
-        "resume ok: "
-        f"method={resume_method}, paused_index={paused_index}, resumed_index={resumed_index}, "
-        f"percent={progress_percent(resumed)}"
+        "breakpoint resume execute ok: "
+        f"resume_flight_id={resume_flight_id}, breakpoint_index={paused_index}, "
+        f"current_waypoint={resumed_index}, percent={progress_percent(resumed)}"
     )
 
     rc, progress = client.service(
         "flighttask_progress",
-        {"flight_id": flight_id},
+        {"flight_id": resume_flight_id},
         args.timeout,
         allowed_results={0},
         expected_status="in_progress",
     )
+    if rc != 0:
+        return rc
+    rc = assert_resume_uses_breakpoint(progress, saved_breakpoint)
     if rc != 0:
         return rc
     print(
@@ -350,9 +458,9 @@ def run_flow(client: RealWaylineBreakpointClient, args: argparse.Namespace) -> i
 
     cleanup_method = "flighttask_stop" if args.use_flighttask_stop else "flighttask_undo"
     cleanup_payload = (
-        {"flight_id": flight_id, "reason": 0}
+        {"flight_id": resume_flight_id, "reason": 0}
         if cleanup_method == "flighttask_stop"
-        else {"flight_ids": [flight_id]}
+        else {"flight_ids": [resume_flight_id]}
     )
     rc, cleanup = client.service(
         cleanup_method,
@@ -386,7 +494,8 @@ def run_flow(client: RealWaylineBreakpointClient, args: argparse.Namespace) -> i
 
     print(
         "dock3 real wayline breakpoint test ok "
-        f"(flight_id={flight_id}, file={wayline_file}, accepted={client.stats['accepted']}, "
+        f"(flight_id={flight_id}, resume_flight_id={resume_flight_id}, "
+        f"breakpoint_index={paused_index}, file={wayline_file}, accepted={client.stats['accepted']}, "
         f"events={client.stats['events']}, ignored_mismatched={client.stats['ignored_mismatched']}, "
         f"ignored_legacy={client.stats['ignored_legacy']}, ignored_late={client.stats['ignored_late']}, "
         f"ignored_duplicate={client.stats['ignored_duplicate']}, "
@@ -405,6 +514,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--flight-id", default="")
+    parser.add_argument("--resume-flight-id", default="", help="flight_id used for the second prepare with break_point; defaults to --flight-id")
     parser.add_argument("--wayline-file", default=DEFAULT_REAL_WAYLINE_FILE)
     parser.add_argument("--file-fingerprint", default="")
     parser.add_argument("--expect-waypoint-count", type=int, default=10)
@@ -416,9 +526,13 @@ def main() -> int:
     parser.add_argument("--progress-poll-interval", type=float, default=1.0)
     parser.add_argument("--min-progress-percent", type=int, default=0)
     parser.add_argument("--expect-breakpoint-index", type=int, default=None)
+    parser.add_argument(
+        "--breakpoint-output",
+        default="",
+        help="path to save the captured breakpoint JSON evidence; default logs/wayline_breakpoint/<flight_id>_breakpoint.json",
+    )
     parser.add_argument("--require-gateway-parse", action="store_true")
     parser.add_argument("--require-resume-index", action="store_true")
-    parser.add_argument("--use-flighttask-resume", action="store_true")
     parser.add_argument("--use-flighttask-stop", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
