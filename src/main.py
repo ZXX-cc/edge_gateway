@@ -561,6 +561,32 @@ class EdgeGateway:
         if nest_env_cb not in self.nest_module.env_callbacks:
             self.nest_module.env_callbacks.append(nest_env_cb)
 
+    def handle_gateway_state_query(self, msg: dict) -> dict:
+        """返回全局状态机快照，供平台侧验收脚本做只读准入检查。"""
+        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+        compact = bool(data.get('compact', False))
+        if not self.global_state:
+            return MessageBuilder.build_reply(
+                msg,
+                result=325100,
+                data={'output': {'status': 'failed', 'reason': 'global_state_unavailable'}},
+                msg_str='global state machine unavailable',
+            )
+        snapshot = self.global_state.snapshot()
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={
+                'state': snapshot.to_dict(compact=compact),
+                'ready': (
+                    snapshot.dock == 'ready'
+                    and snapshot.aircraft == 'online'
+                    and snapshot.mission == 'idle'
+                    and snapshot.drc in {'idle', 'unknown'}
+                ),
+            },
+        )
+
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""
         try:
@@ -889,6 +915,7 @@ class EdgeGateway:
             'config_rollback': self.device.handle_config_rollback,
             'property_set': self.device.handle_property_set,
             'property_get': self.device.handle_property_get,
+            'gateway_state_query': self.handle_gateway_state_query,
             'device_binding': self.device.handle_device_binding,
             'device_unbinding': self.device.handle_device_unbinding,
             'device_reboot': self.device.handle_device_reboot,

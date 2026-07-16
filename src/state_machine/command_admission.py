@@ -55,6 +55,7 @@ class CommandAdmissionEngine:
 
     QUERY_METHODS = frozenset({
         "property_get",
+        "gateway_state_query",
         "hms_get",
         "dock_status_query",
         "dock_alarm_query",

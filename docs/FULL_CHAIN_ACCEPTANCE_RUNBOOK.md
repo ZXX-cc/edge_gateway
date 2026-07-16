@@ -224,6 +224,13 @@ ignored_total=0`。
 先打印平台可见中断任务和 MongoDB 只读摘要，再按 `--action resume|cancel|show`
 下发 `flighttask_recovery` 或 `flighttask_undo`。
 
+2026-07-16 航线执行前新增 `tools/mqtt_platform_wayline_preflight_ready.py`：
+用于网关/机巢模拟器重启后把系统拉到可执行航线的准入状态。脚本只清除模拟器故障
+注入文件、发送 `drc_mode_exit`、`supplement_light_close`、`charge_close` 等安全唤醒命令，
+并通过只读 `gateway_state_query` 轮询 `dock=ready`、`aircraft=online`、
+`mission=idle`、`drc=idle|unknown`。它不会上传航线、不会下发 `flighttask_prepare`、
+不会请求机巢起飞，真正起飞仍由 `tools/mqtt_platform_wayline_execute.py` 完成。
+
 ## 3. 启动前检查
 
 在 Ubuntu 服务器执行：
