@@ -3,6 +3,7 @@
 处理探照灯、喊话器、PSDK等第三方负载
 """
 from typing import Optional, Callable
+from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder

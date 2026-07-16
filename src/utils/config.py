@@ -112,6 +112,14 @@ class Config:
         return cls.get('database', {}) or {}
 
     @classmethod
+    def get_payload_config(cls):
+        """获取负载控制配置。"""
+        return {
+            'control_path': cls.get('payload.control_path', 'direct_payload_tcp'),
+            'direct_viewlink_sdk_enabled': cls.get('payload.direct_viewlink_sdk_enabled', True),
+        }
+
+    @classmethod
     def get_nest_mavlink_config(cls):
         """获取机巢MAVLink配置"""
         return {

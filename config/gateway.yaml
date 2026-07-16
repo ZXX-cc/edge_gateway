@@ -219,6 +219,13 @@ request_trace:
   max_queue: 10000 # 后台写入队列长度，避免 MQTT 热路径阻塞
   payload_max_chars: 3000 # 单条 payload 最大保留字符数，超长会截断
 
+# --- 负载控制链路 ---
+payload:
+  # 真实拓扑：吊舱/相机等负载由网关通过独立 TCP/SDK 直连控制；
+  # 主 MAVLink 保留给无人机飞控，机巢不参与、不拦截、不中转负载控制。
+  control_path: "direct_payload_tcp"
+  direct_viewlink_sdk_enabled: true
+
 # --- RTK/NTRIP配置 ---
 rtk:
   enabled: false # 是否启用RTK差分定位

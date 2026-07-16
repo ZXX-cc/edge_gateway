@@ -431,15 +431,27 @@ class EdgeGateway:
                 self.dock.set_nest_module(self.nest_module)
                 self.nest_module.set_flight_control(self.flight_control)
 
-                # 负载模块依赖注入
-                self.gimbal_control = GimbalControl()
-                self.camera.set_gimbal_control(self.gimbal_control)
+                # 负载真实拓扑：吊舱/相机等负载由网关通过独立 TCP/SDK 直连控制；
+                # 主 MAVLink 保留给无人机飞控链路，机巢不参与负载控制。
+                payload_config = Config.get_payload_config()
+                if payload_config.get('direct_viewlink_sdk_enabled'):
+                    self.gimbal_control = GimbalControl()
+                    self.camera.set_gimbal_control(self.gimbal_control)
+                    self.gimbal.set_gimbal_control(self.gimbal_control)
+                    logger.info(
+                        "Payload control path=%s: camera/gimbal use direct payload TCP/SDK when connected",
+                        payload_config.get('control_path'),
+                    )
+                else:
+                    logger.info(
+                        "Payload control path=%s: direct payload TCP/SDK disabled, commands use main MAVLink fallback",
+                        payload_config.get('control_path'),
+                    )
                 self.camera.set_telemetry_module(self.telemetry_module)
                 def camera_event_cb(event):
                     self.mqtt.publish_event(event)
                 self.camera.set_event_callback(camera_event_cb)
 
-                self.gimbal.set_gimbal_control(self.gimbal_control)
                 def gimbal_event_cb(event):
                     self.mqtt.publish_event(event)
                 self.gimbal.set_event_callback(gimbal_event_cb)

@@ -22,7 +22,89 @@ class FakeConnection:
         self.master = type("Master", (), {"mav": FakeMav(), "target_system": 1, "target_component": 1})()
 
 
+class FakeDirectPayload:
+    def __init__(self):
+        self.calls = []
+
+    def is_connected(self):
+        return True
+
+    def take_photo(self):
+        self.calls.append(("take_photo",))
+        return {"success": True}
+
+    def start_recording(self):
+        self.calls.append(("start_recording",))
+        return {"success": True}
+
+    def stop_recording(self):
+        self.calls.append(("stop_recording",))
+        return {"success": True}
+
+    def turn_to(self, yaw, pitch):
+        self.calls.append(("turn_to", yaw, pitch))
+        return {"success": True}
+
+    def home(self):
+        self.calls.append(("home",))
+        return {"success": True}
+
+
 class PayloadStateConsistencyTest(unittest.TestCase):
+    def test_camera_prefers_direct_payload_sdk_when_connected(self):
+        camera = CameraController()
+        connection = FakeConnection()
+        direct_payload = FakeDirectPayload()
+        camera.set_mavlink_connection(connection)
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_photo_take(message("camera_photo_take"))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("take_photo",)])
+        self.assertEqual(connection.master.mav.commands, [])
+
+    def test_camera_recording_prefers_direct_payload_sdk_when_connected(self):
+        camera = CameraController()
+        connection = FakeConnection()
+        direct_payload = FakeDirectPayload()
+        camera.set_mavlink_connection(connection)
+        camera.set_gimbal_control(direct_payload)
+
+        started = camera.handle_start_record(message("camera_recording_start"))
+        stopped = camera.handle_stop_record(message("camera_recording_stop"))
+
+        self.assertEqual(started["data"]["result"], 0)
+        self.assertEqual(stopped["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("start_recording",), ("stop_recording",)])
+        self.assertEqual(connection.master.mav.commands, [])
+
+    def test_gimbal_prefers_direct_payload_sdk_when_connected(self):
+        gimbal = GimbalController()
+        connection = FakeConnection()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_mavlink_connection(connection)
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {"pitch": -30, "yaw": 45}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("turn_to", 45, -30)])
+        self.assertEqual(connection.master.mav.commands, [])
+
+    def test_gimbal_reset_prefers_direct_payload_sdk_when_connected(self):
+        gimbal = GimbalController()
+        connection = FakeConnection()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_mavlink_connection(connection)
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_reset(message("gimbal_reset"))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("home",)])
+        self.assertEqual(connection.master.mav.commands, [])
+
     def test_failed_camera_record_start_does_not_set_recording(self):
         camera = CameraController()
 
