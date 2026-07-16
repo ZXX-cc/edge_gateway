@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Create a persisted wayline breakpoint, then stop for manual SITL restart."""
+"""Create a persisted wayline breakpoint, then stop for manual gateway/SITL restart.
+
+The script drives the gateway over MQTT and expects the gateway to be connected
+to the real SITL/flight-controller chain. ``--real-sitl`` is accepted as a
+readability/compatibility flag.
+"""
 
 from __future__ import annotations
 
@@ -116,7 +121,20 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         "created_at": int(time.time() * 1000),
     }
     write_state(args.state_file, state)
+    stale_total = client.stale_total()
+    if args.fail_on_stale and stale_total:
+        print(
+            "strict stale replies observed: "
+            f"stats={client.stats}, samples={client.stale_sample_summary()}",
+            file=sys.stderr,
+        )
+        return 41
     print("SITL can be restarted now. Do not run cleanup before the resume script.")
+    print(
+        "dock3 wayline breakpoint creation ok "
+        f"(flight_id={flight_id}, breakpoint_index={breakpoint.get('index')}, "
+        f"ignored_total={stale_total})"
+    )
     return 0
 
 
@@ -132,6 +150,11 @@ def main() -> int:
     parser.add_argument("--wayline-file", default=DEFAULT_REAL_WAYLINE_FILE)
     parser.add_argument("--state-file", default=DEFAULT_STATE_FILE)
     parser.add_argument("--file-fingerprint", default="")
+    parser.add_argument(
+        "--real-sitl",
+        action="store_true",
+        help="Compatibility flag: this script already targets the real SITL gateway chain",
+    )
     parser.add_argument("--expect-waypoint-count", type=int, default=10)
     parser.add_argument("--execute-delay-seconds", type=float, default=0.0)
     parser.add_argument("--rth-altitude", type=float, default=100.0)
@@ -143,6 +166,7 @@ def main() -> int:
     parser.add_argument("--require-gateway-parse", action="store_true")
     parser.add_argument("--expect-breakpoint-index", type=int, default=None)
     parser.add_argument("--quiet-stale", action="store_true")
+    parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     args.min_breakpoint_index = args.target_waypoint_index
