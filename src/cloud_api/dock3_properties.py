@@ -134,7 +134,10 @@ DOCK3_PROPERTY_SPECS: Dict[str, PropertySpec] = {
     "sub_device": PropertySpec("sub_device", "子设备状态", "struct", "r", 0),
     "flighttask_step_code": PropertySpec(
         "flighttask_step_code", "机场任务状态", "enum_int", "r", 0,
-        enum_values={0, 1, 2, 3, 4, 5, 255, 256},
+        # MissionManager.CURRENT_STEP_MAP currently emits Dock3 wayline
+        # progress steps 0..33. 255/256 are retained for legacy exception
+        # states used by earlier OSD/state samples.
+        enum_values=set(range(34)) | {255, 256},
     ),
     "mode_code": PropertySpec(
         "mode_code", "机场状态", "enum_int", "r", 0,
