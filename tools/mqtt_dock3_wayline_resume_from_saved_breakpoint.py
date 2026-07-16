@@ -117,6 +117,40 @@ def assert_execute_from_saved_breakpoint(payload: Any, breakpoint_index: int) ->
     return 0
 
 
+def assert_reprepare_from_saved_breakpoint(
+    payload: Any,
+    wayline_file: str,
+    breakpoint_index: int,
+    args: argparse.Namespace,
+) -> int:
+    """Validate reprepare after restart.
+
+    A recovered paused mission does not need to parse/upload the file again.
+    The gateway may reply with ``resume_from_breakpoint=true`` and only return
+    the persisted breakpoint context.  First-time prepare still uses the strict
+    file-summary assertion.
+    """
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    if data.get("resume_from_breakpoint") is True:
+        bp = break_point_from(payload)
+        current = current_waypoint(payload)
+        if bp.get("index") != breakpoint_index or current != breakpoint_index:
+            print(
+                "reprepare breakpoint context mismatch: "
+                f"expected={breakpoint_index}, current={current}, breakpoint={bp}",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 46
+        print(
+            "reprepare accepted as saved breakpoint resume: "
+            f"breakpoint={breakpoint_index}, current_waypoint={current}, "
+            f"percent={progress_percent(payload)}"
+        )
+        return 0
+    return assert_prepare_file(payload, wayline_file, args)
+
+
 def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
     state = read_state(args.state_file)
     flight_id = args.flight_id or str(state.get("flight_id") or "")
@@ -154,7 +188,12 @@ def run_flow(client: RelaunchBreakpointClient, args: argparse.Namespace) -> int:
         )
         if rc != 0:
             return rc
-        rc = assert_prepare_file(reprepare, wayline_file, args)
+        rc = assert_reprepare_from_saved_breakpoint(
+            reprepare,
+            wayline_file,
+            breakpoint_index,
+            args,
+        )
         if rc != 0:
             return rc
         print(
