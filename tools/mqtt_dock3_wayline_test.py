@@ -52,6 +52,7 @@ def write_real_sitl_waypoints(
     path: Path,
     latitude: float = DEFAULT_SITL_LATITUDE,
     longitude: float = DEFAULT_SITL_LONGITUDE,
+    bearing_deg: float | None = None,
 ):
     """Build an executable ArduPilot mission for --real-sitl --execute-real.
 
@@ -63,8 +64,12 @@ def write_real_sitl_waypoints(
     flight.  Keep this separate from the KMZ fixture so KMZ parsing/upload
     remains covered by the safe --real-sitl upload-only path.
     """
-    first_latitude, first_longitude = _offset_location(latitude, longitude, north_meters=8, east_meters=8)
-    second_latitude, second_longitude = _offset_location(latitude, longitude, north_meters=16, east_meters=16)
+    if bearing_deg is None:
+        first_latitude, first_longitude = _offset_location(latitude, longitude, north_meters=8, east_meters=8)
+        second_latitude, second_longitude = _offset_location(latitude, longitude, north_meters=16, east_meters=16)
+    else:
+        first_latitude, first_longitude = _offset_location_by_bearing(latitude, longitude, bearing_deg, distance_meters=25)
+        second_latitude, second_longitude = _offset_location_by_bearing(latitude, longitude, bearing_deg, distance_meters=50)
     path.write_text(
         "QGC WPL 110\n"
         f"0\t1\t3\t22\t0\t0\t0\t0\t{latitude:.7f}\t{longitude:.7f}\t15\t1\n"
@@ -83,6 +88,19 @@ def _offset_location(latitude: float, longitude: float, *, north_meters: float, 
         latitude + float(north_meters) / 111132.0,
         longitude + float(east_meters) / meters_per_degree_lon,
     )
+
+
+def _offset_location_by_bearing(
+    latitude: float,
+    longitude: float,
+    bearing_deg: float,
+    *,
+    distance_meters: float,
+) -> tuple[float, float]:
+    bearing_rad = math.radians(float(bearing_deg) % 360.0)
+    north_meters = math.cos(bearing_rad) * float(distance_meters)
+    east_meters = math.sin(bearing_rad) * float(distance_meters)
+    return _offset_location(latitude, longitude, north_meters=north_meters, east_meters=east_meters)
 
 
 def _field_value(payload: Any, key: str) -> Any:
@@ -139,18 +157,24 @@ def wait_for_drone_osd(client: MqttRequestClient, topics: Iterable[str], timeout
     return _latest_observed(client, topics)
 
 
-def resolve_real_sitl_origin(client: MqttRequestClient, args) -> tuple[float, float, str]:
+def resolve_real_sitl_origin(client: MqttRequestClient, args) -> tuple[float, float, float | None, str]:
     """Prefer an explicitly supplied or current OSD origin for the probe route."""
+    explicit_bearing = args.sitl_route_bearing
     if args.sitl_origin_lat is not None and args.sitl_origin_lon is not None:
-        return float(args.sitl_origin_lat), float(args.sitl_origin_lon), "cli"
+        return float(args.sitl_origin_lat), float(args.sitl_origin_lon), explicit_bearing, "cli"
 
     topic, payload = wait_for_drone_osd(client, args._real_sitl_osd_topics, args.osd_wait)
     latitude = _to_coordinate(_field_value(payload, "latitude"), lower=-90.0, upper=90.0)
     longitude = _to_coordinate(_field_value(payload, "longitude"), lower=-180.0, upper=180.0)
+    bearing = explicit_bearing
+    if bearing is None:
+        bearing = _to_coordinate(_field_value(payload, "attitude_head"), lower=0.0, upper=360.0)
+    if bearing is None:
+        bearing = _to_coordinate(_field_value(payload, "course"), lower=0.0, upper=360.0)
     if latitude is not None and longitude is not None and (latitude != 0.0 or longitude != 0.0):
-        return latitude, longitude, f"osd:{topic}"
+        return latitude, longitude, bearing, f"osd:{topic}"
 
-    return DEFAULT_SITL_LATITUDE, DEFAULT_SITL_LONGITUDE, "fallback"
+    return DEFAULT_SITL_LATITUDE, DEFAULT_SITL_LONGITUDE, explicit_bearing, "fallback"
 
 
 def real_sitl_osd_snapshot(client: MqttRequestClient, args) -> dict[str, Any]:
@@ -605,6 +629,7 @@ def main():
     parser.add_argument("--osd-wait", type=float, default=4.0, help="seconds to wait for initial drone OSD")
     parser.add_argument("--sitl-origin-lat", type=float, default=None, help="override generated real-SITL route origin latitude")
     parser.add_argument("--sitl-origin-lon", type=float, default=None, help="override generated real-SITL route origin longitude")
+    parser.add_argument("--sitl-route-bearing", type=float, default=None, help="override generated short SITL route bearing in degrees clockwise from north; default uses current OSD attitude_head/course")
     parser.add_argument("--skip-prearm-verify", action="store_true", help="skip the QLAND-to-armable-mode verification before real execution")
     parser.add_argument("--arm-timeout", type=float, default=10.0, help="arm confirmation timeout for real-SITL pre-arm verification")
     parser.add_argument("--prearm-timeout", type=float, default=30.0, help="pre-arm readiness wait for real-SITL verification")
@@ -664,11 +689,12 @@ def main():
         try:
             args._real_sitl_osd_topics = real_sitl_osd_topics(args.drone_sn)
             if needs_real_sitl_fixture:
-                latitude, longitude, origin_source = resolve_real_sitl_origin(client, args)
-                write_real_sitl_waypoints(Path(args.wayline_file), latitude, longitude)
+                latitude, longitude, bearing, origin_source = resolve_real_sitl_origin(client, args)
+                write_real_sitl_waypoints(Path(args.wayline_file), latitude, longitude, bearing)
                 print(
                     "mock executable SITL waypoints -> "
-                    f"{args.wayline_file} (origin={latitude:.7f},{longitude:.7f}, source={origin_source})"
+                    f"{args.wayline_file} (origin={latitude:.7f},{longitude:.7f}, "
+                    f"bearing={bearing if bearing is not None else 'default-ne'}, source={origin_source})"
                 )
             rc = run_real_sitl_prepare_check(client, args) if args.real_sitl else run_wayline_checks(client, args)
             if rc != 0:
