@@ -579,19 +579,30 @@ def run_real_sitl_prepare_check(client, args):
             )
             return 26
 
-        rc, _ = client.request(
-            "flighttask_return",
-            {"flight_id": flight_id, "return_type": args.return_type},
-            args.timeout,
-            [0],
-            "in_progress",
-        )
+        if args.return_mode == "flighttask_return":
+            rc, _ = client.request(
+                "flighttask_return",
+                {"flight_id": flight_id, "return_type": args.return_type},
+                args.timeout,
+                [0],
+                "in_progress",
+            )
+            return_action = f"flighttask_return return_type={args.return_type}"
+        else:
+            rc, _ = client.request(
+                "set_flight_mode",
+                {"flight_mode": args.return_mode, "timeout": args.arm_timeout},
+                args.timeout,
+                [0],
+                None,
+            )
+            return_action = f"set_flight_mode {args.return_mode}"
         if rc != 0:
             cleanup_real_sitl_mission(client, args, flight_id)
             return rc
         print(
             "target waypoint return accepted "
-            f"(flight_id={flight_id}, return_type={args.return_type}, "
+            f"(flight_id={flight_id}, action={return_action}, "
             f"waypoint_index={ext.get('current_waypoint_index')})"
         )
         if args.land_after_return_seconds >= 0:
@@ -722,7 +733,8 @@ def main():
     parser.add_argument("--sitl-origin-lat", type=float, default=None, help="override generated real-SITL route origin latitude")
     parser.add_argument("--sitl-origin-lon", type=float, default=None, help="override generated real-SITL route origin longitude")
     parser.add_argument("--sitl-route-bearing", type=float, default=None, help="override generated short SITL route bearing in degrees clockwise from north; default uses current OSD attitude_head/course")
-    parser.add_argument("--return-at-waypoint-index", type=int, default=None, help="with --execute-real, request flighttask_return when current_waypoint_index reaches this value")
+    parser.add_argument("--return-at-waypoint-index", type=int, default=None, help="with --execute-real, request return mode when current_waypoint_index reaches this value")
+    parser.add_argument("--return-mode", choices=["QRTL", "RTL", "QLAND", "LAND", "flighttask_return"], default="QRTL", help="action for --return-at-waypoint-index; default directly sets QRTL, use flighttask_return for the original return_type flow")
     parser.add_argument("--return-type", type=int, choices=[0, 1], default=0, help="return_type for --return-at-waypoint-index: 0=return home, 1=land")
     parser.add_argument("--return-at-waypoint-timeout", type=float, default=180.0, help="maximum seconds to wait for --return-at-waypoint-index")
     parser.add_argument("--return-at-waypoint-poll-seconds", type=float, default=2.0, help="progress poll interval for --return-at-waypoint-index")
