@@ -357,6 +357,20 @@ def cleanup_real_sitl_mission(client, args, flight_id: str) -> int:
     return rc
 
 
+def cleanup_current_mission(client, args) -> int:
+    """Cancel whichever mission the gateway currently considers active."""
+    rc, _ = client.request(
+        "flighttask_undo",
+        {"flight_ids": ["current"]},
+        args.timeout,
+        [0],
+        "canceled",
+    )
+    if rc == 0:
+        print("current wayline mission cleaned up")
+    return rc
+
+
 def wait_until_real_sitl_waypoint_reaches(client, args, flight_id: str, expected_file: dict, target_index: int):
     deadline = time.monotonic() + args.return_at_waypoint_timeout
     last_progress = None
@@ -747,6 +761,11 @@ def main():
         action="store_true",
         help="do not automatically undo an in-progress real-SITL test mission",
     )
+    parser.add_argument(
+        "--cleanup-current",
+        action="store_true",
+        help="cancel the currently active gateway wayline mission and exit",
+    )
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
@@ -778,7 +797,7 @@ def main():
 
     temp_dir = None
     needs_real_sitl_fixture = False
-    if not args.wayline_file:
+    if not args.cleanup_current and not args.wayline_file:
         temp_dir = tempfile.TemporaryDirectory()
         if args.real_sitl and args.execute_real:
             mock_path = Path(temp_dir.name) / "simulated-executable-wayline.waypoints"
@@ -804,6 +823,8 @@ def main():
             print("timeout waiting for MQTT connection", file=sys.stderr)
             return 1
         try:
+            if args.cleanup_current:
+                return cleanup_current_mission(client, args)
             args._real_sitl_osd_topics = real_sitl_osd_topics(args.drone_sn)
             if needs_real_sitl_fixture:
                 latitude, longitude, bearing, origin_source = resolve_real_sitl_origin(client, args)
