@@ -1,6 +1,6 @@
 # Edge Gateway Windows 部署文档
 
-本文档说明如何在 Windows 10/11 64 位电脑上部署并启动 Edge Gateway。示例安装目录为 `C:\edge_gateway`，默认使用本机 MongoDB 和 Mosquitto。
+本文档说明如何在 Windows 10/11 64 位电脑上部署并启动 Edge Gateway。示例安装目录为 `C:\Project\edge_gateway`，默认使用本机 MongoDB 和 Mosquitto。
 
 ## 1. 安装软件
 
@@ -25,7 +25,7 @@ Get-Service MongoDB, mosquitto
 将项目压缩包解压到：
 
 ```text
-C:\edge_gateway
+C:\Project\edge_gateway
 ```
 
 目录中应能看到：
@@ -46,7 +46,7 @@ requirements-ubuntu.txt
 打开 PowerShell：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 py -3.11 -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
@@ -74,7 +74,7 @@ Get-Service MongoDB
 use admin
 db.createUser({
   user: "edge_gateway",
-  pwd: "edge_gateway_2026",
+  pwd: "edge_gateway",
   roles: [{ role: "readWrite", db: "edge_gateway" }]
 })
 ```
@@ -111,7 +111,7 @@ Restart-Service mosquitto
 复制默认配置：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 Copy-Item .\config\gateway.yaml .\config\gateway.windows.yaml
 notepad .\config\gateway.windows.yaml
 ```
@@ -140,7 +140,7 @@ database:
     port: 27017
     database: "edge_gateway"
     username: "edge_gateway"
-    password: "edge_gateway_2026"
+    password: "edge_gateway"
     auth_source: "admin"
     connect_timeout_ms: 5000
 ```
@@ -209,13 +209,13 @@ nest_mavlink:
 
 ```yaml
 media:
-  storage_path: "C:/edge_gateway/data/media"
+  storage_path: "C:/Project/edge_gateway/data/media"
 
 logging:
-  dir: "C:/edge_gateway/logs"
+  dir: "C:/Project/edge_gateway/logs"
 
 request_trace:
-  dir: "C:/edge_gateway/logs/request_trace"
+  dir: "C:/Project/edge_gateway/logs/request_trace"
 ```
 
 Windows 路径建议使用 `/`，避免 YAML 中的反斜杠转义问题。
@@ -225,7 +225,7 @@ Windows 路径建议使用 `/`，避免 YAML 中的反斜杠转义问题。
 不接真实机巢时，打开一个新的 PowerShell：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 .\.venv\Scripts\Activate.ps1
 
 New-Item -ItemType Directory -Force .\logs\nest_simulator | Out-Null
@@ -248,7 +248,7 @@ python .\src\nest_simulator.py `
 不连接真实云端平台时，打开一个新的 PowerShell：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 .\.venv\Scripts\Activate.ps1
 
 python .\tools\mqtt_cloud_simulator.py `
@@ -267,7 +267,7 @@ python .\tools\mqtt_cloud_simulator.py `
 先启动 MongoDB、Mosquitto和需要使用的设备/模拟器，再打开一个新的 PowerShell：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 .\.venv\Scripts\Activate.ps1
 python .\src\main.py -c .\config\gateway.windows.yaml
 ```
@@ -288,7 +288,7 @@ Entering async main loop
 打开一个新的 PowerShell：
 
 ```powershell
-Set-Location C:\edge_gateway
+Set-Location C:\Project\edge_gateway
 .\.venv\Scripts\Activate.ps1
 
 $env:DEMO_HOST = "127.0.0.1"
@@ -297,7 +297,7 @@ $env:MQTT_HOST = "127.0.0.1"
 $env:MQTT_PORT = "1883"
 $env:GATEWAY_SN = "EDGEGW001"
 $env:DRONE_SN = "DRONESIM001"
-$env:REAL_HD_WAYPOINTS_PATH = "C:/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints"
+$env:REAL_HD_WAYPOINTS_PATH = "C:/Project/edge_gateway/tools/ardupilot_sitl/HD.copter-sitl.waypoints"
 
 python .\demo_platform\app.py
 ```
