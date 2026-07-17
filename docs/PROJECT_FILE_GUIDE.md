@@ -7,18 +7,21 @@
 | 路径 | 职责 |
 |---|---|
 | `README.md` | 项目入口、当前目标、人员分工和文档索引 |
+| `README_WINDOWS.md` | Windows 客户电脑的部署和使用入口，不替代研发 README |
 | `ARCHITECTURE_DESIGN.md` | 系统架构设计说明 |
 | `DJI_CLOUD_API_INTERFACES.md` | 当前 MQTT method 分组和 Dock3 验收状态 |
 | `config/gateway.yaml` | 网关运行配置，包含 gateway、MQTT、cloud、MAVLink、media、logging、retention 等配置 |
 | `nanomq.conf` | NanoMQ 配置模板；Ubuntu 22.04 当前可用 Mosquitto 替代 |
-| `requirements-ubuntu.txt` | Ubuntu 部署使用的 Python 依赖 |
+| `requirements-ubuntu.txt` | UTF-8 通用 Python 依赖；当前 Ubuntu 和 Windows 部署均使用 |
 | `requirements.txt` | 原依赖文件，存在历史编码风险，Ubuntu 默认不用它 |
-| `start.sh` | 生产/半自动启动脚本，当前仍偏 NanoMQ 和服务化部署 |
+| `start.sh` | 早期树莓派/NanoMQ 半自动脚本；当前 Ubuntu 部署不以它作为入口 |
 
 ## 1.1 规划与验收文档
 
 | 路径 | 职责 |
 |---|---|
+| `docs/DEPLOYMENT_GUIDE.md` | 客户 Windows 安装、生产配置、Windows 服务、升级回滚和部署排障 |
+| `docs/USER_GUIDE.md` | 客户 Windows 日常启动、控制台、业务操作、日志追踪和安全停机 |
 | `docs/CUSTOMER_REQUIREMENTS_COVERAGE_MATRIX.md` | 客户需求覆盖矩阵，说明客户 Word 文档如何归一到 Dock3 开发口径 |
 | `docs/CUSTOMER_REQUIREMENTS_TRACEABILITY_MATRIX.md` | 客户需求可追溯矩阵，说明客户章节如何落到 Dock3 落点、P0/P1/P2、缺口和验收证据 |
 | `docs/METHOD_COVERAGE_LEDGER.md` | MQTT method 覆盖台账，说明当前 243 个注册 method 如何归入 P0/P1/P2 和验收域 |
