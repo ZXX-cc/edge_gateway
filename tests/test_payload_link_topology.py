@@ -81,6 +81,21 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(control["port"], 2300)
         self.assertEqual(control["adapter"], "viewlink")
 
+    def test_legacy_viewlink_fields_override_direct_gimbal_endpoint(self):
+        Config._data = {
+            "payload": {
+                "viewlink_sdk_dir": "D:/ViewLink/bin/win64",
+                "viewlink_gimbal_ip": "10.10.10.10",
+                "viewlink_gimbal_port": 2400,
+            }
+        }
+
+        control = Config.get_payload_config()["devices"]["gimbal"]["channels"]["control"]
+
+        self.assertEqual(control["sdk_dir"], "D:/ViewLink/bin/win64")
+        self.assertEqual(control["host"], "10.10.10.10")
+        self.assertEqual(control["port"], 2400)
+
     def test_topology_rejects_realtime_raw_data_transfer(self):
         devices = Config.get_payload_config()["devices"]
         devices["lidar"]["channels"]["post_landing_raw_data"]["timing"] = "realtime"
