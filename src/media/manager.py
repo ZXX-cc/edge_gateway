@@ -5,9 +5,11 @@
 import time
 import os
 import glob
+import html.parser
 import subprocess
 import threading
 import asyncio
+import urllib.parse
 import requests
 from pathlib import Path
 from typing import Dict, Optional, Callable, List
@@ -17,6 +19,7 @@ from src.utils.message import MessageBuilder
 from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
 from src.cloud_api.dock3_media import (
     build_media_file,
+    build_remote_media_file,
     file_list_data,
     filter_media_files,
     media_task_output,
@@ -44,6 +47,19 @@ from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 
 logger = get_logger("media")
+
+
+class _DirectoryLinkParser(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if str(tag).lower() != "a":
+            return
+        for name, value in attrs:
+            if str(name).lower() == "href" and value:
+                self.links.append(str(value))
 
 
 class MediaManager:
@@ -339,6 +355,72 @@ class MediaManager:
             logger.error(f"Scan local files failed: {e}")
 
         return files
+
+    def _scan_remote_media_files(self) -> List[dict]:
+        """Scan configured HTTP media directory indexes from direct payloads."""
+        remote_cfg = Config.get('media.remote_media', {}) or {}
+        if not isinstance(remote_cfg, dict) or not remote_cfg.get('enabled', False):
+            return []
+
+        base_urls = remote_cfg.get('base_urls', None)
+        if base_urls is None:
+            base_url = remote_cfg.get('base_url', '')
+            base_urls = [base_url] if base_url else []
+        if isinstance(base_urls, str):
+            base_urls = [base_urls]
+        if not isinstance(base_urls, list):
+            return []
+
+        timeout = float(remote_cfg.get('timeout_seconds', 5.0) or 5.0)
+        max_depth = max(0, int(remote_cfg.get('max_depth', 4) or 4))
+        extensions = tuple(
+            str(ext).lower() if str(ext).startswith('.') else f".{str(ext).lower()}"
+            for ext in (remote_cfg.get('extensions') or ['jpg', 'jpeg', 'png', 'dng', 'mp4', 'mov', 'avi', 'mkv'])
+        )
+
+        media_urls: List[str] = []
+        seen_pages = set()
+        seen_media = set()
+
+        def visit(page_url: str, depth: int):
+            normalized_page = page_url.split('#', 1)[0]
+            if normalized_page in seen_pages or depth > max_depth:
+                return
+            seen_pages.add(normalized_page)
+            try:
+                response = requests.get(page_url, timeout=timeout)
+                response.raise_for_status()
+            except Exception as exc:
+                logger.warning("Scan remote media page failed: url=%s error=%s", page_url, exc)
+                return
+
+            parser = _DirectoryLinkParser()
+            parser.feed(response.text)
+            for href in parser.links:
+                if href in {'../', '..'}:
+                    continue
+                absolute = urllib.parse.urljoin(page_url, href)
+                parsed = urllib.parse.urlparse(absolute)
+                if parsed.scheme not in {'http', 'https'}:
+                    continue
+                path = parsed.path.lower()
+                if path.endswith('/'):
+                    visit(absolute, depth + 1)
+                    continue
+                if extensions and not path.endswith(extensions):
+                    continue
+                if absolute not in seen_media:
+                    media_urls.append(absolute)
+                    seen_media.add(absolute)
+
+        for url in base_urls:
+            if url:
+                visit(str(url), 0)
+
+        return [build_remote_media_file(url, self.gateway_sn) for url in media_urls]
+
+    def _scan_media_files(self) -> List[dict]:
+        return self._scan_local_files() + self._scan_remote_media_files()
 
     @staticmethod
     def _media_identity_map(files: List[dict]) -> Dict[str, dict]:
@@ -975,7 +1057,7 @@ class MediaManager:
 
         logger.info(f"File list get: page={page}, size={page_size}")
 
-        filtered = filter_media_files(self._scan_local_files(), data)
+        filtered = filter_media_files(self._scan_media_files(), data)
         selected = paginate(filtered, page, page_size)
 
         return MessageBuilder.build_reply(

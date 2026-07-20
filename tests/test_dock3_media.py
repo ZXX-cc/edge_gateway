@@ -1,4 +1,5 @@
 import os
+import requests
 import sys
 import tempfile
 import time
@@ -37,6 +38,7 @@ if "src.database.media_db" not in sys.modules:
 
 from src.cloud_api.dock3_media import (
     build_media_file,
+    build_remote_media_file,
     file_list_data,
     filter_media_files,
     media_type_for_file,
@@ -66,6 +68,15 @@ class Dock3MediaHelperTest(unittest.TestCase):
         self.assertEqual(media_type_for_file("a.JPG"), "photo")
         self.assertEqual(media_type_for_file("a.mp4"), "video")
         self.assertEqual(media_type_for_file("a.txt"), "unknown")
+
+    def test_build_remote_media_file_has_download_url(self):
+        item = build_remote_media_file("http://192.168.1.119:8554/download/photo/a.jpg", "EDGEGW001")
+
+        self.assertEqual(item["device_sn"], "EDGEGW001")
+        self.assertEqual(item["media_type"], "photo")
+        self.assertEqual(item["name"], "a.jpg")
+        self.assertEqual(item["download_url"], "http://192.168.1.119:8554/download/photo/a.jpg")
+        self.assertEqual(item["upload_status"], "remote")
 
     def test_file_list_filter_and_pagination_shape(self):
         now = int(time.time() * 1000)
@@ -129,6 +140,52 @@ class Dock3MediaManagerTest(unittest.TestCase):
             }))
             self.assertEqual(deleted["data"]["result"], 0)
             self.assertFalse(path.exists())
+
+    def test_file_list_can_include_configured_remote_http_media(self):
+        class FakeResponse:
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        pages = {
+            "http://media.local/download/": '<a href="photo/">photo/</a><a href="video/">video/</a>',
+            "http://media.local/download/photo/": '<a href="../">../</a><a href="a.jpg">a.jpg</a>',
+            "http://media.local/download/video/": '<a href="../">../</a><a href="b.mp4">b.mp4</a>',
+        }
+
+        def fake_get(url, timeout):
+            return FakeResponse(pages[url])
+
+        old_get = requests.get
+        requests.get = fake_get
+        Config.merge({
+            "media": {
+                "remote_media": {
+                    "enabled": True,
+                    "base_url": "http://media.local/download/",
+                    "max_depth": 2,
+                    "timeout_seconds": 1,
+                }
+            }
+        })
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                manager.storage_path = tmp
+                listed = manager.handle_file_list_get(base_msg("file_list_get", {
+                    "media_type": "all",
+                    "page": 1,
+                    "page_size": 10,
+                }))
+        finally:
+            requests.get = old_get
+            Config.merge({"media": {"remote_media": {"enabled": False}}})
+
+        files = listed["data"]["files"]
+        self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
+        self.assertTrue(all(item["source"] == "remote_http" for item in files))
 
     def test_file_delete_rejects_missing_ids(self):
         manager = MediaManager()

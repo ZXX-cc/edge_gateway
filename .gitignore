@@ -21,9 +21,9 @@ env/
 *.sqlite3
 *.log
 data/
+logs/
 
 # Local config
 .env
 .env.*
 .idea/
-

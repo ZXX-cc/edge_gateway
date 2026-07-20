@@ -5,6 +5,7 @@ import hashlib
 import mimetypes
 import os
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -17,6 +18,11 @@ def stable_file_id(path: str) -> str:
     """Build a deterministic local file id without leaking absolute paths."""
     resolved = str(Path(path).resolve())
     return hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:24]
+
+
+def stable_url_file_id(url: str) -> str:
+    """Build a deterministic id for remote media URLs."""
+    return hashlib.sha1(str(url).encode("utf-8")).hexdigest()[:24]
 
 
 def media_type_for_file(path: str) -> str:
@@ -99,6 +105,37 @@ def build_media_file(path: str, storage_root: str, device_sn: str) -> Dict[str, 
         "create_time": create_time,
         "capture_time": create_time,
         "upload_status": "pending",
+    }
+
+
+def build_remote_media_file(url: str, device_sn: str, *, size: int = 0, create_time: int = 0) -> Dict[str, Any]:
+    parsed = urllib.parse.urlparse(url)
+    filename = urllib.parse.unquote(Path(parsed.path).name) or "remote_media"
+    ext = Path(filename).suffix.lower().lstrip(".")
+    media_type = media_type_for_file(filename)
+    file_id = stable_url_file_id(url)
+    mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    timestamp = int(create_time or time.time() * 1000)
+
+    return {
+        "file_id": file_id,
+        "fingerprint": file_id,
+        "device_sn": device_sn,
+        "module": "media",
+        "name": filename,
+        "file_name": filename,
+        "path": url,
+        "object_key": parsed.path.lstrip("/"),
+        "size": int(size or 0),
+        "file_size": int(size or 0),
+        "media_type": media_type,
+        "file_type": ext,
+        "mime_type": mime_type,
+        "create_time": timestamp,
+        "capture_time": timestamp,
+        "upload_status": "remote",
+        "download_url": url,
+        "source": "remote_http",
     }
 
 
