@@ -1314,6 +1314,28 @@ class EdgeGateway:
             'takeoff_to_point': self.drc.handle_takeoff_to_point,
         }, category='drc')
 
+        # Dock3 services payload commands share several method names with the
+        # DRC command set. TopicRouter is method-based, so the later DRC batch
+        # would otherwise overwrite the real payload handlers above and route
+        # camera_focal_length_set / focus commands to DRC's placeholder
+        # "real adapter unavailable" replies. Re-register these as payload
+        # services so platform API tests hit the ViewLink-backed camera/gimbal
+        # path.
+        self.router.register_batch({
+            'camera_photo_take': self.camera.handle_camera_photo_take,
+            'camera_photo_stop': self.camera.handle_camera_photo_stop,
+            'camera_recording_start': self.camera.handle_camera_recording_start,
+            'camera_recording_stop': self.camera.handle_camera_recording_stop,
+            'camera_focal_length_set': self.camera.handle_camera_focal_length_set,
+            'camera_focus_mode_set': self.camera.handle_camera_focus_mode_set,
+            'camera_focus_value_set': self.camera.handle_camera_focus_value_set,
+            'camera_point_focus_action': self.camera.handle_camera_point_focus_action,
+            'camera_exposure_mode_set': self.camera.handle_camera_exposure_mode_set,
+            'gimbal_reset': self.gimbal.handle_gimbal_reset,
+            'camera_look_at': self.gimbal.handle_camera_look_at,
+            'photo_storage_set': self.camera.handle_photo_storage_set,
+        }, category='payload')
+
         # ---- 机场管理API (DJI Dock) ----
         self.router.register_batch({
             'dock_status_query': self.dock.handle_dock_status_query,
