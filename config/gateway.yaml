@@ -142,6 +142,11 @@ media:
     wide: "/dev/video0"
     zoom: "/dev/video0"
     ir: "/dev/video1"
+    gimbal: "rtsp://192.168.1.119:554/main"
+    dock_inside: "rtsp://admin:Cgbxuav301@192.168.1.64:554/main"
+    dock_outside: "rtsp://admin:Cgbxuav301@192.168.1.65:554/main"
+
+
 
   # OSS配置(上传凭证由云端下发)
   oss:
@@ -240,7 +245,7 @@ payload:
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"
-          endpoint: "" # 吊舱视频流地址
+          endpoint: "rtsp://192.168.1.119:554/main" # 吊舱视频流地址
           timing: "realtime"
     mapping_camera:
       name: "正射/倾斜相机"
