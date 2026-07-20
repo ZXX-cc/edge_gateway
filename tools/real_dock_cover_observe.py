@@ -46,6 +46,8 @@ COMMAND_METHODS = {
     "light-off": "supplement_light_close",
     "putter-open": "putter_open",
     "putter-close": "putter_close",
+    "drone-on": "drone_open",
+    "drone-off": "drone_close",
 }
 
 
@@ -77,6 +79,7 @@ def build_property_get(sn: str) -> dict[str, Any]:
                 "putter_state",
                 "charging_state",
                 "supplement_light_state",
+                "drone_charge_state",
                 "drone_in_dock",
                 "emergency_stop_state",
             ]
