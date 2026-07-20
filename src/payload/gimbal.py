@@ -6,7 +6,14 @@ from typing import Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.modules.gimbal_control import VLKConnType, VLKRecordMode, VLKSensor, VLKTrackTemplateSize
+from src.modules.gimbal_control import (
+    VLKConnType,
+    VLKFocusMode,
+    VLKLaserZoomMode,
+    VLKRecordMode,
+    VLKSensor,
+    VLKTrackTemplateSize,
+)
 from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
 from web.mavlink.viewlink import build_viewlink_call
 
@@ -132,6 +139,14 @@ class GimbalController:
             if method == "set_record_mode":
                 return self._gimbal_control.set_record_mode(
                     VLKRecordMode(args.get("mode", VLKRecordMode.NONE))
+                )
+            if method == "set_focus_mode":
+                return self._gimbal_control.set_focus_mode(
+                    VLKFocusMode(args.get("mode", VLKFocusMode.AUTO))
+                )
+            if method == "set_laser_zoom_mode":
+                return self._gimbal_control.set_laser_zoom_mode(
+                    VLKLaserZoomMode(args.get("mode", VLKLaserZoomMode.FOLLOW_EO))
                 )
 
             func = getattr(self._gimbal_control, method)
@@ -289,6 +304,27 @@ class GimbalController:
         logger.info("Gimbal capability query")
         return MessageBuilder.build_reply(msg, result=0, data={
             'supported_modes': ['FOLLOW', 'FREE', 'FPV', 'RESET'],
+            'viewlink_extensions': [
+                'zoom_to',
+                'focus_in',
+                'focus_out',
+                'stop_focus',
+                'set_focus_mode',
+                'get_focus_mode',
+                'switch_eo_digital_zoom',
+                'ir_digital_zoom_in',
+                'ir_digital_zoom_out',
+                'switch_defog',
+                'is_defog_on',
+                'switch_laser',
+                'laser_single',
+                'laser_zoom_in',
+                'laser_zoom_out',
+                'laser_stop_zoom',
+                'set_laser_zoom_mode',
+                'is_tracking',
+                'get_record_mode',
+            ],
             **GIMBAL_CAPABILITY,
         })
 

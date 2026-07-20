@@ -56,6 +56,18 @@ class VLKRecordMode(IntEnum):
     RECORD = 2
 
 
+class VLKFocusMode(IntEnum):
+    """对焦模式"""
+    AUTO = 0
+    MANUAL = 1
+
+
+class VLKLaserZoomMode(IntEnum):
+    """激光变焦模式"""
+    FOLLOW_EO = 0
+    MANUAL = 1
+
+
 class VLKConnStatus(IntEnum):
     """连接状态"""
     CONNECTED_DEPRECATED = 0
@@ -311,6 +323,62 @@ class GimbalControl:
 
         lib.VLK_GetRecordMode.argtypes = []
         lib.VLK_GetRecordMode.restype = c_int
+
+        # 对焦和指定倍率
+        lib.VLK_FocusIn.argtypes = [c_int]
+        lib.VLK_FocusIn.restype = None
+
+        lib.VLK_FocusOut.argtypes = [c_int]
+        lib.VLK_FocusOut.restype = None
+
+        lib.VLK_StopFocus.argtypes = []
+        lib.VLK_StopFocus.restype = None
+
+        lib.VLK_SetFocusMode.argtypes = [c_int]
+        lib.VLK_SetFocusMode.restype = None
+
+        lib.VLK_GetFocusMode.argtypes = []
+        lib.VLK_GetFocusMode.restype = c_int
+
+        lib.VLK_ZoomTo.argtypes = [ctypes.c_float]
+        lib.VLK_ZoomTo.restype = None
+
+        # 电子变焦/除雾/激光
+        lib.VLK_SwitchEODigitalZoom.argtypes = [c_int]
+        lib.VLK_SwitchEODigitalZoom.restype = None
+
+        lib.VLK_IRDigitalZoomIn.argtypes = [c_int]
+        lib.VLK_IRDigitalZoomIn.restype = None
+
+        lib.VLK_IRDigitalZoomOut.argtypes = [c_int]
+        lib.VLK_IRDigitalZoomOut.restype = None
+
+        lib.VLK_SwitchDefog.argtypes = [c_int]
+        lib.VLK_SwitchDefog.restype = None
+
+        lib.VLK_IsDefogOn.argtypes = []
+        lib.VLK_IsDefogOn.restype = c_int
+
+        lib.VLK_SwitchLaser.argtypes = [c_int]
+        lib.VLK_SwitchLaser.restype = None
+
+        lib.VLK_LaserSingle.argtypes = []
+        lib.VLK_LaserSingle.restype = None
+
+        lib.VLK_LaserZoomIn.argtypes = [c_int]
+        lib.VLK_LaserZoomIn.restype = None
+
+        lib.VLK_LaserZoomOut.argtypes = [c_int]
+        lib.VLK_LaserZoomOut.restype = None
+
+        lib.VLK_LaserStopZoom.argtypes = []
+        lib.VLK_LaserStopZoom.restype = None
+
+        lib.VLK_SetLaserZoomMode.argtypes = [c_int]
+        lib.VLK_SetLaserZoomMode.restype = None
+
+        lib.VLK_IsTracking.argtypes = []
+        lib.VLK_IsTracking.restype = c_int
 
     def uninitialize(self):
         """反初始化 SDK"""
@@ -625,6 +693,225 @@ class GimbalControl:
 
         return result
 
+    def zoom_to(self, magnification: float) -> dict:
+        """变焦到指定倍率"""
+        result = {"success": False, "message": ""}
+
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+
+        magnification = max(1.0, float(magnification))
+        self._lib.VLK_ZoomTo(ctypes.c_float(magnification))
+        result["success"] = True
+        result["message"] = f"变焦到指定倍率: {magnification}x"
+        self.log(result["message"])
+
+        return result
+
+    # ==================== 对焦控制 ====================
+
+    def focus_in(self, speed: int = 5) -> dict:
+        """近焦方向连续对焦"""
+        result = {"success": False, "message": ""}
+
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+
+        speed = max(1, min(8, int(speed)))
+        self._lib.VLK_FocusIn(speed)
+        result["success"] = True
+        result["message"] = f"近焦中，速度: {speed}"
+        self.log(result["message"])
+        return result
+
+    def focus_out(self, speed: int = 5) -> dict:
+        """远焦方向连续对焦"""
+        result = {"success": False, "message": ""}
+
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+
+        speed = max(1, min(8, int(speed)))
+        self._lib.VLK_FocusOut(speed)
+        result["success"] = True
+        result["message"] = f"远焦中，速度: {speed}"
+        self.log(result["message"])
+        return result
+
+    def stop_focus(self) -> dict:
+        """停止对焦"""
+        result = {"success": False, "message": ""}
+
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+
+        self._lib.VLK_StopFocus()
+        result["success"] = True
+        result["message"] = "对焦已停止"
+        self.log(result["message"])
+        return result
+
+    def set_focus_mode(self, mode: VLKFocusMode) -> dict:
+        """设置对焦模式"""
+        result = {"success": False, "message": ""}
+
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+
+        self._lib.VLK_SetFocusMode(int(mode))
+        mode_names = {
+            VLKFocusMode.AUTO: "自动对焦",
+            VLKFocusMode.MANUAL: "手动对焦",
+        }
+        result["success"] = True
+        result["message"] = f"设置对焦模式: {mode_names.get(mode, '未知')}"
+        self.log(result["message"])
+        return result
+
+    def get_focus_mode(self) -> dict:
+        """获取当前对焦模式"""
+        if not self._connected:
+            return {"success": False, "mode": -1, "mode_name": "未连接"}
+
+        mode = self._lib.VLK_GetFocusMode()
+        mode_names = {
+            0: "自动对焦",
+            1: "手动对焦",
+        }
+        return {
+            "success": True,
+            "mode": mode,
+            "mode_name": mode_names.get(mode, f"未知({mode})"),
+        }
+
+    # ==================== 电子变焦/除雾/激光 ====================
+
+    def switch_eo_digital_zoom(self, on: bool) -> dict:
+        """开启或关闭可见光电子变焦"""
+        return self._switch_int("VLK_SwitchEODigitalZoom", bool(on), "EO电子变焦")
+
+    def ir_digital_zoom_in(self, speed: int = 0) -> dict:
+        """红外电子变焦放大一级"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_IRDigitalZoomIn(int(speed))
+        result["success"] = True
+        result["message"] = "红外电子变焦放大"
+        self.log(result["message"])
+        return result
+
+    def ir_digital_zoom_out(self, speed: int = 0) -> dict:
+        """红外电子变焦缩小一级"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_IRDigitalZoomOut(int(speed))
+        result["success"] = True
+        result["message"] = "红外电子变焦缩小"
+        self.log(result["message"])
+        return result
+
+    def switch_defog(self, on: bool) -> dict:
+        """开启或关闭除雾"""
+        return self._switch_int("VLK_SwitchDefog", bool(on), "除雾")
+
+    def is_defog_on(self) -> dict:
+        """查询除雾状态"""
+        if not self._connected:
+            return {"success": False, "on": False, "message": "未连接到设备"}
+        on = self._lib.VLK_IsDefogOn() == 1
+        return {"success": True, "on": on}
+
+    def switch_laser(self, on: bool) -> dict:
+        """开启或关闭激光。使用前应确认现场安全。"""
+        return self._switch_int("VLK_SwitchLaser", bool(on), "激光")
+
+    def laser_single(self) -> dict:
+        """激光单次测距"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_LaserSingle()
+        result["success"] = True
+        result["message"] = "激光单次测距命令已发送"
+        self.log(result["message"])
+        return result
+
+    def laser_zoom_in(self, speed: int = 0) -> dict:
+        """激光变焦放大"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_LaserZoomIn(int(speed))
+        result["success"] = True
+        result["message"] = "激光变焦放大"
+        self.log(result["message"])
+        return result
+
+    def laser_zoom_out(self, speed: int = 0) -> dict:
+        """激光变焦缩小"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_LaserZoomOut(int(speed))
+        result["success"] = True
+        result["message"] = "激光变焦缩小"
+        self.log(result["message"])
+        return result
+
+    def laser_stop_zoom(self) -> dict:
+        """停止激光变焦"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_LaserStopZoom()
+        result["success"] = True
+        result["message"] = "激光变焦已停止"
+        self.log(result["message"])
+        return result
+
+    def set_laser_zoom_mode(self, mode: VLKLaserZoomMode) -> dict:
+        """设置激光变焦模式"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_SetLaserZoomMode(int(mode))
+        result["success"] = True
+        result["message"] = f"设置激光变焦模式: {int(mode)}"
+        self.log(result["message"])
+        return result
+
+    def is_tracking(self) -> dict:
+        """查询跟踪状态"""
+        if not self._connected:
+            return {"success": False, "tracking": False, "message": "未连接到设备"}
+        tracking = self._lib.VLK_IsTracking() == 1
+        return {"success": True, "tracking": tracking}
+
+    def _switch_int(self, sdk_method: str, on: bool, label: str) -> dict:
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        getattr(self._lib, sdk_method)(1 if on else 0)
+        result["success"] = True
+        result["message"] = f"{label}{'开启' if on else '关闭'}"
+        self.log(result["message"])
+        return result
+
     # ==================== 跟踪控制 ====================
 
     def start_track(
@@ -801,6 +1088,9 @@ class GimbalControl:
             "connected": self._connected,
             "is_recording": self.is_recording() if self._connected else False,
             "record_mode": self.get_record_mode() if self._connected else None,
+            "focus_mode": self.get_focus_mode() if self._connected else None,
+            "defog_on": self.is_defog_on().get("on", False) if self._connected else False,
+            "tracking": self.is_tracking().get("tracking", False) if self._connected else False,
             "gimbal_ip": self.gimbal_ip,
             "gimbal_port": self.gimbal_port,
             "sdk_dir": self.sdk_dir

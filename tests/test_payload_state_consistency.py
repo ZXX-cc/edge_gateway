@@ -1,4 +1,31 @@
 import unittest
+import sys
+import types
+
+
+if "src.database.connection" not in sys.modules:
+    connection = types.ModuleType("src.database.connection")
+
+    async def init_database_async():
+        return None
+
+    def get_async_session_local():
+        return None
+
+    connection.init_database_async = init_database_async
+    connection.get_async_session_local = get_async_session_local
+    sys.modules["src.database.connection"] = connection
+
+if "src.database.media_db" not in sys.modules:
+    media_db = types.ModuleType("src.database.media_db")
+
+    class _MediaDB:
+        @staticmethod
+        async def update_upload_status(*args, **kwargs):
+            return True
+
+    media_db.MediaDB = _MediaDB
+    sys.modules["src.database.media_db"] = media_db
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
@@ -47,6 +74,26 @@ class FakeDirectPayload:
 
     def home(self):
         self.calls.append(("home",))
+        return {"success": True}
+
+    def zoom_to(self, magnification):
+        self.calls.append(("zoom_to", magnification))
+        return {"success": True}
+
+    def set_focus_mode(self, mode):
+        self.calls.append(("set_focus_mode", int(mode)))
+        return {"success": True}
+
+    def focus_in(self, speed):
+        self.calls.append(("focus_in", speed))
+        return {"success": True}
+
+    def focus_out(self, speed):
+        self.calls.append(("focus_out", speed))
+        return {"success": True}
+
+    def stop_focus(self):
+        self.calls.append(("stop_focus",))
         return {"success": True}
 
 
@@ -104,6 +151,29 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("home",)])
         self.assertEqual(connection.master.mav.commands, [])
+
+    def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        zoom = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {"zoom_ratio": 3.5}))
+        focus_mode = camera.handle_camera_focus_mode_set(message("camera_focus_mode_set", {"mode": "manual_focus"}))
+        focus_value = camera.handle_camera_focus_value_set(message("camera_focus_value_set", {
+            "focus_distance": -1,
+            "focus_speed": 2,
+            "focus_duration": 0,
+        }))
+
+        self.assertEqual(zoom["data"]["result"], 0)
+        self.assertEqual(focus_mode["data"]["result"], 0)
+        self.assertEqual(focus_value["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("zoom_to", 3.5),
+            ("set_focus_mode", 1),
+            ("focus_in", 2),
+            ("stop_focus",),
+        ])
 
     def test_failed_camera_record_start_does_not_set_recording(self):
         camera = CameraController()

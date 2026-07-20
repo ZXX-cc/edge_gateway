@@ -10,6 +10,7 @@ from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.modules.gimbal_control import VLKFocusMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 from web.mavlink.camera import (
@@ -55,6 +56,8 @@ class CameraController:
         self._photo_count = 0
         self._zoom_level = 1.0
         self._exposure_mode = 'auto'
+        self._focus_mode = 'auto_focus'
+        self._focus_value = 0.0
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -310,15 +313,37 @@ class CameraController:
         ratio = data.get('zoom_ratio')
         self._log_camera_setting_mapping('zoom', data)
 
+        success = False
+        viewlink_attempted = False
         if ratio is not None:
             self._zoom_level = ratio
             logger.info(f"Zoom ratio: {ratio}x")
+            if self._gimbal_control and self._gimbal_control.is_connected():
+                viewlink_attempted = True
+                result = self._gimbal_control.zoom_to(float(ratio))
+                success = result.get('success', False)
+                logger.info(f"ViewLink zoom_to: {result}")
         else:
             direction = data.get('zoom_direction', 0)
             speed = data.get('zoom_speed', 1)
             logger.info(f"Zoom direction: {direction}, speed: {speed}")
+            if self._gimbal_control and self._gimbal_control.is_connected():
+                viewlink_attempted = True
+                try:
+                    direction_value = int(direction)
+                except (TypeError, ValueError):
+                    direction_value = 0
+                direction_text = str(direction).lower()
+                if direction_value > 0 or direction_text in {"in", "zoom_in", "tele"}:
+                    result = self._gimbal_control.zoom_in(int(speed))
+                elif direction_value < 0 or direction_text in {"out", "zoom_out", "wide"}:
+                    result = self._gimbal_control.zoom_out(int(speed))
+                else:
+                    result = self._gimbal_control.stop_zoom()
+                success = result.get('success', False)
+                logger.info(f"ViewLink zoom direction: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
     def handle_set_focus_mode(self, msg: dict) -> dict:
         """
@@ -331,8 +356,19 @@ class CameraController:
         self._log_camera_setting_mapping('set_focus_mode', data)
 
         logger.info(f"Focus mode: {mode}")
+        self._focus_mode = mode
 
-        return MessageBuilder.build_reply(msg, result=0)
+        success = False
+        viewlink_attempted = False
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            viewlink_attempted = True
+            normalized = str(mode).lower()
+            focus_mode = VLKFocusMode.MANUAL if normalized in {"manual", "manual_focus", "mf"} else VLKFocusMode.AUTO
+            result = self._gimbal_control.set_focus_mode(focus_mode)
+            success = result.get('success', False)
+            logger.info(f"ViewLink focus mode: {result}")
+
+        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
     def handle_set_focus_value(self, msg: dict) -> dict:
         """
@@ -345,8 +381,34 @@ class CameraController:
         self._log_camera_setting_mapping('set_focus_value', data)
 
         logger.info(f"Focus distance: {distance}")
+        self._focus_value = distance
 
-        return MessageBuilder.build_reply(msg, result=0)
+        success = False
+        viewlink_attempted = False
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            viewlink_attempted = True
+            speed = int(data.get('speed', data.get('focus_speed', 3)) or 3)
+            raw_duration = data.get('duration', data.get('focus_duration', 0.3))
+            duration = float(0.3 if raw_duration is None else raw_duration)
+            try:
+                distance_value = float(distance)
+            except (TypeError, ValueError):
+                distance_value = 0.0
+            if distance_value > 0:
+                result = self._gimbal_control.focus_out(speed)
+            elif distance_value < 0:
+                result = self._gimbal_control.focus_in(speed)
+            else:
+                result = self._gimbal_control.stop_focus()
+            success = result.get('success', False)
+            logger.info(f"ViewLink focus value: {result}")
+            if success and distance_value != 0:
+                time.sleep(max(0.0, min(2.0, duration)))
+                stop_result = self._gimbal_control.stop_focus()
+                success = stop_result.get('success', False)
+                logger.info(f"ViewLink stop focus: {stop_result}")
+
+        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
     def handle_spot_focus(self, msg: dict) -> dict:
         """
@@ -360,8 +422,15 @@ class CameraController:
         self._log_camera_setting_mapping('spot_focus', data)
 
         logger.info(f"Spot focus: ({x}, {y})")
+        success = False
+        viewlink_attempted = False
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            viewlink_attempted = True
+            result = self._gimbal_control.set_focus_mode(VLKFocusMode.AUTO)
+            success = result.get('success', False)
+            logger.info(f"ViewLink point focus fallback to auto focus: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
     def handle_photo_storage_set(self, msg: dict) -> dict:
         """
