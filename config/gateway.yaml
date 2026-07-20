@@ -16,7 +16,7 @@ runtime:
 database:
   backend: "mongodb"
   mongodb:
-    host: "192.168.1.100"
+    host: "127.0.0.1"
     port: 27017
     database: "edge_gateway"
     username: "admin"
@@ -27,7 +27,7 @@ database:
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
-  host: "192.168.1.100"
+  host: "127.0.0.1"
   port: 1883
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
@@ -69,12 +69,12 @@ mavlink:
   connection:
     # 实机按物理拓扑使用 TTL 串口：type: "serial"、port: "/dev/ttyS0"、baudrate: 921600。
     # 当前 test 模式保留 UDP，用于 ArduPilot SITL 回归。
-    type: "udp"
+    type: "tcp"
     host: "192.168.1.182"
     port: 8600 # SITL/飞控 -> 网关主 MAVLink
 
   # 系统ID
-  system_id: 1
+  system_id: 255
   component_id: 190 # MAV_COMP_ID_MISSIONPLANNER
 
   # 遥测推送频率(Hz)
@@ -89,14 +89,14 @@ mavlink:
 nest_mavlink:
   enabled: true # 网关通过 14551 与机巢/机巢模拟器交换自定义机巢 MAVLink
   connection:
-    type: "udp"
+    type: "tcp"
     host: "192.168.1.11"
     port: 8600 # 网关 <-> 机巢/机巢模拟器；不承载飞控标准 MAVLink
   sitl:
     host: "127.0.0.1"
     port: 14552 # 旧串联代理兼容端口；默认脚本不再使用
-  system_id: 1
-  component_id: 190
+  system_id: 255
+  component_id: 1
 
 # --- 设备属性配置 ---
 device:

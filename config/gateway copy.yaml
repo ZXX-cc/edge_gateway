@@ -1,0 +1,253 @@
+# ============================================================
+# 边缘网关配置 - 树莓派 + NanoMQ + MAVLink
+# ============================================================
+
+# --- 网关身份 ---
+gateway:
+  sn: "EDGEGW001" # 网关序列号；DJI Demo topic 匹配要求纯字母数字
+  name: "EdgeGateway-01" # 网关名称
+  product_type: "edge-gateway" # 产品类型
+
+# --- 运行模式 ---
+runtime:
+  mode: "test" # test/production；production 禁止测试 SN 和缺失真实链路拓扑元数据
+
+# --- 运行时数据库（Ubuntu 本机 MongoDB） ---
+database:
+  backend: "mongodb"
+  mongodb:
+    host: "127.0.0.1"
+    port: 27017
+    database: "edge_gateway"
+    username: "admin"
+    password: "admin123"
+    auth_source: "admin"
+    connect_timeout_ms: 5000
+
+# --- NanoMQ 本地Broker配置 ---
+nanomq:
+  enabled: true
+  host: "127.0.0.1"
+  port: 1883
+  ws_port: 8083 # WebSocket端口(视频流分离)
+  max_clients: 100
+  keepalive: 60
+  username: ""
+  password: ""
+
+  # 控制信令Topic前缀
+  topic_prefix: "thing/product"
+
+  # SSL/TLS配置(生产环境启用)
+  ssl:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    ca_file: ""
+
+# --- 云端MQTT配置 ---
+cloud:
+  enabled: false # 默认关闭，配置后启用
+  broker_host: ""
+  broker_port: 8883
+  username: ""
+  password: ""
+  client_id: ""
+
+  # SSL配置
+  ssl: true
+  cert_file: ""
+  key_file: ""
+
+  # 心跳配置
+  keepalive: 60
+  reconnect_interval: 5
+
+# --- MAVLink配置 ---
+mavlink:
+  enabled: true # 网关直连飞控/SITL；机巢链路由 nest_mavlink 单独连接
+  connection:
+    # type: "serial"               # serial/udp/udpin/udpout/tcp
+    # port: "/dev/ttyACM0"         # 串口设备
+    # baudrate: 921600
+    type: "tcp"
+    host: "192.168.1.182"
+    port: 8600 # 无人机飞控 -> 网关主 MAVLink
+
+  # 系统ID
+  system_id: 255
+  component_id: 190 # MAV_COMP_ID_MISSIONPLANNER
+
+  # 遥测推送频率(Hz)
+  telemetry_rate:
+    osd: 1 # 定频遥测
+    state: 0 # 状态变更(事件触发)
+    gps: 10
+    attitude: 10
+    battery: 1
+
+# --- 机巢MAVLink配置（独立机巢链路） ---
+nest_mavlink:
+  enabled: true # 网关通过 14551 与机巢/机巢模拟器交换自定义机巢 MAVLink
+  connection:
+    type: "tcp"
+    host: "192.168.1.11"
+    port: 8600 # 网关 <-> 机巢；不承载飞控标准 MAVLink
+  #  sitl:
+  #   host: "127.0.0.1"
+  #   port: 14552 # 旧串联代理兼容端口；默认脚本不再使用
+  system_id: 255
+  component_id: 1
+
+# --- 设备属性配置 ---
+device:
+  firmware_version: "1.0.0" # 固件版本
+  storage_capacity: 64000 # 存储容量(MB)
+
+  # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
+  # 网关不会自动生成 device_secret/nonce。
+  topology:
+    device_secret: ""
+    nonce: ""
+
+  # 飞行限制
+  limits:
+    max_height: 120 # 最大飞行高度(m)
+    max_distance: 10000 # 最大飞行距离(m)
+    max_speed: 15 # 最大速度(m/s)
+    return_home_power: 30 # 返航预留电量(%)
+
+  # 安全设置
+  safety:
+    geofence_enabled: true
+    obstacle_avoidance: true
+    airsense_enabled: false
+
+# --- 航线任务真实闭环配置 ---
+mission:
+  completion:
+    enabled: true # 航线末航点到达后执行返航、降落、收舱、充电闭环
+    auto_return_home: true # 调用真实飞控 RTL/QRTL，不生成模拟完成
+    auto_land: true # 返航指令下发后继续调用真实降落指令
+    nest_recovery: true # 降落后夹紧、关盖、恢复充电
+    retry_count: 3 # 飞控/机巢命令失败后的最大尝试次数
+    retry_interval_seconds: 2.0 # 两次尝试之间的等待时间
+
+# --- 媒体配置 ---
+media:
+  storage_path: "/data/media" # 本地存储路径
+  auto_upload: true
+  upload_quality: "original" # original/high/medium/low
+  video_sources: # 真实直播视频源配置；生产环境必须使用 /dev/video*、rtsp://、http:// 或 https://
+    normal: "/dev/video0"
+    wide: "/dev/video0"
+    zoom: "/dev/video0"
+    ir: "/dev/video1"
+
+  # OSS配置(上传凭证由云端下发)
+  oss:
+    provider: "minio" # minio/aliyun/aws
+    endpoint: ""
+    bucket: ""
+    region: ""
+    object_key_prefix: ""
+    credentials:
+      access_key_id: ""
+      access_key_secret: ""
+      expire: 0
+      security_token: ""
+
+# --- 直播配置 ---
+livestream:
+  protocols: ["webrtc", "rtmp"]
+  default_quality: "1080p"
+  default_bitrate: 4000 # kbps
+  default_framerate: 30
+
+# --- 日志配置 ---
+logging:
+  level: "INFO" # DEBUG/INFO/WARNING/ERROR
+  dir: "./logs" # 日志根目录；总日志会自动按 YYYY-MM 创建月份目录
+  filename_prefix: "edge_gateway" # 网关总日志：logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log
+  flight_telemetry_interval_seconds: 5 # 飞控遥测字段解释日志间隔；模式/解锁变化会立即输出
+  console: true # 同时输出到终端
+  capture_print: true # 捕获旧模块 print/stdout/stderr 到日志文件
+  daily_files: true # 每日独立日志文件
+  monthly_dirs: true # 每月独立日志目录
+  # 专用日志均按 logs/<分类>/YYYY-MM/<分类>_YYYY-MM-DD.log 保存；
+  # 加上上面的网关总日志形成分节点输出。dir 可填绝对路径，或相对 logging.dir 的子目录。
+  categories:
+    gateway:
+      enabled: true
+      dir: "gateway"
+      filename_prefix: "gateway"
+    mqtt:
+      enabled: true
+      dir: "mqtt"
+      filename_prefix: "mqtt"
+    mavlink_raw:
+      enabled: true
+      dir: "mavlink_raw"
+      filename_prefix: "mavlink_raw"
+    mission:
+      enabled: true
+      dir: "mission"
+      filename_prefix: "mission"
+    alarm:
+      enabled: true
+      dir: "alarm"
+      filename_prefix: "alarm"
+    nest_plc:
+      enabled: true
+      dir: "nest_plc"
+      filename_prefix: "nest_plc"
+    flight_control:
+      enabled: true
+      dir: "flight_control"
+      filename_prefix: "flight_control"
+    payload:
+      enabled: true
+      dir: "payload"
+      filename_prefix: "payload"
+
+# --- 请求追踪配置 ---
+request_trace:
+  enabled: true # 记录 MQTT 请求/回包/handler 追踪，P0 验收需要
+  dir: "./logs/request_trace" # JSONL 输出目录；会自动按 YYYY-MM 创建月份目录
+  filename_prefix: "request_trace" # 每日文件名：request_trace_YYYY-MM-DD.jsonl
+  max_memory: 5000 # 内存 ring buffer 条数
+  max_queue: 10000 # 后台写入队列长度，避免 MQTT 热路径阻塞
+  payload_max_chars: 3000 # 单条 payload 最大保留字符数，超长会截断
+
+# --- 负载控制链路 ---
+payload:
+  # 真实拓扑：吊舱/相机等负载由网关通过独立 TCP/SDK 直连控制；
+  # 主 MAVLink 保留给无人机飞控，机巢不参与、不拦截、不中转负载控制。
+  control_path: "direct_payload_tcp"
+  direct_viewlink_sdk_enabled: true
+
+# --- RTK/NTRIP配置 ---
+rtk:
+  enabled: false # 是否启用RTK差分定位
+  host: "" # NTRIP服务器地址
+  port: 8002 # NTRIP服务器端口
+  mountpoint: "" # NTRIP挂载点
+  username: "" # NTRIP用户名
+  password: "" # NTRIP密码
+
+# --- 数据保留策略 ---
+retention:
+  telemetry_hours: 2 # 遥测数据保留时长(小时)
+  operation_days: 3 # 操作记录保留时长(天)
+  alarm_days: 1 # 告警记录保留时长(天)
+  media_uploaded_days: 7 # 已上传媒体保留时长(天)
+  cleanup_interval_hours: 1 # 清理间隔(小时)
+  vacuum_interval_hours: 24 # 数据库压缩间隔(小时)
+  max_db_size_mb: 50 # 最大数据库大小(MB)
+
+# --- 远程调试 ---
+debug:
+  enabled: true
+  websocket_port: 7681
+  auth_token: "" # 空表示不校验
+  session_timeout: 1800 # 30分钟
