@@ -44,6 +44,8 @@ COMMAND_METHODS = {
     "charge-close": "charge_close",
     "light-on": "supplement_light_open",
     "light-off": "supplement_light_close",
+    "putter-open": "putter_open",
+    "putter-close": "putter_close",
 }
 
 
