@@ -25,16 +25,14 @@
                          |
                          v
                 Edge Gateway 主程序
-       +-----------------+-----------------+
-       |                                   |
-       v                                   v
- Cloud API / TopicRouter              MAVLink Core
- services/reply/events                connection/dispatcher
- osd/state/requests/drc               telemetry/flight/nest
-       |                                   |
-       v                                   v
- MongoDB 目标数据层                 SITL / 机巢模拟器
- 当前 SQLite 迁移前状态             当前纯模拟
+       |                 |                 |
+       v                 v                 v
+ Cloud API /         MAVLink Core      直连负载适配器
+ TopicRouter         飞控/TTL         吊舱/相机/雷达/
+       |                 |             光谱/喊话器
+       v                 v                 |
+ MongoDB 数据层      SITL / 实机飞控          v
+                                      视频/原始数据/音频
 ```
 
 ## 3. 分层设计
@@ -90,6 +88,20 @@ SITL / 机巢模拟器
 ```
 
 人员3负责让环境可重复启动和复现。
+
+### 4.4 实机飞控与负载链路
+
+飞控与负载是两组独立物理链路。实机环境下，网关通过 TTL 串口向飞控发送全部飞行控制指令（包括开始传输数据）；负载不经由飞控或机巢中转。`test` 模式可继续使用 UDP 连接 SITL，但不改变负载的路由边界。
+
+| 设备 | 直连网关通道 | 方向/时机 |
+|---|---|---|
+| 吊舱 | 吊舱控制、视频流 | 控制双向；视频实时上行 |
+| 正射/倾斜相机 | 视频流、原始数据 | 视频实时上行；原始数据降落后传输 |
+| 激光雷达 | 原始数据 | 降落后传输 |
+| 多光谱/高光谱 | 视频流、原始数据 | 视频实时上行；原始数据降落后传输 |
+| 喊话器 | 控制、音频 | 网关按需下行 |
+
+运行时从 `payload.devices` 读取上述拓扑。`payload.flight_controller_fallback_enabled` 默认为 `false`；只有 SITL 兼容验证需要时才可显式开启，且机巢 MAVLink 永不作为负载回退链路。
 
 ## 5. 非阻塞架构原则
 
@@ -190,4 +202,3 @@ SITL / 机巢模拟器
 | 机巢模拟 | 能解析自定义机巢状态和命令响应 |
 | Dock3 文档 | 19 个 Dock3 官方入口已纳入迁移指南 |
 | 协作 | 三名人员能通过文档定位职责和交接接口 |
-
