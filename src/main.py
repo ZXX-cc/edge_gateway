@@ -50,6 +50,7 @@ from src.mission.manager import MissionManager
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
 from src.payload.third_party import ThirdPartyController
+from src.payload.topology import PayloadTopology
 from src.media.manager import MediaManager
 from src.drc.controller import DrcController
 from src.cloud_api.dock_manager import DockManager
@@ -158,6 +159,8 @@ class EdgeGateway:
         self.telemetry_module = None
         self.nest_module = None
         self.gimbal_control = None
+        self.payload_config = None
+        self.payload_topology = None
 
         # 遥测处理
         self.telemetry: TelemetryProcessor = None
@@ -234,6 +237,9 @@ class EdgeGateway:
             self.flight_area = FlightAreaManager()
             self.custom_data = CustomDataManager()
 
+            # 负载链路独立于飞控/机巢 MAVLink，在业务模块创建后立即装配。
+            self._configure_payload_connections()
+
             # 6.1 初始化数据保留管理器（边缘端专用）
             self.retention_manager = DataRetentionManager()
 
@@ -278,6 +284,82 @@ class EdgeGateway:
         except Exception as e:
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
+
+    def _configure_payload_connections(self):
+        """Configure direct payload adapters without depending on flight control."""
+        self.payload_config = Config.get_payload_config()
+        self.payload_topology = PayloadTopology(self.payload_config.get('devices'))
+        for error in self.payload_topology.validate():
+            logger.error("Payload topology invalid: %s", error)
+
+        if self.third_party:
+            self.third_party.set_payload_topology(
+                self.payload_topology,
+                self._payload_connection_states,
+            )
+
+        gimbal_config = self.payload_topology.get_device('gimbal')
+        control = (gimbal_config.get('channels') or {}).get('control') or {}
+        direct_gimbal_enabled = (
+            bool(gimbal_config.get('enabled', True))
+            and bool(gimbal_config.get('direct_to_gateway'))
+            and control.get('adapter') == 'viewlink'
+        )
+        if direct_gimbal_enabled:
+            kwargs = {}
+            if control.get('sdk_dir'):
+                kwargs['sdk_dir'] = control['sdk_dir']
+            if control.get('host'):
+                kwargs['gimbal_ip'] = control['host']
+            if control.get('port') is not None:
+                kwargs['gimbal_port'] = int(control['port'])
+            self.gimbal_control = GimbalControl(**kwargs)
+            self.camera.set_gimbal_control(self.gimbal_control)
+            self.gimbal.set_gimbal_control(self.gimbal_control)
+
+        if self.drc:
+            self.drc.set_gimbal_control(self.gimbal_control)
+            self.drc.set_camera_controller(self.camera)
+
+        fallback_enabled = bool(
+            self.payload_config.get('flight_controller_fallback_enabled', False)
+        )
+        logger.info(
+            "Payload topology configured: path=%s devices=%s flight_controller_fallback=%s",
+            self.payload_config.get('control_path'),
+            ','.join(device_id for device_id, _ in self.payload_topology.iter_devices()),
+            fallback_enabled,
+        )
+
+    def _payload_connection_states(self) -> dict:
+        """Return adapter state without treating configured endpoints as connected."""
+        states = {}
+        if self.gimbal_control:
+            states['gimbal'] = (
+                'connected' if self.gimbal_control.is_connected() else 'disconnected'
+            )
+        return states
+
+    def _enable_payload_flight_controller_fallback(self, connection) -> bool:
+        """Opt-in legacy bridge for SITL only; never called with the nest link."""
+        if not self.payload_config:
+            self.payload_config = Config.get_payload_config()
+        if not self.payload_config.get('flight_controller_fallback_enabled', False):
+            logger.info("Payload-to-flight-controller fallback is disabled")
+            return False
+        self.camera.set_mavlink_connection(connection)
+        self.gimbal.set_mavlink_connection(connection)
+        self.third_party.set_mavlink_connection(connection)
+        logger.warning("Legacy payload fallback over flight-controller MAVLink is enabled")
+        return True
+
+    def _close_payload_connections(self):
+        if not self.gimbal_control:
+            return
+        try:
+            self.gimbal_control.uninitialize()
+        except Exception as exc:
+            logger.warning("Failed to close direct gimbal adapter: %s", exc)
 
     def start(self) -> bool:
         """启动网关"""
@@ -352,12 +434,6 @@ class EdgeGateway:
                     if self._start_nest_mavlink(nest_mavlink_config):
                         if self.mission:
                             self.mission.set_mavlink_connection(self.nest_mavlink_conn)
-                        if self.camera:
-                            self.camera.set_mavlink_connection(self.nest_mavlink_conn)
-                        if self.gimbal:
-                            self.gimbal.set_mavlink_connection(self.nest_mavlink_conn)
-                        if self.third_party:
-                            self.third_party.set_mavlink_connection(self.nest_mavlink_conn)
                 else:
                     logger.warning("Main MAVLink disabled but nest_mavlink.enabled is false")
 
@@ -437,42 +513,15 @@ class EdgeGateway:
                 self.mission.recover_missions()
                 self.drc.set_flight_control(self.flight_control)
                 self.drc.set_mode_control(self.mode_control)
-                self.camera.set_mavlink_connection(self.mavlink_conn)
-                self.gimbal.set_mavlink_connection(self.mavlink_conn)
-                self.third_party.set_mavlink_connection(self.mavlink_conn)
+                self._enable_payload_flight_controller_fallback(self.mavlink_conn)
                 self.dock.set_nest_module(self.nest_module)
                 self.nest_module.set_flight_control(self.flight_control)
 
-                # 负载真实拓扑：吊舱/相机等负载由网关通过独立 TCP/SDK 直连控制；
-                # 主 MAVLink 保留给无人机飞控链路，机巢不参与负载控制。
-                payload_config = Config.get_payload_config()
-                if payload_config.get('direct_viewlink_sdk_enabled'):
-                    self.gimbal_control = GimbalControl()
-                    self.camera.set_gimbal_control(self.gimbal_control)
-                    self.gimbal.set_gimbal_control(self.gimbal_control)
-                    logger.info(
-                        "Payload control path=%s: camera/gimbal use direct payload TCP/SDK when connected",
-                        payload_config.get('control_path'),
-                    )
-                else:
-                    logger.info(
-                        "Payload control path=%s: direct payload TCP/SDK disabled, commands use main MAVLink fallback",
-                        payload_config.get('control_path'),
-                    )
                 self.camera.set_telemetry_module(self.telemetry_module)
-                def camera_event_cb(event):
-                    self.mqtt.publish_event(event)
-                self.camera.set_event_callback(camera_event_cb)
-
-                def gimbal_event_cb(event):
-                    self.mqtt.publish_event(event)
-                self.gimbal.set_event_callback(gimbal_event_cb)
 
                 # DRC 模块依赖注入
                 self.drc.set_mission_manager(self.mission)
                 self.drc.set_telemetry_module(self.telemetry_module)
-                self.drc.set_gimbal_control(self.gimbal_control)
-                self.drc.set_camera_controller(self.camera)
                 self.drc.set_event_callback(self._handle_drc_event)
 
                 # 注入 DeviceManager 依赖（数据源联动）
@@ -689,6 +738,7 @@ class EdgeGateway:
             self.mavlink_conn.disconnect()
         if self.nest_mavlink_conn:
             self.nest_mavlink_conn.disconnect()
+        self._close_payload_connections()
         if self.mqtt:
             self.mqtt.disconnect()
         if self.device:
@@ -743,6 +793,7 @@ class EdgeGateway:
             self.mavlink_conn.disconnect()
         if self.nest_mavlink_conn:
             self.nest_mavlink_conn.disconnect()
+        self._close_payload_connections()
         if self.mqtt:
             self.mqtt.disconnect()
         if self.device:
@@ -904,6 +955,14 @@ class EdgeGateway:
         def third_party_event_cb(event):
             self.mqtt.publish_event(event)
         self.third_party.set_event_callback(third_party_event_cb)
+
+        def camera_event_cb(event):
+            self.mqtt.publish_event(event)
+        self.camera.set_event_callback(camera_event_cb)
+
+        def gimbal_event_cb(event):
+            self.mqtt.publish_event(event)
+        self.gimbal.set_event_callback(gimbal_event_cb)
 
     def _handle_drc_event(self, event: dict):
         """同步 DRC 状态到物模型后再上报事件。"""

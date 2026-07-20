@@ -46,10 +46,17 @@ class ThirdPartyController:
 
         # 回调
         self._event_callback: Optional[Callable] = None
+        self._payload_topology = None
+        self._payload_state_provider: Optional[Callable] = None
 
     def set_mavlink_connection(self, mavlink_conn):
-        """注入MAVLink连接"""
+        """注入显式启用的飞控 MAVLink 兼容链路。"""
         self._mavlink_conn = mavlink_conn
+
+    def set_payload_topology(self, topology, state_provider: Optional[Callable] = None):
+        """注入网关直连负载拓扑及连接状态提供器。"""
+        self._payload_topology = topology
+        self._payload_state_provider = state_provider
 
     def _send_mavlink_command(self, command: int, params: list) -> bool:
         """发送MAVLink COMMAND_LONG"""
@@ -328,8 +335,15 @@ class ThirdPartyController:
     def handle_payload_status_query(self, msg: dict) -> dict:
         """负载状态查询"""
         logger.info("Payload status query")
+        states = self._payload_state_provider() if self._payload_state_provider else {}
+        payloads = (
+            self._payload_topology.snapshot(states)
+            if self._payload_topology
+            else []
+        )
         return MessageBuilder.build_reply(msg, result=0, data={
-            'payloads': []
+            'payloads': payloads,
+            'flight_controller_fallback': bool(self._mavlink_conn),
         })
 
     def handle_parachute_open(self, msg: dict) -> dict:
@@ -390,8 +404,17 @@ class ThirdPartyController:
     def handle_payload_capability_query(self, msg: dict) -> dict:
         """负载能力查询"""
         logger.info("Payload capability query")
+        configured_payloads = []
+        if self._payload_topology:
+            configured_payloads = [
+                device_id
+                for device_id, device in self._payload_topology.iter_devices()
+                if device.get('enabled', True)
+            ]
         return MessageBuilder.build_reply(msg, result=0, data={
-            'supported_payloads': ['camera', 'speaker', 'light', 'thermal']
+            'supported_payloads': ['camera', 'speaker', 'light', 'thermal'],
+            'configured_payload_links': configured_payloads,
+            'connection_model': 'direct_gateway',
         })
 
     # ---- PSDK接口 ----

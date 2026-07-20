@@ -16,7 +16,7 @@ runtime:
 database:
   backend: "mongodb"
   mongodb:
-    host: "127.0.0.1"
+    host: "192.168.1.100"
     port: 27017
     database: "edge_gateway"
     username: "admin"
@@ -27,7 +27,7 @@ database:
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
-  host: "127.0.0.1"
+  host: "192.168.1.100"
   port: 1883
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
@@ -67,12 +67,11 @@ cloud:
 mavlink:
   enabled: true # 网关直连飞控/SITL；机巢链路由 nest_mavlink 单独连接
   connection:
-    # type: "serial"               # serial/udp/udpin/udpout/tcp
-    # port: "/dev/ttyACM0"         # 串口设备
-    # baudrate: 921600
+    # 实机按物理拓扑使用 TTL 串口：type: "serial"、port: "/dev/ttyS0"、baudrate: 921600。
+    # 当前 test 模式保留 UDP，用于 ArduPilot SITL 回归。
     type: "udp"
-    host: "127.0.0.1"
-    port: 14550 # SITL/飞控 -> 网关主 MAVLink
+    host: "192.168.1.182"
+    port: 8600 # SITL/飞控 -> 网关主 MAVLink
 
   # 系统ID
   system_id: 1
@@ -91,8 +90,8 @@ nest_mavlink:
   enabled: true # 网关通过 14551 与机巢/机巢模拟器交换自定义机巢 MAVLink
   connection:
     type: "udp"
-    host: "127.0.0.1"
-    port: 14551 # 网关 <-> 机巢/机巢模拟器；不承载飞控标准 MAVLink
+    host: "192.168.1.11"
+    port: 8600 # 网关 <-> 机巢/机巢模拟器；不承载飞控标准 MAVLink
   sitl:
     host: "127.0.0.1"
     port: 14552 # 旧串联代理兼容端口；默认脚本不再使用
@@ -221,10 +220,78 @@ request_trace:
 
 # --- 负载控制链路 ---
 payload:
-  # 真实拓扑：吊舱/相机等负载由网关通过独立 TCP/SDK 直连控制；
-  # 主 MAVLink 保留给无人机飞控，机巢不参与、不拦截、不中转负载控制。
-  control_path: "direct_payload_tcp"
-  direct_viewlink_sdk_enabled: true
+  # 负载均与网关直连。主 MAVLink/TTL 只承载飞控指令，机巢和飞控
+  # 不中转负载控制、视频流或原始数据。
+  control_path: "direct_gateway"
+  flight_controller_fallback_enabled: false
+  devices:
+    gimbal:
+      name: "吊舱"
+      enabled: true
+      direct_to_gateway: true
+      channels:
+        control:
+          direction: "bidirectional"
+          transport: "viewlink_tcp"
+          adapter: "viewlink"
+          host: "192.168.1.119"
+          port: 2000
+          sdk_dir: "" # ViewLink SDK 目录；留空时使用 adapter 默认值
+        video:
+          direction: "payload_to_gateway"
+          transport: "rtsp"
+          endpoint: "" # 吊舱视频流地址
+          timing: "realtime"
+    mapping_camera:
+      name: "正射/倾斜相机"
+      enabled: true
+      direct_to_gateway: true
+      channels:
+        video:
+          direction: "payload_to_gateway"
+          transport: "vendor_stream"
+          endpoint: ""
+          timing: "realtime"
+        post_landing_raw_data:
+          direction: "payload_to_gateway"
+          transport: "vendor_file_transfer"
+          endpoint: ""
+          timing: "post_landing"
+    lidar:
+      name: "激光雷达"
+      enabled: true
+      direct_to_gateway: true
+      channels:
+        post_landing_raw_data:
+          direction: "payload_to_gateway"
+          transport: "vendor_file_transfer"
+          endpoint: ""
+          timing: "post_landing"
+    spectral_camera:
+      name: "多光谱/高光谱"
+      enabled: true
+      direct_to_gateway: true
+      channels:
+        video:
+          direction: "payload_to_gateway"
+          transport: "vendor_stream"
+          endpoint: ""
+          timing: "realtime"
+        post_landing_raw_data:
+          direction: "payload_to_gateway"
+          transport: "vendor_file_transfer"
+          endpoint: ""
+          timing: "post_landing"
+    speaker:
+      name: "喊话器"
+      enabled: true
+      direct_to_gateway: true
+      channels:
+        control_audio:
+          direction: "gateway_to_payload"
+          transport: "vendor_protocol"
+          endpoint: ""
+          timing: "on_demand"
 
 # --- RTK/NTRIP配置 ---
 rtk:

@@ -7,6 +7,95 @@ from pathlib import Path
 from copy import deepcopy
 
 
+DEFAULT_PAYLOAD_DEVICES = {
+    'gimbal': {
+        'name': '吊舱',
+        'enabled': True,
+        'direct_to_gateway': True,
+        'channels': {
+            'control': {
+                'direction': 'bidirectional',
+                'transport': 'viewlink_tcp',
+                'adapter': 'viewlink',
+                'host': '192.168.1.119',
+                'port': 2000,
+                'sdk_dir': '',
+            },
+            'video': {
+                'direction': 'payload_to_gateway',
+                'transport': 'rtsp',
+                'endpoint': '',
+                'timing': 'realtime',
+            },
+        },
+    },
+    'mapping_camera': {
+        'name': '正射/倾斜相机',
+        'enabled': True,
+        'direct_to_gateway': True,
+        'channels': {
+            'video': {
+                'direction': 'payload_to_gateway',
+                'transport': 'vendor_stream',
+                'endpoint': '',
+                'timing': 'realtime',
+            },
+            'post_landing_raw_data': {
+                'direction': 'payload_to_gateway',
+                'transport': 'vendor_file_transfer',
+                'endpoint': '',
+                'timing': 'post_landing',
+            },
+        },
+    },
+    'lidar': {
+        'name': '激光雷达',
+        'enabled': True,
+        'direct_to_gateway': True,
+        'channels': {
+            'post_landing_raw_data': {
+                'direction': 'payload_to_gateway',
+                'transport': 'vendor_file_transfer',
+                'endpoint': '',
+                'timing': 'post_landing',
+            },
+        },
+    },
+    'spectral_camera': {
+        'name': '多光谱/高光谱',
+        'enabled': True,
+        'direct_to_gateway': True,
+        'channels': {
+            'video': {
+                'direction': 'payload_to_gateway',
+                'transport': 'vendor_stream',
+                'endpoint': '',
+                'timing': 'realtime',
+            },
+            'post_landing_raw_data': {
+                'direction': 'payload_to_gateway',
+                'transport': 'vendor_file_transfer',
+                'endpoint': '',
+                'timing': 'post_landing',
+            },
+        },
+    },
+    'speaker': {
+        'name': '喊话器',
+        'enabled': True,
+        'direct_to_gateway': True,
+        'channels': {
+            'control_audio': {
+                'direction': 'gateway_to_payload',
+                'transport': 'vendor_protocol',
+                'endpoint': '',
+                'timing': 'on_demand',
+            },
+        },
+    },
+}
+
+
 class Config:
     """配置管理器 - 单例模式"""
 
@@ -114,9 +203,29 @@ class Config:
     @classmethod
     def get_payload_config(cls):
         """获取负载控制配置。"""
+        configured_devices = cls.get('payload.devices', {}) or {}
+        devices = deepcopy(DEFAULT_PAYLOAD_DEVICES)
+
+        def deep_merge(base, patch):
+            for key, value in patch.items():
+                if isinstance(value, dict) and isinstance(base.get(key), dict):
+                    deep_merge(base[key], value)
+                else:
+                    base[key] = deepcopy(value)
+
+        if isinstance(configured_devices, dict):
+            deep_merge(devices, configured_devices)
+
+        legacy_viewlink_enabled = cls.get('payload.direct_viewlink_sdk_enabled', None)
+        if legacy_viewlink_enabled is not None:
+            devices['gimbal']['enabled'] = bool(legacy_viewlink_enabled)
+
         return {
-            'control_path': cls.get('payload.control_path', 'direct_payload_tcp'),
-            'direct_viewlink_sdk_enabled': cls.get('payload.direct_viewlink_sdk_enabled', True),
+            'control_path': cls.get('payload.control_path', 'direct_gateway'),
+            'flight_controller_fallback_enabled': cls.get(
+                'payload.flight_controller_fallback_enabled', False
+            ),
+            'devices': devices,
         }
 
     @classmethod
