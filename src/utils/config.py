@@ -220,6 +220,17 @@ class Config:
         if legacy_viewlink_enabled is not None:
             devices['gimbal']['enabled'] = bool(legacy_viewlink_enabled)
 
+        gimbal_control = devices['gimbal'].setdefault('channels', {}).setdefault('control', {})
+        legacy_sdk_dir = cls.get('payload.viewlink_sdk_dir', None)
+        legacy_gimbal_ip = cls.get('payload.viewlink_gimbal_ip', None)
+        legacy_gimbal_port = cls.get('payload.viewlink_gimbal_port', None)
+        if legacy_sdk_dir is not None:
+            gimbal_control['sdk_dir'] = legacy_sdk_dir
+        if legacy_gimbal_ip is not None:
+            gimbal_control['host'] = legacy_gimbal_ip
+        if legacy_gimbal_port is not None:
+            gimbal_control['port'] = legacy_gimbal_port
+
         return {
             'control_path': cls.get('payload.control_path', 'direct_gateway'),
             'flight_controller_fallback_enabled': cls.get(
