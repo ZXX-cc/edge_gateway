@@ -32,6 +32,25 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     video_type = args.video_type
     video_id = args.video_id or f"{args.sn}/0/{video_type}"
 
+    if args.stop_only:
+        rc, stop = client.request(
+            "live_stop_push",
+            {"video_id": video_id},
+            args.timeout,
+            [0, INVALID_COMMAND_FORMAT],
+        )
+        if rc != 0:
+            return rc
+        if result_code(stop) == INVALID_COMMAND_FORMAT:
+            reason = str(stop.get("data", {}).get("reason", "") or stop.get("msg", "")).lower()
+            if "not streaming" not in reason:
+                print(f"live_stop_push rejected unexpectedly: {stop}", file=sys.stderr)
+                return 13
+            print("live_stop_push skipped: already not streaming")
+        else:
+            print("live_stop_push ok")
+        return 0
+
     rc, capability = client.request(
         "live_capability_query",
         {},
@@ -103,6 +122,10 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     if rc != 0:
         return rc
 
+    if args.keep_stream:
+        print("live stream kept running; use --stop-only when you want to stop it")
+        return 0
+
     status_before = client.event_count("live_status_notify")
     rc, _ = client.request(
         "live_stop_push",
@@ -144,6 +167,8 @@ def main():
     parser.add_argument("--url-type", type=int, default=4)
     parser.add_argument("--video-id", default="")
     parser.add_argument("--video-type", choices=["normal", "wide", "zoom", "ir", "fpv", "gimbal"], default="gimbal")
+    parser.add_argument("--keep-stream", action="store_true")
+    parser.add_argument("--stop-only", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
