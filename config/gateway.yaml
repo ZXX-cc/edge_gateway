@@ -102,6 +102,9 @@ nest_mavlink:
 device:
   firmware_version: "1.0.0" # 固件版本
   storage_capacity: 64000 # 存储容量(MB)
+  auto_bind_on_startup: true # test 模式下自动绑定，便于直接运行云台/负载验收
+  auto_bind_workspace_id: "local_test_workspace"
+  auto_bind_workspace_name: "本地测试工作空间"
 
   # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
   # 网关不会自动生成 device_secret/nonce。

@@ -272,6 +272,7 @@ class EdgeGateway:
 
             # 9. 设置回调
             self._setup_callbacks()
+            self._auto_bind_gateway_for_test_runtime()
 
             # 8. 注册API处理器
             self._register_handlers()
@@ -284,6 +285,20 @@ class EdgeGateway:
         except Exception as e:
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
+
+    def _auto_bind_gateway_for_test_runtime(self):
+        """Bind the gateway automatically in test mode so local payload checks can run directly."""
+        if str(Config.get('runtime.mode', 'test')).lower() == 'production':
+            return
+        if not bool(Config.get('device.auto_bind_on_startup', True)):
+            return
+        workspace_id = str(Config.get('device.auto_bind_workspace_id', 'local_test_workspace') or 'local_test_workspace')
+        workspace_name = str(Config.get('device.auto_bind_workspace_name', '本地测试工作空间') or '本地测试工作空间')
+        state = self.device.get_device_state() if self.device else {}
+        if state.get('state') in {'bound', 'online'}:
+            return
+        logger.info("Auto binding gateway for test runtime: workspace_id=%s", workspace_id)
+        self.device.bind_device(workspace_id, workspace_name)
 
     def _configure_payload_connections(self):
         """Configure direct payload adapters without depending on flight control."""

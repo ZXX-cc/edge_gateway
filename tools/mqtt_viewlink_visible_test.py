@@ -62,8 +62,32 @@ def _check_bound(client, timeout: float) -> int:
         return rc
     data = _data(reply)
     if data.get("is_bind") not in {True, 1, "1"}:
-        print("gateway is unbound; complete device binding before ViewLink actions", file=sys.stderr)
-        return 23
+        print("gateway is unbound; sending local test device_binding")
+        rc, _ = client.request(
+            "device_binding",
+            {
+                "workspace_id": "local_test_workspace",
+                "workspace_name": "本地测试工作空间",
+            },
+            timeout,
+            channel="services",
+            allowed_results={0},
+        )
+        if rc != 0:
+            return rc
+        rc, reply = client.request(
+            "workspace_bind_status",
+            {},
+            timeout,
+            channel="services",
+            allowed_results={0},
+        )
+        if rc != 0:
+            return rc
+        data = _data(reply)
+        if data.get("is_bind") not in {True, 1, "1"}:
+            print("gateway is still unbound after device_binding", file=sys.stderr)
+            return 23
     print("ok workspace_bind_status: bound")
     return 0
 
