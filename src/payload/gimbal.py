@@ -15,6 +15,7 @@ from src.modules.gimbal_control import (
     VLKSensor,
     VLKTrackTemplateSize,
 )
+from src.payload.dock3_payload import with_dock3_payload_index
 from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
 from web.mavlink.viewlink import build_viewlink_call
 
@@ -97,8 +98,7 @@ class GimbalController:
         channels = gimbal_config.get("channels", {}) if isinstance(gimbal_config, dict) else {}
         control = channels.get("control", {}) if isinstance(channels, dict) else {}
         video = channels.get("video", {}) if isinstance(channels, dict) else {}
-        return {
-            "payload_index": "0",
+        state = {
             "payload_type": "gimbal",
             "payload_model_key": str(gimbal_config.get("model_key", "viewlink-gimbal")),
             "payload_name": str(gimbal_config.get("name", "gimbal")),
@@ -123,6 +123,7 @@ class GimbalController:
             "last_control": dict(self._last_control),
             "last_update_time": self._last_update_time,
         }
+        return with_dock3_payload_index(state, gimbal_config)
 
     def _notify_payload_state(self, reason: str):
         """Publish a payload state event without polluting Dock3 dock state properties."""

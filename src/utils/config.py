@@ -13,6 +13,14 @@ DEFAULT_PAYLOAD_DEVICES = {
         'enabled': True,
         'auto_connect': True,
         'direct_to_gateway': True,
+        'cloud_api': {
+            'type': 52,
+            'subtype': 0,
+            'gimbal_index': 0,
+            'video_index': 'normal-0',
+            'video_type': 'normal',
+            'switchable_video_types': ['normal', 'wide', 'zoom', 'infrared'],
+        },
         'channels': {
             'control': {
                 'direction': 'bidirectional',

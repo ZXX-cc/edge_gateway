@@ -312,6 +312,8 @@ class EdgeGateway:
                 self.payload_topology,
                 self._payload_connection_states,
             )
+        if self.device:
+            self.device.set_payload_state_provider(self._payload_connection_states)
 
         gimbal_config = self.payload_topology.get_device('gimbal')
         control = (gimbal_config.get('channels') or {}).get('control') or {}
@@ -648,7 +650,7 @@ class EdgeGateway:
                 if self.telemetry_reporter:
                     self.telemetry_reporter.report_osd(
                         Config.get_gateway_sn(),
-                        self.device.build_dock3_dock_osd(),
+                        self.device.build_dock3_dock_osd(include_payload=True),
                     )
             if self.dock:
                 dock_updates = filter_dock_status_fields(build_dock3_properties_from_nest(nest_data))
@@ -919,7 +921,7 @@ class EdgeGateway:
         def osd_cb(osd_data):
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
-            dock_osd = self.device.build_dock3_dock_osd()
+            dock_osd = self.device.build_dock3_dock_osd(include_payload=True)
             self.telemetry_reporter.report_osd(gateway_sn, dock_osd)
 
             published_drone_osd = False

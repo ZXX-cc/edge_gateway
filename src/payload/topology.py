@@ -9,6 +9,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from src.payload.dock3_payload import with_dock3_payload_index
+
 
 REQUIRED_CHANNELS = {
     "gimbal": {
@@ -101,6 +103,8 @@ class PayloadTopology:
                 if state_payload
                 else state
             )
+            if device_id == "gimbal" and state_payload:
+                state_payload = with_dock3_payload_index(state_payload, device)
             payloads.append({
                 "id": device_id,
                 "name": device.get("name", device_id),

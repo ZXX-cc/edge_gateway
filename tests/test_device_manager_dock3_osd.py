@@ -27,6 +27,24 @@ class DeviceManagerDock3OsdTest(unittest.TestCase):
 
         self.assertEqual(osd["mode_code"], {"value": "marker:mode_code"})
 
+    def test_payload_osd_extension_is_explicit(self):
+        self.manager.gateway_sn = "EDGEGW001"
+        self.manager._payload_state_provider = lambda: {
+            "gimbal": {
+                "payload_index": "52-0-0",
+                "gimbal": {"pitch": -12.04, "roll": 3.02, "yaw": 190},
+            }
+        }
+
+        osd = self.manager.build_dock3_dock_osd(include_payload=True)
+
+        payload = osd["type_subtype_gimbalindex"]
+        self.assertEqual(payload["payload_index"], "52-0-0")
+        self.assertEqual(payload["gimbal_pitch"], -12.0)
+        self.assertEqual(payload["gimbal_roll"], 3.0)
+        self.assertEqual(payload["gimbal_yaw"], -170.0)
+        self.assertEqual(payload["measure_target_error_state"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

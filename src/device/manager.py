@@ -31,6 +31,7 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder
+from src.payload.dock3_payload import build_gimbal_payload_property, build_live_capacity
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
     official_property_names,
@@ -181,6 +182,7 @@ class DeviceManager:
         self._telemetry_processor = None   # TelemetryProcessor - MAVLink遥测
         self._dock_manager = None          # DockManager - 机场管理
         self._cloud_conn = None            # CloudConnectionManager - 云端请求
+        self._payload_state_provider = None # Direct payload state provider
 
         # ===== 组织绑定信息持久化 =====
         self._org_data_path = os.path.join(
@@ -353,11 +355,7 @@ class DeviceManager:
             # ---- 直播/媒体属性 (pushMode=1, 部分可写) ----
             'air_transfer_enable': False,    # rw: 空中回传
             'live_status': [],
-            'live_capacity': {
-                'available_video_number': 0,
-                'coexist_video_number_max': 0,
-                'device_list': []
-            },
+            'live_capacity': self._build_live_capacity_property(),
 
             # ---- 电源/电量属性 ----
             'electricity': 100,                      # 总电量(%)
@@ -449,6 +447,7 @@ class DeviceManager:
                 'locked': False,
                 'payloads': []
             },
+            'type_subtype_gimbalindex': self._build_gimbal_payload_property(),
 
             # ---- 用户体验 (pushMode=1, 可写rw) ----
             'user_experience_improvement': 0,   # 0:初始,1:拒绝,2:同意
@@ -482,6 +481,11 @@ class DeviceManager:
         """注入云端连接管理器（用于发起 requests/requests_reply）"""
         self._cloud_conn = cloud_conn
         logger.info("DeviceManager: Cloud connection manager injected")
+
+    def set_payload_state_provider(self, provider: Callable):
+        """Inject direct payload state provider for Dock3 payload properties."""
+        self._payload_state_provider = provider
+        self._refresh_payload_properties(notify=False)
 
     # ========== 持久化数据加载 ==========
 
@@ -794,7 +798,11 @@ class DeviceManager:
         import copy
         return copy.deepcopy(self._properties)
 
-    def build_dock3_dock_osd(self, wrap_value: bool = False) -> Dict[str, Any]:
+    def build_dock3_dock_osd(
+        self,
+        wrap_value: bool = False,
+        include_payload: bool = False,
+    ) -> Dict[str, Any]:
         """
         构造 Dock3 机场 OSD。
 
@@ -816,9 +824,60 @@ class DeviceManager:
             for field in dock_osd_fields
             if field in self._properties
         }
+        if include_payload:
+            self._refresh_payload_properties(notify=False)
+            if "type_subtype_gimbalindex" in self._properties:
+                osd["type_subtype_gimbalindex"] = copy.deepcopy(
+                    self._properties["type_subtype_gimbalindex"]
+                )
+
         if not wrap_value:
             return osd
         return {field: {"value": value} for field, value in osd.items()}
+
+    def _gimbal_payload_config(self) -> Dict[str, Any]:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        gimbal = devices.get("gimbal", {}) if isinstance(devices, dict) else {}
+        return gimbal if isinstance(gimbal, dict) else {}
+
+    def _build_gimbal_payload_property(self) -> Dict[str, Any]:
+        state = {}
+        provider = getattr(self, "_payload_state_provider", None)
+        if provider:
+            try:
+                states = provider() or {}
+                if isinstance(states, dict) and isinstance(states.get("gimbal"), dict):
+                    state = states["gimbal"]
+            except Exception as exc:
+                logger.warning("Refresh gimbal payload property failed: %s", exc)
+        return build_gimbal_payload_property(state, self._gimbal_payload_config())
+
+    def _build_live_capacity_property(self) -> Dict[str, Any]:
+        gimbal_config = self._gimbal_payload_config()
+        channels = gimbal_config.get("channels", {}) if isinstance(gimbal_config, dict) else {}
+        video = channels.get("video", {}) if isinstance(channels, dict) else {}
+        return build_live_capacity(
+            gateway_sn=getattr(self, "gateway_sn", Config.get_gateway_sn()),
+            config=gimbal_config,
+            video_endpoint=str(video.get("endpoint", "") or ""),
+        )
+
+    def _refresh_payload_properties(self, notify: bool = False) -> Dict[str, Any]:
+        updates = {
+            "type_subtype_gimbalindex": self._build_gimbal_payload_property(),
+            "live_capacity": self._build_live_capacity_property(),
+        }
+        changed = {
+            key: value
+            for key, value in updates.items()
+            if self._properties.get(key) != value
+        }
+        if changed:
+            self._properties.update(changed)
+            if notify and self._state_callback:
+                self._notify_state({"property": changed})
+        return updates
 
     def update_properties(self, updates: Dict[str, Any], notify: bool = True):
         """批量更新属性（内部遥测/机巢更新用）"""
@@ -1652,6 +1711,7 @@ class DeviceManager:
         """
         data = msg.get('data', {})
         props = data.get('properties', [])
+        self._refresh_payload_properties(notify=False)
         if not props:
             result = self.get_all_properties()
         else:

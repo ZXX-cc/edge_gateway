@@ -127,7 +127,7 @@ class PayloadLinkTopologyTest(unittest.TestCase):
                 "gimbal": {
                     "connection_state": "connected",
                     "payload_type": "gimbal",
-                    "payload_index": "0",
+                    "payload_index": "52-0-0",
                     "gimbal": {"pitch": -20, "roll": 0, "yaw": 30, "mode": 0},
                 }
             },
@@ -140,7 +140,8 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(payloads[0]["id"], "gimbal")
         self.assertEqual(payloads[0]["connection_state"], "connected")
         self.assertEqual(payloads[0]["payload_type"], "gimbal")
-        self.assertEqual(payloads[0]["payload_index"], "0")
+        self.assertEqual(payloads[0]["payload_index"], "52-0-0")
+        self.assertEqual(payloads[0]["type_subtype_gimbalindex"]["payload_index"], "52-0-0")
         self.assertEqual(payloads[0]["gimbal"]["pitch"], -20)
         self.assertTrue(all(item["direct_to_gateway"] for item in payloads))
         self.assertFalse(reply["data"]["flight_controller_fallback"])

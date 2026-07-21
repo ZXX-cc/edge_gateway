@@ -1045,9 +1045,10 @@ class DrcController:
         Response: { result }
         """
         data = msg.get('data', {})
-        payload_index = data.get('payload_index', '0')
+        payload_index = str(data.get('payload_index', '52-0-0') or '52-0-0')
         action = data.get('action', '')
         params = data.get('params', {})
+        camera_index = self._camera_index_from_payload_index(payload_index)
 
         if not self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="DRC not enabled")
@@ -1059,17 +1060,17 @@ class DrcController:
             if action == 'photo_take':
                 # 拍照 - 调用相机控制器
                 if self._camera_controller:
-                    self._camera_controller.handle_camera_photo_take({'data': {'camera_index': int(payload_index)}})
+                    self._camera_controller.handle_camera_photo_take({'data': {'camera_index': camera_index}})
 
             elif action == 'record_start':
                 # 开始录像
                 if self._camera_controller:
-                    self._camera_controller.handle_camera_record_start({'data': {'camera_index': int(payload_index)}})
+                    self._camera_controller.handle_camera_record_start({'data': {'camera_index': camera_index}})
 
             elif action == 'record_stop':
                 # 停止录像
                 if self._camera_controller:
-                    self._camera_controller.handle_camera_record_stop({'data': {'camera_index': int(payload_index)}})
+                    self._camera_controller.handle_camera_record_stop({'data': {'camera_index': camera_index}})
 
             elif action == 'zoom':
                 # 变焦
@@ -1091,6 +1092,14 @@ class DrcController:
             return MessageBuilder.build_reply(msg, result=-1, msg_str=str(e))
 
         return MessageBuilder.build_reply(msg, result=0)
+
+    @staticmethod
+    def _camera_index_from_payload_index(payload_index: str) -> int:
+        """Map Dock3 type-subtype-gimbalIndex to the local camera slot."""
+        try:
+            return int(str(payload_index).split("-")[-1])
+        except (TypeError, ValueError):
+            return 0
 
     def handle_drc_gimbal_speed_push(self, msg: dict) -> dict:
         """

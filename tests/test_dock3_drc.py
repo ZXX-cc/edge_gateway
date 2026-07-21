@@ -54,6 +54,23 @@ class FakeModeControl:
         return {"success": self.goto_success, "message": "guided target sent"}
 
 
+class FakeCameraController:
+    def __init__(self):
+        self.calls = []
+
+    def handle_camera_photo_take(self, msg):
+        self.calls.append(("photo", msg["data"]["camera_index"]))
+        return {"data": {"result": 0}}
+
+    def handle_camera_record_start(self, msg):
+        self.calls.append(("record_start", msg["data"]["camera_index"]))
+        return {"data": {"result": 0}}
+
+    def handle_camera_record_stop(self, msg):
+        self.calls.append(("record_stop", msg["data"]["camera_index"]))
+        return {"data": {"result": 0}}
+
+
 class Dock3DrcTest(unittest.TestCase):
     def test_official_dock3_drc_scope_contains_core_methods(self):
         for method in [
@@ -386,6 +403,26 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["status"], "failed")
         self.assertEqual(events[-1]["data"]["status"], "wayline_failed")
         self.assertIsNone(controller.get_drc_status()["active_fly_to_point"])
+
+    def test_payload_control_accepts_official_three_part_payload_index(self):
+        controller = DrcController()
+        camera = FakeCameraController()
+        controller.set_camera_controller(camera)
+        controller._drc_enabled = True
+
+        reply = controller.handle_payload_control({
+            "method": "payload_control",
+            "tid": "tid-payload",
+            "gateway": "EDGEGW001",
+            "data": {
+                "payload_index": "52-0-0",
+                "action": "photo_take",
+                "params": {},
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(camera.calls, [("photo", 0)])
 
     def test_payload_todo_methods_fail_without_real_adapter(self):
         controller = DrcController()

@@ -274,6 +274,19 @@ class Dock3MediaManagerTest(unittest.TestCase):
             4,
         )
 
+    def test_live_capability_includes_official_camera_index(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+
+        reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+
+        capacity = reply["data"]["live_capacity"]
+        camera = capacity["device_list"][0]["camera_list"][0]
+        video = camera["video_list"][0]
+        self.assertEqual(camera["camera_index"], "52-0-0")
+        self.assertEqual(video["video_index"], "normal-0")
+        self.assertIn("zoom", video["switchable_video_types"])
+
     def test_gimbal_live_source_builds_rtsp_to_rtmp_ffmpeg_command(self):
         original = deepcopy(Config.all())
         Config.merge({

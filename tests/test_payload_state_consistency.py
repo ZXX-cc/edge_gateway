@@ -5,6 +5,12 @@ import types
 
 if "src.database.connection" not in sys.modules:
     connection = types.ModuleType("src.database.connection")
+    try:
+        from sqlalchemy.orm import declarative_base
+
+        Base = declarative_base()
+    except Exception:
+        Base = type("Base", (), {})
 
     async def init_database_async():
         return None
@@ -12,8 +18,21 @@ if "src.database.connection" not in sys.modules:
     def get_async_session_local():
         return None
 
+    def is_mongo_session(*args, **kwargs):
+        return False
+
+    def mongo_model_from_document(*args, **kwargs):
+        return None
+
+    def mongo_expired_filter(*args, **kwargs):
+        return {}
+
+    connection.Base = Base
     connection.init_database_async = init_database_async
     connection.get_async_session_local = get_async_session_local
+    connection.is_mongo_session = is_mongo_session
+    connection.mongo_model_from_document = mongo_model_from_document
+    connection.mongo_expired_filter = mongo_expired_filter
     sys.modules["src.database.connection"] = connection
 
 if "src.database.media_db" not in sys.modules:
@@ -235,7 +254,10 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         payload = reply["data"]["payload"]
         self.assertEqual(payload["payload_type"], "gimbal")
-        self.assertEqual(payload["payload_index"], "0")
+        self.assertEqual(payload["payload_index"], "52-0-0")
+        self.assertEqual(payload["type_subtype_gimbalindex"]["payload_index"], "52-0-0")
+        self.assertEqual(payload["type_subtype_gimbalindex"]["gimbal_pitch"], -25.0)
+        self.assertEqual(payload["type_subtype_gimbalindex"]["gimbal_yaw"], 55.0)
         self.assertEqual(payload["gimbal"]["pitch"], -25)
         self.assertEqual(payload["gimbal"]["roll"], 1)
         self.assertEqual(payload["gimbal"]["yaw"], 55)
