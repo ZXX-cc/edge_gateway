@@ -63,12 +63,12 @@ media:
   auto_upload: true
   upload_quality: "original"
   video_sources:
-    normal: "rtsp://192.168.2.119:554/main"
-    zoom: "rtsp://192.168.2.119:554/main"
-    gimbal: "rtsp://192.168.2.119:554/main"
+    normal: "rtsp://192.168.1.119:554/main"
+    zoom: "rtsp://192.168.1.119:554/main"
+    gimbal: "rtsp://192.168.1.119:554/main"
   remote_media:
     enabled: true
-    base_url: "http://192.168.2.119:8554/download/"
+    base_url: "http://192.168.1.119:8554/download/"
     max_depth: 4
     timeout_seconds: 5
     extensions: ["jpg", "jpeg", "png", "dng", "mp4", "mov", "avi", "mkv"]
@@ -134,14 +134,14 @@ payload:
           direction: "bidirectional"
           transport: "viewlink_tcp"
           adapter: "viewlink"
-          host: "192.168.2.119"
+          host: "192.168.1.119"
           port: 2000
           connect_timeout: 5
           sdk_dir: "D:/ViewLink/bin/win64"
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"
-          endpoint: "rtsp://192.168.2.119:554/main"
+          endpoint: "rtsp://192.168.1.119:554/main"
           timing: "realtime"
 
 rtk:

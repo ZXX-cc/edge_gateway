@@ -720,17 +720,18 @@ class MediaManager:
         logger.info(f"Starting ffmpeg: {' '.join(cmd)}")
 
         try:
-            self._ffmpeg_process = subprocess.Popen(
+            process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
             )
-            logger.info(f"FFmpeg started, pid={self._ffmpeg_process.pid}")
+            self._ffmpeg_process = process
+            logger.info(f"FFmpeg started, pid={process.pid}")
 
             # 启动监控线程
             self._ffmpeg_monitor_thread = threading.Thread(
-                target=self._ffmpeg_monitor, daemon=True
+                target=self._ffmpeg_monitor, args=(process,), daemon=True
             )
             self._ffmpeg_monitor_thread.start()
             return True
@@ -778,22 +779,24 @@ class MediaManager:
             self.gateway_sn,
         ))
 
-    def _ffmpeg_monitor(self):
+    def _ffmpeg_monitor(self, process: Optional[subprocess.Popen] = None):
         """监控 ffmpeg 进程状态"""
-        if not self._ffmpeg_process:
+        process = process or self._ffmpeg_process
+        if not process:
             return
 
-        stdout, stderr = self._ffmpeg_process.communicate()
-        returncode = self._ffmpeg_process.returncode
+        stdout, stderr = process.communicate()
+        returncode = process.returncode
 
         if returncode != 0 and returncode is not None:
             stderr_text = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
             logger.warning(f"FFmpeg exited with code {returncode}: {stderr_text}")
 
-        if self._live_streaming:
+        if self._ffmpeg_process is process and self._live_streaming:
             logger.info("FFmpeg exited, live streaming stopped")
             self._live_streaming = False
             self._live_session_id = ""
+            self._ffmpeg_process = None
 
     def handle_live_start(self, msg: dict) -> dict:
         """

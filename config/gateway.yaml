@@ -141,16 +141,16 @@ media:
   auto_upload: true
   upload_quality: "original" # original/high/medium/low
   video_sources: # 真实直播视频源配置；生产环境必须使用 /dev/video*、rtsp://、http:// 或 https://
-    normal: "rtsp://192.168.2.119:554/main"
+    normal: "rtsp://192.168.1.119:554/main"
     wide: "rtsp://admin:Cgbxuav301@192.168.1.64:554/main"
-    zoom: "rtsp://192.168.2.119:554/main"
+    zoom: "rtsp://192.168.1.119:554/main"
     ir: "/dev/video1"
-    gimbal: "rtsp://192.168.2.119:554/main"
+    gimbal: "rtsp://192.168.1.119:554/main"
     dock_inside: "rtsp://admin:Cgbxuav301@192.168.1.64:554/main"
     dock_outside: "rtsp://admin:Cgbxuav301@192.168.1.65:554/main"
   remote_media:
     enabled: true
-    base_url: "http://192.168.2.119:8554/download/"
+    base_url: "http://192.168.1.119:8554/download/"
     max_depth: 4
     timeout_seconds: 5
     extensions: ["jpg", "jpeg", "png", "dng", "mp4", "mov", "avi", "mkv"]
@@ -255,14 +255,14 @@ payload:
           direction: "bidirectional"
           transport: "viewlink_tcp"
           adapter: "viewlink"
-          host: "192.168.2.119"
+          host: "192.168.1.119"
           port: 2000
           connect_timeout: 5
           sdk_dir: "D:/ViewLink/bin/win64" # ViewLink SDK 目录；留空时使用 adapter 默认值
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"
-          endpoint: "rtsp://192.168.2.119:554/main" # 吊舱视频流地址
+          endpoint: "rtsp://192.168.1.119:554/main" # 吊舱视频流地址
           timing: "realtime"
     mapping_camera:
       name: "正射/倾斜相机"

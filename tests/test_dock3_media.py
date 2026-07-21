@@ -314,6 +314,26 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("flv", command)
         self.assertEqual(command[-1], "rtmp://cloud.example/live/stream")
 
+    def test_old_ffmpeg_monitor_does_not_clear_restarted_stream(self):
+        class FinishedProcess:
+            returncode = 0
+
+            def communicate(self):
+                return b"", b""
+
+        manager = MediaManager()
+        old_process = FinishedProcess()
+        new_process = FinishedProcess()
+        manager._ffmpeg_process = new_process
+        manager._live_streaming = True
+        manager._live_session_id = "new-live"
+
+        manager._ffmpeg_monitor(old_process)
+
+        self.assertIs(manager._ffmpeg_process, new_process)
+        self.assertTrue(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "new-live")
+
     def test_live_start_accepts_gimbal_video_type(self):
         ok, normalized, errors = validate_live_start_payload({
             "url": "rtmp://cloud.example/live/stream",
