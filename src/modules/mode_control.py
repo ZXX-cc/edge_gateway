@@ -301,6 +301,51 @@ class ModeControl(BaseModule):
 
         return result
 
+    def guided_loiter_at_point(self, lat: float, lon: float, alt: float,
+                               radius: float = 80.0,
+                               frame: int = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT) -> dict:
+        """GUIDED模式飞往指定位置，并以该点为圆心持续盘旋。"""
+        result = {
+            "success": False,
+            "message": ""
+        }
+
+        self.log(f"GUIDED模式盘旋点: ({lat:.6f}, {lon:.6f}, {alt}m), radius={radius}m")
+
+        mav = self._get_mav_sender()
+        if not mav or not hasattr(mav, "mission_item_int_send"):
+            result["message"] = "MAVLink连接不可用，无法发送GUIDED盘旋点"
+            self.log(result["message"], "ERROR")
+            return result
+
+        loiter_command = getattr(
+            mavutil.mavlink,
+            "MAV_CMD_NAV_LOITER_UNLIM",
+            getattr(mavlink, "MAV_CMD_NAV_LOITER_UNLIM", 17),
+        )
+        mav.mission_item_int_send(
+            self.target_system,
+            self.target_component,
+            0,
+            frame,
+            loiter_command,
+            2,
+            0,
+            0,
+            0,
+            radius,
+            0,
+            int(lat * 1.0e7),
+            int(lon * 1.0e7),
+            alt
+        )
+
+        result["success"] = True
+        result["message"] = f"GUIDED盘旋点已设置: ({lat:.6f}, {lon:.6f}, {alt}m), radius={radius}m"
+        self.log(result["message"])
+
+        return result
+
     def guided_forward(self, distance: float) -> dict:
         """GUIDED模式向前飞行指定距离"""
         result = {

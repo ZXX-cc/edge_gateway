@@ -17,6 +17,7 @@ try:
             "MAV_FRAME_GLOBAL_RELATIVE_ALT_INT",
             "MAV_FRAME_BODY_NED",
             "MAV_CMD_NAV_WAYPOINT",
+            "MAV_CMD_NAV_LOITER_UNLIM",
         )
     )
 except Exception:
@@ -29,12 +30,14 @@ if _needs_stub:
         MAV_FRAME_GLOBAL_RELATIVE_ALT_INT=6,
         MAV_FRAME_BODY_NED=8,
         MAV_CMD_NAV_WAYPOINT=16,
+        MAV_CMD_NAV_LOITER_UNLIM=17,
     )
     pymavlink.mavutil = mavutil
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = mavutil
 
 from src.modules.mode_control import ModeControl  # noqa: E402
+from pymavlink import mavutil  # noqa: E402
 
 
 class RecordingMav:
@@ -77,6 +80,24 @@ class ModeControlGuidedTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(len(mav.position_target_local_calls), 1)
+
+    def test_guided_loiter_at_point_uses_loiter_command_and_radius(self):
+        mav = RecordingMav()
+        mode = ModeControl()
+        mode.dispatcher = types.SimpleNamespace(
+            connection=types.SimpleNamespace(master=types.SimpleNamespace(mav=mav))
+        )
+
+        result = mode.guided_loiter_at_point(-35.3632622, 149.1652375, 50, radius=90)
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(mav.mission_item_int_calls), 1)
+        call = mav.mission_item_int_calls[0]
+        self.assertEqual(call[4], mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM)
+        self.assertEqual(call[9], 90)
+        self.assertEqual(call[11], int(-35.3632622 * 1.0e7))
+        self.assertEqual(call[12], int(149.1652375 * 1.0e7))
+        self.assertEqual(call[13], 50)
 
     def test_guided_goto_reports_failure_without_mav_sender(self):
         mode = ModeControl()

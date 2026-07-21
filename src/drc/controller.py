@@ -92,6 +92,7 @@ class DrcController:
         self._altitude_max = 500  # 最大高度（米）
         self._speed_max = 20  # 最大速度（m/s）
         self._geofence_radius = 2000  # 电子围栏半径（米）
+        self._guided_loiter_radius = Config.get('device.drc.guided_loiter_radius', 80.0)
 
     def set_event_callback(self, callback: Callable):
         """设置事件上报回调"""
@@ -223,6 +224,30 @@ class DrcController:
                 return True, False, mode
             last_message = result.get("message", f"{mode} failed")
         return False, False, last_message
+
+    def _send_guided_loiter_target(self, latitude: float, longitude: float, height: float) -> dict:
+        """固定翼指点飞行：切 GUIDED 后发送到点盘旋目标。"""
+        if not self._mode_control:
+            return {"success": False, "message": "mode_control not available"}
+
+        if hasattr(self._mode_control, "set_mode"):
+            mode_result = self._mode_control.set_mode("GUIDED")
+            if not mode_result.get("success"):
+                return {
+                    "success": False,
+                    "message": mode_result.get("message", "GUIDED mode switch failed"),
+                }
+
+        if hasattr(self._mode_control, "guided_loiter_at_point"):
+            return self._mode_control.guided_loiter_at_point(
+                latitude,
+                longitude,
+                height,
+                radius=self._guided_loiter_radius,
+            )
+        if hasattr(self._mode_control, "guided_goto"):
+            return self._mode_control.guided_goto(latitude, longitude, height)
+        return {"success": False, "message": "guided flight adapter not available"}
 
     def _set_emergency_land_mode(self) -> tuple:
         """进入紧急降落模式，优先复用 FlightControl.land。"""
@@ -436,10 +461,27 @@ class DrcController:
                 # 创建暂停消息并调用（包含当前任务ID）
                 if hasattr(self._mission_manager, 'handle_pause_wayline'):
                     task_id = getattr(self._mission_manager, '_current_task_id', '')
-                    self._mission_manager.handle_pause_wayline({'data': {'task_id': task_id}})
-                return True
+                    reply = self._mission_manager.handle_pause_wayline({'data': {'task_id': task_id}})
+                    result = reply.get("data", {}).get("result", 0) if isinstance(reply, dict) else 0
+                    return result == 0
+                return False
 
         return True
+
+    def _enter_drc_hold_mode(self) -> tuple:
+        """进入 DRC 后的固定翼保持态：任务暂停用 LOITER，无任务也切 LOITER 盘旋。"""
+        if self._mission_manager and hasattr(self._mission_manager, 'status'):
+            from src.mission.manager import MissionManager
+            mission_status = self._mission_manager.status
+            if mission_status in (MissionManager.MISSION_RUNNING, MissionManager.MISSION_PREPARING):
+                if self._pause_current_mission():
+                    return True, "mission paused to LOITER"
+                return False, "pause mission failed"
+
+        sent, _, detail = self._set_safe_mode()
+        if sent:
+            return True, detail
+        return False, detail
 
     def _start_heartbeat_monitor(self):
         """启动心跳监控线程"""
@@ -545,11 +587,10 @@ class DrcController:
 
         流程:
         1. 状态校验：检查飞行状态
-        2. 暂停任务：如正在执行航线任务，先暂停
-        3. 保存原模式：记录进入前的飞行模式
-        4. 模式切换：切换至GUIDED模式
-        5. 启动心跳：建立心跳保活机制
-        6. 上报事件：drc_status_notify
+        2. 保存原模式：记录进入前的飞行模式
+        3. 固定翼保持：如正在执行航线任务，暂停到 LOITER；无任务时切 LOITER 盘旋
+        4. 启动心跳：建立心跳保活机制
+        5. 上报事件：drc_status_notify
 
         Request: { }
         """
@@ -576,34 +617,30 @@ class DrcController:
             return MessageBuilder.build_reply(msg, result=-1, msg_str=reason)
 
         # 2. 保存原模式
-        if self._mode_control:
+        if self._mode_control and hasattr(self._mode_control, "get_current_mode"):
             mode_info = self._mode_control.get_current_mode()
             self._original_mode = mode_info.get('mode_name')
             logger.info(f"DRC: 保存原模式 {self._original_mode}")
 
-        # 3. 暂停当前任务
-        self._pause_current_mission()
+        # 3. 固定翼进入可持续保持态；指点飞行时再切 GUIDED。
+        hold_ok, hold_reason = self._enter_drc_hold_mode()
+        if not hold_ok:
+            logger.warning("DRC enter hold mode failed: %s", hold_reason)
+            return self._real_adapter_unavailable(msg, hold_reason)
 
         # 4. 进入DRC状态
         self._drc_enabled = True
         self._session_id = str(int(time.time() * 1000))
         logger.info(f"DRC mode entered, session={self._session_id}")
 
-        # 5. 切换到GUIDED模式以支持实时控制
-        if self._mode_control:
-            result = self._mode_control.set_mode("GUIDED")
-            if not result.get("success"):
-                logger.warning(f"DRC进入GUIDED模式失败: {result.get('message')}")
-                # 即使失败也保持DRC状态，允许后续重试
-
-        # 6. 启动心跳监控
+        # 5. 启动心跳监控
         self._start_heartbeat_monitor()
 
-        # 7. 上报进入成功事件
+        # 6. 上报进入成功事件
         self.report_drc_status_notify(drc_state=2, result=0)
 
-        # 8. 写入审计日志
-        self._write_audit_log("mode_enter", f"session={self._session_id}")
+        # 7. 写入审计日志
+        self._write_audit_log("mode_enter", f"session={self._session_id}, hold={hold_reason}")
 
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -940,11 +977,10 @@ class DrcController:
 
         logger.info(f"DRC flyto: lat={lat}, lon={lon}, alt={alt}, speed={speed}")
 
-        # 通过ModeControl发送GUIDED位置目标
-        if self._mode_control and hasattr(self._mode_control, 'guided_goto'):
-            result = self._mode_control.guided_goto(lat, lon, alt)
-            if not result.get("success"):
-                logger.warning(f"DRC flyto failed: {result.get('message')}")
+        result = self._send_guided_loiter_target(lat, lon, alt)
+        if not result.get("success"):
+            logger.warning(f"DRC flyto failed: {result.get('message')}")
+            return self._real_adapter_unavailable(msg, result.get("message", "guided target failed"))
 
         return MessageBuilder.build_reply(msg, result=0)
 
@@ -1213,7 +1249,9 @@ class DrcController:
         }
         logger.info("Fly to point update: id=%s, max_speed=%s, points=%s", fly_to_id, max_speed, points)
 
-        if not self._mode_control or not hasattr(self._mode_control, 'guided_goto'):
+        if not self._mode_control or not (
+            hasattr(self._mode_control, 'guided_loiter_at_point') or hasattr(self._mode_control, 'guided_goto')
+        ):
             self.report_flyto_progress(fly_to_id, "wayline_failed", result=DOCK_COMMUNICATION_ERROR)
             self._active_fly_to_point = None
             return self._real_adapter_unavailable(
@@ -1222,7 +1260,7 @@ class DrcController:
             )
 
         try:
-            result = self._mode_control.guided_goto(
+            result = self._send_guided_loiter_target(
                 first_point["latitude"],
                 first_point["longitude"],
                 first_point["height"],
@@ -1607,7 +1645,9 @@ class DrcController:
             }],
         )
 
-        if not self._mode_control or not hasattr(self._mode_control, 'guided_goto'):
+        if not self._mode_control or not (
+            hasattr(self._mode_control, 'guided_loiter_at_point') or hasattr(self._mode_control, 'guided_goto')
+        ):
             self.report_takeoff_to_point_progress(
                 flight_id,
                 "wayline_failed",
@@ -1622,20 +1662,7 @@ class DrcController:
 
         guidance_message = "guided target sent"
         try:
-            if hasattr(self._mode_control, 'set_mode'):
-                mode_result = self._mode_control.set_mode("GUIDED")
-                if not mode_result.get("success"):
-                    guidance_warning = mode_result.get("message", "GUIDED mode switch failed")
-                    logger.warning("takeoff_to_point GUIDED mode failed: %s", guidance_warning)
-                    self.report_takeoff_to_point_progress(
-                        flight_id,
-                        "wayline_failed",
-                        result=DOCK_COMMUNICATION_ERROR,
-                        track_id=track_id,
-                    )
-                    self._active_takeoff_to_point = None
-                    return self._real_adapter_unavailable(msg, guidance_warning)
-            goto_result = self._mode_control.guided_goto(target_latitude, target_longitude, target_height)
+            goto_result = self._send_guided_loiter_target(target_latitude, target_longitude, target_height)
             if not goto_result.get("success"):
                 guidance_warning = goto_result.get("message", "guided_goto failed")
                 logger.warning("takeoff_to_point guided_goto failed: %s", guidance_warning)

@@ -53,6 +53,10 @@ class FakeModeControl:
         self.calls.append(("guided_goto", latitude, longitude, height))
         return {"success": self.goto_success, "message": "guided target sent"}
 
+    def guided_loiter_at_point(self, latitude, longitude, height, radius=80.0):
+        self.calls.append(("guided_loiter_at_point", latitude, longitude, height, radius))
+        return {"success": self.goto_success, "message": "guided loiter target sent"}
+
 
 class FakeCameraController:
     def __init__(self):
@@ -289,9 +293,32 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(events[-1]["data"]["drc_state"], 0)
         self.assertEqual(events[-1]["data"]["result"], DEVICE_COMMAND_TIMEOUT)
 
+    def test_controller_drc_mode_enter_holds_fixed_wing_in_loiter(self):
+        mode = FakeModeControl()
+        controller = DrcController()
+        controller.set_mode_control(mode)
+        events = []
+        controller.set_event_callback(events.append)
+
+        reply = controller.handle_drc_mode_enter({
+            "method": "drc_mode_enter",
+            "tid": "tid-enter",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+        controller._heartbeat_running = False
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertTrue(controller.get_drc_status()["enabled"])
+        self.assertIn(("set_mode", "LOITER"), mode.calls)
+        self.assertNotIn(("set_mode", "GUIDED"), mode.calls)
+        self.assertEqual(events[-1]["method"], "drc_status_notify")
+        self.assertEqual(events[-1]["data"]["drc_state"], 2)
+
     def test_controller_takeoff_to_point_reports_progress_event(self):
         controller = DrcController()
-        controller.set_mode_control(FakeModeControl())
+        mode = FakeModeControl()
+        controller.set_mode_control(mode)
         events = []
         controller.set_event_callback(events.append)
 
@@ -318,6 +345,8 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(events[0]["data"]["status"], "task_ready")
         self.assertEqual(events[1]["data"]["status"], "wayline_progress")
         self.assertEqual(reply["data"]["output"]["simulated"], False)
+        self.assertIn(("set_mode", "GUIDED"), mode.calls)
+        self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 50.0, 80.0), mode.calls)
 
     def test_controller_takeoff_to_point_fails_without_guided_adapter(self):
         controller = DrcController()
@@ -344,7 +373,8 @@ class Dock3DrcTest(unittest.TestCase):
 
     def test_controller_fly_to_point_update_and_stop_report_events(self):
         controller = DrcController()
-        controller.set_mode_control(FakeModeControl())
+        mode = FakeModeControl()
+        controller.set_mode_control(mode)
         events = []
         controller.set_event_callback(events.append)
 
@@ -367,6 +397,8 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(update["data"]["fly_to_id"], "flyto-001")
         self.assertEqual(events[-1]["method"], "fly_to_point_progress")
         self.assertEqual(events[-1]["data"]["status"], "wayline_progress")
+        self.assertIn(("set_mode", "GUIDED"), mode.calls)
+        self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 45.0, 80.0), mode.calls)
 
         stop = controller.handle_fly_to_point_stop({
             "method": "fly_to_point_stop",
