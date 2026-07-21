@@ -5,6 +5,7 @@ import tempfile
 import time
 import types
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -272,6 +273,46 @@ class Dock3MediaManagerTest(unittest.TestCase):
             len([event for event in events if event.get("method") == "live_status_notify"]),
             4,
         )
+
+    def test_gimbal_live_source_builds_rtsp_to_rtmp_ffmpeg_command(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "livestream": {"default_video_type": "gimbal"},
+            "media": {
+                "video_sources": {
+                    "gimbal": "rtsp://192.168.1.119:554/main",
+                }
+            },
+        })
+        try:
+            manager = MediaManager()
+            command = manager._build_ffmpeg_cmd(
+                "rtmp://cloud.example/live/stream",
+                1,
+                3,
+                "gimbal",
+            )
+        finally:
+            Config._data = original
+
+        self.assertIn("-rtsp_transport", command)
+        self.assertIn("rtsp://192.168.1.119:554/main", command)
+        self.assertIn("-f", command)
+        self.assertIn("flv", command)
+        self.assertEqual(command[-1], "rtmp://cloud.example/live/stream")
+
+    def test_live_start_accepts_gimbal_video_type(self):
+        ok, normalized, errors = validate_live_start_payload({
+            "url": "rtmp://cloud.example/live/stream",
+            "url_type": 1,
+            "video_id": "EDGEGW001/0/gimbal",
+            "video_quality": 3,
+            "video_type": "gimbal",
+        })
+
+        self.assertTrue(ok)
+        self.assertEqual(errors, [])
+        self.assertEqual(normalized["video_type"], "gimbal")
 
     def test_production_rejects_mock_live_url(self):
         Config.merge({"runtime": {"mode": "production"}})

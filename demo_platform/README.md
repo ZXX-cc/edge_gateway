@@ -6,13 +6,14 @@
 - APIDock3 命令：直接通过云端 API topic 下发 services、property、DRC 命令
 - 真实航线：先用 QSTABILIZE/QLAN 前置解锁，再下发真实 HD 航线准备、执行、进度、暂停、恢复、返航、终止
 - DRC 飞控：进入控制、心跳、速度推送、退出控制
+- 云台直播：通过 ffmpeg 把吊舱 RTSP 转成浏览器可看的 MJPEG，并可下发 Dock3 直播推流命令
 - 飞行日志：按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包
 - 复测留证：只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项
 - 原始报文：排障时查看完整 `osd`、`state`、`events`、`services_reply`、`drc/up`、`status`
 
 它不替代 `src/main.py` 网关，也不启动 broker。使用前需要先启动 MQTT broker、Edge Gateway 和机巢模拟器。
 
-当前联调默认按 `192.168.2.188` 环境配置：`src/main.py` 和机巢模拟器都在 `192.168.2.188`，Demo Platform 通过 `192.168.2.188:1883` 连接 MQTT。
+当前联调默认按网关 `192.168.1.100` 环境配置：Demo Platform 通过 `192.168.1.100:1883` 连接 MQTT，默认预览吊舱 `rtsp://192.168.1.119:554/main`。
 
 ## 启动
 
@@ -33,22 +34,23 @@ http://127.0.0.1:8095
 ```bash
 DEMO_HOST=0.0.0.0
 DEMO_PORT=8095
-MQTT_HOST=192.168.2.188
+MQTT_HOST=192.168.1.100
 MQTT_PORT=1883
 GATEWAY_SN=EDGEGW001
 DRONE_SN=DRONESIM001
+GIMBAL_RTSP_URL=rtsp://192.168.1.119:554/main
 ```
 
-如果 Demo Platform 也部署在 `192.168.2.188`，推荐这样启动，方便局域网浏览器访问：
+如果 Demo Platform 也部署在网关同网段主机上，推荐这样启动，方便局域网浏览器访问：
 
 ```bash
-DEMO_HOST=0.0.0.0 MQTT_HOST=192.168.2.188 python demo_platform/app.py
+DEMO_HOST=0.0.0.0 MQTT_HOST=192.168.1.100 python demo_platform/app.py
 ```
 
 访问地址：
 
 ```text
-http://192.168.2.188:8095
+http://运行Demo的主机IP:8095
 ```
 
 ## 内置工作流

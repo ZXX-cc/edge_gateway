@@ -33,6 +33,7 @@ const viewMeta = {
   dock: ["APIDock3 命令", "直接通过云端 API topic 下发 Dock3 services、property 和 DRC 命令。"],
   mission: ["真实航线", "先用 QSTABILIZE/QLAN 前置解锁，再下发 HD 航线准备、执行、进度查询。"],
   drc: ["DRC 飞控", "进入控制、心跳、速度推送、退出控制。"],
+  live: ["云台直播", "查看吊舱 RTSP 实时画面，并验证 Dock3 live_start_push 推流链路。"],
   ops: ["飞行日志", "按时间查看飞行过程中的电量、高度、经纬度、模式、航线进度和回包。"],
   retest: ["复测留证", "只保留真实 SITL、APIDock3、DRC、机场机构和非阻塞留证项。"],
   raw: ["原始报文", "需要排障时查看完整 MQTT payload。"],
@@ -44,7 +45,7 @@ const retestItems = [
     category: "SITL",
     title: "SITL/QGC 真实 HD 航线上传校验",
     status: "needs_data",
-    command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale --real-sitl --wayline-file /home/fenghuolun/zwz/HD.waypoints --expect-waypoint-count 7",
+    command: "python tools/mqtt_dock3_wayline_test.py --host 192.168.1.100 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale --real-sitl --wayline-file /home/fenghuolun/zwz/HD.waypoints --expect-waypoint-count 7",
     expect: "将 /home/fenghuolun/zwz/HD.waypoints 的 7 个任务项上传到真实 SITL；该按钮不切 AUTO、不自动执行。",
     evidence: "flighttask_prepare 回包中的 file.source、waypoint_count=7，以及飞控任务上传 ACK。",
   },
@@ -53,7 +54,7 @@ const retestItems = [
     category: "APIDock3",
     title: "APIDock3/CMD 远程调试",
     status: "needs_data",
-    command: "python tools/mqtt_dock3_cmd_test.py --host 192.168.2.188 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
+    command: "python tools/mqtt_dock3_cmd_test.py --host 192.168.1.100 --port 1883 --sn EDGEGW001 --timeout 20 --quiet-stale",
     expect: "可直接从页面或脚本通过 Dock3 topic 下发命令，并看到 result、tid、进度事件。",
     evidence: "services_reply、progress event、operation record、拒绝原因。",
   },
@@ -62,7 +63,7 @@ const retestItems = [
     category: "飞控",
     title: "SITL 飞行模式真实复测",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase flight-modes --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    command: "python tools/person2_gap_test.py --phase flight-modes --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
     expect: "GUIDED/RTL/LAND 下发成功，且测试期间能收到飞行器 OSD 作为真实 SITL 在线证据。",
     evidence: "services_reply result、OSD mode_code/gear、FlightControl 日志。",
   },
@@ -71,7 +72,7 @@ const retestItems = [
     category: "飞控",
     title: "SITL 基础飞控动作",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase basic-flight --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    command: "python tools/person2_gap_test.py --phase basic-flight --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
     expect: "GUIDED、take_off、go_home、landing 均有回包，并且飞行器 OSD 可留证。",
     evidence: "services_reply result、OSD 经纬度/高度/模式、FlightControl 日志。",
   },
@@ -80,7 +81,7 @@ const retestItems = [
     category: "DRC",
     title: "DRC 到 MAVLink 语义复测",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase drc-sitl --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    command: "python tools/person2_gap_test.py --phase drc-sitl --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
     expect: "DRC enter/heartbeat/速度/takeoff_to_point/stop 都可用，并产生指点飞行进度事件。",
     evidence: "drc/up、services_reply、takeoff_to_point_progress 或 fly_to_point_progress、SITL OSD。",
   },
@@ -89,7 +90,7 @@ const retestItems = [
     category: "机场",
     title: "机场机构网关联动",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
     expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 dock_operation 或 HMS 事件。",
     evidence: "网关日志、机巢模拟器日志、HMS 事件、dock_operation 事件。",
   },
@@ -98,7 +99,7 @@ const retestItems = [
     category: "日志",
     title: "飞行过程日志留证",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase retention --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
+    command: "python tools/person2_gap_test.py --phase retention --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
     expect: "HMS/log/任务进度入口可查，页面时间线能清楚展示电量、高度、经纬度和回包。",
     evidence: "数据库记录、request trace、HMS/log 事件、清理前后计数。",
   },
@@ -107,7 +108,7 @@ const retestItems = [
     category: "稳定性",
     title: "MAVLink/状态机非阻塞探针",
     status: "needs_data",
-    command: "python tools/person2_gap_test.py --phase non-blocking --host 192.168.2.188 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001 --loop-count 8",
+    command: "python tools/person2_gap_test.py --phase non-blocking --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001 --loop-count 8",
     expect: "连续 property_get 延迟不超过阈值，期间飞行器 OSD 不断流。",
     evidence: "每轮 elapsed_ms、OSD 观察、request trace 耗时。",
   },
@@ -192,7 +193,7 @@ function buildDrcEnterData() {
   const mqtt = snapshot?.mqtt || {};
   return {
     mqtt_broker: {
-      address: mqtt.host || "192.168.2.188",
+      address: mqtt.host || "192.168.1.100",
       port: mqtt.port || 1883,
     },
     osd_frequency: 10,
@@ -808,6 +809,16 @@ async function loadWorkflows() {
   renderWorkflows();
 }
 
+async function loadLiveConfig() {
+  try {
+    const res = await fetch("/api/live-config");
+    const data = await res.json();
+    setText("liveSource", data.gimbal_rtsp_url || "--");
+  } catch (err) {
+    setText("liveSource", `配置加载失败: ${err.message}`);
+  }
+}
+
 function commandTimeoutSeconds(method) {
   const missionModeCommands = new Set([
     "flighttask_pause",
@@ -843,6 +854,45 @@ async function sendCommandPayload(channel, method, data, title) {
   } finally {
     buttons.forEach((button) => button.disabled = false);
   }
+}
+
+function startGimbalPreview() {
+  const img = $("gimbalStream");
+  const placeholder = $("livePlaceholder");
+  img.src = `/api/gimbal-stream?ts=${Date.now()}`;
+  img.classList.add("active");
+  placeholder.classList.add("hidden");
+  setText("liveSource", "正在拉取云台 RTSP");
+}
+
+function stopGimbalPreview() {
+  const img = $("gimbalStream");
+  const placeholder = $("livePlaceholder");
+  img.removeAttribute("src");
+  img.classList.remove("active");
+  placeholder.classList.remove("hidden");
+  setText("liveSource", snapshot?.live?.gimbal_rtsp_url || "--");
+}
+
+async function startDockLivePush() {
+  const url = $("livePushUrl").value.trim();
+  if (!url) {
+    $("commandResult").textContent = "请填写推流地址";
+    return;
+  }
+  await sendCommandPayload("services", "live_start_push", {
+    url,
+    url_type: url.startsWith("rtmp://") ? 1 : 4,
+    video_id: `${snapshot?.gateway_sn || "EDGEGW001"}/0/gimbal`,
+    video_quality: 3,
+    video_type: "gimbal",
+  }, "云台 Dock3 推流");
+}
+
+async function stopDockLivePush() {
+  await sendCommandPayload("services", "live_stop_push", {
+    video_id: `${snapshot?.gateway_sn || "EDGEGW001"}/0/gimbal`,
+  }, "停止云台 Dock3 推流");
 }
 
 async function sendManualCommand() {
@@ -956,9 +1006,15 @@ $("openManualBtn").addEventListener("click", () => openDrawer(true));
 $("closeManualBtn").addEventListener("click", () => openDrawer(false));
 $("closeManualBackdrop").addEventListener("click", () => openDrawer(false));
 $("rawFilter").addEventListener("change", () => renderMessages(snapshot?.messages || []));
+$("startPreviewBtn").addEventListener("click", startGimbalPreview);
+$("stopPreviewBtn").addEventListener("click", stopGimbalPreview);
+$("reloadPreviewBtn").addEventListener("click", startGimbalPreview);
+$("startDockLiveBtn").addEventListener("click", startDockLivePush);
+$("stopDockLiveBtn").addEventListener("click", stopDockLivePush);
 
 renderActionCards();
 loadStatus();
 loadWorkflows();
 loadRetestLogs();
+loadLiveConfig();
 connectStream();

@@ -12,7 +12,7 @@ TASK_STATUS_REJECTED = "rejected"
 
 SUPPORTED_URL_TYPES = {0, 1, 3, 4}
 SUPPORTED_QUALITIES = {0, 1, 2, 3, 4}
-SUPPORTED_VIDEO_TYPES = {"normal", "wide", "zoom", "ir", "fpv"}
+SUPPORTED_VIDEO_TYPES = {"normal", "wide", "zoom", "ir", "fpv", "gimbal"}
 SUPPORTED_CAMERA_POSITIONS = {0, 1}
 
 
@@ -33,6 +33,7 @@ def validate_live_start_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[s
     video_id = str(data.get("video_id", "") or "")
     url_type = data.get("url_type", 4)
     video_quality = data.get("video_quality", data.get("quality", 0))
+    video_type = str(data.get("video_type", data.get("lens", "")) or "")
 
     if not url:
         errors.append("live_start missing url")
@@ -42,12 +43,15 @@ def validate_live_start_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[s
         errors.append("live_start.url_type must be int enum 0/1/3/4")
     if not _is_int(video_quality) or video_quality not in SUPPORTED_QUALITIES:
         errors.append("live_start.video_quality must be int enum 0..4")
+    if video_type and video_type not in SUPPORTED_VIDEO_TYPES:
+        errors.append("live_start.video_type unsupported")
 
     normalized = {
         "url": url,
         "video_id": video_id,
         "url_type": int(url_type) if _is_int(url_type) else 4,
         "video_quality": int(video_quality) if _is_int(video_quality) else 0,
+        "video_type": video_type if video_type in SUPPORTED_VIDEO_TYPES else "",
     }
     return not errors, normalized, errors
 
@@ -115,6 +119,7 @@ def live_status_event_data(
     video_type: str = "normal",
     url: str = "",
     reason: str = "",
+    source: str = "",
 ) -> Dict[str, Any]:
     data = live_task_output(status, {
         "video_id": video_id,
@@ -128,6 +133,8 @@ def live_status_event_data(
         data["url"] = url
     if reason:
         data["reason"] = reason
+    if source:
+        data["source"] = source
     data["result"] = 0 if status in {TASK_STATUS_OK, TASK_STATUS_IN_PROGRESS} else 1
     return data
 

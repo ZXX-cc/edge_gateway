@@ -20,6 +20,7 @@
         <button class="nav-item" data-view="dock">APIDock3 命令</button>
         <button class="nav-item" data-view="mission">真实航线</button>
         <button class="nav-item" data-view="drc">DRC 飞控</button>
+        <button class="nav-item" data-view="live">云台直播</button>
         <button class="nav-item" data-view="ops">飞行日志</button>
         <button class="nav-item" data-view="retest">复测留证</button>
         <button class="nav-item" data-view="raw">原始报文</button>
@@ -157,6 +158,42 @@
           <p>进入控制、心跳、速度推送、退出控制。</p>
         </div>
         <div class="action-grid" data-actions="drc"></div>
+      </section>
+
+      <section class="view" id="view-live">
+        <div class="module-head">
+          <h2>云台直播</h2>
+          <p>查看吊舱 RTSP 实时画面，并下发 Dock3 live_start_push / live_stop_push。</p>
+        </div>
+        <section class="panel live-panel">
+          <div class="section-title">
+            <h2>实时画面</h2>
+            <span id="liveSource">等待配置</span>
+          </div>
+          <div class="live-stage">
+            <img id="gimbalStream" alt="云台实时画面" />
+            <div id="livePlaceholder">点击开始预览</div>
+          </div>
+          <div class="live-controls">
+            <button id="startPreviewBtn" class="primary">开始预览</button>
+            <button id="stopPreviewBtn">停止预览</button>
+            <button id="reloadPreviewBtn">重载画面</button>
+          </div>
+        </section>
+        <section class="panel live-control-panel">
+          <div class="section-title">
+            <h2>Dock3 推流</h2>
+            <span>RTSP 转推</span>
+          </div>
+          <label class="payload-label">
+            推流地址
+            <input id="livePushUrl" value="rtmp://127.0.0.1/live/gimbal001" />
+          </label>
+          <div class="live-controls">
+            <button id="startDockLiveBtn" class="primary">开始推流</button>
+            <button id="stopDockLiveBtn">停止推流</button>
+          </div>
+        </section>
       </section>
 
       <section class="view" id="view-ops">

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -28,7 +29,7 @@ RETEST_LOG_PATH = LOG_DIR / "retest_log.jsonl"
 
 DEMO_HOST = os.environ.get("DEMO_HOST", "127.0.0.1")
 DEMO_PORT = int(os.environ.get("DEMO_PORT", "8095"))
-MQTT_HOST = os.environ.get("MQTT_HOST", "192.168.2.188")
+MQTT_HOST = os.environ.get("MQTT_HOST", "192.168.1.100")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 GATEWAY_SN = os.environ.get("GATEWAY_SN", "EDGEGW001")
 DRONE_SN = os.environ.get("DRONE_SN", "DRONESIM001")
@@ -36,6 +37,8 @@ REAL_HD_WAYPOINTS_PATH = os.environ.get(
     "REAL_HD_WAYPOINTS_PATH",
     "/home/fenghuolun/zwz/HD.waypoints",
 )
+GIMBAL_RTSP_URL = os.environ.get("GIMBAL_RTSP_URL", "rtsp://192.168.1.119:554/main")
+FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 
 CHANNELS = {
     "services": ("thing/product/{sn}/services", "thing/product/{sn}/services_reply"),
@@ -87,6 +90,7 @@ state: dict[str, Any] = {
     "gateway_sn": GATEWAY_SN,
     "drone_sn": DRONE_SN,
     "mqtt": {"host": MQTT_HOST, "port": MQTT_PORT, "connected": False},
+    "live": {"gimbal_rtsp_url": GIMBAL_RTSP_URL},
     "topic_counts": {},
     "latest": {
         "dock_osd": {},
@@ -917,6 +921,87 @@ def api_stream() -> Response:
             subscribers.discard(q)
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+@app.get("/api/live-config")
+def api_live_config():
+    return jsonify({
+        "gimbal_rtsp_url": GIMBAL_RTSP_URL,
+        "gateway_sn": GATEWAY_SN,
+        "ffmpeg": FFMPEG_BIN,
+    })
+
+
+@app.get("/api/gimbal-stream")
+def api_gimbal_stream() -> Response:
+    """将云台 RTSP 拉流转成浏览器可直接显示的 MJPEG 流。"""
+    if not shutil.which(FFMPEG_BIN) and not Path(FFMPEG_BIN).is_file():
+        return jsonify({"ok": False, "error": f"ffmpeg not found: {FFMPEG_BIN}"}), 503
+
+    cmd = [
+        FFMPEG_BIN,
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-rtsp_transport",
+        "tcp",
+        "-i",
+        GIMBAL_RTSP_URL,
+        "-an",
+        "-r",
+        "10",
+        "-q:v",
+        "5",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "pipe:1",
+    ]
+
+    def generate():
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+        )
+        buffer = b""
+        try:
+            while True:
+                chunk = process.stdout.read(4096) if process.stdout else b""
+                if not chunk:
+                    break
+                buffer += chunk
+                while True:
+                    start = buffer.find(b"\xff\xd8")
+                    end = buffer.find(b"\xff\xd9", start + 2)
+                    if start < 0 or end < 0:
+                        if len(buffer) > 2_000_000:
+                            buffer = buffer[-256_000:]
+                        break
+                    frame = buffer[start:end + 2]
+                    buffer = buffer[end + 2:]
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
+                        + frame
+                        + b"\r\n"
+                    )
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+    return Response(
+        generate(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/command")

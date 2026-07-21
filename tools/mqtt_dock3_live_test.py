@@ -29,7 +29,8 @@ class Dock3LiveClient(MqttRequestClient):
 
 
 def run_live_checks(client: Dock3LiveClient, args) -> int:
-    video_id = args.video_id or f"{args.sn}/0/normal"
+    video_type = args.video_type
+    video_id = args.video_id or f"{args.sn}/0/{video_type}"
 
     rc, capability = client.request(
         "live_capability_query",
@@ -53,6 +54,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
             "url_type": args.url_type,
             "video_id": video_id,
             "video_quality": 2,
+            "video_type": video_type,
         },
         args.timeout,
         [0],
@@ -90,7 +92,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     status_before = client.event_count("live_status_notify")
     rc, _ = client.request(
         "live_lens_change",
-        {"video_id": video_id, "video_type": "zoom"},
+        {"video_id": video_id, "video_type": video_type},
         args.timeout,
         [0],
         "ok",
@@ -141,6 +143,7 @@ def main():
     parser.add_argument("--url", default="mock://dock3/live")
     parser.add_argument("--url-type", type=int, default=4)
     parser.add_argument("--video-id", default="")
+    parser.add_argument("--video-type", choices=["normal", "wide", "zoom", "ir", "fpv", "gimbal"], default="gimbal")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()

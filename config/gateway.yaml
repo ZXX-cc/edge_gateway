@@ -171,6 +171,7 @@ media:
 # --- 直播配置 ---
 livestream:
   protocols: ["webrtc", "rtmp"]
+  default_video_type: "gimbal"
   default_quality: "1080p"
   default_bitrate: 4000 # kbps
   default_framerate: 30

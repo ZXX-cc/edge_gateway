@@ -107,7 +107,7 @@ class MediaManager:
         self._live_quality = 0   # 默认自适应
         self._live_video_id = ""
         self._live_url = ""
-        self._live_video_type = "normal"
+        self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
         self._live_camera_position = 0
 
         # ffmpeg 推流进程
@@ -638,6 +638,7 @@ class MediaManager:
             'ir': '/dev/video1',
             'wide': '/dev/video0',
             'zoom': '/dev/video0',
+            'gimbal': '/dev/video0',
         })
         return source_map.get(video_type, self.DEFAULT_VIDEO_SOURCE)
 
@@ -772,6 +773,7 @@ class MediaManager:
                 video_type=self._live_video_type,
                 url=self._live_url,
                 reason=reason,
+                source=self._get_video_source(self._live_video_type),
             ),
             self.gateway_sn,
         ))
@@ -819,6 +821,9 @@ class MediaManager:
         url = data["url"]
         video_id = data["video_id"]
         video_quality = data["video_quality"]
+        requested_video_type = data.get("video_type") or self._video_type_from_video_id(video_id)
+        if requested_video_type:
+            self._live_video_type = requested_video_type
 
         if self._live_streaming:
             return MessageBuilder.build_reply(
@@ -868,11 +873,20 @@ class MediaManager:
             'url_type': self._live_protocol,
             'video_quality': self._live_quality,
             'video_type': self._live_video_type,
+            'source': self._get_video_source(self._live_video_type),
         }))
 
     def handle_live_start_push(self, msg: dict) -> dict:
         """官方 Dock3 开始直播方法名。"""
         return self.handle_live_start(msg)
+
+    @staticmethod
+    def _video_type_from_video_id(video_id: str) -> str:
+        value = str(video_id or "").strip()
+        if not value:
+            return ""
+        tail = value.rsplit("/", 1)[-1]
+        return tail if tail in {"normal", "wide", "zoom", "ir", "fpv", "gimbal"} else ""
 
     def handle_live_stop(self, msg: dict) -> dict:
         """
