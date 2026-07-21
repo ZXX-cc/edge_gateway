@@ -813,7 +813,8 @@ async function loadLiveConfig() {
   try {
     const res = await fetch("/api/live-config");
     const data = await res.json();
-    setText("liveSource", data.gimbal_rtsp_url || "--");
+    const suffix = data.ffmpeg_available ? "" : `（未找到 ${data.ffmpeg || "ffmpeg"}）`;
+    setText("liveSource", `${data.gimbal_rtsp_url || "--"}${suffix}`);
   } catch (err) {
     setText("liveSource", `配置加载失败: ${err.message}`);
   }
@@ -856,9 +857,33 @@ async function sendCommandPayload(channel, method, data, title) {
   }
 }
 
-function startGimbalPreview() {
+async function startGimbalPreview() {
   const img = $("gimbalStream");
   const placeholder = $("livePlaceholder");
+  try {
+    const res = await fetch("/api/live-config");
+    const data = await res.json();
+    if (!data.ffmpeg_available) {
+      img.removeAttribute("src");
+      img.classList.remove("active");
+      placeholder.classList.remove("hidden");
+      placeholder.textContent = `未找到 ${data.ffmpeg || "ffmpeg"}，无法将 RTSP 转成浏览器画面`;
+      setText("liveSource", data.gimbal_rtsp_url || "--");
+      return;
+    }
+  } catch (err) {
+    placeholder.classList.remove("hidden");
+    placeholder.textContent = `直播配置读取失败：${err.message}`;
+    return;
+  }
+  img.onerror = () => {
+    img.removeAttribute("src");
+    img.classList.remove("active");
+    placeholder.classList.remove("hidden");
+    placeholder.textContent = "拉流失败：请检查 RTSP 地址、吊舱网络和 ffmpeg 输出";
+    setText("liveSource", snapshot?.live?.gimbal_rtsp_url || "RTSP 拉流失败");
+  };
+  placeholder.textContent = "正在拉取云台 RTSP";
   img.src = `/api/gimbal-stream?ts=${Date.now()}`;
   img.classList.add("active");
   placeholder.classList.add("hidden");
@@ -871,6 +896,7 @@ function stopGimbalPreview() {
   img.removeAttribute("src");
   img.classList.remove("active");
   placeholder.classList.remove("hidden");
+  placeholder.textContent = "点击开始预览";
   setText("liveSource", snapshot?.live?.gimbal_rtsp_url || "--");
 }
 

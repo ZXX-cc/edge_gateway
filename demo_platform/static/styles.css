@@ -538,6 +538,9 @@ button:disabled {
   place-items: center;
   color: #d0d8e8;
   font-weight: 700;
+  padding: 18px;
+  text-align: center;
+  line-height: 1.5;
 }
 
 #livePlaceholder.hidden {

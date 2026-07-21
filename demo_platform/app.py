@@ -37,7 +37,7 @@ REAL_HD_WAYPOINTS_PATH = os.environ.get(
     "REAL_HD_WAYPOINTS_PATH",
     "/home/fenghuolun/zwz/HD.waypoints",
 )
-GIMBAL_RTSP_URL = os.environ.get("GIMBAL_RTSP_URL", "rtsp://192.168.1.119:554/main")
+GIMBAL_RTSP_URL = os.environ.get("GIMBAL_RTSP_URL", "rtsp://192.168.2.119:554/main")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 
 CHANNELS = {
@@ -925,10 +925,12 @@ def api_stream() -> Response:
 
 @app.get("/api/live-config")
 def api_live_config():
+    ffmpeg_available = bool(shutil.which(FFMPEG_BIN) or Path(FFMPEG_BIN).is_file())
     return jsonify({
         "gimbal_rtsp_url": GIMBAL_RTSP_URL,
         "gateway_sn": GATEWAY_SN,
         "ffmpeg": FFMPEG_BIN,
+        "ffmpeg_available": ffmpeg_available,
     })
 
 
