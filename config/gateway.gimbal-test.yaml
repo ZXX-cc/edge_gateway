@@ -1,0 +1,163 @@
+# Local-only configuration for real ViewLink gimbal chain tests.
+gateway:
+  sn: "EDGEGW001"
+  name: "EdgeGateway-Gimbal-Test"
+  product_type: "edge-gateway"
+
+runtime:
+  mode: "test"
+
+database:
+  backend: "sqlite"
+
+nanomq:
+  enabled: true
+  host: "127.0.0.1"
+  port: 1883
+  ws_port: 8083
+  max_clients: 100
+  keepalive: 60
+  username: ""
+  password: ""
+  topic_prefix: "thing/product"
+  ssl:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    ca_file: ""
+
+mavlink:
+  enabled: false
+  connection:
+    type: "tcp"
+    host: "127.0.0.1"
+    port: 8600
+  system_id: 255
+  component_id: 190
+
+nest_mavlink:
+  enabled: false
+  connection:
+    type: "tcp"
+    host: "127.0.0.1"
+    port: 8600
+  system_id: 255
+  component_id: 1
+
+device:
+  firmware_version: "1.0.0"
+  storage_capacity: 64000
+  auto_bind_on_startup: true
+  auto_bind_workspace_id: "local_test_workspace"
+  auto_bind_workspace_name: "本地测试工作空间"
+  topology:
+    device_secret: ""
+    nonce: ""
+
+mission:
+  completion:
+    enabled: false
+
+media:
+  storage_path: "./data/media"
+  auto_upload: true
+  upload_quality: "original"
+  video_sources:
+    normal: "rtsp://192.168.2.119:554/main"
+    zoom: "rtsp://192.168.2.119:554/main"
+    gimbal: "rtsp://192.168.2.119:554/main"
+  remote_media:
+    enabled: true
+    base_url: "http://192.168.2.119:8554/download/"
+    max_depth: 4
+    timeout_seconds: 5
+    extensions: ["jpg", "jpeg", "png", "dng", "mp4", "mov", "avi", "mkv"]
+  oss:
+    provider: "minio"
+    endpoint: ""
+    bucket: ""
+    region: ""
+    object_key_prefix: ""
+    credentials:
+      access_key_id: ""
+      access_key_secret: ""
+      expire: 0
+      security_token: ""
+
+livestream:
+  protocols: ["webrtc", "rtmp"]
+  default_quality: "1080p"
+  default_bitrate: 4000
+  default_framerate: 30
+
+logging:
+  level: "INFO"
+  dir: "./logs"
+  filename_prefix: "edge_gateway_gimbal_test"
+  console: true
+  capture_print: true
+  daily_files: true
+  monthly_dirs: true
+  categories:
+    gateway:
+      enabled: true
+      dir: "gateway"
+      filename_prefix: "gateway"
+    mqtt:
+      enabled: true
+      dir: "mqtt"
+      filename_prefix: "mqtt"
+    payload:
+      enabled: true
+      dir: "payload"
+      filename_prefix: "payload"
+
+request_trace:
+  enabled: true
+  dir: "./logs/request_trace"
+  filename_prefix: "request_trace_gimbal_test"
+  max_memory: 1000
+  max_queue: 2000
+  payload_max_chars: 3000
+
+payload:
+  control_path: "direct_gateway"
+  flight_controller_fallback_enabled: false
+  devices:
+    gimbal:
+      name: "吊舱"
+      enabled: true
+      auto_connect: true
+      direct_to_gateway: true
+      channels:
+        control:
+          direction: "bidirectional"
+          transport: "viewlink_tcp"
+          adapter: "viewlink"
+          host: "192.168.2.119"
+          port: 2000
+          connect_timeout: 5
+          sdk_dir: "D:/ViewLink/bin/win64"
+        video:
+          direction: "payload_to_gateway"
+          transport: "rtsp"
+          endpoint: "rtsp://192.168.2.119:554/main"
+          timing: "realtime"
+
+rtk:
+  enabled: false
+
+retention:
+  telemetry_hours: 2
+  operation_days: 3
+  alarm_days: 1
+  media_uploaded_days: 7
+  cleanup_interval_hours: 1
+  vacuum_interval_hours: 24
+  max_db_size_mb: 50
+
+debug:
+  enabled: false
+  websocket_port: 7681
+  auth_token: ""
+  session_timeout: 1800

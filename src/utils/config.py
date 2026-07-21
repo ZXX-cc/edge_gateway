@@ -18,7 +18,7 @@ DEFAULT_PAYLOAD_DEVICES = {
                 'direction': 'bidirectional',
                 'transport': 'viewlink_tcp',
                 'adapter': 'viewlink',
-                'host': '192.168.1.119',
+                'host': '192.168.2.119',
                 'port': 2000,
                 'sdk_dir': '',
             },

@@ -135,7 +135,7 @@ class GimbalControl:
     def __init__(
         self,
         sdk_dir: str = "C:/workspace/ViewLink-SDK-2025/bin/win64",
-        gimbal_ip: str = "192.168.1.119",
+        gimbal_ip: str = "192.168.2.119",
         gimbal_port: int = 2000
     ):
         """
