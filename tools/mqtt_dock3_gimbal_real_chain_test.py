@@ -163,6 +163,21 @@ def wait_new_media(
     return 20, None
 
 
+def download_media_item(client: GimbalRealChainClient, item: dict[str, Any], args) -> int:
+    identity = file_identity(item)
+    data = {"file_ids": [identity]} if identity else {"download_url": item.get("download_url", "")}
+    rc, reply = client.service("file_download", data, args.timeout, {0}, "ok")
+    if rc != 0:
+        return rc
+    files = files_from_reply(reply)
+    if not files:
+        print(f"file_download returned no files: {json.dumps(reply, ensure_ascii=False)}", file=sys.stderr)
+        return 21
+    downloaded = files[0]
+    print(f"media cached locally: {json.dumps(downloaded, ensure_ascii=False)}")
+    return 0
+
+
 def verify_playback(play_url: str, ffmpeg_bin: str, timeout: float, output: Path) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -219,6 +234,10 @@ def run_checks(client: GimbalRealChainClient, args) -> int:
         if rc != 0:
             return rc
         print(f"photo file observed: {json.dumps(photo, ensure_ascii=False)}")
+        if args.download_media and photo:
+            rc = download_media_item(client, photo, args)
+            if rc != 0:
+                return rc
 
     if not args.skip_record:
         rc, _ = client.service(
@@ -248,6 +267,10 @@ def run_checks(client: GimbalRealChainClient, args) -> int:
         if rc != 0:
             return rc
         print(f"video file observed: {json.dumps(video, ensure_ascii=False)}")
+        if args.download_media and video:
+            rc = download_media_item(client, video, args)
+            if rc != 0:
+                return rc
 
     if args.push_url:
         video_id = args.live_video_id or f"{args.sn}/0/gimbal"
@@ -317,6 +340,7 @@ def main() -> int:
     parser.add_argument("--page-size", type=int, default=100)
     parser.add_argument("--skip-photo", action="store_true")
     parser.add_argument("--skip-record", action="store_true")
+    parser.add_argument("--download-media", action="store_true", help="发现照片/录像后调用 file_download 缓存到网关本地。")
     parser.add_argument("--push-url", default="")
     parser.add_argument("--play-url", default="")
     parser.add_argument("--url-type", type=int, default=1)

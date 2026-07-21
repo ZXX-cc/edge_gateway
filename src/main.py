@@ -1289,6 +1289,8 @@ class EdgeGateway:
         # ---- 媒体管理API (Media Management) ----
         self.router.register_batch({
             'file_list_get': self.media.handle_file_list_get,
+            'file_download': self.media.handle_file_download,
+            'download_media': self.media.handle_download_media,
             'file_delete': self.media.handle_file_delete,
             'adjust_upload_priority': self.media.handle_adjust_upload_priority,
             'storage_config_get': self.media.handle_storage_config_get,

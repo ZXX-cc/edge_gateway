@@ -226,6 +226,42 @@ class Dock3MediaManagerTest(unittest.TestCase):
         finally:
             requests.get = old_get
 
+    def test_file_download_caches_remote_media_without_upload(self):
+        class FakeResponse:
+            def __init__(self, content):
+                self.content = content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield self.content
+
+        old_get = requests.get
+        requests.get = lambda url, stream, timeout: FakeResponse(b"download-only")
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                manager.storage_path = tmp
+                reply = manager.handle_file_download(base_msg("file_download", {
+                    "download_url": "http://media.local/download/photo/a.jpg",
+                }))
+
+                self.assertEqual(reply["data"]["result"], 0)
+                files = reply["data"]["files"]
+                self.assertEqual(len(files), 1)
+                cache_path = Path(files[0]["cache_path"])
+                self.assertTrue(cache_path.exists())
+                self.assertEqual(cache_path.read_bytes(), b"download-only")
+        finally:
+            requests.get = old_get
+
     def test_file_delete_rejects_missing_ids(self):
         manager = MediaManager()
         reply = manager.handle_file_delete(base_msg("file_delete", {}))

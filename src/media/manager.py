@@ -455,6 +455,59 @@ class MediaManager:
             finally:
                 raise
 
+    def _download_media_item(self, item: dict) -> dict:
+        """下载单个媒体条目；本地文件直接返回路径，远端文件缓存到本地。"""
+        if item.get("file_path") and os.path.exists(item["file_path"]):
+            filepath = item["file_path"]
+        elif item.get("download_url"):
+            filepath = self._download_remote_media(str(item["download_url"]))
+        else:
+            raise ValueError("media item has no local path or download_url")
+
+        return {
+            "file_id": item.get("file_id", ""),
+            "fingerprint": item.get("fingerprint", item.get("file_id", "")),
+            "name": item.get("name", item.get("file_name", "")),
+            "file_name": item.get("file_name", item.get("name", "")),
+            "media_type": item.get("media_type", ""),
+            "source": item.get("source", "local"),
+            "download_url": item.get("download_url", ""),
+            "cache_path": filepath,
+            "file_path": filepath,
+            "size": os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+        }
+
+    def _resolve_media_items_for_download(self, data: dict) -> tuple[List[dict], List[str]]:
+        known = self._scan_media_files()
+        by_id = self._media_identity_map(known)
+        requested, errors = normalize_delete_ids(data)
+        urls = []
+        raw_urls = data.get("download_urls", data.get("download_url", [])) if isinstance(data, dict) else []
+        if isinstance(raw_urls, list):
+            urls = [str(url) for url in raw_urls if url]
+        elif raw_urls:
+            urls = [str(raw_urls)]
+        requested.extend(urls)
+        requested = list(dict.fromkeys(requested))
+        if urls and errors == ["file_delete missing file_ids/files"]:
+            errors = []
+        if not requested:
+            return [], errors or ["file_download missing file_ids/files/download_url"]
+
+        items: List[dict] = []
+        missing: List[str] = []
+        for identity in requested:
+            item = by_id.get(identity)
+            if not item and str(identity).startswith(("http://", "https://")):
+                item = build_remote_media_file(str(identity), self.gateway_sn)
+            if item:
+                items.append(item)
+            else:
+                missing.append(identity)
+        if missing:
+            errors.append(f"file not found: {', '.join(missing)}")
+        return items, errors
+
     @staticmethod
     def _media_identity_map(files: List[dict]) -> Dict[str, dict]:
         mapping: Dict[str, dict] = {}
@@ -1168,6 +1221,49 @@ class MediaManager:
         return MessageBuilder.build_reply(msg, result=0, data=media_task_output("ok", {
             "files": results,
         }))
+
+    def handle_file_download(self, msg: dict) -> dict:
+        """
+        文件下载到网关本地缓存。
+
+        Request: { file_ids: [...] } 或 { download_url: "http://云台/..." }
+        """
+        data = msg.get('data', {})
+        items, errors = self._resolve_media_items_for_download(data)
+        if errors:
+            logger.warning("Rejected file_download payload: %s", "; ".join(errors))
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data=media_task_output("rejected", {"errors": errors}),
+                msg_str="; ".join(errors),
+            )
+
+        results = []
+        for item in items:
+            try:
+                downloaded = self._download_media_item(item)
+                results.append({"result": 0, **downloaded})
+            except Exception as exc:
+                logger.error("Download media file failed: item=%s error=%s", item, exc)
+                results.append({
+                    "result": INVALID_COMMAND_FORMAT,
+                    "file_id": item.get("file_id", ""),
+                    "name": item.get("name", item.get("file_name", "")),
+                    "download_url": item.get("download_url", ""),
+                    "msg": str(exc),
+                })
+
+        ok = all(item.get("result") == 0 for item in results)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if ok else INVALID_COMMAND_FORMAT,
+            data=media_task_output("ok" if ok else "failed", {"files": results}),
+        )
+
+    def handle_download_media(self, msg: dict) -> dict:
+        """兼容 download_media 方法名，实际执行 file_download。"""
+        return self.handle_file_download(msg)
 
     def handle_live_capability_query(self, msg: dict) -> dict:
         """
