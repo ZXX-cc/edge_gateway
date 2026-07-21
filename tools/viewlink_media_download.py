@@ -143,7 +143,7 @@ def main() -> int:
     config = load_config(args.config)
     remote_media = config.get("media", {}).get("remote_media", {}) if isinstance(config, dict) else {}
     configured_url = remote_media.get("base_url", "") if isinstance(remote_media, dict) else ""
-    args.url = args.url or configured_url or "http://192.168.1.119:8554/download/"
+    args.url = args.url or configured_url or "http://192.168.2.119:8554/download/"
 
     extensions = tuple(ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in args.ext)
     if not extensions:
