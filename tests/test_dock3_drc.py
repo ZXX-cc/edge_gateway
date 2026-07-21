@@ -62,11 +62,11 @@ class FakeCameraController:
         self.calls.append(("photo", msg["data"]["camera_index"]))
         return {"data": {"result": 0}}
 
-    def handle_camera_record_start(self, msg):
+    def handle_camera_recording_start(self, msg):
         self.calls.append(("record_start", msg["data"]["camera_index"]))
         return {"data": {"result": 0}}
 
-    def handle_camera_record_stop(self, msg):
+    def handle_camera_recording_stop(self, msg):
         self.calls.append(("record_stop", msg["data"]["camera_index"]))
         return {"data": {"result": 0}}
 
@@ -423,6 +423,27 @@ class Dock3DrcTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(camera.calls, [("photo", 0)])
+
+    def test_payload_control_record_actions_use_camera_recording_handlers(self):
+        controller = DrcController()
+        camera = FakeCameraController()
+        controller.set_camera_controller(camera)
+        controller._drc_enabled = True
+
+        for action in ("record_start", "record_stop"):
+            reply = controller.handle_payload_control({
+                "method": "payload_control",
+                "tid": f"tid-{action}",
+                "gateway": "EDGEGW001",
+                "data": {
+                    "payload_index": "52-0-0",
+                    "action": action,
+                    "params": {},
+                },
+            })
+            self.assertEqual(reply["data"]["result"], 0)
+
+        self.assertEqual(camera.calls, [("record_start", 0), ("record_stop", 0)])
 
     def test_payload_todo_methods_fail_without_real_adapter(self):
         controller = DrcController()

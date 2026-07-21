@@ -188,6 +188,44 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
         self.assertTrue(all(item["source"] == "remote_http" for item in files))
 
+    def test_remote_media_is_cached_before_upload(self):
+        class FakeResponse:
+            def __init__(self, content):
+                self.content = content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield self.content
+
+        old_get = requests.get
+        requests.get = lambda url, stream, timeout: FakeResponse(b"remote-jpeg")
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                manager.storage_path = tmp
+                remote = build_remote_media_file("http://media.local/download/photo/a.jpg", "EDGEGW001")
+                uploaded = []
+                manager._request_upload_credentials = lambda files: {"upload_url": "http://oss.local/a.jpg"}
+                manager._upload_file_http = lambda filepath, upload_url: uploaded.append((filepath, upload_url)) or True
+                manager._upload_queue = [remote]
+                manager._uploading = True
+
+                manager._upload_files()
+                self.assertEqual(len(uploaded), 1)
+                self.assertEqual(uploaded[0][1], "http://oss.local/a.jpg")
+                self.assertTrue(Path(uploaded[0][0]).exists())
+                self.assertEqual(Path(uploaded[0][0]).read_bytes(), b"remote-jpeg")
+        finally:
+            requests.get = old_get
+
     def test_file_delete_rejects_missing_ids(self):
         manager = MediaManager()
         reply = manager.handle_file_delete(base_msg("file_delete", {}))

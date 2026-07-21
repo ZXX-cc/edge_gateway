@@ -5,6 +5,7 @@
 import time
 import os
 import glob
+import hashlib
 import html.parser
 import subprocess
 import threading
@@ -193,6 +194,8 @@ class MediaManager:
                 logger.error(f"Failed to schedule DB coroutine: {e}")
         else:
             logger.warning("Cannot schedule DB coroutine: no event loop available")
+            if hasattr(coro, "close"):
+                coro.close()
 
     # ---- 媒体文件管理 ----
 
@@ -422,6 +425,36 @@ class MediaManager:
     def _scan_media_files(self) -> List[dict]:
         return self._scan_local_files() + self._scan_remote_media_files()
 
+    def _remote_media_cache_path(self, url: str) -> str:
+        """将云台等远端媒体 URL 映射到稳定的本地缓存路径。"""
+        parsed = urllib.parse.urlparse(url)
+        filename = urllib.parse.unquote(Path(parsed.path).name) or "remote_media"
+        digest = hashlib.sha1(str(url).encode("utf-8")).hexdigest()[:16]
+        cache_dir = Path(self.storage_path) / ".remote_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return str(cache_dir / f"{digest}_{filename}")
+
+    def _download_remote_media(self, url: str) -> str:
+        """先下载负载端媒体文件，再复用现有上传流水线。"""
+        target = self._remote_media_cache_path(url)
+        tmp_target = f"{target}.part"
+        timeout = float(Config.get('media.remote_media.timeout_seconds', 10.0) or 10.0)
+        try:
+            with requests.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
+                with open(tmp_target, 'wb') as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+            os.replace(tmp_target, target)
+            return target
+        except Exception:
+            try:
+                if os.path.exists(tmp_target):
+                    os.remove(tmp_target)
+            finally:
+                raise
+
     @staticmethod
     def _media_identity_map(files: List[dict]) -> Dict[str, dict]:
         mapping: Dict[str, dict] = {}
@@ -448,7 +481,7 @@ class MediaManager:
             db_files = await MediaDB.get_pending_uploads(session, self.gateway_sn)
             db_file_names = {f.file_name for f in db_files}
 
-            local_files = self._scan_local_files()
+            local_files = self._scan_media_files()
             pending_files = []
 
             for local_file in local_files:
@@ -541,6 +574,18 @@ class MediaManager:
             file_type = file_info.get('file_type')
 
             logger.info(f"Starting upload: {file_name}")
+            if not filepath and file_info.get('download_url'):
+                try:
+                    filepath = self._download_remote_media(file_info['download_url'])
+                    file_info['file_path'] = filepath
+                    file_info['file_size'] = os.path.getsize(filepath)
+                    file_info['size'] = file_info['file_size']
+                    file_size = file_info['file_size']
+                    logger.info("Remote media cached for upload: name=%s path=%s size=%s", file_name, filepath, file_size)
+                except Exception as exc:
+                    logger.error("Remote media download failed: name=%s url=%s error=%s", file_name, file_info.get('download_url'), exc)
+                    self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
+                    continue
 
             # 请求上传凭证
             credentials = self._request_upload_credentials([file_info])

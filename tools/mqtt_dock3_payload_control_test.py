@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""MQTT acceptance test for DJI Dock3 payload-control services.
+"""DJI Dock3 负载 services 控制 MQTT 验收脚本。
 
-This tool covers the Dock3 payload-control methods shown in the DJI Cloud API
-services list.  It deliberately publishes through thing/product/{sn}/services;
-it does not enter DRC mode and does not use the drc/down channel.
+本脚本覆盖上云 API services 里的相机/云台控制方法。它固定通过
+thing/product/{sn}/services 发布，不进入 DRC 模式，也不测试
+drc/down 里的 payload_control 方法。
 """
 
 import argparse
@@ -87,6 +87,68 @@ def build_cases(args) -> list[PayloadControlCase]:
     payload_index = _payload_index(args)
     camera_type = args.camera_type
     video_id = args.video_id
+
+    gimbal_only_cases = [
+        PayloadControlCase(
+            "云台控制-状态查询",
+            "gimbal_status_query",
+            {"payload_index": payload_index},
+        ),
+        PayloadControlCase(
+            "云台控制-小角度转动",
+            "gimbal_rotate",
+            {"payload_index": payload_index, "pitch": args.gimbal_pitch, "yaw": args.gimbal_yaw},
+        ),
+        PayloadControlCase(
+            "云台控制-变焦",
+            "camera_focal_length_set",
+            {
+                "payload_index": payload_index,
+                "camera_index": 0,
+                "camera_type": camera_type,
+                "zoom_ratio": args.zoom_ratio,
+                "focal_length": args.focal_length,
+            },
+        ),
+        PayloadControlCase(
+            "云台控制-拍照",
+            "camera_photo_take",
+            {
+                "payload_index": payload_index,
+                "camera_index": 0,
+                "camera_type": camera_type,
+            },
+        ),
+        PayloadControlCase(
+            "云台控制-开始录像",
+            "camera_recording_start",
+            {
+                "payload_index": payload_index,
+                "camera_index": 0,
+                "camera_type": camera_type,
+                "resolution": args.resolution,
+                "framerate": args.framerate,
+                "video_id": video_id,
+            },
+        ),
+        PayloadControlCase(
+            "云台控制-停止录像",
+            "camera_recording_stop",
+            {
+                "payload_index": payload_index,
+                "camera_index": 0,
+                "camera_type": camera_type,
+                "video_id": video_id,
+            },
+        ),
+        PayloadControlCase(
+            "云台控制-回中",
+            "gimbal_reset",
+            {"payload_index": payload_index},
+        ),
+    ]
+    if args.gimbal_only:
+        return gimbal_only_cases
 
     return [
         PayloadControlCase(
@@ -324,8 +386,13 @@ def print_summary(results: list[tuple[PayloadControlCase, int, dict | None]]) ->
 def run_payload_control_checks(client: Dock3PayloadControlClient, args) -> int:
     results: list[tuple[PayloadControlCase, int, dict | None]] = []
 
-    if args.bind_gimbal:
-        rc = bind_gimbal(client, args)
+    if not args.skip_bind_gateway:
+        rc = ensure_gateway_bound(client, args)
+        if rc != 0:
+            return rc
+
+    if args.connect_gimbal or args.bind_gimbal:
+        rc = connect_gimbal(client, args)
         if rc != 0:
             return rc
 
@@ -373,11 +440,42 @@ def run_payload_control_checks(client: Dock3PayloadControlClient, args) -> int:
     return 0
 
 
-def bind_gimbal(client: Dock3PayloadControlClient, args) -> int:
+def ensure_gateway_bound(client: Dock3PayloadControlClient, args) -> int:
+    rc, workspace = client.request(
+        "workspace_get",
+        {},
+        args.timeout,
+        channel="services",
+        allowed_results={0},
+        expected_status=None,
+    )
+    if rc != 0:
+        return rc
+    data = workspace.get("data", {}) if isinstance(workspace, dict) else {}
+    if data.get("is_bound") in {True, 1, "1", "true", "True"}:
+        return 0
+
+    rc, _ = client.request(
+        "device_binding",
+        {
+            "workspace_id": args.workspace_id,
+            "workspace_name": args.workspace_name,
+        },
+        args.timeout,
+        channel="services",
+        allowed_results={0},
+        expected_status=None,
+    )
+    if rc == 0:
+        print(f"gateway bind ok (workspace_id={args.workspace_id})")
+    return rc
+
+
+def connect_gimbal(client: Dock3PayloadControlClient, args) -> int:
     control = _gimbal_control_config(args)
     if not control["sdk_dir"] or not control["ip"] or not control["port"]:
         print(
-            "gimbal bind config is incomplete; provide --sdk-dir, --gimbal-ip and --gimbal-port "
+            "gimbal connection config is incomplete; provide --sdk-dir, --gimbal-ip and --gimbal-port "
             "or fill payload.devices.gimbal.channels.control in config.",
             file=sys.stderr,
         )
@@ -404,12 +502,12 @@ def bind_gimbal(client: Dock3PayloadControlClient, args) -> int:
             if viewlink_result.get("connected") is not True:
                 print(f"gimbal not connected after bind: {json.dumps(reply, ensure_ascii=False)}", file=sys.stderr)
                 return 12
-    print(f"gimbal bind ok (ip={control['ip']}, port={control['port']}, sdk_dir={control['sdk_dir']})")
+    print(f"gimbal connect ok (ip={control['ip']}, port={control['port']}, sdk_dir={control['sdk_dir']})")
     return 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test DJI Dock3 payload-control services")
+    parser = argparse.ArgumentParser(description="Test DJI Dock3 payload camera/gimbal service controls")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
@@ -420,7 +518,12 @@ def main():
     parser.add_argument("--fail-on-stale", action="store_true")
     parser.add_argument("--strict", action="store_true", help="Require every payload-control method to return result=0.")
     parser.add_argument("--stop-on-failure", action="store_true")
-    parser.add_argument("--bind-gimbal", action="store_true", help="Initialize and connect the ViewLink gimbal before payload-control cases.")
+    parser.add_argument("--gimbal-only", action="store_true", help="Only run the ViewLink gimbal cases that match the current single-payload setup.")
+    parser.add_argument("--skip-bind-gateway", action="store_true", help="Do not auto-bind the gateway before service control cases.")
+    parser.add_argument("--workspace-id", default="local_test_workspace")
+    parser.add_argument("--workspace-name", default="本地测试工作空间")
+    parser.add_argument("--connect-gimbal", action="store_true", help="Initialize and connect the ViewLink gimbal before control cases.")
+    parser.add_argument("--bind-gimbal", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--sdk-dir", default="", help="Override ViewLink SDK directory for --bind-gimbal.")
     parser.add_argument("--gimbal-ip", default="", help="Override gimbal IP for --bind-gimbal.")
     parser.add_argument("--gimbal-port", type=int, default=0, help="Override gimbal control port for --bind-gimbal.")
@@ -433,6 +536,8 @@ def main():
     parser.add_argument("--video-id", default="payload-control-test")
     parser.add_argument("--drag-pitch-speed", type=float, default=0.0)
     parser.add_argument("--drag-yaw-speed", type=float, default=15.0)
+    parser.add_argument("--gimbal-pitch", type=float, default=0.0)
+    parser.add_argument("--gimbal-yaw", type=float, default=0.0)
     parser.add_argument("--zoom-ratio", type=float, default=2.0)
     parser.add_argument("--focal-length", type=float, default=24.0)
     parser.add_argument("--look-at-lat", type=float, default=31.230416)

@@ -1065,12 +1065,12 @@ class DrcController:
             elif action == 'record_start':
                 # 开始录像
                 if self._camera_controller:
-                    self._camera_controller.handle_camera_record_start({'data': {'camera_index': camera_index}})
+                    self._camera_controller.handle_camera_recording_start({'data': {'camera_index': camera_index}})
 
             elif action == 'record_stop':
                 # 停止录像
                 if self._camera_controller:
-                    self._camera_controller.handle_camera_record_stop({'data': {'camera_index': camera_index}})
+                    self._camera_controller.handle_camera_recording_stop({'data': {'camera_index': camera_index}})
 
             elif action == 'zoom':
                 # 变焦
