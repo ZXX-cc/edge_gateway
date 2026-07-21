@@ -11,6 +11,7 @@ DEFAULT_PAYLOAD_DEVICES = {
     'gimbal': {
         'name': '吊舱',
         'enabled': True,
+        'auto_connect': True,
         'direct_to_gateway': True,
         'channels': {
             'control': {

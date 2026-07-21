@@ -130,14 +130,19 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         gimbal = GimbalController()
         connection = FakeConnection()
         direct_payload = FakeDirectPayload()
+        events = []
         gimbal.set_mavlink_connection(connection)
         gimbal.set_gimbal_control(direct_payload)
+        gimbal.set_event_callback(events.append)
 
         reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {"pitch": -30, "yaw": 45}))
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("turn_to", 45, -30)])
         self.assertEqual(connection.master.mav.commands, [])
+        self.assertEqual(events[-1]["method"], "payload_status_notify")
+        self.assertEqual(events[-1]["data"]["payloads"][0]["gimbal"]["pitch"], -30)
+        self.assertEqual(events[-1]["data"]["payloads"][0]["gimbal"]["yaw"], 45)
 
     def test_gimbal_reset_prefers_direct_payload_sdk_when_connected(self):
         gimbal = GimbalController()
@@ -219,6 +224,22 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual((gimbal._pitch, gimbal._roll, gimbal._yaw), (-30, 2, 45))
         self.assertEqual(len(connection.master.mav.commands), 1)
+
+    def test_gimbal_status_query_includes_payload_state_snapshot(self):
+        gimbal = GimbalController()
+        connection = FakeConnection()
+        gimbal.set_mavlink_connection(connection)
+        gimbal.handle_gimbal_rotate(message("gimbal_rotate", {"pitch": -25, "roll": 1, "yaw": 55}))
+
+        reply = gimbal.handle_gimbal_status_query(message("gimbal_status_query"))
+
+        payload = reply["data"]["payload"]
+        self.assertEqual(payload["payload_type"], "gimbal")
+        self.assertEqual(payload["payload_index"], "0")
+        self.assertEqual(payload["gimbal"]["pitch"], -25)
+        self.assertEqual(payload["gimbal"]["roll"], 1)
+        self.assertEqual(payload["gimbal"]["yaw"], 55)
+        self.assertEqual(payload["gimbal"]["mode_text"], "FOLLOW")
 
 
 if __name__ == "__main__":

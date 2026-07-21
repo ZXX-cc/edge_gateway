@@ -2,7 +2,8 @@
 云台控制模块
 处理云台角度、模式、目标指向
 """
-from typing import Optional, Callable
+import time
+from typing import Any, Dict, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
@@ -49,6 +50,8 @@ class GimbalController:
         self._roll = 0.0
         self._yaw = 0.0
         self._mode = self.MODE_FOLLOW
+        self._last_control: Dict[str, Any] = {}
+        self._last_update_time = int(time.time() * 1000)
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -70,6 +73,71 @@ class GimbalController:
     def set_event_callback(self, callback: Callable):
         """设置事件回调"""
         self._event_callback = callback
+
+    def _mode_text(self) -> str:
+        return {
+            self.MODE_FOLLOW: "FOLLOW",
+            self.MODE_FREE: "FREE",
+            self.MODE_FPV: "FPV",
+            self.MODE_RESET: "RESET",
+        }.get(self._mode, "FOLLOW")
+
+    def _connection_state(self) -> str:
+        if not self._gimbal_control:
+            return "disconnected"
+        try:
+            return "connected" if self._gimbal_control.is_connected() else "disconnected"
+        except Exception as exc:
+            logger.warning("Query ViewLink connection state failed: %s", exc)
+            return "unknown"
+
+    def build_payload_state(self) -> Dict[str, Any]:
+        """Build the Cloud API-facing state snapshot for the only connected payload: gimbal."""
+        gimbal_config = Config.get_payload_config().get("devices", {}).get("gimbal", {})
+        channels = gimbal_config.get("channels", {}) if isinstance(gimbal_config, dict) else {}
+        control = channels.get("control", {}) if isinstance(channels, dict) else {}
+        video = channels.get("video", {}) if isinstance(channels, dict) else {}
+        return {
+            "payload_index": "0",
+            "payload_type": "gimbal",
+            "payload_model_key": str(gimbal_config.get("model_key", "viewlink-gimbal")),
+            "payload_name": str(gimbal_config.get("name", "gimbal")),
+            "connection_state": self._connection_state(),
+            "adapter": control.get("adapter", "viewlink"),
+            "control": {
+                "transport": control.get("transport", "viewlink_tcp"),
+                "host": control.get("host", ""),
+                "port": control.get("port", 0),
+            },
+            "video": {
+                "transport": video.get("transport", ""),
+                "endpoint": video.get("endpoint", ""),
+            },
+            "gimbal": {
+                "pitch": self._pitch,
+                "roll": self._roll,
+                "yaw": self._yaw,
+                "mode": self._mode,
+                "mode_text": self._mode_text(),
+            },
+            "last_control": dict(self._last_control),
+            "last_update_time": self._last_update_time,
+        }
+
+    def _notify_payload_state(self, reason: str):
+        """Publish a payload state event without polluting Dock3 dock state properties."""
+        self._last_update_time = int(time.time() * 1000)
+        if not self._event_callback:
+            return
+        event = MessageBuilder.build_event(
+            "payload_status_notify",
+            {
+                "reason": reason,
+                "payloads": [self.build_payload_state()],
+            },
+            self.gateway_sn,
+        )
+        self._event_callback(event)
 
     def _send_mavlink_command(self, command: int, params: list) -> bool:
         """发送MAVLink COMMAND_LONG"""
@@ -219,6 +287,14 @@ class GimbalController:
             self._pitch = target_pitch
             self._roll = target_roll
             self._yaw = target_yaw
+            self._last_control = {
+                "method": msg.get("method", "gimbal_rotate"),
+                "type": "angle" if (pitch is not None or yaw is not None or roll is not None) else "speed",
+                "pitch_speed": pitch_speed,
+                "roll_speed": roll_speed,
+                "yaw_speed": yaw_speed,
+            }
+            self._notify_payload_state("gimbal_rotate")
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -266,10 +342,12 @@ class GimbalController:
 
         if success:
             self._mode = target_mode
+            self._last_control = {"method": msg.get("method", "set_gimbal_mode"), "mode": mode_str}
             if target_mode == self.MODE_RESET:
                 self._pitch = 0
                 self._roll = 0
                 self._yaw = 0
+            self._notify_payload_state("set_gimbal_mode")
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -296,6 +374,8 @@ class GimbalController:
             self._pitch = 0
             self._roll = 0
             self._yaw = 0
+            self._last_control = {"method": msg.get("method", "gimbal_reset")}
+            self._notify_payload_state("gimbal_reset")
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -335,7 +415,8 @@ class GimbalController:
             'pitch': self._pitch,
             'roll': self._roll,
             'yaw': self._yaw,
-            'mode': self._mode
+            'mode': self._mode,
+            'payload': self.build_payload_state(),
         })
 
     # ---- 红外相机接口 (IR) ----
@@ -386,6 +467,20 @@ class GimbalController:
         mapping = build_viewlink_call(sdk_method, data)
         result = self._execute_viewlink_call(mapping)
         success = bool(result.get("success", False))
+        if success:
+            if sdk_method in {"home"}:
+                self._pitch = 0
+                self._roll = 0
+                self._yaw = 0
+            elif sdk_method == "turn_to":
+                self._yaw = data.get("yaw", self._yaw)
+                self._pitch = data.get("pitch", self._pitch)
+            self._last_control = {
+                "method": method,
+                "sdk_method": sdk_method,
+                "args": mapping.get("args", {}),
+            }
+            self._notify_payload_state(method)
 
         return MessageBuilder.build_reply(
             msg,

@@ -316,6 +316,8 @@ class EdgeGateway:
             self.gimbal_control = GimbalControl(**kwargs)
             self.camera.set_gimbal_control(self.gimbal_control)
             self.gimbal.set_gimbal_control(self.gimbal_control)
+            if bool(gimbal_config.get('auto_connect', True)):
+                self._auto_connect_gimbal_payload(control)
 
         if self.drc:
             self.drc.set_gimbal_control(self.gimbal_control)
@@ -331,10 +333,31 @@ class EdgeGateway:
             fallback_enabled,
         )
 
+    def _auto_connect_gimbal_payload(self, control: dict):
+        """Initialize and connect the configured ViewLink gimbal during gateway startup."""
+        if not self.gimbal_control:
+            return
+        init_result = self.gimbal_control.initialize()
+        if not init_result.get("success"):
+            logger.warning("ViewLink gimbal auto initialize failed: %s", init_result)
+            return
+
+        connect_result = self.gimbal_control.connect(
+            ip=control.get("host") or None,
+            port=int(control.get("port") or 0) or None,
+            timeout=float(control.get("connect_timeout", 5.0) or 5.0),
+        )
+        if connect_result.get("success"):
+            logger.info("ViewLink gimbal auto connected: %s", connect_result.get("message"))
+        else:
+            logger.warning("ViewLink gimbal auto connect failed: %s", connect_result)
+
     def _payload_connection_states(self) -> dict:
         """Return adapter state without treating configured endpoints as connected."""
         states = {}
-        if self.gimbal_control:
+        if self.gimbal:
+            states['gimbal'] = self.gimbal.build_payload_state()
+        elif self.gimbal_control:
             states['gimbal'] = (
                 'connected' if self.gimbal_control.is_connected() else 'disconnected'
             )

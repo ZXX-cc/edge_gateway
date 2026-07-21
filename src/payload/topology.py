@@ -94,15 +94,26 @@ class PayloadTopology:
         payloads: List[Dict[str, Any]] = []
         for device_id, device in self._devices.items():
             enabled = bool(device.get("enabled", True))
+            state = states.get(device_id)
+            state_payload = state if isinstance(state, dict) else {}
+            connection_state = (
+                state_payload.get("connection_state")
+                if state_payload
+                else state
+            )
             payloads.append({
                 "id": device_id,
                 "name": device.get("name", device_id),
                 "enabled": enabled,
                 "direct_to_gateway": bool(device.get("direct_to_gateway", False)),
-                "connection_state": states.get(
-                    device_id,
-                    "configured" if enabled else "disabled",
+                "connection_state": connection_state or (
+                    "configured" if enabled else "disabled"
                 ),
                 "channels": deepcopy(device.get("channels", {})),
+                **deepcopy({
+                    key: value
+                    for key, value in state_payload.items()
+                    if key not in {"id", "name", "enabled", "direct_to_gateway", "channels"}
+                }),
             })
         return payloads

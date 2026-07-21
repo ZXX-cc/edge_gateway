@@ -48,6 +48,38 @@ def assert_state(reply: dict, *, pitch=None, roll=None, yaw=None, mode=None) -> 
     return True
 
 
+def gimbal_payload_state(message: dict) -> dict:
+    data = message.get("data", {}) if isinstance(message, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    payloads = data.get("payloads")
+    if isinstance(payloads, list):
+        for item in payloads:
+            if isinstance(item, dict) and item.get("id", item.get("payload_type")) == "gimbal":
+                return item
+    return {}
+
+
+def assert_gimbal_payload_state(message: dict, *, pitch=None, roll=None, yaw=None, mode=None) -> bool:
+    payload = gimbal_payload_state(message)
+    gimbal = payload.get("gimbal") if isinstance(payload, dict) else None
+    if not isinstance(gimbal, dict):
+        print(f"gimbal payload state missing: {message}", file=sys.stderr)
+        return False
+    if payload.get("payload_type") != "gimbal":
+        print(f"payload_type mismatch: {payload}", file=sys.stderr)
+        return False
+    expected = {"pitch": pitch, "roll": roll, "yaw": yaw, "mode": mode}
+    for key, value in expected.items():
+        if value is not None and gimbal.get(key) != value:
+            print(f"gimbal payload state mismatch: expected {key}={value}, actual={payload}", file=sys.stderr)
+            return False
+    return True
+
+
 def run_payload_checks(client: Dock3PayloadClient, args) -> int:
     rc, camera_capability = client.request("camera_capability_query", {}, args.timeout, [0])
     if rc != 0:
@@ -63,6 +95,13 @@ def run_payload_checks(client: Dock3PayloadClient, args) -> int:
         print(f"gimbal capability missing pitch_range: {gimbal_capability}", file=sys.stderr)
         return 11
 
+    rc, payload_status = client.request("payload_status_query", {}, args.timeout, [0])
+    if rc != 0:
+        return rc
+    if not assert_gimbal_payload_state(payload_status):
+        return 17
+
+    previous_payload_events = client.event_count("payload_status_notify")
     rc, _ = client.request(
         "gimbal_rotate",
         {"pitch": args.pitch, "roll": args.roll, "yaw": args.yaw},
@@ -76,6 +115,18 @@ def run_payload_checks(client: Dock3PayloadClient, args) -> int:
         return rc
     if not assert_state(status, pitch=args.pitch, roll=args.roll, yaw=args.yaw):
         return 12
+    if not assert_gimbal_payload_state(status, pitch=args.pitch, roll=args.roll, yaw=args.yaw):
+        return 18
+    rc, event = client.wait_event(
+        "payload_status_notify",
+        previous_payload_events,
+        args.event_timeout,
+        expected_status=None,
+    )
+    if rc != 0:
+        return rc
+    if not assert_gimbal_payload_state(event, pitch=args.pitch, roll=args.roll, yaw=args.yaw):
+        return 19
 
     rc, _ = client.request("set_gimbal_mode", {"mode": "FREE"}, args.timeout, [0])
     if rc != 0:
@@ -135,6 +186,7 @@ def main():
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--event-timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--pitch", type=float, default=-20.0)
     parser.add_argument("--roll", type=float, default=0.0)
@@ -151,6 +203,7 @@ def main():
         args.qos,
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_dock3_payload",
+        subscribe_events=True,
     )
     if not client.connect(args.timeout):
         print("timeout waiting for MQTT connection", file=sys.stderr)

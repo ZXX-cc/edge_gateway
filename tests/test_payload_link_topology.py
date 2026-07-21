@@ -1,5 +1,16 @@
 import unittest
+import sys
+import types
 from copy import deepcopy
+
+if "pymavlink" not in sys.modules:
+    pymavlink = types.ModuleType("pymavlink")
+    mavutil = types.SimpleNamespace(
+        mavlink=types.SimpleNamespace(MAV_CMD_DO_SET_SERVO=183)
+    )
+    pymavlink.mavutil = mavutil
+    sys.modules["pymavlink"] = pymavlink
+    sys.modules["pymavlink.mavutil"] = mavutil
 
 from src.payload.third_party import ThirdPartyController
 from src.payload.topology import PayloadTopology
@@ -110,7 +121,17 @@ class PayloadLinkTopologyTest(unittest.TestCase):
     def test_payload_status_query_exposes_all_direct_links(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
         controller = ThirdPartyController()
-        controller.set_payload_topology(topology, lambda: {"gimbal": "connected"})
+        controller.set_payload_topology(
+            topology,
+            lambda: {
+                "gimbal": {
+                    "connection_state": "connected",
+                    "payload_type": "gimbal",
+                    "payload_index": "0",
+                    "gimbal": {"pitch": -20, "roll": 0, "yaw": 30, "mode": 0},
+                }
+            },
+        )
 
         reply = controller.handle_payload_status_query(message("payload_status_query"))
 
@@ -118,6 +139,9 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(len(payloads), 5)
         self.assertEqual(payloads[0]["id"], "gimbal")
         self.assertEqual(payloads[0]["connection_state"], "connected")
+        self.assertEqual(payloads[0]["payload_type"], "gimbal")
+        self.assertEqual(payloads[0]["payload_index"], "0")
+        self.assertEqual(payloads[0]["gimbal"]["pitch"], -20)
         self.assertTrue(all(item["direct_to_gateway"] for item in payloads))
         self.assertFalse(reply["data"]["flight_controller_fallback"])
 

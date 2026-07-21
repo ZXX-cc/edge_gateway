@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = "config/gateway.yaml"
-DEFAULT_MQTT_HOST = "127.0.0.1"
+DEFAULT_MQTT_HOST = "192.168.1.100"
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_GATEWAY_SN = "EDGE-GW-001"
 

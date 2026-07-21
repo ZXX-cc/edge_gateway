@@ -316,7 +316,7 @@ def main() -> int:
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
-    parser.add_argument("--confirm-device-sn", required=True)
+    parser.add_argument("--confirm-device-sn", default="")
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--sdk-dir", default="")
@@ -340,7 +340,7 @@ def main() -> int:
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
-    if args.confirm_device_sn != args.sn:
+    if args.confirm_device_sn and args.confirm_device_sn != args.sn:
         parser.error("--confirm-device-sn must exactly match --sn")
     if not 1 <= args.zoom_speed <= 8:
         parser.error("--zoom-speed must be between 1 and 8")
