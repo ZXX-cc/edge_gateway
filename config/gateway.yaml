@@ -152,6 +152,7 @@ media:
     zoom: "rtsp://192.168.1.119:554/main"
     ir: "/dev/video1"
     gimbal: "rtsp://192.168.1.119:554/main"
+    mapping_camera: "rtsp://192.168.5.74:8554/LIVE"
     dock_inside: "rtsp://admin:Cgbxuav301@192.168.1.64:554/main"
     dock_outside: "rtsp://admin:Cgbxuav301@192.168.1.65:554/main"
   remote_media:
@@ -274,16 +275,46 @@ payload:
       name: "正射/倾斜相机"
       enabled: true
       direct_to_gateway: true
+      cloud_api:
+        type: 52
+        subtype: 0
+        gimbal_index: 1
+        video_index: "mapping-0"
+        video_type: "normal"
+        source_key: "mapping_camera"
+        switchable_video_types: ["normal"]
       channels:
+        control:
+          direction: "conditional"
+          transport: "ttl_via_flight_controller_when_armed_gateway_direct_when_disarmed"
+          protocol: "rainpoo_v3"
+          flight_controller_state_key: "armed"
+          gateway_host: "192.168.5.74"
+          serial:
+            port: ""
+            baudrate: 115200
+            level: "ttl_3v3"
+            photo_command_hex: "FA FA 00 01 00 00 01 A1 03 01 AC 11 AF AF"
+            photo_success_reply_hex: "FB FB 00 01 00 00 01 A1 03 00 BC 30 BF BF"
+          trigger:
+            mode: "low_level"
+            hold_ms: 50
+          feedback:
+            mode: "low_level"
+            hold_ms: 5
+          timing: "on_demand"
         video:
           direction: "payload_to_gateway"
-          transport: "vendor_stream"
-          endpoint: ""
+          transport: "rtsp"
+          endpoint: "rtsp://192.168.5.74:8554/LIVE"
           timing: "realtime"
         post_landing_raw_data:
           direction: "payload_to_gateway"
-          transport: "vendor_file_transfer"
-          endpoint: ""
+          transport: "ftp"
+          endpoint: "ftp://192.168.5.74/DCIM"
+          smb_endpoint: "\\\\192.168.5.74\\DCIM"
+          file_pattern: "*/Riebo*.jpg"
+          timeout_seconds: 5
           timing: "post_landing"
     lidar:
       name: "激光雷达"

@@ -41,7 +41,7 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         )
         self.assertEqual(
             set(topology.get_device("mapping_camera")["channels"]),
-            {"video", "post_landing_raw_data"},
+            {"control", "video", "post_landing_raw_data"},
         )
         self.assertEqual(
             set(topology.get_device("lidar")["channels"]),
@@ -60,6 +60,10 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         speaker_channels = topology.get_device("speaker")["channels"]
         self.assertEqual(
             mapping_channels["post_landing_raw_data"]["timing"], "post_landing"
+        )
+        self.assertEqual(
+            mapping_channels["control"]["transport"],
+            "ttl_via_flight_controller_when_armed_gateway_direct_when_disarmed",
         )
         self.assertEqual(
             spectral_channels["video"]["timing"], "realtime"

@@ -44,6 +44,7 @@ from src.cloud_api.dock3_live import (
     validate_live_quality_payload,
     validate_live_start_payload,
 )
+from src.payload.dock3_payload import payload_index_from_config
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 
@@ -109,6 +110,7 @@ class MediaManager:
         self._live_video_id = ""
         self._live_url = ""
         self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+        self._live_source_key = self._live_video_type
         self._live_camera_position = 0
 
         # ffmpeg 推流进程
@@ -740,6 +742,29 @@ class MediaManager:
         })
         return source_map.get(video_type, self.DEFAULT_VIDEO_SOURCE)
 
+    def _live_source_key_from_video_id(self, video_id: str) -> str:
+        parts = str(video_id or "").split("/")
+        if len(parts) < 3:
+            return ""
+        camera_index = parts[-2]
+        video_index = parts[-1]
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        device_items = devices.items() if isinstance(devices, dict) else []
+        for device_id, device in device_items:
+            if not isinstance(device, dict) or not device.get("enabled", True):
+                continue
+            cloud_api = device.get("cloud_api")
+            if not isinstance(cloud_api, dict):
+                continue
+            if payload_index_from_config(device) != camera_index:
+                continue
+            configured_video_index = str(cloud_api.get("video_index") or "")
+            if configured_video_index and configured_video_index != video_index:
+                continue
+            return str(cloud_api.get("source_key") or device_id)
+        return ""
+
     def _build_ffmpeg_cmd(self, url: str, url_type: int, quality: int, video_type: str) -> list:
         """
         构建 ffmpeg 推流命令
@@ -872,7 +897,7 @@ class MediaManager:
                 video_type=self._live_video_type,
                 url=self._live_url,
                 reason=reason,
-                source=self._get_video_source(self._live_video_type),
+                source=self._get_video_source(self._live_source_key),
             ),
             self.gateway_sn,
         ))
@@ -923,8 +948,13 @@ class MediaManager:
         video_id = data["video_id"]
         video_quality = data["video_quality"]
         requested_video_type = data.get("video_type") or self._video_type_from_video_id(video_id)
-        if requested_video_type:
+        requested_source_key = self._live_source_key_from_video_id(video_id)
+        if requested_source_key:
+            self._live_source_key = requested_source_key
+            self._live_video_type = requested_video_type or requested_source_key
+        elif requested_video_type:
             self._live_video_type = requested_video_type
+            self._live_source_key = requested_video_type
 
         if self._live_streaming:
             return MessageBuilder.build_reply(
@@ -956,7 +986,7 @@ class MediaManager:
         if is_mock_live_url(url):
             logger.info("Live mock stream enabled: video_id=%s, url=%s", video_id, url)
         else:
-            if not self._start_ffmpeg(url, url_type, video_quality, self._live_video_type):
+            if not self._start_ffmpeg(url, url_type, video_quality, self._live_source_key):
                 self._live_session_id = ""
                 self._live_video_id = ""
                 self._live_url = ""
@@ -974,7 +1004,7 @@ class MediaManager:
             'url_type': self._live_protocol,
             'video_quality': self._live_quality,
             'video_type': self._live_video_type,
-            'source': self._get_video_source(self._live_video_type),
+            'source': self._get_video_source(self._live_source_key),
         }))
 
     def handle_live_start_push(self, msg: dict) -> dict:
@@ -1087,7 +1117,8 @@ class MediaManager:
 
         # 如果正在推流，重启 ffmpeg 切换视频源
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
-            self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, video_type)
+            self._live_source_key = self._live_source_key_from_video_id(video_id) or video_type
+            self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key)
 
         self._publish_live_status_event(TASK_STATUS_OK)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
@@ -1123,7 +1154,7 @@ class MediaManager:
 
         # 如果正在推流，重启 ffmpeg 调整画质
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
-            self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_video_type)
+            self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_source_key)
 
         self._publish_live_status_event(TASK_STATUS_OK)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {

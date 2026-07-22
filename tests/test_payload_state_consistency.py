@@ -1,6 +1,10 @@
 import unittest
 import sys
 import types
+import os
+import tempfile
+import ftplib
+from copy import deepcopy
 
 
 if "src.database.connection" not in sys.modules:
@@ -48,6 +52,7 @@ if "src.database.media_db" not in sys.modules:
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
+from src.utils.config import Config
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
 
 
@@ -116,7 +121,21 @@ class FakeDirectPayload:
         return {"success": True}
 
 
+class FakeFlightControl:
+    def __init__(self, armed=False):
+        self.armed = armed
+
+    def is_armed_status(self):
+        return self.armed
+
+
 class PayloadStateConsistencyTest(unittest.TestCase):
+    def setUp(self):
+        self._config = deepcopy(Config._data)
+
+    def tearDown(self):
+        Config._data = self._config
+
     def test_camera_prefers_direct_payload_sdk_when_connected(self):
         camera = CameraController()
         connection = FakeConnection()
@@ -220,6 +239,127 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertFalse(camera._is_recording)
         self.assertFalse(stopped["data"]["recording"])
         self.assertEqual(len(connection.master.mav.commands), 2)
+
+    def test_mapping_camera_disarmed_uses_gateway_direct_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Config.merge({
+                "media": {"storage_path": tmp},
+                "payload": {
+                    "devices": {
+                        "mapping_camera": {
+                            "channels": {
+                                "post_landing_raw_data": {"endpoint": "disabled://camera/DCIM"}
+                            }
+                        }
+                    }
+                },
+            })
+            camera = CameraController()
+            connection = FakeConnection()
+            camera.set_mavlink_connection(connection)
+            camera.set_flight_control(FakeFlightControl(armed=False))
+
+            reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+                "camera_index": "52-0-1",
+            }))
+
+            self.assertEqual(reply["data"]["result"], 0)
+            self.assertEqual(reply["data"]["control_route"], "gateway_direct")
+            self.assertFalse(reply["data"]["armed"])
+            self.assertEqual(connection.master.mav.commands, [])
+            self.assertTrue(os.path.exists(reply["data"]["local_cache"]["file_path"]))
+
+    def test_mapping_camera_armed_uses_flight_controller_ttl_and_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Config.merge({
+                "media": {"storage_path": tmp},
+                "payload": {
+                    "devices": {
+                        "mapping_camera": {
+                            "channels": {
+                                "post_landing_raw_data": {"endpoint": "disabled://camera/DCIM"}
+                            }
+                        }
+                    }
+                },
+            })
+            camera = CameraController()
+            connection = FakeConnection()
+            camera.set_mapping_camera_flight_controller_connection(connection)
+            camera.set_flight_control(FakeFlightControl(armed=True))
+
+            reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+                "camera_index": "52-0-1",
+            }))
+
+            self.assertEqual(reply["data"]["result"], 0)
+            self.assertEqual(reply["data"]["control_route"], "flight_controller_ttl")
+            self.assertTrue(reply["data"]["armed"])
+            self.assertEqual(len(connection.master.mav.commands), 1)
+            self.assertTrue(os.path.exists(reply["data"]["local_cache"]["file_path"]))
+
+    def test_mapping_camera_cache_downloads_latest_ftp_photo(self):
+        class FakeFTP:
+            def __init__(self, host, timeout):
+                self.cwd_path = "/"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def login(self, username, password):
+                return None
+
+            def cwd(self, path):
+                if path == "..":
+                    self.cwd_path = "/DCIM"
+                elif path.startswith("/"):
+                    self.cwd_path = path
+                else:
+                    self.cwd_path = f"{self.cwd_path.rstrip('/')}/{path}"
+
+            def nlst(self):
+                if self.cwd_path == "/DCIM":
+                    return ["00001", "00002"]
+                if self.cwd_path == "/DCIM/00002":
+                    return ["Riebo000001.jpg", "Riebo000003.jpg"]
+                return []
+
+            def retrbinary(self, command, callback):
+                callback(b"real-jpeg")
+
+        old_ftp = ftplib.FTP
+        ftplib.FTP = FakeFTP
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                Config.merge({
+                    "media": {"storage_path": tmp},
+                    "payload": {
+                        "devices": {
+                            "mapping_camera": {
+                                "channels": {
+                                    "post_landing_raw_data": {
+                                        "endpoint": "ftp://192.168.5.74/DCIM",
+                                        "timeout_seconds": 1,
+                                    }
+                                }
+                            }
+                        }
+                    },
+                })
+                camera = CameraController()
+
+                cached = camera._cache_photo_locally({}, "gateway_direct")
+                with open(cached["file_path"], "rb") as handle:
+                    cached_bytes = handle.read()
+        finally:
+            ftplib.FTP = old_ftp
+
+        self.assertEqual(cached["file_name"], "Riebo000003.jpg")
+        self.assertEqual(cached_bytes, b"real-jpeg")
+        self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000003.jpg")
 
     def test_failed_gimbal_commands_do_not_change_cached_pose_or_mode(self):
         gimbal = GimbalController()

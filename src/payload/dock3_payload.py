@@ -8,7 +8,7 @@ shapes.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 DEFAULT_CAMERA_TYPE = 52
@@ -110,6 +110,64 @@ def build_live_capacity(
         "available_video_number": 1,
         "coexist_video_number_max": 1,
         "device_list": [device],
+    }
+
+
+def build_live_capacity_from_devices(
+    *,
+    gateway_sn: str,
+    devices: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build Dock3 live capacity from all configured realtime video payloads."""
+    camera_list: List[Dict[str, Any]] = []
+    total_available = 0
+    coexist_max = 0
+
+    for device_id, device in (devices or {}).items():
+        if not isinstance(device, Mapping) or not device.get("enabled", True):
+            continue
+        channels = device.get("channels")
+        if not isinstance(channels, Mapping):
+            continue
+        video_channel = channels.get("video")
+        if not isinstance(video_channel, Mapping):
+            continue
+        if video_channel.get("timing") != "realtime":
+            continue
+
+        payload_config = _payload_cloud_config(device)
+        if not payload_config:
+            continue
+
+        video_endpoint = str(video_channel.get("endpoint", "") or "")
+        single = build_live_capacity(
+            gateway_sn=gateway_sn,
+            config=device,
+            video_endpoint=video_endpoint,
+        )
+        single_device = single["device_list"][0]
+        camera = single_device["camera_list"][0]
+        camera["device_id"] = str(device_id)
+        if video_endpoint:
+            camera["video_list"][0]["source_key"] = str(
+                payload_config.get("source_key") or device_id
+            )
+        camera_list.append(camera)
+        total_available += int(camera.get("available_video_number", 1) or 1)
+        coexist_max += int(camera.get("coexist_video_number_max", 1) or 1)
+
+    if not camera_list:
+        return build_live_capacity(gateway_sn=gateway_sn, config=None)
+
+    return {
+        "available_video_number": total_available,
+        "coexist_video_number_max": max(1, coexist_max),
+        "device_list": [{
+            "sn": gateway_sn,
+            "available_video_number": total_available,
+            "coexist_video_number_max": max(1, coexist_max),
+            "camera_list": camera_list,
+        }],
     }
 
 

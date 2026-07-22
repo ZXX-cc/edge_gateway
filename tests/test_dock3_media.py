@@ -361,6 +361,45 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(video["video_index"], "normal-0")
         self.assertIn("zoom", video["switchable_video_types"])
 
+    def test_live_capability_includes_mapping_camera(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "payload": {
+                "devices": {
+                    "mapping_camera": {
+                        "cloud_api": {
+                            "type": 52,
+                            "subtype": 0,
+                            "gimbal_index": 1,
+                            "video_index": "mapping-0",
+                            "video_type": "normal",
+                            "source_key": "mapping_camera",
+                            "switchable_video_types": ["normal"],
+                        },
+                        "channels": {
+                            "video": {
+                                "transport": "rtsp",
+                                "endpoint": "rtsp://192.168.5.74:8554/LIVE",
+                            }
+                        },
+                    }
+                }
+            }
+        })
+        try:
+            manager = MediaManager()
+            manager.gateway_sn = "EDGEGW001"
+            reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+        finally:
+            Config._data = original
+
+        cameras = reply["data"]["live_capacity"]["device_list"][0]["camera_list"]
+        mapping = next(item for item in cameras if item["camera_index"] == "52-0-1")
+        self.assertEqual(mapping["device_id"], "mapping_camera")
+        self.assertEqual(mapping["video_list"][0]["video_index"], "mapping-0")
+        self.assertEqual(mapping["video_list"][0]["source_key"], "mapping_camera")
+        self.assertEqual(mapping["video_list"][0]["endpoint"], "rtsp://192.168.5.74:8554/LIVE")
+
     def test_gimbal_live_source_builds_rtsp_to_rtmp_ffmpeg_command(self):
         original = deepcopy(Config.all())
         Config.merge({
@@ -387,6 +426,44 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("-f", command)
         self.assertIn("flv", command)
         self.assertEqual(command[-1], "rtmp://cloud.example/live/stream")
+
+    def test_mapping_camera_video_id_selects_mapping_rtsp_source(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "media": {
+                "video_sources": {
+                    "mapping_camera": "rtsp://192.168.5.74:8554/LIVE",
+                }
+            },
+            "payload": {
+                "devices": {
+                    "mapping_camera": {
+                        "cloud_api": {
+                            "type": 52,
+                            "subtype": 0,
+                            "gimbal_index": 1,
+                            "video_index": "mapping-0",
+                            "source_key": "mapping_camera",
+                        }
+                    }
+                }
+            },
+        })
+        try:
+            manager = MediaManager()
+            source_key = manager._live_source_key_from_video_id("EDGEGW001/52-0-1/mapping-0")
+            command = manager._build_ffmpeg_cmd(
+                "rtmp://cloud.example/live/mapping",
+                1,
+                3,
+                source_key,
+            )
+        finally:
+            Config._data = original
+
+        self.assertEqual(source_key, "mapping_camera")
+        self.assertIn("rtsp://192.168.5.74:8554/LIVE", command)
+        self.assertEqual(command[-1], "rtmp://cloud.example/live/mapping")
 
     def test_old_ffmpeg_monitor_does_not_clear_restarted_stream(self):
         class FinishedProcess:

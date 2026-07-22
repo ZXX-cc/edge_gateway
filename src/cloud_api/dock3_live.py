@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Tuple
 
-from src.payload.dock3_payload import build_live_capacity
+from src.payload.dock3_payload import build_live_capacity_from_devices
 from src.utils.config import Config
 
 
@@ -145,9 +145,6 @@ def live_status_event_data(
 def live_capability_data() -> Dict[str, Any]:
     payload_config = Config.get_payload_config()
     devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
-    gimbal = devices.get("gimbal", {}) if isinstance(devices, dict) else {}
-    channels = gimbal.get("channels", {}) if isinstance(gimbal, dict) else {}
-    video = channels.get("video", {}) if isinstance(channels, dict) else {}
     return live_task_output(TASK_STATUS_OK, {
         "supported_protocols": ["webrtc", "rtmp", "rtsp"],
         "supported_url_types": sorted(SUPPORTED_URL_TYPES),
@@ -156,9 +153,8 @@ def live_capability_data() -> Dict[str, Any]:
         "supported_qualities": sorted(SUPPORTED_QUALITIES),
         "max_bitrate": 8000,
         "max_framerate": 60,
-        "live_capacity": build_live_capacity(
+        "live_capacity": build_live_capacity_from_devices(
             gateway_sn=Config.get_gateway_sn(),
-            config=gimbal,
-            video_endpoint=str(video.get("endpoint", "") or ""),
+            devices=devices if isinstance(devices, dict) else {},
         ),
     })

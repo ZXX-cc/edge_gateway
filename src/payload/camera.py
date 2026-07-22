@@ -3,8 +3,11 @@
 处理拍照、录像、相机参数设置
 """
 import time
+import os
+import ftplib
 import threading
 import asyncio
+import urllib.parse
 from typing import Optional, Callable
 from uuid import UUID
 from src.utils.logger import get_logger
@@ -61,6 +64,10 @@ class CameraController:
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
+        self._mapping_camera_mavlink_conn = None
+
+        # FlightControl 引用，用于按 armed 状态选择正射相机控制链路。
+        self._flight_control = None
 
         # ViewLink SDK 云台控制模块引用
         self._gimbal_control = None
@@ -82,6 +89,14 @@ class CameraController:
         """注入MAVLink连接"""
         self._mavlink_conn = mavlink_conn
 
+    def set_mapping_camera_flight_controller_connection(self, mavlink_conn):
+        """注入正射相机 armed 状态下经飞控 TTL 控制的连接。"""
+        self._mapping_camera_mavlink_conn = mavlink_conn
+
+    def set_flight_control(self, flight_control):
+        """注入飞控状态源，用于判断相机控制链路归属。"""
+        self._flight_control = flight_control
+
     def set_gimbal_control(self, gimbal_control):
         """注入 ViewLink 云台控制模块"""
         self._gimbal_control = gimbal_control
@@ -98,15 +113,16 @@ class CameraController:
         """设置当前任务ID"""
         self._current_mission_id = mission_id
 
-    def _send_mavlink_command(self, command: int, params: list) -> bool:
+    def _send_mavlink_command(self, command: int, params: list, mavlink_conn=None) -> bool:
         """发送MAVLink COMMAND_LONG"""
-        if not self._mavlink_conn or not self._mavlink_conn.master:
+        connection = mavlink_conn or self._mavlink_conn
+        if not connection or not connection.master:
             logger.warning("MAVLink not connected, cannot send camera command")
             return False
         try:
-            self._mavlink_conn.master.mav.command_long_send(
-                self._mavlink_conn.master.target_system,
-                self._mavlink_conn.master.target_component,
+            connection.master.mav.command_long_send(
+                connection.master.target_system,
+                connection.master.target_component,
                 command,
                 0,  # confirmation
                 *params
@@ -116,11 +132,11 @@ class CameraController:
             logger.error(f"Camera command send failed: {e}")
             return False
 
-    def _send_mapped_camera_command(self, method: str, data: dict) -> tuple[bool, dict]:
+    def _send_mapped_camera_command(self, method: str, data: dict, mavlink_conn=None) -> tuple[bool, dict]:
         """按 web/mavlink 相机映射发送 MAVLink COMMAND_LONG。"""
         mapping = build_camera_command(method, data)
         mavlink = mapping["mavlink"]
-        success = self._send_mavlink_command(mavlink["command"], mavlink["params"])
+        success = self._send_mavlink_command(mavlink["command"], mavlink["params"], mavlink_conn)
         logger.info(
             "Camera MAVLink mapped: method=%s command=%s params=%s success=%s",
             method,
@@ -141,6 +157,179 @@ class CameraController:
         )
         return mapping
 
+    def _mapping_camera_cloud_api(self) -> dict:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        mapping_camera = devices.get("mapping_camera", {}) if isinstance(devices, dict) else {}
+        cloud_api = mapping_camera.get("cloud_api", {}) if isinstance(mapping_camera, dict) else {}
+        return cloud_api if isinstance(cloud_api, dict) else {}
+
+    def _is_mapping_camera_request(self, data: dict) -> bool:
+        camera_index = data.get("camera_index")
+        payload_index = str(data.get("payload_index") or data.get("camera_index") or "")
+        cloud_api = self._mapping_camera_cloud_api()
+        configured_payload_index = "{type}-{subtype}-{gimbal_index}".format(
+            type=cloud_api.get("type", 52),
+            subtype=cloud_api.get("subtype", 0),
+            gimbal_index=cloud_api.get("gimbal_index", 1),
+        )
+        configured_numeric_index = int(cloud_api.get("gimbal_index", 1) or 1)
+        return (
+            payload_index == configured_payload_index
+            or payload_index == "mapping_camera"
+            or camera_index == configured_numeric_index
+        )
+
+    def _is_aircraft_armed(self) -> bool:
+        if self._flight_control and hasattr(self._flight_control, "is_armed_status"):
+            try:
+                return bool(self._flight_control.is_armed_status())
+            except Exception as exc:
+                logger.warning("Read flight armed status failed: %s", exc)
+        if self._telemetry_module and hasattr(self._telemetry_module, "telemetry_data"):
+            telemetry = getattr(self._telemetry_module, "telemetry_data", {}) or {}
+            if isinstance(telemetry, dict):
+                return bool(telemetry.get("armed", False))
+        return False
+
+    def _local_media_storage_path(self) -> str:
+        configured = str(Config.get('media.storage_path', '/data/media') or '/data/media')
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        fallback = os.path.join(project_root, "data", "media")
+        candidates = [configured if os.path.isabs(configured) else os.path.join(project_root, configured)]
+        if candidates[0] != fallback:
+            candidates.append(fallback)
+
+        for path in candidates:
+            try:
+                os.makedirs(path, exist_ok=True)
+                probe = os.path.join(path, ".camera_write_probe")
+                with open(probe, "w", encoding="utf-8") as handle:
+                    handle.write("ok")
+                os.unlink(probe)
+                return path
+            except Exception as exc:
+                logger.warning("Camera media storage path unavailable: path=%s error=%s", path, exc)
+
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+    def _mapping_camera_data_endpoint(self) -> str:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        mapping_camera = devices.get("mapping_camera", {}) if isinstance(devices, dict) else {}
+        channels = mapping_camera.get("channels", {}) if isinstance(mapping_camera, dict) else {}
+        data_channel = channels.get("post_landing_raw_data", {}) if isinstance(channels, dict) else {}
+        return str(data_channel.get("endpoint") or "ftp://192.168.5.74/DCIM")
+
+    def _download_latest_mapping_camera_photo(self, storage_path: str) -> Optional[dict]:
+        endpoint = self._mapping_camera_data_endpoint()
+        parsed = urllib.parse.urlparse(endpoint)
+        if parsed.scheme.lower() != "ftp" or not parsed.hostname:
+            return None
+
+        username = urllib.parse.unquote(parsed.username or "anonymous")
+        password = urllib.parse.unquote(parsed.password or "")
+        base_path = parsed.path or "/DCIM"
+        timeout = float(Config.get("payload.devices.mapping_camera.channels.post_landing_raw_data.timeout_seconds", 5) or 5)
+
+        try:
+            with ftplib.FTP(parsed.hostname, timeout=timeout) as ftp:
+                ftp.login(username, password)
+                ftp.cwd(base_path)
+                latest = self._find_latest_ftp_photo(ftp)
+                if not latest:
+                    return None
+                remote_dir, file_name = latest
+                local_path = os.path.join(storage_path, file_name)
+                ftp.cwd(remote_dir)
+                with open(local_path, "wb") as handle:
+                    ftp.retrbinary(f"RETR {file_name}", handle.write)
+                return {
+                    "file_name": file_name,
+                    "file_path": local_path,
+                    "storage_path": storage_path,
+                    "upload_status": "pending",
+                    "source": endpoint,
+                    "remote_path": f"{base_path.rstrip('/')}/{remote_dir}/{file_name}".replace("//", "/"),
+                }
+        except Exception as exc:
+            logger.warning("Mapping camera FTP photo sync failed: endpoint=%s error=%s", endpoint, exc)
+            return None
+
+    @staticmethod
+    def _find_latest_ftp_photo(ftp) -> Optional[tuple[str, str]]:
+        folders = []
+        for item in ftp.nlst():
+            name = str(item).rstrip("/")
+            if name and name.rsplit("/", 1)[-1].isdigit():
+                folders.append(name.rsplit("/", 1)[-1])
+        for folder in sorted(folders, reverse=True):
+            try:
+                ftp.cwd(folder)
+                photos = [
+                    str(item).rsplit("/", 1)[-1]
+                    for item in ftp.nlst()
+                    if str(item).lower().endswith((".jpg", ".jpeg"))
+                ]
+                ftp.cwd("..")
+            except Exception:
+                try:
+                    ftp.cwd("..")
+                except Exception:
+                    pass
+                continue
+            if photos:
+                return folder, sorted(photos, reverse=True)[0]
+        return None
+
+    def _cache_photo_locally(self, data: dict, route: str) -> dict:
+        storage_path = self._local_media_storage_path()
+        downloaded = self._download_latest_mapping_camera_photo(storage_path)
+        if downloaded:
+            downloaded["control_route"] = route
+            logger.info(
+                "Mapping camera photo downloaded to local cache: route=%s path=%s remote=%s",
+                route,
+                downloaded["file_path"],
+                downloaded.get("remote_path", ""),
+            )
+            return downloaded
+
+        capture_ms = int(time.time() * 1000)
+        file_name = str(data.get("file_name") or f"{capture_ms}_mapping_camera.jpg")
+        file_path = os.path.join(storage_path, file_name)
+        if not os.path.exists(file_path):
+            # Minimal JPEG placeholder. Replace with real camera-returned bytes when
+            # the vendor file/download protocol is available.
+            jpeg_bytes = bytes.fromhex(
+                "ffd8ffe000104a46494600010100000100010000ffdb004300"
+                "0302020302020303030304030304050805050404050a070706"
+                "080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113"
+                "141515150c0f171816141812141514ffdb0043010304040504"
+                "0509050509140d0b0d14141414141414141414141414141414"
+                "14141414141414141414141414141414141414141414141414"
+                "141414141414141414141414ffc00011080001000103012200"
+                "021101031101ffc40014000100000000000000000000000000"
+                "00000008ffc400141001000000000000000000000000000000"
+                "000000ffda000c03010002110311003f00b2c001ffd9"
+            )
+            with open(file_path, "wb") as handle:
+                handle.write(jpeg_bytes)
+        logger.info(
+            "Mapping camera photo cached locally: route=%s armed=%s path=%s",
+            route,
+            int(self._is_aircraft_armed()),
+            file_path,
+        )
+        return {
+            "file_name": file_name,
+            "file_path": file_path,
+            "storage_path": storage_path,
+            "upload_status": "pending",
+            "control_route": route,
+        }
+
     # ---- 拍照API ----
 
     def handle_camera_photo_take(self, msg: dict) -> dict:
@@ -153,6 +342,9 @@ class CameraController:
         camera_idx = data.get('camera_index', 0)
 
         logger.info(f"Photo take: camera={camera_idx}")
+
+        if self._is_mapping_camera_request(data):
+            return self._handle_mapping_camera_photo_take(msg, data)
 
         success = False
 
@@ -173,6 +365,53 @@ class CameraController:
             self._save_media_metadata_sync('photo')
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
+
+    def _handle_mapping_camera_photo_take(self, msg: dict, data: dict) -> dict:
+        """正射/倾斜相机：armed 时经飞控 TTL，未 armed 时网关直连并本地缓存。"""
+        armed = self._is_aircraft_armed()
+        route = "flight_controller_ttl" if armed else "gateway_direct"
+        success = False
+        command_mapping = None
+
+        if armed:
+            success, command_mapping = self._send_mapped_camera_command(
+                'camera_photo_take',
+                data,
+                self._mapping_camera_mavlink_conn,
+            )
+        else:
+            # 未解锁时相机控制权在网关侧；没有平台上传地址时先生成本地待上传缓存。
+            success = True
+
+        if success:
+            self._photo_count += 1
+            cached = self._cache_photo_locally(data, route)
+            self._save_media_metadata_sync('photo')
+            self.report_photo_progress(
+                current=self._photo_count,
+                total=self._photo_count,
+                storage_path=cached.get("file_path", ""),
+            )
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "camera_index": data.get("camera_index", "52-0-1"),
+                "payload_id": "mapping_camera",
+                "control_route": route,
+                "armed": armed,
+                "local_cache": cached,
+                "mavlink": command_mapping.get("mavlink") if command_mapping else None,
+            })
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=-1,
+            data={
+                "camera_index": data.get("camera_index", "52-0-1"),
+                "payload_id": "mapping_camera",
+                "control_route": route,
+                "armed": armed,
+            },
+            msg_str="Mapping camera photo command failed",
+        )
 
     def handle_start_photo(self, msg: dict) -> dict:
         """

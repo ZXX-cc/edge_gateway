@@ -31,7 +31,7 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.command_trace import trace_command
 from src.utils.message import MessageBuilder
-from src.payload.dock3_payload import build_gimbal_payload_property, build_live_capacity
+from src.payload.dock3_payload import build_gimbal_payload_property, build_live_capacity_from_devices
 from src.cloud_api.dock3_properties import (
     PROPERTY_SET_SUCCESS,
     official_property_names,
@@ -854,13 +854,11 @@ class DeviceManager:
         return build_gimbal_payload_property(state, self._gimbal_payload_config())
 
     def _build_live_capacity_property(self) -> Dict[str, Any]:
-        gimbal_config = self._gimbal_payload_config()
-        channels = gimbal_config.get("channels", {}) if isinstance(gimbal_config, dict) else {}
-        video = channels.get("video", {}) if isinstance(channels, dict) else {}
-        return build_live_capacity(
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        return build_live_capacity_from_devices(
             gateway_sn=getattr(self, "gateway_sn", Config.get_gateway_sn()),
-            config=gimbal_config,
-            video_endpoint=str(video.get("endpoint", "") or ""),
+            devices=devices if isinstance(devices, dict) else {},
         )
 
     def _refresh_payload_properties(self, notify: bool = False) -> Dict[str, Any]:

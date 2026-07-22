@@ -462,6 +462,8 @@ class EdgeGateway:
                     self.mission.set_camera_controller(self.camera)
                     self.mission.set_telemetry_module(self.telemetry_module)
                     self.mission.set_telemetry_reporter(self.telemetry_reporter)
+                if self.camera:
+                    self.camera.set_flight_control(self.flight_control)
                 if self.telemetry_module and self.telemetry:
                     self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
                 if self.drc:
@@ -560,6 +562,8 @@ class EdgeGateway:
                 self.dock.set_nest_module(self.nest_module)
                 self.nest_module.set_flight_control(self.flight_control)
 
+                self.camera.set_flight_control(self.flight_control)
+                self.camera.set_mapping_camera_flight_controller_connection(self.mavlink_conn)
                 self.camera.set_telemetry_module(self.telemetry_module)
 
                 # DRC 模块依赖注入
