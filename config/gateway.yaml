@@ -37,6 +37,7 @@ nanomq:
 
   # 控制信令Topic前缀
   topic_prefix: "thing/product"
+  background_handler_workers: 4 # 文件列表/上传等本地 IO 后台执行，避免 file_list_get 被长任务排队超时。
 
   # SSL/TLS配置(生产环境启用)
   ssl:

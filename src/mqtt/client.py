@@ -59,11 +59,11 @@ class MQTTClient:
         self._trace_instance = f"{self.gateway_sn}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         # 文件扫描、媒体删除等本地 IO 不能占用 Paho 的网络回调线程。
         # 控制类 method 仍保持原有串行调用，以免改变设备状态机的执行顺序。
-        worker_count = self.config.get('background_handler_workers', 2)
+        worker_count = self.config.get('background_handler_workers', 4)
         try:
             self._background_worker_count = max(1, int(worker_count))
         except (TypeError, ValueError):
-            self._background_worker_count = 2
+            self._background_worker_count = 4
         self._background_executor: Optional[ThreadPoolExecutor] = None
         self._background_methods = set()
         self._background_futures: set[Future] = set()
@@ -1033,14 +1033,24 @@ class MQTTClient:
             },
         )
         if is_downstream_command:
+            with self._background_lock:
+                pending_count = len(self._background_futures)
             trace_command(
                 "mqtt_handler_queued",
                 source_topic=source_topic,
                 method=method,
                 tid=payload.get("tid"),
                 execution="background_io",
+                pending_background_tasks=pending_count,
                 gateway_pid=os.getpid(),
                 gateway_instance=self._trace_instance,
+            )
+            logger.info(
+                "MQTT background handler queued: method=%s tid=%s pending=%s workers=%s",
+                method,
+                payload.get("tid"),
+                pending_count,
+                self._background_worker_count,
             )
 
         with self._background_lock:
@@ -1109,6 +1119,7 @@ class MQTTClient:
                 ("method", method),
                 ("tid", payload.get('tid')),
                 ("source_topic", source_topic),
+                ("elapsed_ms", elapsed_ms),
                 ("handler_elapsed_ms", handler_elapsed_ms),
                 ("result", self._reply_result(result)),
                 ("reply", format_with_labels(result, max_length=3000)),

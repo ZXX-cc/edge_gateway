@@ -185,7 +185,7 @@ class Config:
             'password': cls.get('nanomq.password', ''),
             'topic_prefix': cls.get('nanomq.topic_prefix', 'thing/product'),
             # 仅用于日志/媒体等明确的本地 IO handler，控制类 method 保持同步执行。
-            'background_handler_workers': cls.get('nanomq.background_handler_workers', 2),
+            'background_handler_workers': cls.get('nanomq.background_handler_workers', 4),
             'dedup_ttl_seconds': cls.get('nanomq.dedup_ttl_seconds', 300),
             'dedup_max_entries': cls.get('nanomq.dedup_max_entries', 1024),
         }
