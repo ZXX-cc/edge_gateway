@@ -60,6 +60,34 @@ def start_stream(client: Dock3LiveSwitchClient, *, label: str, url: str, url_typ
     return rc
 
 
+def set_quality(client: Dock3LiveSwitchClient, *, video_id: str, quality: int, timeout: float) -> int:
+    print_step(f"设置直播清晰度: {video_id} -> {quality}")
+    rc, _ = client.request(
+        "live_set_quality",
+        {"video_id": video_id, "video_quality": quality},
+        timeout,
+        [0],
+        "ok",
+    )
+    if rc == 0:
+        print(f"直播清晰度已设置为 {quality}")
+    return rc
+
+
+def set_lens(client: Dock3LiveSwitchClient, *, video_id: str, video_type: str, timeout: float) -> int:
+    print_step(f"设置直播镜头: {video_id} -> {video_type}")
+    rc, _ = client.request(
+        "live_lens_change",
+        {"video_id": video_id, "video_type": video_type},
+        timeout,
+        [0],
+        "ok",
+    )
+    if rc == 0:
+        print(f"直播镜头已设置为 {video_type}")
+    return rc
+
+
 def stop_stream(client: Dock3LiveSwitchClient, *, label: str, video_id: str, timeout: float) -> int:
     print_step(f"停止 {label}: {video_id}")
     rc, reply = client.request(
@@ -105,6 +133,9 @@ def print_menu(args, active_label: str) -> None:
     print("直播源手动切换命令:")
     print(f"  1 / gimbal   -> 推云台      {args.gimbal_video_id}")
     print(f"  2 / mapping  -> 推正射相机  {args.mapping_video_id}")
+    print("  + / -        -> 提高/降低直播清晰度")
+    print("  0 / 3 / 4    -> 设置清晰度: 0=自适应, 3=高清, 4=超清")
+    print("  n/w/z/i/f    -> 设置镜头: normal/wide/zoom/ir/fpv")
     print("  s / stop     -> 停止当前推流")
     print("  c / cap      -> 重新查询 live_capacity")
     print("  q / quit     -> 退出脚本")
@@ -163,9 +194,32 @@ def switch_to(client: Dock3LiveSwitchClient, args, *, target_label: str, target_
         return rc
     active["label"] = target_label
     active["video_id"] = target_video_id
+    active["quality"] = str(args.quality)
     if args.play_url:
         print(f"查看 {target_label}: {args.play_url}")
     return 0
+
+
+def set_active_quality(client: Dock3LiveSwitchClient, args, active: dict, quality: int) -> int:
+    if not active.get("video_id"):
+        print("请先按 1 或 2 启动一个直播源，再设置直播清晰度")
+        return 0
+    quality = max(0, min(4, quality))
+    rc = set_quality(client, video_id=active["video_id"], quality=quality, timeout=args.timeout)
+    if rc == 0:
+        active["quality"] = str(quality)
+        args.quality = quality
+    return rc
+
+
+def set_active_lens(client: Dock3LiveSwitchClient, args, active: dict, video_type: str) -> int:
+    if not active.get("video_id"):
+        print("请先按 1 或 2 启动一个直播源，再设置直播镜头")
+        return 0
+    rc = set_lens(client, video_id=active["video_id"], video_type=video_type, timeout=args.timeout)
+    if rc == 0:
+        active["video_type"] = video_type
+    return rc
 
 
 def stop_active(client: Dock3LiveSwitchClient, args, active: dict) -> int:
@@ -223,6 +277,40 @@ def run_manual_switch(client: Dock3LiveSwitchClient, args) -> int:
                 target_video_id=args.mapping_video_id,
                 active=active,
             )
+            if rc != 0:
+                return rc
+        elif command in {"+", "="}:
+            current_quality = int(active.get("quality", args.quality))
+            rc = set_active_quality(client, args, active, current_quality + 1)
+            if rc != 0:
+                return rc
+        elif command in {"-", "_"}:
+            current_quality = int(active.get("quality", args.quality))
+            rc = set_active_quality(client, args, active, current_quality - 1)
+            if rc != 0:
+                return rc
+        elif command in {"0", "3", "4"}:
+            rc = set_active_quality(client, args, active, int(command))
+            if rc != 0:
+                return rc
+        elif command in {"n", "normal"}:
+            rc = set_active_lens(client, args, active, "normal")
+            if rc != 0:
+                return rc
+        elif command in {"w", "wide"}:
+            rc = set_active_lens(client, args, active, "wide")
+            if rc != 0:
+                return rc
+        elif command in {"z", "zoom"}:
+            rc = set_active_lens(client, args, active, "zoom")
+            if rc != 0:
+                return rc
+        elif command in {"i", "ir"}:
+            rc = set_active_lens(client, args, active, "ir")
+            if rc != 0:
+                return rc
+        elif command in {"f", "fpv"}:
+            rc = set_active_lens(client, args, active, "fpv")
             if rc != 0:
                 return rc
         elif command in {"s", "stop"}:
