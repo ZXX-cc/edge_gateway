@@ -111,6 +111,14 @@ def print_menu(args, active_label: str) -> None:
     print(f"  当前: {active_label or '未推流'}")
 
 
+def normalize_command(command: str) -> str:
+    """兼容 Windows 现场输入时可能混入的空格、全角数字或 § 前缀。"""
+    cleaned = command.strip().lower().replace("１", "1").replace("２", "2")
+    if cleaned.startswith("§"):
+        cleaned = cleaned[1:].strip()
+    return cleaned
+
+
 def switch_to(client: Dock3LiveSwitchClient, args, *, target_label: str, target_video_id: str, active: dict) -> int:
     if active.get("video_id") == target_video_id:
         print(f"{target_label} 已经在推流")
@@ -172,12 +180,15 @@ def run_manual_switch(client: Dock3LiveSwitchClient, args) -> int:
     print_menu(args, active.get("label", ""))
     while True:
         try:
-            command = input("live-switch> ").strip().lower()
+            command = normalize_command(input("live-switch> "))
         except (EOFError, KeyboardInterrupt):
             print()
             command = "q"
 
-        if command in {"1", "g", "gimbal"}:
+        if command:
+            print(f"收到命令: {command}")
+
+        if command in {"1", "g", "gimbal", "云台"}:
             rc = switch_to(
                 client,
                 args,
@@ -187,7 +198,7 @@ def run_manual_switch(client: Dock3LiveSwitchClient, args) -> int:
             )
             if rc != 0:
                 return rc
-        elif command in {"2", "m", "mapping", "camera", "mapping_camera"}:
+        elif command in {"2", "m", "mapping", "camera", "mapping_camera", "相机", "正射", "正射相机"}:
             rc = switch_to(
                 client,
                 args,
