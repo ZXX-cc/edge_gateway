@@ -361,6 +361,36 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(cached_bytes, b"real-jpeg")
         self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000003.jpg")
 
+    def test_mapping_camera_payload_state_exposes_gateway_binding(self):
+        Config.merge({
+            "media": {
+                "video_sources": {
+                    "mapping_camera": "rtsp://192.168.5.74:8554/LIVE",
+                }
+            }
+        })
+        camera = CameraController()
+        camera.gateway_sn = "EDGEGW001"
+        camera.set_flight_control(FakeFlightControl(armed=False))
+        camera._last_mapping_camera_cache = {"file_path": "/data/media/Riebo000003.jpg"}
+        old_probe = CameraController._tcp_endpoint_reachable
+        CameraController._tcp_endpoint_reachable = staticmethod(
+            lambda endpoint, default_port, timeout=0.3: str(endpoint).startswith("rtsp://")
+        )
+        try:
+            state = camera.build_mapping_camera_payload_state()
+        finally:
+            CameraController._tcp_endpoint_reachable = old_probe
+
+        self.assertEqual(state["connection_state"], "connected")
+        self.assertEqual(state["payload_type"], "mapping_camera")
+        self.assertEqual(state["payload_index"], "52-0-1")
+        self.assertEqual(state["control_route"], "gateway_direct")
+        self.assertEqual(state["video"]["video_id"], "EDGEGW001/52-0-1/mapping-0")
+        self.assertTrue(state["video"]["reachable"])
+        self.assertFalse(state["data_link"]["reachable"])
+        self.assertEqual(state["last_photo_cache"]["file_path"], "/data/media/Riebo000003.jpg")
+
     def test_failed_gimbal_commands_do_not_change_cached_pose_or_mode(self):
         gimbal = GimbalController()
 

@@ -381,6 +381,8 @@ class EdgeGateway:
             states['gimbal'] = (
                 'connected' if self.gimbal_control.is_connected() else 'disconnected'
             )
+        if self.camera:
+            states['mapping_camera'] = self.camera.build_mapping_camera_payload_state()
         return states
 
     def _enable_payload_flight_controller_fallback(self, connection) -> bool:

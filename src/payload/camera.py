@@ -5,6 +5,7 @@
 import time
 import os
 import ftplib
+import socket
 import threading
 import asyncio
 import urllib.parse
@@ -84,6 +85,11 @@ class CameraController:
 
         # 当前任务ID
         self._current_mission_id = None
+
+        # 正射相机网关侧状态，用于 payload_status_query 暴露给平台。
+        self._last_mapping_camera_cache = {}
+        self._last_mapping_camera_sync_error = ""
+        self._last_mapping_camera_control_route = ""
 
     def set_mavlink_connection(self, mavlink_conn):
         """注入MAVLink连接"""
@@ -222,6 +228,87 @@ class CameraController:
         data_channel = channels.get("post_landing_raw_data", {}) if isinstance(channels, dict) else {}
         return str(data_channel.get("endpoint") or "ftp://192.168.5.74/DCIM")
 
+    def _mapping_camera_config(self) -> dict:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        mapping_camera = devices.get("mapping_camera", {}) if isinstance(devices, dict) else {}
+        return mapping_camera if isinstance(mapping_camera, dict) else {}
+
+    @staticmethod
+    def _tcp_endpoint_reachable(endpoint: str, default_port: int, timeout: float = 0.3) -> bool:
+        parsed = urllib.parse.urlparse(str(endpoint or ""))
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or default_port
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def build_mapping_camera_payload_state(self) -> dict:
+        """构建正射相机在网关侧的负载绑定状态，供平台查询展示。"""
+        config = self._mapping_camera_config()
+        channels = config.get("channels", {}) if isinstance(config, dict) else {}
+        control = channels.get("control", {}) if isinstance(channels, dict) else {}
+        video = channels.get("video", {}) if isinstance(channels, dict) else {}
+        data_channel = channels.get("post_landing_raw_data", {}) if isinstance(channels, dict) else {}
+        cloud_api = config.get("cloud_api", {}) if isinstance(config, dict) else {}
+        payload_index = "{type}-{subtype}-{gimbal_index}".format(
+            type=cloud_api.get("type", 52),
+            subtype=cloud_api.get("subtype", 0),
+            gimbal_index=cloud_api.get("gimbal_index", 1),
+        )
+        video_index = str(cloud_api.get("video_index") or "mapping-0")
+        rtsp_endpoint = str(video.get("endpoint") or Config.get("media.video_sources.mapping_camera", ""))
+        ftp_endpoint = str(data_channel.get("endpoint") or self._mapping_camera_data_endpoint())
+        probe_timeout = float(data_channel.get("probe_timeout_seconds", 0.3) or 0.3)
+        rtsp_reachable = self._tcp_endpoint_reachable(rtsp_endpoint, 8554, probe_timeout)
+        ftp_reachable = self._tcp_endpoint_reachable(ftp_endpoint, 21, probe_timeout)
+        connection_state = "connected" if rtsp_reachable or ftp_reachable else "configured"
+        armed = self._is_aircraft_armed()
+        route = self._last_mapping_camera_control_route or (
+            "flight_controller_ttl" if armed else "gateway_direct"
+        )
+        return {
+            "payload_type": "mapping_camera",
+            "payload_model_key": str(config.get("model_key", "rainpoo-r6p")),
+            "payload_name": str(config.get("name", "正射/倾斜相机")),
+            "payload_index": payload_index,
+            "connection_state": connection_state,
+            "adapter": "rainpoo_v3",
+            "armed": armed,
+            "control_route": route,
+            "control": {
+                "transport": control.get("transport", ""),
+                "protocol": control.get("protocol", "rainpoo_v3"),
+                "gateway_host": control.get("gateway_host", ""),
+                "serial": {
+                    "port": (control.get("serial") or {}).get("port", ""),
+                    "baudrate": (control.get("serial") or {}).get("baudrate", 115200),
+                    "level": (control.get("serial") or {}).get("level", "ttl_3v3"),
+                },
+                "trigger": control.get("trigger", {}),
+                "feedback": control.get("feedback", {}),
+            },
+            "video": {
+                "transport": video.get("transport", "rtsp"),
+                "endpoint": rtsp_endpoint,
+                "video_id": f"{self.gateway_sn}/{payload_index}/{video_index}",
+                "reachable": rtsp_reachable,
+            },
+            "data_link": {
+                "transport": data_channel.get("transport", "ftp"),
+                "endpoint": ftp_endpoint,
+                "smb_endpoint": data_channel.get("smb_endpoint", ""),
+                "file_pattern": data_channel.get("file_pattern", "*/Riebo*.jpg"),
+                "reachable": ftp_reachable,
+            },
+            "last_photo_cache": self._last_mapping_camera_cache,
+            "last_sync_error": self._last_mapping_camera_sync_error,
+        }
+
     def _download_latest_mapping_camera_photo(self, storage_path: str) -> Optional[dict]:
         endpoint = self._mapping_camera_data_endpoint()
         parsed = urllib.parse.urlparse(endpoint)
@@ -255,6 +342,7 @@ class CameraController:
                 }
         except Exception as exc:
             logger.warning("Mapping camera FTP photo sync failed: endpoint=%s error=%s", endpoint, exc)
+            self._last_mapping_camera_sync_error = str(exc)
             return None
 
     @staticmethod
@@ -288,6 +376,9 @@ class CameraController:
         downloaded = self._download_latest_mapping_camera_photo(storage_path)
         if downloaded:
             downloaded["control_route"] = route
+            self._last_mapping_camera_cache = dict(downloaded)
+            self._last_mapping_camera_sync_error = ""
+            self._last_mapping_camera_control_route = route
             logger.info(
                 "Mapping camera photo downloaded to local cache: route=%s path=%s remote=%s",
                 route,
@@ -322,13 +413,16 @@ class CameraController:
             int(self._is_aircraft_armed()),
             file_path,
         )
-        return {
+        cached = {
             "file_name": file_name,
             "file_path": file_path,
             "storage_path": storage_path,
             "upload_status": "pending",
             "control_route": route,
         }
+        self._last_mapping_camera_cache = dict(cached)
+        self._last_mapping_camera_control_route = route
+        return cached
 
     # ---- 拍照API ----
 

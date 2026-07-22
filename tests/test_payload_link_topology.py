@@ -133,7 +133,26 @@ class PayloadLinkTopologyTest(unittest.TestCase):
                     "payload_type": "gimbal",
                     "payload_index": "52-0-0",
                     "gimbal": {"pitch": -20, "roll": 0, "yaw": 30, "mode": 0},
-                }
+                },
+                "mapping_camera": {
+                    "connection_state": "configured",
+                    "payload_type": "mapping_camera",
+                    "payload_model_key": "rainpoo-r6p",
+                    "payload_index": "52-0-1",
+                    "control_route": "gateway_direct",
+                    "video": {
+                        "transport": "rtsp",
+                        "endpoint": "rtsp://192.168.5.74:8554/LIVE",
+                        "video_id": "EDGEGW001/52-0-1/mapping-0",
+                        "reachable": False,
+                    },
+                    "data_link": {
+                        "transport": "ftp",
+                        "endpoint": "ftp://192.168.5.74/DCIM",
+                        "reachable": False,
+                    },
+                    "last_photo_cache": {"file_path": "/data/media/Riebo000001.jpg"},
+                },
             },
         )
 
@@ -147,6 +166,14 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(payloads[0]["payload_index"], "52-0-0")
         self.assertEqual(payloads[0]["type_subtype_gimbalindex"]["payload_index"], "52-0-0")
         self.assertEqual(payloads[0]["gimbal"]["pitch"], -20)
+        mapping = next(item for item in payloads if item["id"] == "mapping_camera")
+        self.assertEqual(mapping["connection_state"], "configured")
+        self.assertEqual(mapping["payload_type"], "mapping_camera")
+        self.assertEqual(mapping["payload_index"], "52-0-1")
+        self.assertEqual(mapping["control_route"], "gateway_direct")
+        self.assertEqual(mapping["video"]["video_id"], "EDGEGW001/52-0-1/mapping-0")
+        self.assertEqual(mapping["data_link"]["transport"], "ftp")
+        self.assertEqual(mapping["last_photo_cache"]["file_path"], "/data/media/Riebo000001.jpg")
         self.assertTrue(all(item["direct_to_gateway"] for item in payloads))
         self.assertFalse(reply["data"]["flight_controller_fallback"])
 
