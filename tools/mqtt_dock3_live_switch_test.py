@@ -9,6 +9,8 @@
 import argparse
 import json
 import sys
+import termios
+import tty
 from pathlib import Path
 
 
@@ -112,11 +114,26 @@ def print_menu(args, active_label: str) -> None:
 
 
 def normalize_command(command: str) -> str:
-    """兼容 Windows 现场输入时可能混入的空格、全角数字或 § 前缀。"""
-    cleaned = command.strip().lower().replace("１", "1").replace("２", "2")
+    """兼容现场输入时可能混入的空格、全角数字、回车符或 § 前缀。"""
+    cleaned = command.strip().lower().replace("１", "1").replace("２", "2").replace("\r", "")
     if cleaned.startswith("§"):
         cleaned = cleaned[1:].strip()
     return cleaned
+
+
+def read_command(args) -> str:
+    if args.line_mode or not sys.stdin.isatty():
+        return normalize_command(input("live-switch> "))
+
+    print("live-switch> ", end="", flush=True)
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        command = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    print(command)
+    return normalize_command(command)
 
 
 def switch_to(client: Dock3LiveSwitchClient, args, *, target_label: str, target_video_id: str, active: dict) -> int:
@@ -180,7 +197,7 @@ def run_manual_switch(client: Dock3LiveSwitchClient, args) -> int:
     print_menu(args, active.get("label", ""))
     while True:
         try:
-            command = normalize_command(input("live-switch> "))
+            command = read_command(args)
         except (EOFError, KeyboardInterrupt):
             print()
             command = "q"
@@ -246,6 +263,7 @@ def main() -> int:
     parser.add_argument("--quality", type=int, default=3)
     parser.add_argument("--stop-previous", action="store_true", help="进入交互前先停止已知的云台和正射相机视频源")
     parser.add_argument("--keep-on-exit", action="store_true", help="退出脚本时保留当前推流")
+    parser.add_argument("--line-mode", action="store_true", help="使用传统输入模式，需要输入命令后再按回车")
     parser.add_argument("--quiet-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
@@ -259,7 +277,7 @@ def main() -> int:
         args.qos,
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_live_switch",
-        subscribe_events=True,
+        subscribe_events=False,
     )
     if not client.connect(args.timeout):
         print("等待 MQTT 连接超时", file=sys.stderr)
