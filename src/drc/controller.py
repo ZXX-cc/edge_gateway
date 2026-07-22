@@ -571,6 +571,7 @@ class DrcController:
         self._original_mode = None
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
+        self._flight_authority_grabbed = False
 
         # 上报退出事件
         result = DEVICE_COMMAND_TIMEOUT if reason == "heartbeat_timeout" else -1
@@ -630,6 +631,7 @@ class DrcController:
 
         # 4. 进入DRC状态
         self._drc_enabled = True
+        self._flight_authority_grabbed = True
         self._session_id = str(int(time.time() * 1000))
         logger.info(f"DRC mode entered, session={self._session_id}")
 
@@ -692,6 +694,7 @@ class DrcController:
         self._original_mode = None
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
+        self._flight_authority_grabbed = False
         logger.info("DRC mode exited")
 
         # 5. 上报退出状态事件
@@ -747,6 +750,42 @@ class DrcController:
                 "flight_authority": 1,
             },
         )
+
+    def _ensure_drc_authority_for_point_flight(self, msg: dict) -> tuple[bool, str]:
+        """指点飞行前自动进入/保持 DRC 控制权。"""
+        if self._drc_enabled and self._flight_authority_grabbed:
+            return True, ""
+        if self._drc_enabled and not self._flight_authority_grabbed:
+            authority_msg = {
+                "method": "flight_authority_grab",
+                "tid": msg.get("tid", ""),
+                "gateway": msg.get("gateway", self.gateway_sn),
+                "data": {},
+            }
+            reply = self.handle_flight_authority_grab(authority_msg)
+            result = reply.get("data", {}).get("result") if isinstance(reply, dict) else None
+            if result == 0 and self._flight_authority_grabbed:
+                return True, ""
+            reason = ""
+            if isinstance(reply, dict):
+                reason = reply.get("msg") or reply.get("data", {}).get("output", {}).get("reason", "")
+            return False, reason or "DRC flight authority unavailable"
+
+        enter_msg = {
+            "method": "drc_mode_enter",
+            "tid": msg.get("tid", ""),
+            "gateway": msg.get("gateway", self.gateway_sn),
+            "data": {},
+        }
+        reply = self.handle_drc_mode_enter(enter_msg)
+        result = reply.get("data", {}).get("result") if isinstance(reply, dict) else None
+        if result == 0 and self._drc_enabled:
+            self._flight_authority_grabbed = True
+            return True, ""
+        reason = ""
+        if isinstance(reply, dict):
+            reason = reply.get("msg") or reply.get("data", {}).get("output", {}).get("reason", "")
+        return False, reason or "DRC authority unavailable"
 
     # ---- DRC实时控制 ----
 
@@ -1240,6 +1279,16 @@ class DrcController:
         if not valid:
             logger.warning("fly_to_point_update boundary rejected: %s", reason)
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str=reason)
+
+        authority_ok, authority_reason = self._ensure_drc_authority_for_point_flight(msg)
+        if not authority_ok:
+            logger.warning("fly_to_point_update rejected before authority: %s", authority_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=DOCK_COMMUNICATION_ERROR,
+                data={"output": {"status": "failed", "reason": authority_reason}},
+                msg_str=authority_reason,
+            )
 
         self._active_fly_to_point = {
             "fly_to_id": fly_to_id,

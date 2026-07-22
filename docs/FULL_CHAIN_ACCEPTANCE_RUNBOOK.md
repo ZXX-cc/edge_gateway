@@ -1,6 +1,6 @@
 # 全链路验收 Runbook
 
-更新时间：2026-07-10
+更新时间：2026-07-22
 
 本文档用于证明 Edge Gateway 按客户需求和 DJI Dock 3 口径完成全链路可用。它不是开发计划，而是验收执行手册。
 
@@ -127,7 +127,7 @@ Wayline、一键启航和 firmware/config 前自动执行 `drc_mode_exit`；同�
 舱盖开/关回读改为非阻塞告警，保证命令成功后继续执行关盖恢复；充电状态回读
 仍保持严格校验。全局状态机同时把 `takeoff_to_point`、`fly_to_point_update`、
 `fly_to_point_stop` 等归入 DRC 指点飞行控制：DRC 激活时允许进入业务 handler，
-DRC 未激活时仍按非法状态迁移拒绝，不再误判为“新航线任务”。此外，
+DRC 未激活时停止指点飞行仍按非法状态迁移拒绝，不再误判为“新航线任务”。此外，
 `tools/e2e_takeoff_flow_test.py` 已适配当前真实执行策略：当网关明确拒绝
 `simulate_mission` 并返回 `simulate_mission is disabled; real flight execution is required`
 时，脚本记录为真实执行保护生效；如需强制旧离线模拟闭环，可显式增加
@@ -216,6 +216,42 @@ ignored_total=0`。
 续飞脚本新增 `--wait-completion --completion-timeout <秒>`：默认仍只验证断点后至少推进
 一个航点；需要让飞机继续飞完整条航线时加该参数，脚本会轮询到 `completed/ok/100%`
 或失败终态。
+
+2026-07-22 断点续飞 V2 改造：断点续飞拆成两条验收链路。第一类
+`passive_auto_return` 用于低电量、返航等被动中断后的新任务接管；旧任务保持
+`paused/interrupted` 后不再要求平台先确认续飞或取消，平台可直接下发新的
+`flighttask_prepare`，只要 `flight_id` 不同且带合法 `break_point.index` 或
+`break_point.last_waypoint_idx`，网关会把旧任务持久化为 `superseded`，保留旧断点
+记录，并让新任务按自身 `file + break_point` 准备和执行。第二类
+`manual_intervention` 用于平台主动“暂停-指令飞行-恢复”；`flighttask_pause` 会保存
+当前位置断点，`fly_to_point`/`fly_to_point_update` 会先自动进入或保持 DRC 控制权，
+获取失败则拒绝执行，干预结束后平台下发 `resume_wayline_task`，其行为与
+`flighttask_resume`/`resume_wayline` 一致：先回断点，再恢复原航线。
+
+断点续飞 V2 验收命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_breakpoint_v2
+mkdir -p "$EVIDENCE_DIR"
+
+python -m unittest -v tests.test_dock3_wayline tests.test_global_state_machine tests.test_dock3_drc \
+  > "$EVIDENCE_DIR/unit.log" 2>&1
+
+python tools/mqtt_dock3_wayline_relaunch_breakpoint_test.py \
+  --host 192.168.2.188 --port 1883 --timeout 30 --quiet-stale --fail-on-stale --real-sitl \
+  > "$EVIDENCE_DIR/passive_takeover.log" 2>&1
+
+python tools/mqtt_dock3_drc_test.py \
+  --host 192.168.2.188 --port 1883 --timeout 20 --quiet-stale --fail-on-stale \
+  > "$EVIDENCE_DIR/manual_intervention_drc.log" 2>&1
+```
+
+通过标准：`unit.log` 中上述三个单测模块全通过；`passive_takeover.log` 能看到
+带断点的新 `flight_id` 接管旧暂停任务，旧任务进入 `superseded`，新任务从断点继续；
+`manual_intervention_drc.log` 能看到 `fly_to_point_update` 在 DRC 控制权可用后返回
+`result=0`，未获得 DRC 控制权时返回明确失败。所有日志必须保存在
+`$EVIDENCE_DIR`，不要只复制终端滚动输出。
 
 2026-07-16 平台决策式断点续飞新增三段脚本，测试期间不需要重启网关、SITL 或机巢模拟器：
 `tools/mqtt_platform_wayline_execute.py` 只模拟平台下发 `flighttask_prepare/execute`；

@@ -756,6 +756,75 @@ class MissionManager:
             msg_str=reason,
         )
 
+    @staticmethod
+    def _breakpoint_index_from_payload(break_point: dict) -> Optional[int]:
+        """从平台下发的断点字段中提取有效航点索引。"""
+        if not isinstance(break_point, dict) or not break_point:
+            return None
+        index = break_point.get("index", break_point.get("last_waypoint_idx"))
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return None
+        return index if index >= 0 else None
+
+    def _release_active_task_for_breakpoint_takeover(self, new_flight_id: str, break_point: dict):
+        """被动中断后允许平台下发新的断点任务接管当前暂停任务。"""
+        old_flight_id = self._current_task_id
+        old_breakpoint = dict(self._break_point or {})
+        old_step = self._current_step
+        old_percent = self._current_progress_percent()
+        if old_flight_id:
+            threading.Thread(
+                target=self._run_db_coroutine,
+                args=(self._update_mission_status(old_flight_id, 'superseded'),),
+                daemon=True,
+            ).start()
+            logger.info(
+                "Paused mission superseded by breakpoint task: old=%s new=%s breakpoint=%s",
+                old_flight_id,
+                new_flight_id,
+                break_point,
+            )
+
+        self.stop_mission_monitor()
+        self._current_task_id = None
+        self._current_wayline = []
+        self._current_waypoint_idx = 0
+        self._breakpoint_waypoint_idx = 0
+        self._task_file = {}
+        self._task_file_summary = {}
+        self._ready_conditions = {}
+        self._executable_conditions = {}
+        self._break_point = {}
+        self._simulate_mission = {}
+        self._battery_safety_action = None
+        self._executed_waypoint_actions.clear()
+        self._clear_task_failure()
+
+        if self._event_callback and old_flight_id:
+            event = MessageBuilder.build_event(
+                'flighttask_progress',
+                {
+                    'result': 0,
+                    'output': {
+                        'status': 'canceled',
+                        'progress': {
+                            'current_step': old_step,
+                            'percent': old_percent,
+                        },
+                        'ext': {
+                            'flight_id': old_flight_id,
+                            'superseded_by': new_flight_id,
+                            'breakpoint_takeover': True,
+                            'break_point': old_breakpoint,
+                        },
+                    },
+                },
+                self.gateway_sn,
+            )
+            self._event_callback(event)
+
     def _wayline_status_name(self) -> str:
         status_map = {
             self.MISSION_PREPARING: STATUS_SENT,
@@ -1610,7 +1679,12 @@ class MissionManager:
         logger.info("Breakpoint loaded: %s", data)
         return data
 
-    def _record_breakpoint(self, reason: str, break_reason: int = 0):
+    def _record_breakpoint(
+        self,
+        reason: str,
+        break_reason: int = 0,
+        breakpoint_type: str = "manual_intervention",
+    ):
         """记录当前航点断点，确保返航或重启后可以从断点继续执行。"""
         self._sync_current_waypoint_from_manager()
         self._breakpoint_waypoint_idx = self._current_waypoint_idx
@@ -1624,6 +1698,7 @@ class MissionManager:
             ),
             'break_reason': break_reason,
             'reason': reason,
+            'breakpoint_type': breakpoint_type,
         }
         self._save_breakpoint_file(reason)
 
@@ -1891,6 +1966,7 @@ class MissionManager:
                 'index': self._current_waypoint_idx,
                 'break_reason': 773,
                 'reason': reason,
+                'breakpoint_type': 'passive_auto_return',
                 'failure': {
                     key: value for key, value in failure.items()
                     if key != "raw_result"
@@ -1917,6 +1993,7 @@ class MissionManager:
                 'index': self._current_waypoint_idx,
                 'break_reason': 773,
                 'reason': reason,
+                'breakpoint_type': 'passive_auto_return',
             }
             self._breakpoint_waypoint_idx = self._current_waypoint_idx
             self._save_breakpoint_file(reason)
@@ -3761,12 +3838,24 @@ class MissionManager:
                             extra={"resume_from_breakpoint": True},
                         ),
                     )
-            return self._reject_flighttask_request(
-                msg,
-                flight_id,
-                DOCK_BUSY,
-                "当前航线任务正在执行，不能覆盖航线文件",
-            )
+            if self._status == self.MISSION_PAUSED and self._current_task_id != flight_id:
+                takeover_index = self._breakpoint_index_from_payload(break_point)
+                if takeover_index is not None:
+                    self._release_active_task_for_breakpoint_takeover(flight_id, break_point)
+                else:
+                    return self._reject_flighttask_request(
+                        msg,
+                        flight_id,
+                        DOCK_BUSY,
+                        "暂停任务只能被带有效 break_point 的新断点任务接管",
+                    )
+            else:
+                return self._reject_flighttask_request(
+                    msg,
+                    flight_id,
+                    DOCK_BUSY,
+                    "当前航线任务正在执行，不能覆盖航线文件",
+                )
 
         # 保存任务属性
         self._current_task_id = flight_id
@@ -3848,7 +3937,12 @@ class MissionManager:
 
         # 断点续飞设置
         if break_point:
-            self._breakpoint_waypoint_idx = break_point.get('index', 0)
+            self._breakpoint_waypoint_idx = self._breakpoint_index_from_payload(break_point) or 0
+            self._break_point = {
+                **break_point,
+                'index': self._breakpoint_waypoint_idx,
+                'breakpoint_type': break_point.get('breakpoint_type', 'passive_auto_return'),
+            }
             logger.info(f"Breakpoint set: index={break_point.get('index')}, "
                        f"state={break_point.get('state')}, progress={break_point.get('progress')}")
 
@@ -4378,6 +4472,17 @@ class MissionManager:
         注意: 功能等同于 flighttask_recovery / resume_wayline
         """
         logger.info("Flighttask resume")
+        return self.handle_resume_wayline(msg)
+
+    def handle_resume_wayline_task(self, msg: dict) -> dict:
+        """
+        平台主动干预后的正式恢复入口。
+
+        Direction: down (services)
+        功能等同于 flighttask_resume / resume_wayline，保留独立 method 便于平台按
+        “暂停-指令飞行-恢复航线”业务流程调用。
+        """
+        logger.info("Resume wayline task")
         return self.handle_resume_wayline(msg)
 
     def handle_flighttask_ready(self, msg: dict) -> dict:

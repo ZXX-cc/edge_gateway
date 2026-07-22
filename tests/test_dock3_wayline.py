@@ -633,6 +633,90 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(manager._breakpoint_waypoint_idx, 2)
             self.assertEqual(manager._break_point["index"], 2)
 
+    def test_paused_task_can_be_superseded_by_new_breakpoint_prepare(self):
+        original_config = Config._data
+        Config._data = {"mavlink": {"enabled": True}, "nest_mavlink": {"enabled": True}}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                breakpoint_path = Path(tmp) / "breakpoint.json"
+                kmz_path = Path(tmp) / "mission.kmz"
+                write_mock_kmz(kmz_path)
+
+                manager = MissionManager()
+                events = []
+                status_updates = []
+                waypoint_manager = RecordingWaypointManager()
+                manager.set_event_callback(events.append)
+                manager.set_waypoint_manager(waypoint_manager)
+                manager.set_flight_control(RecordingRealWaylineFlightControl())
+                manager._breakpoint_file_path = lambda: str(breakpoint_path)
+                manager.stop_mission_monitor = lambda: True
+                manager._run_prepare_self_check = lambda simulate_enabled: (True, [], {})
+                manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+                def record_status(task_id, status):
+                    status_updates.append((task_id, status))
+
+                manager._update_mission_status = record_status
+                manager._current_task_id = "flight-old"
+                manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+                manager._current_waypoint_idx = 2
+                manager._breakpoint_waypoint_idx = 2
+                manager._break_point = {"index": 2, "breakpoint_type": "passive_auto_return"}
+                manager._task_file = {"url": "file:///old.kmz", "fingerprint": "old"}
+                manager._status = manager.MISSION_PAUSED
+
+                prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+                    "flight_id": "flight-new",
+                    "task_type": 0,
+                    "execute_time": int(time.time() * 1000),
+                    "file": {"url": kmz_path.as_uri(), "fingerprint": "new"},
+                    "break_point": {"index": 1, "progress": 0.5},
+                    "simulate_mission": {"is_enable": 0},
+                }))
+
+                self.assertEqual(prepare["data"]["result"], 0)
+                self.assertEqual(prepare["data"]["output"]["status"], "sent")
+                self.assertEqual(manager._current_task_id, "flight-new")
+                self.assertEqual(manager._status, manager.MISSION_IDLE)
+                self.assertEqual(manager._breakpoint_waypoint_idx, 1)
+                self.assertEqual(manager._break_point["breakpoint_type"], "passive_auto_return")
+                self.assertEqual(waypoint_manager.clear_calls, 1)
+                self.assertEqual(len(waypoint_manager.added), 2)
+                superseded_events = [
+                    event for event in events
+                    if event.get("method") == "flighttask_progress"
+                    and event.get("data", {}).get("output", {}).get("ext", {}).get("superseded_by") == "flight-new"
+                ]
+                self.assertTrue(superseded_events)
+                self.assertEqual(superseded_events[-1]["data"]["output"]["status"], "canceled")
+                deadline = time.time() + 0.5
+                while not status_updates and time.time() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(status_updates, [("flight-old", "superseded")])
+        finally:
+            Config._data = original_config
+
+    def test_paused_task_rejects_new_prepare_without_valid_breakpoint(self):
+        manager = MissionManager()
+        manager._current_task_id = "flight-old"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_PAUSED
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        prepare = manager.handle_flighttask_prepare(base_msg("flighttask_prepare", {
+            "flight_id": "flight-new",
+            "task_type": 0,
+            "execute_time": int(time.time() * 1000),
+            "file": {"url": "file:///tmp/new.kmz", "fingerprint": "new"},
+            "break_point": {},
+            "simulate_mission": {"is_enable": 0},
+        }))
+
+        self.assertEqual(prepare["data"]["result"], DOCK_BUSY)
+        self.assertEqual(prepare["data"]["output"]["status"], "rejected")
+        self.assertEqual(manager._current_task_id, "flight-old")
+
     def test_flighttask_execute_relaunches_paused_task_from_breakpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             breakpoint_path = Path(tmp) / "breakpoint.json"
@@ -1094,6 +1178,22 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(resume["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(resume["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._status, manager.MISSION_PAUSED)
+
+    def test_resume_wayline_task_uses_existing_resume_logic(self):
+        manager = MissionManager()
+        calls = []
+
+        def fake_resume(msg):
+            calls.append(msg.get("method"))
+            return {"data": {"result": 0, "output": {"status": "in_progress"}}}
+
+        manager.handle_resume_wayline = fake_resume
+
+        reply = manager.handle_resume_wayline_task(base_msg("resume_wayline_task", {}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "in_progress")
+        self.assertEqual(calls, ["resume_wayline_task"])
 
     def test_prepare_payload_accepts_official_shape(self):
         ok, normalized, errors = normalize_prepare_payload({
