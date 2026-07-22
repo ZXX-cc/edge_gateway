@@ -15,6 +15,7 @@ from src.core.message_dispatcher import MessageDispatcher
 
 class FakeConnection:
     use_custom_dialect = False
+    connection_string = "udp:127.0.0.1:14550"
 
     def is_connected(self):
         return True
@@ -24,6 +25,15 @@ class FakeConnection:
 
     def recv_message(self, timeout=0.1):
         return None
+
+    def disconnect(self):
+        pass
+
+    def connect(self):
+        return True
+
+    def get_connection_info(self):
+        return {}
 
 
 class MessageDispatcherHeartbeatTest(unittest.TestCase):
@@ -51,6 +61,36 @@ class MessageDispatcherHeartbeatTest(unittest.TestCase):
             self.assertFalse(dispatcher._should_log_heartbeat_timeout(True))
         self.assertTrue(dispatcher._should_log_heartbeat_timeout(True))
         self.assertEqual(dispatcher._heartbeat_timeout_count, 10)
+
+    def test_reconnect_runs_when_connection_is_disconnected(self):
+        class ReconnectConnection(FakeConnection):
+            def __init__(self):
+                self.connected = False
+                self.disconnect_calls = 0
+                self.connect_calls = 0
+
+            def is_connected(self):
+                return self.connected
+
+            def disconnect(self):
+                self.disconnect_calls += 1
+
+            def connect(self):
+                self.connect_calls += 1
+                self.connected = True
+                return True
+
+            def get_connection_info(self):
+                return {"disconnect_reason": "TCP peer closed connection"}
+
+        connection = ReconnectConnection()
+        dispatcher = MessageDispatcher(connection)
+        dispatcher._last_reconnect_attempt = -999
+
+        self.assertTrue(dispatcher._maybe_reconnect())
+        self.assertTrue(connection.connected)
+        self.assertEqual(connection.disconnect_calls, 1)
+        self.assertEqual(connection.connect_calls, 1)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ class TelemetryProcessor:
         self._last_state: Dict[str, any] = {}
         self._last_osd_time = 0
         self._osd_interval = 2.0
+        self.configure_osd_rate(Config.get('mavlink.telemetry_rate.osd', 0.5))
 
         # 回调
         self._osd_callback: Optional[Callable] = None
@@ -73,7 +74,7 @@ class TelemetryProcessor:
         self._running = True
         self._osd_thread = threading.Thread(target=self._osd_loop, daemon=True)
         self._osd_thread.start()
-        logger.info("Telemetry OSD loop started (0.5Hz)")
+        logger.info("Telemetry OSD loop started: interval=%ss", self._osd_interval)
 
     def stop(self):
         """停止OSD定时推送线程"""
@@ -94,6 +95,17 @@ class TelemetryProcessor:
             except Exception as e:
                 logger.error(f"OSD push error: {e}")
             time.sleep(self._osd_interval)
+
+    def configure_osd_rate(self, rate_hz) -> None:
+        """按配置设置 OSD 上报频率；客户要求 2 秒一次时配置 0.5Hz。"""
+        try:
+            rate = float(rate_hz)
+        except (TypeError, ValueError):
+            rate = 0.5
+        if rate <= 0:
+            self._osd_interval = 2.0
+            return
+        self._osd_interval = max(1.0 / rate, 0.1)
 
     # ---- 数据输入接口（来自TelemetryModule） ----
 

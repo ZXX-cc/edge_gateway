@@ -51,6 +51,9 @@ class MessageDispatcher:
         self._start_time = 0
         self._heartbeat_timeout_count = 0
         self._heartbeat_timeout_log_interval = 10
+        self._reconnect_enabled = True
+        self._reconnect_interval = 2.0
+        self._last_reconnect_attempt = 0.0
 
         # ⭐⭐⭐ 新增：根据连接类型设置心跳检查策略 ⭐⭐⭐
         self._check_heartbeat = not connection.use_custom_dialect
@@ -170,6 +173,11 @@ class MessageDispatcher:
                 logger.error("Dispatcher module on_stop failed: module=%s error=%s", module.name, e, exc_info=True)
 
         logger.info("Dispatcher stopped: connection=%s", self.connection.connection_string)
+
+    def configure_reconnect(self, enabled: bool = True, interval: float = 2.0):
+        """配置后台重连；机巢 TCP 被对端断开后由 idle loop 拉起恢复。"""
+        self._reconnect_enabled = bool(enabled)
+        self._reconnect_interval = max(float(interval or 0), 0.1)
 
     def _receive_loop(self):
         """消息接收循环（推送机制实现）"""
@@ -360,6 +368,8 @@ class MessageDispatcher:
 
         while self._running:
             try:
+                self._maybe_reconnect()
+
                 # ⭐⭐⭐ 修改：只对需要心跳检查的连接进行检查 ⭐⭐⭐
                 if self._check_heartbeat:
                     if self._should_log_heartbeat_timeout(self.connection.check_heartbeat_timeout()):
@@ -384,6 +394,44 @@ class MessageDispatcher:
             except Exception as e:
                 if self._running:
                     logger.error("Dispatcher idle loop error: %s", e, exc_info=True)
+
+    def _maybe_reconnect(self) -> bool:
+        """连接断开时按固定间隔重连，避免业务线程一直向已关闭 socket 写入。"""
+        if not self._reconnect_enabled or self.connection.is_connected():
+            return False
+
+        current_time = time.time()
+        if current_time - self._last_reconnect_attempt < self._reconnect_interval:
+            return False
+        self._last_reconnect_attempt = current_time
+
+        info = (
+            self.connection.get_connection_info()
+            if hasattr(self.connection, "get_connection_info")
+            else {}
+        )
+        logger.warning(
+            "Dispatcher reconnecting: connection=%s reason=%s",
+            self.connection.connection_string,
+            info.get("disconnect_reason", ""),
+        )
+
+        try:
+            self.connection.disconnect()
+        except Exception as e:
+            logger.warning("Dispatcher cleanup before reconnect failed: %s", e, exc_info=True)
+
+        try:
+            if self.connection.connect():
+                self._heartbeat_timeout_count = 0
+                logger.info("Dispatcher reconnected: connection=%s", self.connection.connection_string)
+                return True
+        except Exception as e:
+            logger.warning("Dispatcher reconnect error: %s", e, exc_info=True)
+            return False
+
+        logger.warning("Dispatcher reconnect failed: connection=%s", self.connection.connection_string)
+        return False
 
     def _should_log_heartbeat_timeout(self, timed_out: bool) -> bool:
         """连续心跳超时时按固定间隔降频打印，恢复后重置计数。"""

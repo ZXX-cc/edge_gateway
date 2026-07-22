@@ -30,6 +30,13 @@ class MavlinkTelemetryStateTest(unittest.TestCase):
             {"property": {"firmware_version": "1.2.3"}},
         )
 
+    def test_osd_rate_configures_two_second_interval(self):
+        telemetry = TelemetryProcessor()
+
+        telemetry.configure_osd_rate(0.5)
+
+        self.assertEqual(telemetry._osd_interval, 2.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
