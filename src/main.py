@@ -174,6 +174,8 @@ class EdgeGateway:
         self.dock: DockManager = None
         self.cloud_conn: CloudConnectionManager = None
         self.telemetry_reporter: TelemetryReporter = None
+        self._dock_osd_interval = 2.0
+        self._last_dock_osd_report_time = 0.0
         self.capability_reporter: CapabilityReporter = None
         self.log_mgr: LogManager = None
         self.flysafe: FlySafeManager = None
@@ -221,6 +223,10 @@ class EdgeGateway:
             # 5. 初始化遥测处理器
             logger.info("Initializing telemetry processor...")
             self.telemetry = TelemetryProcessor()
+            self.telemetry.configure_osd_rate(
+                mavlink_config.get('telemetry_rate', {}).get('osd', 0.5)
+            )
+            self._dock_osd_interval = self.telemetry._osd_interval
 
             # 6. 初始化业务模块
             logger.info("Initializing business modules...")
@@ -645,13 +651,9 @@ class EdgeGateway:
         def nest_env_cb(nest_data):
             if self.device:
                 self.device.update_from_nest(nest_data)
-                # 机场 OSD 不能依赖飞控遥测线程。无 SITL/飞机时也要把机巢
-                # 心跳、舱盖、充电、急停和故障状态及时发布到网关 OSD。
-                if self.telemetry_reporter:
-                    self.telemetry_reporter.report_osd(
-                        Config.get_gateway_sn(),
-                        self.device.build_dock3_dock_osd(include_payload=True),
-                    )
+                # 机巢状态进入缓存后按 OSD 定频上报平台；这里做兜底节流，
+                # 避免收到高频机巢帧时突破客户要求的 2 秒上报节奏。
+                self._report_dock_osd_if_due()
             if self.dock:
                 dock_updates = filter_dock_status_fields(build_dock3_properties_from_nest(nest_data))
                 if dock_updates:
@@ -661,6 +663,19 @@ class EdgeGateway:
 
         if nest_env_cb not in self.nest_module.env_callbacks:
             self.nest_module.env_callbacks.append(nest_env_cb)
+
+    def _report_dock_osd_if_due(self, force: bool = False) -> bool:
+        """按统一 OSD 周期发布机场/机巢状态到平台。"""
+        if not self.telemetry_reporter or not self.device:
+            return False
+        current_time = time.time()
+        if not force and current_time - self._last_dock_osd_report_time < self._dock_osd_interval:
+            return False
+        self._last_dock_osd_report_time = current_time
+        return self.telemetry_reporter.report_osd(
+            Config.get_gateway_sn(),
+            self.device.build_dock3_dock_osd(include_payload=True),
+        )
 
     def handle_gateway_state_query(self, msg: dict) -> dict:
         """返回全局状态机快照，供平台侧验收脚本做只读准入检查。"""
@@ -733,6 +748,10 @@ class EdgeGateway:
                 return False
 
             self.nest_dispatcher = MessageDispatcher(self.nest_mavlink_conn)
+            self.nest_dispatcher.configure_reconnect(
+                enabled=bool(nest_config.get('reconnect_enabled', True)),
+                interval=float(nest_config.get('reconnect_interval', 2.0) or 2.0),
+            )
             device_side_modules = [] if self.mavlink_conn else [
                 self.flight_control,
                 self.mode_control,
@@ -748,6 +767,20 @@ class EdgeGateway:
             self.nest_dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
             self.nest_dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
             self.nest_module.dispatcher = self.nest_dispatcher
+            poll_enabled = nest_config.get('status_poll_enabled')
+            if poll_enabled is None:
+                poll_enabled = conn_type == 'udp'
+            self.nest_module.status_poll_enabled = bool(poll_enabled)
+            self.nest_module.status_poll_interval = float(nest_config.get(
+                'status_poll_interval',
+                self.nest_module.status_poll_interval,
+            ) or self.nest_module.status_poll_interval)
+            logger.info(
+                "Nest status poll configured: enabled=%s interval=%ss connection_type=%s",
+                self.nest_module.status_poll_enabled,
+                self.nest_module.status_poll_interval,
+                conn_type,
+            )
             self.nest_dispatcher.start()
             logger.info("Nest MAVLink dispatcher started")
             return True
@@ -921,8 +954,7 @@ class EdgeGateway:
         def osd_cb(osd_data):
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
-            dock_osd = self.device.build_dock3_dock_osd(include_payload=True)
-            self.telemetry_reporter.report_osd(gateway_sn, dock_osd)
+            self._report_dock_osd_if_due(force=True)
 
             published_drone_osd = False
             for sub_device in self.device.get_all_sub_devices():

@@ -201,7 +201,8 @@ class Config:
             'host': cls.get('mavlink.connection.host', '127.0.0.1'),
             'udp_port': cls.get('mavlink.connection.port', 14550),
             'system_id': cls.get('mavlink.system_id', 1),
-            'component_id': cls.get('mavlink.component_id', 190)
+            'component_id': cls.get('mavlink.component_id', 190),
+            'telemetry_rate': cls.get('mavlink.telemetry_rate', {}) or {},
         }
 
     @classmethod

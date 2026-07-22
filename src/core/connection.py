@@ -172,11 +172,13 @@ class MAVLinkConnection:
         self._receiver_thread = None
         self._message_queue = Queue(maxsize=1000)
         self._custom_valid_message_ids: Set[int] = set()
+        self.disconnect_reason = ""
 
     def connect(self) -> bool:
         """建立连接"""
         try:
             self.status = ConnectionStatus.CONNECTING
+            self.disconnect_reason = ""
 
             # 如果使用自定义dialect，预先加载
             if self.use_custom_dialect:
@@ -344,6 +346,7 @@ class MAVLinkConnection:
 
                 print(f"[Connection] ✅ UDP自定义dialect连接已建立: {host}:{port}")
                 self.status = ConnectionStatus.CONNECTED
+                self.disconnect_reason = ""
                 self.last_heartbeat_time = time.time()
                 return True
 
@@ -371,13 +374,14 @@ class MAVLinkConnection:
                 # 在 connect() 方法中，找到 CustomMAVLinkWrapper 类定义，替换为：
 
                 class CustomMAVLinkWrapper:
-                    def __init__(self, mav_instance, standard_mav_instance, file_obj, sock_obj, valid_ids):
+                    def __init__(self, mav_instance, standard_mav_instance, file_obj, sock_obj, valid_ids, owner):
                         self.mav = mav_instance
                         self.standard_mav = standard_mav_instance
                         self.file = file_obj
                         self._sock = sock_obj
                         self._sock.settimeout(1.0)
                         self._valid_ids = valid_ids
+                        self._owner = owner
                         self.target_system = 0
                         self.target_component = 0
 
@@ -416,6 +420,7 @@ class MAVLinkConnection:
                             try:
                                 data = self._sock.recv(4096)
                                 if not data:
+                                    self._owner.mark_disconnected("TCP peer closed connection")
                                     print("[Connection] TCP连接被关闭")
                                     break
 
@@ -446,6 +451,7 @@ class MAVLinkConnection:
                                 continue
                             except Exception as e:
                                 if "timeout" not in str(e).lower():
+                                    self._owner.mark_disconnected(f"TCP recv error: {e}")
                                     print(f"[Connection] recv错误: {e}")
                                 break
 
@@ -488,10 +494,11 @@ class MAVLinkConnection:
                     srcComponent=self.source_component,
                 )
 
-                self.master = CustomMAVLinkWrapper(mav_instance, standard_mav_instance, file, sock, valid_message_ids)
+                self.master = CustomMAVLinkWrapper(mav_instance, standard_mav_instance, file, sock, valid_message_ids, self)
 
                 print(f"[Connection] ✅ 使用自定义dialect包装连接")
                 self.status = ConnectionStatus.CONNECTED
+                self.disconnect_reason = ""
                 self.last_heartbeat_time = time.time()
                 return True
 
@@ -507,6 +514,7 @@ class MAVLinkConnection:
             if self.use_custom_dialect:
                 print(f"[Connection] ✅ 自定义dialect连接已建立（无需心跳验证）")
                 self.status = ConnectionStatus.CONNECTED
+                self.disconnect_reason = ""
                 self.last_heartbeat_time = time.time()
                 return True
 
@@ -516,12 +524,14 @@ class MAVLinkConnection:
 
             if msg:
                 self.status = ConnectionStatus.CONNECTED
+                self.disconnect_reason = ""
                 self.last_heartbeat_time = time.time()
                 print(f"[Connection] 已连接到系统 {msg.get_srcSystem()}")
                 return True
             else:
                 print(f"[Connection] 心跳超时")
                 self.status = ConnectionStatus.ERROR
+                self.disconnect_reason = "heartbeat timeout"
                 return False
 
         except Exception as e:
@@ -529,6 +539,7 @@ class MAVLinkConnection:
             import traceback
             traceback.print_exc()
             self.status = ConnectionStatus.ERROR
+            self.disconnect_reason = f"connect failed: {e}"
             return False
 
     def _load_custom_dialect(self) -> bool:
@@ -608,6 +619,14 @@ class MAVLinkConnection:
             self.status = ConnectionStatus.DISCONNECTED
             print("[Connection] 连接已断开")
 
+    def mark_disconnected(self, reason: str = ""):
+        """标记连接已断开，供后台接收线程或发送异常调用。"""
+        with self.lock:
+            if self.status != ConnectionStatus.DISCONNECTED:
+                self.status = ConnectionStatus.DISCONNECTED
+                self.disconnect_reason = reason
+                print(f"[Connection] 连接已断开: {reason}")
+
     def recv_message(self, timeout: float = 0.01):
         """
         接收消息
@@ -670,6 +689,7 @@ class MAVLinkConnection:
                     return True
                 except Exception as e:
                     print(f"[Connection] 发送消息错误: {e}")
+                    self.mark_disconnected(f"send error: {e}")
                     return False
         return False
 
@@ -721,6 +741,7 @@ class MAVLinkConnection:
             'target_system': self.master.target_system if self.master else None,
             'target_component': self.master.target_component if self.master else None,
             'use_custom_dialect': self.use_custom_dialect,
+            'disconnect_reason': self.disconnect_reason,
             'last_heartbeat': self.last_heartbeat_time,
             'heartbeat_age': time.time() - self.last_heartbeat_time if self.last_heartbeat_time > 0 else None
         }

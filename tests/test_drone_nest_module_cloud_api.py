@@ -159,6 +159,26 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
             },
         )
 
+    def test_disconnected_nest_link_skips_command_send(self):
+        connection = SimpleNamespace(
+            is_connected=lambda: False,
+            get_connection_info=lambda: {"disconnect_reason": "TCP peer closed connection"},
+            master=SimpleNamespace(mav=SimpleNamespace()),
+        )
+        self.module.dispatcher = SimpleNamespace(connection=connection)
+
+        self.assertFalse(self.module.send_gcs_order_response(0, 0))
+
+    def test_status_poll_can_be_disabled_for_tcp_links(self):
+        calls = []
+        self.module.status_poll_enabled = False
+        self.module._last_status_poll_time = 0
+        self.module.poll_nest_status = lambda: calls.append("poll")
+
+        self.module.idle_task(SimpleNamespace())
+
+        self.assertEqual(calls, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

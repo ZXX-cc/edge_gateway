@@ -78,6 +78,7 @@ class DroneNestModule(BaseModule):
         # 数据超时设置（秒）
         self.data_timeout = 5.0
         self.status_poll_interval = 2.0
+        self.status_poll_enabled = True
         self._last_status_poll_time = 0.0
 
         # ⭐ 飞行控制模块引用（用于一键启航协议）
@@ -691,6 +692,10 @@ class DroneNestModule(BaseModule):
 
         try:
             connection = self.dispatcher.connection
+            if hasattr(connection, "is_connected") and not connection.is_connected():
+                info = connection.get_connection_info() if hasattr(connection, "get_connection_info") else {}
+                self.log(f"⚠️ 机巢连接已断开，跳过发送: {info.get('disconnect_reason', '')}", "WARNING")
+                return False
 
             mav_obj = (
                 connection.mav if hasattr(connection, 'mav')
@@ -733,12 +738,14 @@ class DroneNestModule(BaseModule):
 
         except Exception as e:
             self.log(f"发送指令失败: {e}", "ERROR")
-            import traceback
-            traceback.print_exc()
+            if self.dispatcher and self.dispatcher.connection and hasattr(self.dispatcher.connection, "mark_disconnected"):
+                self.dispatcher.connection.mark_disconnected(f"nest command send failed: {e}")
             return False
 
     def poll_nest_status(self):
         """定期发送空机巢命令，用于 UDP 握手和状态查询。"""
+        if not self.status_poll_enabled:
+            return False
         self.send_gcs_order_response(0, 0, verbose=False)
     # ⭐ 便捷命令方法
     # ⭐ 便捷命令方法
@@ -968,7 +975,7 @@ class DroneNestModule(BaseModule):
         """空闲任务：定期检查数据超时状态"""
         current_time = time.time()
 
-        if current_time - self._last_status_poll_time >= self.status_poll_interval:
+        if self.status_poll_enabled and current_time - self._last_status_poll_time >= self.status_poll_interval:
             self._last_status_poll_time = current_time
             self.poll_nest_status()
 
