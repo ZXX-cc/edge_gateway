@@ -43,7 +43,7 @@
 | flysafe | 3 | P2 | 远程解禁 | P2 adapter |
 | flight_area | 2 | P2 | 自定义飞行区 | P2/P1 边界，基础缓存和回包需补 |
 | custom_data | 4 | P2 | PSDK/ESDK 透传 | P2 adapter |
-| 合计 | 243 | 全部处置 | 客户文档相关功能和当前代码入口 | 不能按旧 224 口径验收；不代表 243 个 method 都必须在 30 天内完成 Dock3 字段级迁移 |
+| 合计 | 244 | 全部处置 | 客户文档相关功能和当前代码入口 | 不能按旧 224 口径验收；不代表 244 个 method 都必须在 30 天内完成 Dock3 字段级迁移 |
 
 ## 3. 30 天验收分组
 
@@ -51,8 +51,8 @@
 |---|---|---|---|
 | P0 MQTT/属性/拓扑 | `property_set`, `property_get`, `airport_bind_status`, `workspace_bind_status`, `workspace_get`, `update_topo`, `device_binding`, `device_unbinding` | P0-01 到 P0-05、P1-14 | P0 批量、properties、device、organization 专项 |
 | P0/P1 机巢和 CMD | `cover_open`, `cover_close`, `cover_force_close`, `charge_open`, `charge_close`, `putter_open`, `putter_close`, `drone_open`, `drone_close`, `debug_mode_open`, `debug_mode_close`, `battery_maintenance_switch`, `air_conditioner_mode_switch`, `alarm_state_switch`, `battery_store_mode_switch`, `dock_control`, `dock_emergency_stop`, `dock_reset` | P0-11 到 P0-13、P1-02、P1-15 | CMD 专项、机巢 v1.3 专项 |
-| P0/P1 飞控和航线 | `flighttask_prepare`, `flighttask_execute`, `flighttask_undo`, `flighttask_return`, `flighttask_progress`, `flighttask_pause`, `flighttask_resume`, `return_home_cancel`, `take_off`, `landing`, `go_home`, `return_home`, `set_flight_mode`, `start_takeoff_to_point`, `takeoff_to_point` | P0-08、P0-10、P1-01、P1-04 到 P1-06 | Wayline、DRC、SITL、起飞流程 E2E |
-| P0/P1 DRC | `drc_mode_enter`, `drc_mode_exit`, `stick_control`, `drone_control`, `payload_control`, `drc_gimbal_speed_push`, `drc_speed_push`, `drc_heading_push`, `drc_altitude_push`, `drc_flyto_point_push`, `fly_to_point_stop`, `fly_to_point_update` | P0-09、P1-03、P1-04 | DRC 专项、超时恢复、SITL |
+| P0/P1 飞控和航线 | `flighttask_prepare`, `flighttask_execute`, `flighttask_undo`, `flighttask_return`, `flighttask_progress`, `flighttask_pause`, `flighttask_resume`, `resume_wayline_task`, `return_home_cancel`, `take_off`, `landing`, `go_home`, `return_home`, `set_flight_mode`, `start_takeoff_to_point`, `takeoff_to_point` | P0-08、P0-10、P1-01、P1-04 到 P1-06 | Wayline、DRC、SITL、起飞流程 E2E |
+| P0/P1 DRC | `drc_mode_enter`, `drc_mode_exit`, `stick_control`, `drone_control`, `payload_control`, `drc_gimbal_speed_push`, `drc_speed_push`, `drc_heading_push`, `drc_altitude_push`, `drc_flyto_point_push`, `fly_to_point`, `fly_to_point_stop`, `fly_to_point_update` | P0-09、P1-03、P1-04 | DRC 专项、超时恢复、SITL |
 | P1 媒体和直播 | `file_list_get`, `file_delete`, `adjust_upload_priority`, `storage_config_get`, `live_start`, `live_stop`, `set_livestream_lens`, `set_livestream_quality`, `highest_priority_upload_flighttask_media`, `upload_flighttask_media_prioritize`, `live_lens_change`, `live_set_quality` | P1-07、P1-08 | media/live 专项 |
 | P1 相机/云台 | `camera_photo_take`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_point_focus_action`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set`, `gimbal_rotate`, `camera_look_at`, `set_gimbal_mode`, `gimbal_reset` | P1-09 | payload 专项或 media/live 联合专项 |
 | P1 运维 | `hms_get`, `hms_clear`, `device_log_list_get`, `device_log_upload`, `fileupload_list`, `fileupload_start`, `fileupload_update`, `ota_create`, `ota_cancel`, `firmware_upgrade`, `config_update`, `config_get`, `config_rollback`, `config` | P1-10 到 P1-13、P1-16 | HMS/log、firmware/config 均已通过 Ubuntu 专项；真实 OTA/上传 adapter 后续补 |
@@ -84,11 +84,11 @@ air_conditioner_mode_switch, alarm_state_switch,
 battery_store_mode_switch, config, update_topo, airsense_warning
 ```
 
-### 4.2 mission：42
+### 4.2 mission：43
 
 ```text
 load_wayline, upload_wayline, execute_task, cancel_task,
-pause_wayline, resume_wayline, flyto, fly_to_point, take_off,
+pause_wayline, resume_wayline, resume_wayline_task, flyto, fly_to_point, take_off,
 one_key_return_home, cancel_return_home, set_flight_mode, go_home,
 landing, emergency_stop, start_takeoff_to_point, return_home,
 go_to_altitude, wayline_task_create, wayline_task_execute,

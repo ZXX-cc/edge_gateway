@@ -397,6 +397,7 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(update["data"]["fly_to_id"], "flyto-001")
         self.assertEqual(events[-1]["method"], "fly_to_point_progress")
         self.assertEqual(events[-1]["data"]["status"], "wayline_progress")
+        self.assertTrue(controller.get_drc_status()["enabled"])
         self.assertIn(("set_mode", "GUIDED"), mode.calls)
         self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 45.0, 80.0), mode.calls)
 
@@ -415,6 +416,8 @@ class Dock3DrcTest(unittest.TestCase):
         controller = DrcController()
         events = []
         controller.set_event_callback(events.append)
+        controller._drc_enabled = True
+        controller._flight_authority_grabbed = True
 
         reply = controller.handle_fly_to_point_update({
             "method": "fly_to_point_update",
@@ -435,6 +438,58 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["status"], "failed")
         self.assertEqual(events[-1]["data"]["status"], "wayline_failed")
         self.assertIsNone(controller.get_drc_status()["active_fly_to_point"])
+
+    def test_controller_fly_to_point_update_rejects_when_auto_drc_enter_fails(self):
+        controller = DrcController()
+        mode = FakeModeControl(set_mode_success=False)
+        controller.set_mode_control(mode)
+
+        reply = controller.handle_fly_to_point_update({
+            "method": "fly_to_point_update",
+            "tid": "tid-flyto",
+            "gateway": "EDGEGW001",
+            "data": {
+                "fly_to_id": "flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(controller.get_drc_status()["enabled"])
+        self.assertIsNone(controller.get_drc_status()["active_fly_to_point"])
+        self.assertNotIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 45.0, 80.0), mode.calls)
+
+    def test_controller_fly_to_point_update_grabs_authority_when_drc_already_active(self):
+        controller = DrcController()
+        mode = FakeModeControl()
+        controller.set_mode_control(mode)
+        controller._drc_enabled = True
+        controller._flight_authority_grabbed = False
+
+        reply = controller.handle_fly_to_point_update({
+            "method": "fly_to_point_update",
+            "tid": "tid-flyto",
+            "gateway": "EDGEGW001",
+            "data": {
+                "fly_to_id": "flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertTrue(controller._flight_authority_grabbed)
+        self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 45.0, 80.0), mode.calls)
 
     def test_payload_control_accepts_official_three_part_payload_index(self):
         controller = DrcController()

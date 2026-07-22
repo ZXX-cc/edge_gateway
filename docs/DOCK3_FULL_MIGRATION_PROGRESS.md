@@ -1,6 +1,6 @@
 # DJI Dock 3 客户需求迁移进度台账
 
-更新时间：2026-07-14
+更新时间：2026-07-22
 
 本文档用于记录 Edge Gateway 从当前“链路已通 + P0 局部适配”推进到“客户需求相关网关能力按 DJI Dock 3 协议合规”的逐组迁移进度。后续每完成一个客户需求相关字段、method、topic、reply 或 smoke test，都必须更新本文档。
 
@@ -66,6 +66,15 @@ HMS/log、firmware/config 全部 exit=0；OSD/state 已接受当前任务步骤�
 随后进度先回到航点 1，再推进到航点 2，最终 `flighttask_undo` 清理成功。专项输出
 `dock3 wayline re-execute from breakpoint test ok ... accepted=31, events=37,
 ignored_total=0`，证明“先回断点航点再继续后续航点”的逻辑已在真实 SITL 链路闭环。
+
+2026-07-22 进展：断点续飞拆分为两类业务断点。`passive_auto_return` 用于低电量、
+自动返航等被动中断后的新任务接管：旧任务保持 `paused/interrupted` 时，不再要求
+平台先下发确认续飞或取消；新的 `flight_id + 合法 break_point` 可通过
+`flighttask_prepare` 接管旧任务，旧任务持久化为 `superseded` 并保留旧断点记录。
+`manual_intervention` 用于平台主动“暂停-指令飞行-恢复”：`flighttask_pause` 记录当前
+位置断点，`fly_to_point`/`fly_to_point_update` 前由网关自动进入或保持 DRC 控制权，
+未获得控制权则拒绝，干预完成后平台下发 `resume_wayline_task`，复用原
+`flighttask_resume/resume_wayline` 的回断点并恢复航线逻辑。
 
 当前进度估算：**约 88%**。
 

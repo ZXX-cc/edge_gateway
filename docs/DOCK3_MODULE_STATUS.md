@@ -1,6 +1,6 @@
 # Dock3 模块完成状态总表
 
-更新时间：2026-07-16
+更新时间：2026-07-22
 
 本文档给多人协同开发使用，用一张表说明当前 DJI Dock 3 迁移中每个模块的完成状态、已验证内容、未完成内容和下一步。更细的过程记录见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`，接口字段和错误码见 `docs/INTERFACE_DESIGN_SPEC.md`。
 
@@ -41,6 +41,17 @@
 | 用户处置 | 平台可展示失败原因，用户可选择取消任务或重新执行 |
 | Ubuntu 复测 | `task_retry_v3` 全链路通过：11 段全部 exit=0，`dock3 e2e full-chain test ok (steps=11, elapsed=15.6s)` |
 | 断点续飞 | 断点已改为保存到 MongoDB `missions.execution_conditions.breakpoint`，本地 JSON 仅作为兼容兜底；Ubuntu 真实 SITL + HD.kml 已验证 `breakpoint_index=1`、`resume_seek_index=0`，重执行先回航点 1，再推进到航点 2 |
+
+## 2026-07-22 断点续飞双场景快照
+
+| 项目 | 当前结论 |
+|---|---|
+| 被动中断续飞 | `passive_auto_return` 表示低电量、自动返航等被动中断断点；旧任务处于 `paused/interrupted` 时，新的 `flight_id + 合法 break_point` 可通过 `flighttask_prepare` 接管，不再要求平台先确认续飞或取消旧任务 |
+| 接管持久化 | 被接管旧任务写入 `superseded`，旧断点记录保留；新任务成为当前活动任务，按自身航线文件和平台下发断点重新准备、上传和执行 |
+| 主动干预恢复 | `manual_intervention` 表示平台主动 `flighttask_pause` 后记录的当前位置断点；干预完成后新增正式入口 `resume_wayline_task`，行为等同 `flighttask_resume/resume_wayline` |
+| DRC 指令飞行 | `fly_to_point`/`fly_to_point_update` 改走 DRC 控制器真实指点飞行链路；DRC 未 active 时由网关自动 enter，获取控制权失败则拒绝，不执行指点飞行 |
+| 准入规则 | `paused + 同 flight_id` 继续允许准备/执行/恢复；`paused + 新 flight_id + 合法 break_point` 允许接管；`paused + 新 flight_id + 无 break_point` 继续拒绝 |
+| 待验收 | 本轮只补代码和测试用例，未在本机运行测试；Ubuntu 需执行 Runbook 中 `breakpoint_v2` 留证命令 |
 
 ## 2026-07-09 晚间进度快照
 
@@ -94,9 +105,9 @@
 | Properties / OSD / State | 部分通过 | 88% | Ubuntu 提交 `80bc35e` 已通过 31 个精校单测；严格 MQTT 专项通过 `dock_osd=1, drone_osd=1, state=1, invalid=0, ignored_legacy=0`。主运行时已统一映射、收敛单位/枚举、隔离 dock/aircraft `mode_code` 并阻止内部遥测键进入 state；新增 `--require-live-drone`，占位 OSD 不再冒充动态遥测证据 | 最新严格样本的 aircraft 经纬度、电池电压和 GPS 均为 0，只证明协议结构，未证明 SITL 动态遥测；真实 Dock3/负载和生产云仍缺失 | 启动 SITL 飞行遥测链路后执行 `--require-live-drone`；获得真机后按字段矩阵逐项回填 | 人员1 |
 | Device 设备管理/拓扑 | 已通过 | 85% | `update_topo` 官方必填字段、在线/离线拓扑、无效拓扑拒绝、`status_reply` 已通过专项复测；服务器多设备专项已验证 `DRONE-SIM-001,DRONE-SIM-002` 上线、离线空拓扑、重连恢复和非法拓扑拒绝；organization 多设备绑定服务器复测已验证 `sub_devices=2` 和 `status_reply result=0`；服务器 device 解绑专项已验证 `device_unbinding events ok: count=3`、空 `update_topo`、`unbind=True`；E2E device 单段已通过 | `domain/type/sub_type` 官方产品枚举、真实云端字段差异未精校 | 精校设备类型枚举和真实云端字段 | 人员1/人员3 |
 | Organization 组织管理 | 已通过 | 84% | `airport_bind_status`、`airport_organization_get`、`airport_organization_bind` 的成功、失败、超时、绑定后事件、`update_topo status_reply` 和 SQLite/内存绑定均已验证；服务器多设备绑定已通过，输出 3 次 `device_binding`、`update_topo schema ok ... sub_devices=2`、`memory binding ok`、`sub-device paired ok` 和 `organization request test ok`；device 解绑服务器专项已覆盖多设备解绑事件和空拓扑 | 真实云端差异仍需精校 | 继续真实云端字段精校 | 人员1 |
-| DRC 指令飞行 | 已通过 | 85% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；服务器最新 DRC 专项已用 `property_get` 网关遥测生成电子围栏内目标点，`takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`，输出 `dock3 drc test ok (accepted=15, events=8, ignored_mismatched=0, ignored_legacy=3, ignored_late=7, ignored_duplicate=7, ignored_unknown=0, ignored_total=10)`，并输出 `stale_samples` 定位重复旧回包 | 链路抖动、超时边界和严格清理旧回包环境仍需精校；Wayline 真实航点执行仍归入 G-P1-06 | 补 DRC 严格 `--fail-on-stale` 环境和 SITL 行为证据归档 | 人员1/人员2 |
+| DRC 指令飞行 | 已通过 | 85% | `drc_mode_enter/exit`、`drc_state` 同步、官方心跳、杆量、飞行器/负载控制、速度控制、`takeoff_to_point`、指点飞行更新/停止、非法字段和值域错误已通过专项和批量复测；`fly_to_point`/`fly_to_point_update` 已改为 DRC 控制器入口，未 active 时自动 enter，enter 失败则拒绝；服务器最新 DRC 专项已用 `property_get` 网关遥测生成电子围栏内目标点，`takeoff_to_point` 与 `fly_to_point_update` 均返回 `simulated=false`，输出 `dock3 drc test ok (accepted=15, events=8, ignored_mismatched=0, ignored_legacy=3, ignored_late=7, ignored_duplicate=7, ignored_unknown=0, ignored_total=10)`，并输出 `stale_samples` 定位重复旧回包 | 链路抖动、超时边界和严格清理旧回包环境仍需精校；Wayline 真实航点执行仍归入 G-P1-06 | 补 DRC 严格 `--fail-on-stale` 环境和 SITL 行为证据归档 | 人员1/人员2 |
 | CMD 远程调试 | 已通过 | 80% | 调试模式、舱盖/充电/推杆、飞行器/设备动作、枚举开关、安全拒绝、格式化/重启模拟保护和进度事件已通过专项；服务器重跑验证 `cover_close` 后 `cover_state=0`，最新输出 `dock3 cmd test ok (accepted=60, events=18, ignored_total=60)`，E2E cmd 单段 `steps=1, elapsed=5.0s` | 真实设备重启/格式化/任务耗时/失败码未接真实硬件 | 补真实执行开关和失败码精校 | 人员1/人员3 |
-| Wayline 航线管理 | 已通过 | 92% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；真实 `/home/fenghuolun/zwz/HD.kml` 已完成非模拟上传、`QLAND→QSTABILIZE`/`armed=true`、`AUTO`，并在 15 秒内由 `MISSION_CURRENT=2` 验证到第 2/10 航点 20% 进度，`accepted=5`、`events=8`、全部 `ignored_*=0`。验收工具随后按精确任务 ID 自动 `undo`，回包为 `canceled`、任务状态 9，并清理断点与内存上下文；运维 `flight_ids:["current"]` 同样可取消重启恢复的当前任务，避免遗留任务阻塞新航线；任务执行链路已补失败分类和自动重试，最终 FAILED 会通过 `flighttask_progress` 上报原因；断点已持久化到 MongoDB，`20260716_130947` 真实 SITL + HD.kml 已验证从航点 1 中断后重执行 `resume_seek_index=0`，重新经过航点 1 并推进到航点 2，`accepted=31`、`events=37`、`ignored_total=0`；`task_retry_v3` 11 段全链路已通过 | HD 航线完整完成/返航证据、媒体计数、网关重启后从 MongoDB 读断点恢复仍需 Ubuntu 复测 | 继续以有界超时观察 HD.kml 完整终态；复测网关重启恢复断点 | 人员1/人员2 |
+| Wayline 航线管理 | 已通过 | 92% | `flighttask_prepare/execute/progress/pause/resume/return/undo/return_home_cancel` 基础闭环已通过 Ubuntu 专项复测；新增 `resume_wayline_task` 作为主动干预后的正式恢复入口；真实 `/home/fenghuolun/zwz/HD.kml` 已完成非模拟上传、`QLAND→QSTABILIZE`/`armed=true`、`AUTO`，并在 15 秒内由 `MISSION_CURRENT=2` 验证到第 2/10 航点 20% 进度，`accepted=5`、`events=8`、全部 `ignored_*=0`。验收工具随后按精确任务 ID 自动 `undo`，回包为 `canceled`、任务状态 9，并清理断点与内存上下文；运维 `flight_ids:["current"]` 同样可取消重启恢复的当前任务，避免遗留任务阻塞新航线；任务执行链路已补失败分类和自动重试，最终 FAILED 会通过 `flighttask_progress` 上报原因；断点已持久化到 MongoDB，`20260716_130947` 真实 SITL + HD.kml 已验证从航点 1 中断后重执行 `resume_seek_index=0`，重新经过航点 1 并推进到航点 2，`accepted=31`、`events=37`、`ignored_total=0`；当前已支持 `passive_auto_return` 新任务接管旧暂停任务和 `manual_intervention` 暂停干预恢复；`task_retry_v3` 11 段全链路已通过 | HD 航线完整完成/返航证据、媒体计数、网关重启后从 MongoDB 读断点恢复、断点 V2 双场景仍需 Ubuntu 复测 | 执行 Runbook `breakpoint_v2` 留证命令；继续以有界超时观察 HD.kml 完整终态；复测网关重启恢复断点 | 人员1/人员2 |
 | P0/P1 E2E 回归 | 已通过 | 99% | `tools/e2e_takeoff_flow_test.py --timeout 12` 已在服务器单独通过；清理旧回包、修复机巢 UDP 联调和全局状态机清理后，服务器 `20260714_185520_state_cleanup_v4` 执行 11 段全链路通过，输出 `steps=11, elapsed=36.4s`；任务重试和 OSD 步骤码修复后，`20260716_111102_task_retry_v3` 再次通过 11 段全链路，输出 `dock3 e2e full-chain test ok (steps=11, elapsed=15.6s)`；全局状态机单测 9/9、admission 15/15 通过 | 当前全链路仍属于纯模拟/网关侧证据；真实硬件、真实推流、真实 OTA 和严格真实 SITL 完整航线终态未完成 | 保存证据并继续真实 SITL/硬件联动 | 人员1 |
 | Dock 状态查询 | 部分完成 | 60% | `dock_status_query` 已能返回实时遥测快照和模拟机场状态 | 客户需求涉及的机场状态字段和单位仍需精校 | 纳入 properties/device 字段矩阵 | 人员1 |
 | MAVLink 飞控联动 | 部分完成 | 60% | 网关能连接 SITL，Telemetry、FlightControl、ModeControl、WaypointManager、RTK 基础运行；已新增共享 ArduPilot flight mode 映射，Copter/Plane/QuadPlane 按 HEARTBEAT.type 选择，`set_flight_mode` 支持 `mode/mode_code/flight_mode` 并在底层失败时返回非 0 | 解锁/起飞/航线执行、非阻塞超时恢复仍需完善；模式切换需 Ubuntu SITL 复测 | 跑 set_flight_mode + SITL 模式切换专项 | 人员2 |

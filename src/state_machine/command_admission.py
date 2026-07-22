@@ -159,6 +159,7 @@ class CommandAdmissionEngine:
     MISSION_CONTROL_METHODS = frozenset({
         "flighttask_pause",
         "flighttask_resume",
+        "resume_wayline_task",
         "flighttask_undo",
         "flighttask_stop",
         "flighttask_return",
@@ -314,6 +315,15 @@ class CommandAdmissionEngine:
         if method in self.DRC_ENTER_METHODS:
             return self._check_drc_enter(snapshot)
 
+        if method in self.DRC_POINT_FLIGHT_METHODS:
+            if snapshot.drc == "active":
+                return self._accept(snapshot)
+            if method == "fly_to_point_stop":
+                return self._reject(snapshot, "invalid_state_transition", "DRC 未激活，不能停止 DRC 指点飞行", ["drc.active"], GLOBAL_INVALID_TRANSITION)
+            if snapshot.aircraft == "offline":
+                return self._reject(snapshot, "aircraft_offline", "飞控未在线，不能执行 DRC 指点飞行", ["aircraft.online"], GLOBAL_ADMISSION_REJECTED)
+            return self._accept(snapshot)
+
         if method in self.DRC_CONTROL_METHODS or method in self.DRC_HEARTBEAT_METHODS:
             if snapshot.drc != "active":
                 return self._reject(snapshot, "invalid_state_transition", "DRC 未激活，不能执行 DRC 控制命令", ["drc.active"], GLOBAL_INVALID_TRANSITION)
@@ -346,6 +356,18 @@ class CommandAdmissionEngine:
                 and requested_flight_id == active_task_id
             ):
                 return self._accept(snapshot)
+            data = request.get("data") if isinstance(request, dict) else {}
+            break_point = data.get("break_point") if isinstance(data, dict) else None
+            if (
+                snapshot.mission == "paused"
+                and method == "flighttask_prepare"
+                and requested_flight_id
+                and active_task_id
+                and requested_flight_id != active_task_id
+                and isinstance(break_point, dict)
+                and break_point
+            ):
+                return self._accept(snapshot)
             return self._reject(snapshot, "mission_busy", "当前航线任务正在执行或暂停，不能覆盖新的航线任务", ["mission.idle"], GLOBAL_STATE_CONFLICT)
         if snapshot.ota in self.OTA_BUSY_STATES:
             return self._reject(snapshot, "ota_in_progress", "OTA/配置升级进行中，不能开始航线/飞行任务", ["ota.idle"], GLOBAL_STATE_CONFLICT)
@@ -370,7 +392,7 @@ class CommandAdmissionEngine:
         return self._accept(snapshot)
 
     def _check_mission_control(self, method: str, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
-        if method in {"flighttask_resume", "resume_wayline", "wayline_task_resume"} and snapshot.mission != "paused":
+        if method in {"flighttask_resume", "resume_wayline", "resume_wayline_task", "wayline_task_resume"} and snapshot.mission != "paused":
             return self._reject(snapshot, "invalid_state_transition", "当前任务未暂停，不能执行恢复命令", ["mission.paused"], GLOBAL_INVALID_TRANSITION)
         if method in {"flighttask_pause", "pause_wayline", "wayline_task_pause"} and snapshot.mission != "running":
             return self._reject(snapshot, "invalid_state_transition", "当前任务未运行，不能执行暂停命令", ["mission.running"], GLOBAL_INVALID_TRANSITION)

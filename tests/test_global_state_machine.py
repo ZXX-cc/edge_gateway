@@ -88,14 +88,19 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
 
         self.assertEqual(state.dock, "ready")
 
-    def test_drc_point_flight_requires_active_drc_but_does_not_count_as_new_mission(self):
-        self.check("takeoff_to_point", snapshot(drc="idle"), False, "invalid_state_transition")
+    def test_drc_point_flight_can_enter_drc_automatically_but_still_requires_aircraft_online(self):
+        self.check("takeoff_to_point", snapshot(drc="idle"), True)
+        self.check("fly_to_point_update", snapshot(drc="idle"), True)
+        self.check("fly_to_point_update", snapshot(drc="idle", aircraft="offline"), False, "aircraft_offline")
+        self.check("fly_to_point_stop", snapshot(drc="idle"), False, "invalid_state_transition")
         self.check("takeoff_to_point", snapshot(drc="active"), True)
         self.check("fly_to_point_update", snapshot(drc="active"), True)
 
     def test_resume_requires_paused_mission(self):
         self.check("flighttask_resume", snapshot(mission="idle"), False, "invalid_state_transition")
         self.check("flighttask_resume", snapshot(mission="paused"), True)
+        self.check("resume_wayline_task", snapshot(mission="idle"), False, "invalid_state_transition")
+        self.check("resume_wayline_task", snapshot(mission="paused"), True)
 
     def test_paused_same_task_can_prepare_or_execute_for_breakpoint_relaunch(self):
         state = snapshot(
@@ -106,6 +111,26 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
         self.check("flighttask_prepare", state, True, data={"flight_id": "flight-001"})
         self.check("flighttask_execute", state, True, data={"flight_id": "flight-001"})
         self.check("flighttask_prepare", state, False, "mission_busy", data={"flight_id": "flight-002"})
+
+    def test_paused_new_task_can_take_over_only_with_breakpoint(self):
+        state = snapshot(
+            mission="paused",
+            details={"mission": {"task_id": "flight-old"}},
+        )
+
+        self.check(
+            "flighttask_prepare",
+            state,
+            True,
+            data={"flight_id": "flight-new", "break_point": {"index": 2}},
+        )
+        self.check(
+            "flighttask_prepare",
+            state,
+            False,
+            "mission_busy",
+            data={"flight_id": "flight-new"},
+        )
 
     def test_pause_requires_running_mission(self):
         self.check("flighttask_pause", snapshot(mission="idle"), False, "invalid_state_transition")
