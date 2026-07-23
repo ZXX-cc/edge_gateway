@@ -3,7 +3,6 @@ import sys
 import types
 import os
 import tempfile
-import ftplib
 from copy import deepcopy
 
 
@@ -100,6 +99,10 @@ class FakeDirectPayload:
         self.calls.append(("home",))
         return {"success": True}
 
+    def move(self, yaw_speed, pitch_speed):
+        self.calls.append(("move", yaw_speed, pitch_speed))
+        return {"success": True}
+
     def zoom_to(self, magnification):
         self.calls.append(("zoom_to", magnification))
         return {"success": True}
@@ -194,6 +197,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("home",)])
         self.assertEqual(connection.master.mav.commands, [])
+
+    def test_camera_screen_drag_uses_gimbal_viewlink_move(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        events = []
+        gimbal.set_gimbal_control(direct_payload)
+        gimbal.set_event_callback(events.append)
+
+        reply = gimbal.handle_camera_screen_drag(message("camera_screen_drag", {
+            "payload_index": "52-0-0",
+            "locked": True,
+            "pitch_speed": 1.5,
+            "yaw_speed": -2.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("move", -200, 150)])
+        self.assertEqual(events[-1]["method"], "payload_status_notify")
+        self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
 
     def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):
         camera = CameraController()
@@ -312,26 +334,35 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             def login(self, username, password):
                 return None
 
-            def cwd(self, path):
-                if path == "..":
-                    self.cwd_path = "/DCIM"
-                elif path.startswith("/"):
-                    self.cwd_path = path
-                else:
-                    self.cwd_path = f"{self.cwd_path.rstrip('/')}/{path}"
+            def pwd(self):
+                return self.cwd_path
 
-            def nlst(self):
-                if self.cwd_path == "/DCIM":
-                    return ["00001", "00002"]
-                if self.cwd_path == "/DCIM/00002":
-                    return ["Riebo000001.jpg", "Riebo000003.jpg"]
+            def cwd(self, path):
+                directories = {"/", "/DCIM", "/DCIM/00001", "/DCIM/00002"}
+                target = path if path.startswith("/") else f"{self.cwd_path.rstrip('/')}/{path}"
+                if target in directories:
+                    self.cwd_path = target
+                    return None
+                raise OSError("not a directory")
+
+            def nlst(self, path=None):
+                path = path or self.cwd_path
+                if path == "/DCIM":
+                    return ["/DCIM/00001", "/DCIM/00002"]
+                if path == "/DCIM/00002":
+                    return ["/DCIM/00002/Riebo000001.jpg", "/DCIM/00002/Riebo000003.jpg"]
                 return []
+
+            def size(self, path):
+                return len(b"real-jpeg")
 
             def retrbinary(self, command, callback):
                 callback(b"real-jpeg")
 
-        old_ftp = ftplib.FTP
-        ftplib.FTP = FakeFTP
+        from src.payload import mapping_camera_ftp
+
+        old_ftp = mapping_camera_ftp.FTP
+        mapping_camera_ftp.FTP = FakeFTP
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 Config.merge({
@@ -343,6 +374,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
                                     "post_landing_raw_data": {
                                         "endpoint": "ftp://192.168.5.74/DCIM",
                                         "timeout_seconds": 1,
+                                        "download_jobs": 4,
                                     }
                                 }
                             }
@@ -355,11 +387,91 @@ class PayloadStateConsistencyTest(unittest.TestCase):
                 with open(cached["file_path"], "rb") as handle:
                     cached_bytes = handle.read()
         finally:
-            ftplib.FTP = old_ftp
+            mapping_camera_ftp.FTP = old_ftp
 
         self.assertEqual(cached["file_name"], "Riebo000003.jpg")
         self.assertEqual(cached_bytes, b"real-jpeg")
         self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000003.jpg")
+        self.assertEqual(cached["download_jobs"], 4)
+
+    def test_mapping_camera_cache_downloads_requested_ftp_photo_path(self):
+        class FakeFTP:
+            def __init__(self, host, timeout):
+                self.cwd_path = "/"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def login(self, username, password):
+                return None
+
+            def pwd(self):
+                return self.cwd_path
+
+            def cwd(self, path):
+                directories = {"/", "/DCIM", "/DCIM/00002"}
+                target = path if path.startswith("/") else f"{self.cwd_path.rstrip('/')}/{path}"
+                if target in directories:
+                    self.cwd_path = target
+                    return None
+                raise OSError("not a directory")
+
+            def nlst(self, path=None):
+                path = path or self.cwd_path
+                if path == "/DCIM":
+                    return ["/DCIM/00002"]
+                if path == "/DCIM/00002":
+                    return [
+                        "/DCIM/00002/Riebo000003.JPG",
+                        "/DCIM/00002/Riebo000004.JPG",
+                    ]
+                return []
+
+            def size(self, path):
+                return len(path.encode("utf-8"))
+
+            def retrbinary(self, command, callback):
+                callback(command.encode("utf-8"))
+
+        from src.payload import mapping_camera_ftp
+
+        old_ftp = mapping_camera_ftp.FTP
+        mapping_camera_ftp.FTP = FakeFTP
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                Config.merge({
+                    "media": {"storage_path": tmp},
+                    "payload": {
+                        "devices": {
+                            "mapping_camera": {
+                                "channels": {
+                                    "post_landing_raw_data": {
+                                        "endpoint": "ftp://192.168.5.74/DCIM",
+                                        "timeout_seconds": 1,
+                                        "download_jobs": 4,
+                                    }
+                                }
+                            }
+                        }
+                    },
+                })
+                camera = CameraController()
+
+                cached = camera._cache_photo_locally(
+                    {"file_path": r"/data/media\Riebo000004.JPG"},
+                    "gateway_direct",
+                )
+                with open(cached["file_path"], "rb") as handle:
+                    cached_bytes = handle.read()
+        finally:
+            mapping_camera_ftp.FTP = old_ftp
+
+        self.assertEqual(cached["file_name"], "Riebo000004.JPG")
+        self.assertIn(b"Riebo000004.JPG", cached_bytes)
+        self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000004.JPG")
 
     def test_mapping_camera_payload_state_exposes_gateway_binding(self):
         Config.merge({

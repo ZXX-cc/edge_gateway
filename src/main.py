@@ -1233,6 +1233,7 @@ class EdgeGateway:
             'gimbal_reset': self.gimbal.handle_gimbal_reset,
             'gimbal_capability_query': self.gimbal.handle_gimbal_capability_query,
             'gimbal_status_query': self.gimbal.handle_gimbal_status_query,
+            'camera_screen_drag': self.gimbal.handle_camera_screen_drag,
         }, category='payload')
 
         # ---- ViewLink SDK 调试/降级控制入口 ----
@@ -1368,7 +1369,6 @@ class EdgeGateway:
             'camera_photo_stop': self.drc.handle_camera_photo_stop,
             'camera_recording_start': self.drc.handle_camera_recording_start,
             'camera_recording_stop': self.drc.handle_camera_recording_stop,
-            'camera_screen_drag': self.drc.handle_camera_screen_drag,
             'camera_aim': self.drc.handle_camera_aim,
             'camera_focal_length_set': self.drc.handle_camera_focal_length_set,
             'gimbal_reset': self.drc.handle_gimbal_reset,

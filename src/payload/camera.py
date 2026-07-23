@@ -4,7 +4,6 @@
 """
 import time
 import os
-import ftplib
 import socket
 import threading
 import asyncio
@@ -23,6 +22,7 @@ from web.mavlink.camera import (
     build_media_metadata,
 )
 from web.mavlink.viewlink import build_viewlink_call
+from src.payload.mapping_camera_ftp import MappingCameraFtpDownloader
 
 logger = get_logger("camera")
 
@@ -228,6 +228,14 @@ class CameraController:
         data_channel = channels.get("post_landing_raw_data", {}) if isinstance(channels, dict) else {}
         return str(data_channel.get("endpoint") or "ftp://192.168.5.74/DCIM")
 
+    def _mapping_camera_data_channel(self) -> dict:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        mapping_camera = devices.get("mapping_camera", {}) if isinstance(devices, dict) else {}
+        channels = mapping_camera.get("channels", {}) if isinstance(mapping_camera, dict) else {}
+        data_channel = channels.get("post_landing_raw_data", {}) if isinstance(channels, dict) else {}
+        return data_channel if isinstance(data_channel, dict) else {}
+
     def _mapping_camera_config(self) -> dict:
         payload_config = Config.get_payload_config()
         devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
@@ -309,71 +317,47 @@ class CameraController:
             "last_sync_error": self._last_mapping_camera_sync_error,
         }
 
-    def _download_latest_mapping_camera_photo(self, storage_path: str) -> Optional[dict]:
+    def _download_mapping_camera_photo(self, storage_path: str, remote_hint: str = "") -> Optional[dict]:
         endpoint = self._mapping_camera_data_endpoint()
-        parsed = urllib.parse.urlparse(endpoint)
+        data_channel = self._mapping_camera_data_channel()
+        parsed = urllib.parse.urlparse(str(endpoint or ""))
         if parsed.scheme.lower() != "ftp" or not parsed.hostname:
             return None
 
-        username = urllib.parse.unquote(parsed.username or "anonymous")
-        password = urllib.parse.unquote(parsed.password or "")
-        base_path = parsed.path or "/DCIM"
-        timeout = float(Config.get("payload.devices.mapping_camera.channels.post_landing_raw_data.timeout_seconds", 5) or 5)
+        timeout = float(data_channel.get("timeout_seconds", 30) or 30)
+        jobs = int(data_channel.get("jobs", data_channel.get("download_jobs", 4)) or 4)
 
         try:
-            with ftplib.FTP(parsed.hostname, timeout=timeout) as ftp:
-                ftp.login(username, password)
-                ftp.cwd(base_path)
-                latest = self._find_latest_ftp_photo(ftp)
-                if not latest:
-                    return None
-                remote_dir, file_name = latest
-                local_path = os.path.join(storage_path, file_name)
-                ftp.cwd(remote_dir)
-                with open(local_path, "wb") as handle:
-                    ftp.retrbinary(f"RETR {file_name}", handle.write)
-                return {
-                    "file_name": file_name,
-                    "file_path": local_path,
-                    "storage_path": storage_path,
-                    "upload_status": "pending",
-                    "source": endpoint,
-                    "remote_path": f"{base_path.rstrip('/')}/{remote_dir}/{file_name}".replace("//", "/"),
-                }
+            downloader = MappingCameraFtpDownloader(endpoint, jobs=jobs, timeout=timeout)
+            result = downloader.download_photo(storage_path, remote_hint)
+            if not result:
+                return None
+            return {
+                "file_name": result.file_name,
+                "file_path": result.file_path,
+                "storage_path": storage_path,
+                "upload_status": "pending",
+                "source": endpoint,
+                "remote_path": result.remote_path,
+                "file_size": result.size,
+                "skipped": result.skipped,
+                "download_jobs": jobs,
+            }
         except Exception as exc:
             logger.warning("Mapping camera FTP photo sync failed: endpoint=%s error=%s", endpoint, exc)
             self._last_mapping_camera_sync_error = str(exc)
             return None
 
-    @staticmethod
-    def _find_latest_ftp_photo(ftp) -> Optional[tuple[str, str]]:
-        folders = []
-        for item in ftp.nlst():
-            name = str(item).rstrip("/")
-            if name and name.rsplit("/", 1)[-1].isdigit():
-                folders.append(name.rsplit("/", 1)[-1])
-        for folder in sorted(folders, reverse=True):
-            try:
-                ftp.cwd(folder)
-                photos = [
-                    str(item).rsplit("/", 1)[-1]
-                    for item in ftp.nlst()
-                    if str(item).lower().endswith((".jpg", ".jpeg"))
-                ]
-                ftp.cwd("..")
-            except Exception:
-                try:
-                    ftp.cwd("..")
-                except Exception:
-                    pass
-                continue
-            if photos:
-                return folder, sorted(photos, reverse=True)[0]
-        return None
-
     def _cache_photo_locally(self, data: dict, route: str) -> dict:
         storage_path = self._local_media_storage_path()
-        downloaded = self._download_latest_mapping_camera_photo(storage_path)
+        remote_hint = str(
+            data.get("file_path")
+            or data.get("remote_path")
+            or data.get("camera_file_path")
+            or data.get("file_name")
+            or ""
+        )
+        downloaded = self._download_mapping_camera_photo(storage_path, remote_hint)
         if downloaded:
             downloaded["control_route"] = route
             self._last_mapping_camera_cache = dict(downloaded)

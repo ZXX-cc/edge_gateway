@@ -314,7 +314,8 @@ payload:
           endpoint: "ftp://192.168.5.74/DCIM"
           smb_endpoint: "\\\\192.168.5.74\\DCIM"
           file_pattern: "*/Riebo*.jpg"
-          timeout_seconds: 5
+          timeout_seconds: 30
+          download_jobs: 4
           timing: "post_landing"
     lidar:
       name: "激光雷达"

@@ -299,6 +299,65 @@ class GimbalController:
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
+    def handle_camera_screen_drag(self, msg: dict) -> dict:
+        """
+        负载控制-画面拖动控制 (camera_screen_drag)
+
+        官方上云接口属于 services 负载控制。对 ViewLink 云台来说，
+        画面拖动等价于按 pitch/yaw 角速度移动云台。
+        """
+        data = msg.get('data', {})
+        payload_index = data.get('payload_index', '')
+        locked = bool(data.get('locked', False))
+        pitch_speed = float(data.get('pitch_speed', 0.0) or 0.0)
+        yaw_speed = float(data.get('yaw_speed', 0.0) or 0.0)
+
+        logger.info(
+            "Camera screen drag: payload_index=%s locked=%s pitch_speed=%s yaw_speed=%s",
+            payload_index,
+            locked,
+            pitch_speed,
+            yaw_speed,
+        )
+
+        success = False
+        result = {"success": False, "message": "ViewLink control is not connected"}
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            # ViewLink SDK 使用 0.01 degree/s 为单位，Dock3 文档字段是 degree/s。
+            yaw_spd = int(yaw_speed * 100)
+            pitch_spd = int(pitch_speed * 100)
+            logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
+                "yaw_speed": yaw_spd,
+                "pitch_speed": pitch_spd,
+            }))
+            result = self._gimbal_control.move(yaw_spd, pitch_spd)
+            success = bool(result.get('success', False))
+            logger.info("ViewLink screen drag move: %s", result)
+
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "camera_screen_drag"),
+                "type": "screen_drag",
+                "payload_index": payload_index,
+                "locked": locked,
+                "pitch_speed": pitch_speed,
+                "yaw_speed": yaw_speed,
+            }
+            self._notify_payload_state("camera_screen_drag")
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "camera_screen_drag failed")),
+            data={
+                "payload_index": payload_index,
+                "locked": locked,
+                "pitch_speed": pitch_speed,
+                "yaw_speed": yaw_speed,
+                "viewlink_result": result,
+            },
+        )
+
     def handle_camera_look_at(self, msg: dict) -> dict:
         """
         目标点指向 - 云台自动计算角度对准目标
