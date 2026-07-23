@@ -1114,10 +1114,10 @@ class MediaManager:
         logger.info(f"Livestream lens change: video_id={video_id}, type={video_type}")
 
         self._live_video_type = video_type
+        self._live_source_key = video_type
 
         # 如果正在推流，重启 ffmpeg 切换视频源
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
-            self._live_source_key = self._live_source_key_from_video_id(video_id) or video_type
             self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key)
 
         self._publish_live_status_event(TASK_STATUS_OK)

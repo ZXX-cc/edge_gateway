@@ -333,6 +333,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(lens["data"]["video_id"], video_id)
         self.assertEqual(manager._live_video_type, "zoom")
 
+        ir_lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
+            "video_type": "ir",
+        }))
+        self.assertEqual(ir_lens["data"]["result"], 0)
+        self.assertEqual(manager._live_video_type, "ir")
+        self.assertEqual(manager._live_source_key, "ir")
+        self.assertEqual(events[-1]["data"]["source"], "/dev/video1")
+
         camera = manager.handle_live_camera_change(base_msg("live_camera_change", {
             "video_id": video_id,
             "camera_position": 1,

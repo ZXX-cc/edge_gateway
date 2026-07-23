@@ -179,6 +179,16 @@ def run_ir_switch(client: Dock3IrSwitchClient, args) -> int:
         return rc
     print(f"启动事件: {json.dumps(event_data(start_event), ensure_ascii=False)}")
 
+    if args.manual_switch:
+        print("当前直播已启动；确认可见光画面后按 Enter 切换红外，输入 q 后回车则退出不切换。")
+        choice = input("ir-switch> ").strip().lower()
+        if choice in {"q", "quit", "exit"}:
+            print("已取消红外切换。")
+            if args.keep_stream:
+                print("直播保持运行；需要停止时使用 --stop-only")
+                return 0
+            return stop_stream(client, args, args.video_id)
+
     lens_event_count = client.event_count("live_status_notify")
     lens_payload = {"video_type": args.target_video_type}
     if args.lens_video_id:
@@ -249,6 +259,7 @@ def main() -> int:
     parser.add_argument("--expected-source", default="", help="Override expected IR source; defaults to media.video_sources.ir.")
     parser.add_argument("--allow-capability-mismatch", action="store_true")
     parser.add_argument("--no-source-check", action="store_true", help="Only check reply/event video_type, not event source.")
+    parser.add_argument("--manual-switch", action="store_true", help="启动直播后等待人工确认，再切换红外。")
     parser.add_argument("--stop-previous", action="store_true")
     parser.add_argument("--keep-stream", action="store_true")
     parser.add_argument("--stop-only", action="store_true")

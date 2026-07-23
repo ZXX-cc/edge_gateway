@@ -22,6 +22,18 @@ class ViewLinkMappingExtensionsTest(unittest.TestCase):
         self.assertEqual(laser["args"]["on"], False)
         self.assertEqual(tracking["sdk_method"], "is_tracking")
 
+    def test_image_color_mapping(self):
+        image = build_viewlink_call("set_image_color", {
+            "image_type": "IR1",
+            "enable_pip": "true",
+            "ir_color": "black_hot",
+        })
+
+        self.assertEqual(image["sdk_method"], "set_image_color")
+        self.assertEqual(image["args"]["image_type"], 2)
+        self.assertEqual(image["args"]["enable_pip"], True)
+        self.assertEqual(image["args"]["ir_color"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

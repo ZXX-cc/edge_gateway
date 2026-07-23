@@ -10,6 +10,8 @@ from src.utils.message import MessageBuilder
 from src.modules.gimbal_control import (
     VLKConnType,
     VLKFocusMode,
+    VLKImageType,
+    VLKIrColor,
     VLKLaserZoomMode,
     VLKRecordMode,
     VLKSensor,
@@ -20,6 +22,31 @@ from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
 from web.mavlink.viewlink import build_viewlink_call
 
 logger = get_logger("gimbal")
+
+
+IR_DISPLAY_MODE_MAP = {
+    "visible": (VLKImageType.VISIBLE1, False),
+    "normal": (VLKImageType.VISIBLE1, False),
+    "eo": (VLKImageType.VISIBLE1, False),
+    "ir": (VLKImageType.IR1, False),
+    "infrared": (VLKImageType.IR1, False),
+    "thermal": (VLKImageType.IR1, False),
+    "visible_ir": (VLKImageType.VISIBLE1, True),
+    "eo_ir": (VLKImageType.VISIBLE1, True),
+    "ir_visible": (VLKImageType.IR1, True),
+    "ir_eo": (VLKImageType.IR1, True),
+    "fusion": (VLKImageType.FUSION, False),
+}
+
+IR_COLOR_MAP = {
+    "white_hot": VLKIrColor.WHITEHOT,
+    "whitehot": VLKIrColor.WHITEHOT,
+    "black_hot": VLKIrColor.BLACKHOT,
+    "blackhot": VLKIrColor.BLACKHOT,
+    "pseudo_hot": VLKIrColor.PSEUDOHOT,
+    "pseudohot": VLKIrColor.PSEUDOHOT,
+    "rusty": VLKIrColor.RUSTY,
+}
 
 
 class GimbalController:
@@ -581,9 +608,61 @@ class GimbalController:
     def handle_ir_display_mode_set(self, msg: dict) -> dict:
         """IR显示模式设置"""
         data = msg.get('data', {})
-        mode = data.get('mode', 0)
-        logger.info(f"IR display mode: {mode}")
-        return MessageBuilder.build_reply(msg, result=0)
+        mode = data.get('mode', data.get('display_mode', 'ir'))
+        mode_key = str(mode).lower()
+        if mode_key.isdigit():
+            numeric_mode = int(mode_key)
+            mode_key = {
+                0: "visible",
+                1: "ir",
+                2: "visible_ir",
+                3: "ir_visible",
+                4: "fusion",
+            }.get(numeric_mode, "ir")
+
+        image_type, enable_pip = IR_DISPLAY_MODE_MAP.get(mode_key, IR_DISPLAY_MODE_MAP["ir"])
+        if "image_type" in data:
+            image_type = VLKImageType(int(data.get("image_type")))
+        if "enable_pip" in data:
+            enable_pip = bool(data.get("enable_pip"))
+
+        palette = str(data.get("palette", data.get("ir_color", "white_hot"))).lower()
+        ir_color = IR_COLOR_MAP.get(palette, VLKIrColor.WHITEHOT)
+        logger.info(
+            "IR display mode: mode=%s image_type=%s enable_pip=%s ir_color=%s",
+            mode,
+            int(image_type),
+            enable_pip,
+            int(ir_color),
+        )
+
+        result = {"success": False, "message": "ViewLink control is not connected"}
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            result = self._gimbal_control.set_image_color(image_type, enable_pip, ir_color)
+
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "ir_display_mode_set"),
+                "mode": mode_key,
+                "image_type": int(image_type),
+                "enable_pip": enable_pip,
+                "ir_color": int(ir_color),
+            }
+            self._notify_payload_state("ir_display_mode_set")
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "ir_display_mode_set failed")),
+            data={
+                "mode": mode_key,
+                "image_type": int(image_type),
+                "enable_pip": enable_pip,
+                "ir_color": int(ir_color),
+                "viewlink_result": result,
+            },
+        )
 
     def handle_ir_isotherm_set(self, msg: dict) -> dict:
         """IR等温线设置"""

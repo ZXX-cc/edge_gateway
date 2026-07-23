@@ -43,6 +43,30 @@ LASER_ZOOM_MODE_MAP = {
     "MANUAL": 1,
 }
 
+IMAGE_TYPE_MAP = {
+    "VISIBLE1": 0,
+    "VISIBLE": 0,
+    "NORMAL": 0,
+    "EO": 0,
+    "VISIBLE2": 1,
+    "IR1": 2,
+    "IR": 2,
+    "INFRARED": 2,
+    "THERMAL": 2,
+    "IR2": 3,
+    "FUSION": 4,
+}
+
+IR_COLOR_MAP = {
+    "WHITEHOT": 0,
+    "WHITE_HOT": 0,
+    "BLACKHOT": 1,
+    "BLACK_HOT": 1,
+    "PSEUDOHOT": 2,
+    "PSEUDO_HOT": 2,
+    "RUSTY": 3,
+}
+
 
 VIEWLINK_METHOD_MAP: Dict[str, Dict[str, Any]] = {
     "initialize": {"sdk_method": "initialize", "params": ("sdk_dir",)},
@@ -73,6 +97,7 @@ VIEWLINK_METHOD_MAP: Dict[str, Dict[str, Any]] = {
     "laser_zoom_out": {"sdk_method": "laser_zoom_out", "params": ("speed",)},
     "laser_stop_zoom": {"sdk_method": "laser_stop_zoom", "params": ()},
     "set_laser_zoom_mode": {"sdk_method": "set_laser_zoom_mode", "params": ("mode",)},
+    "set_image_color": {"sdk_method": "set_image_color", "params": ("image_type", "enable_pip", "ir_color")},
     "start_track": {"sdk_method": "start_track", "params": ("x", "y", "width", "height", "template_size", "sensor")},
     "stop_track": {"sdk_method": "stop_track", "params": ()},
     "is_tracking": {"sdk_method": "is_tracking", "params": ()},
@@ -120,6 +145,16 @@ def _normalize_value(name: str, value: Any) -> Any:
         if isinstance(value, bool):
             return value
         return str(value).lower() in {"1", "true", "yes", "on"}
+    if name == "enable_pip":
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in {"1", "true", "yes", "on"}
+    if name == "image_type":
+        key = str(value if value is not None else "IR1").upper()
+        return IMAGE_TYPE_MAP.get(key, int(value or 2) if str(value or "").isdigit() else 2)
+    if name == "ir_color":
+        key = str(value if value is not None else "WHITEHOT").upper()
+        return IR_COLOR_MAP.get(key, int(value or 0) if str(value or "").isdigit() else 0)
     if name == "magnification":
         return max(1.0, float(value or 1.0))
     if name in ("x", "y", "width", "height", "template_size", "port"):

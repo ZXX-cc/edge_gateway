@@ -41,6 +41,23 @@ class VLKSensor(IntEnum):
     VISIBLE2 = 4
 
 
+class VLKImageType(IntEnum):
+    """图像显示类型"""
+    VISIBLE1 = 0
+    VISIBLE2 = 1
+    IR1 = 2
+    IR2 = 3
+    FUSION = 4
+
+
+class VLKIrColor(IntEnum):
+    """红外色板"""
+    WHITEHOT = 0
+    BLACKHOT = 1
+    PSEUDOHOT = 2
+    RUSTY = 3
+
+
 class VLKTrackTemplateSize(IntEnum):
     """跟踪模板尺寸"""
     AUTO = 0
@@ -339,6 +356,9 @@ class GimbalControl:
 
         lib.VLK_GetFocusMode.argtypes = []
         lib.VLK_GetFocusMode.restype = c_int
+
+        lib.VLK_SetImageColor.argtypes = [c_int, c_int, c_int]
+        lib.VLK_SetImageColor.restype = None
 
         lib.VLK_ZoomTo.argtypes = [ctypes.c_float]
         lib.VLK_ZoomTo.restype = None
@@ -900,6 +920,26 @@ class GimbalControl:
             return {"success": False, "tracking": False, "message": "未连接到设备"}
         tracking = self._lib.VLK_IsTracking() == 1
         return {"success": True, "tracking": tracking}
+
+    def set_image_color(
+        self,
+        image_type: VLKImageType = VLKImageType.IR1,
+        enable_pip: bool = False,
+        ir_color: VLKIrColor = VLKIrColor.WHITEHOT,
+    ) -> dict:
+        """设置相机主画面/画中画和红外色板。"""
+        result = {"success": False, "message": ""}
+        if not self._connected:
+            result["message"] = "未连接到设备"
+            return result
+        self._lib.VLK_SetImageColor(int(image_type), 1 if enable_pip else 0, int(ir_color))
+        result["success"] = True
+        result["message"] = (
+            f"设置图像显示: image_type={int(image_type)}, "
+            f"pip={1 if enable_pip else 0}, ir_color={int(ir_color)}"
+        )
+        self.log(result["message"])
+        return result
 
     def _switch_int(self, sdk_method: str, on: bool, label: str) -> dict:
         result = {"success": False, "message": ""}

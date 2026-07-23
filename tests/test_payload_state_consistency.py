@@ -111,6 +111,10 @@ class FakeDirectPayload:
         self.calls.append(("set_focus_mode", int(mode)))
         return {"success": True}
 
+    def set_image_color(self, image_type, enable_pip, ir_color):
+        self.calls.append(("set_image_color", int(image_type), bool(enable_pip), int(ir_color)))
+        return {"success": True}
+
     def focus_in(self, speed):
         self.calls.append(("focus_in", speed))
         return {"success": True}
@@ -239,6 +243,26 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("focus_in", 2),
             ("stop_focus",),
         ])
+
+    def test_ir_display_mode_set_uses_viewlink_image_color(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        events = []
+        gimbal.set_gimbal_control(direct_payload)
+        gimbal.set_event_callback(events.append)
+
+        reply = gimbal.handle_ir_display_mode_set(message("ir_display_mode_set", {
+            "mode": "ir_visible",
+            "palette": "black_hot",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "ir_visible")
+        self.assertEqual(reply["data"]["image_type"], 2)
+        self.assertEqual(reply["data"]["enable_pip"], True)
+        self.assertEqual(reply["data"]["ir_color"], 1)
+        self.assertEqual(direct_payload.calls, [("set_image_color", 2, True, 1)])
+        self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "ir_display_mode_set")
 
     def test_failed_camera_record_start_does_not_set_recording(self):
         camera = CameraController()
