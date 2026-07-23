@@ -199,13 +199,35 @@ function stopDrag() {
   return api('/api/drag', { pitch_speed: 0, yaw_speed: 0 });
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+function videoContentRect() {
+  const layerRect = selectLayer.getBoundingClientRect();
+  const video = document.getElementById('video');
+  const mediaWidth = video.videoWidth || layerRect.width;
+  const mediaHeight = video.videoHeight || layerRect.height;
+  const mediaRatio = mediaWidth / Math.max(mediaHeight, 1);
+  const layerRatio = layerRect.width / Math.max(layerRect.height, 1);
+  let width = layerRect.width;
+  let height = layerRect.height;
+  let left = 0;
+  let top = 0;
+  if (layerRatio > mediaRatio) {
+    width = layerRect.height * mediaRatio;
+    left = (layerRect.width - width) / 2;
+  } else {
+    height = layerRect.width / mediaRatio;
+    top = (layerRect.height - height) / 2;
+  }
+  return { left, top, width, height, layerRect };
+}
 function pointFromEvent(ev) {
-  const rect = selectLayer.getBoundingClientRect();
+  const content = videoContentRect();
+  const rect = content.layerRect;
+  const rawX = ev.clientX - rect.left;
+  const rawY = ev.clientY - rect.top;
   return {
-    x: clamp(ev.clientX - rect.left, 0, rect.width),
-    y: clamp(ev.clientY - rect.top, 0, rect.height),
-    w: rect.width,
-    h: rect.height
+    x: clamp(rawX, content.left, content.left + content.width),
+    y: clamp(rawY, content.top, content.top + content.height),
+    content
   };
 }
 function drawSelection(a, b) {
@@ -218,18 +240,19 @@ function drawSelection(a, b) {
   selectBox.style.top = top + 'px';
   selectBox.style.width = width + 'px';
   selectBox.style.height = height + 'px';
-  return { left, top, width, height, layerWidth: a.w, layerHeight: a.h };
+  return { left, top, width, height, content: a.content };
 }
 function saveSelection(box) {
   if (box.width < 8 || box.height < 8) {
     clearSelection();
     return;
   }
+  const content = box.content || videoContentRect();
   selection = {
-    x: box.left / box.layerWidth,
-    y: box.top / box.layerHeight,
-    width: box.width / box.layerWidth,
-    height: box.height / box.layerHeight
+    x: (box.left - content.left) / content.width,
+    y: (box.top - content.top) / content.height,
+    width: box.width / content.width,
+    height: box.height / content.height
   };
   boxText.textContent = `框选: x=${selection.x.toFixed(3)}, y=${selection.y.toFixed(3)}, w=${selection.width.toFixed(3)}, h=${selection.height.toFixed(3)}`;
 }
@@ -276,7 +299,13 @@ selectLayer.addEventListener('pointerup', (ev) => {
 });
 selectLayer.addEventListener('dblclick', (ev) => {
   const p = pointFromEvent(ev);
-  api('/api/aim', { x: p.x / p.w, y: p.y / p.h, width: 0.08, height: 0.08, locked: true });
+  api('/api/aim', {
+    x: (p.x - p.content.left) / p.content.width,
+    y: (p.y - p.content.top) / p.content.height,
+    width: 0.08,
+    height: 0.08,
+    locked: true
+  });
 });
 window.addEventListener('keydown', (ev) => {
   if (ev.repeat) return;
@@ -319,6 +348,47 @@ class LocalRtspHlsProxy:
         self.process: subprocess.Popen | None = None
         self.label = ""
         self.rtsp_url = ""
+        self.width = 0
+        self.height = 0
+
+    def _ffprobe_path(self) -> str:
+        configured = Path(self.ffmpeg)
+        if configured.name == "ffmpeg":
+            sibling = configured.with_name("ffprobe")
+            if configured.parent != Path(".") and sibling.exists():
+                return str(sibling)
+        return shutil.which("ffprobe") or "ffprobe"
+
+    def probe_resolution(self, rtsp_url: str) -> tuple[int, int]:
+        """用 ffprobe 获取当前 RTSP 实际分辨率，失败时返回 (0, 0) 交给参数兜底。"""
+        command = [
+            self._ffprobe_path(),
+            "-v",
+            "error",
+            "-rtsp_transport",
+            self.rtsp_transport,
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            rtsp_url,
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return 0, 0
+        if completed.returncode != 0:
+            return 0, 0
+        line = completed.stdout.strip().splitlines()[0] if completed.stdout.strip() else ""
+        try:
+            width_text, height_text = line.split("x", 1)
+            width = int(width_text)
+            height = int(height_text)
+        except (ValueError, IndexError):
+            return 0, 0
+        return (width, height) if width > 0 and height > 0 else (0, 0)
 
     def start(self, label: str, rtsp_url: str) -> dict[str, Any]:
         if not rtsp_url:
@@ -334,6 +404,7 @@ class LocalRtspHlsProxy:
 
         playlist = self.root / "stream.m3u8"
         segment = self.root / "segment_%05d.ts"
+        self.width, self.height = self.probe_resolution(rtsp_url)
         codec_args = ["-c:v", "copy"] if self.codec == "copy" else ["-c:v", self.codec, "-preset", "veryfast", "-tune", "zerolatency"]
         command = [
             ffmpeg_path,
@@ -368,7 +439,13 @@ class LocalRtspHlsProxy:
             if playlist.exists():
                 break
             time.sleep(0.1)
-        return {"ok": True, "label": label, "rtsp_url": rtsp_url, "hls_dir": str(self.root)}
+        return {
+            "ok": True,
+            "label": label,
+            "rtsp_url": rtsp_url,
+            "hls_dir": str(self.root),
+            "resolution": {"width": self.width, "height": self.height},
+        }
 
     def stop(self) -> None:
         if not self.process:
@@ -383,10 +460,17 @@ class LocalRtspHlsProxy:
         self.process = None
         self.label = ""
         self.rtsp_url = ""
+        self.width = 0
+        self.height = 0
 
     def status(self) -> dict[str, Any]:
         running = self.process is not None and self.process.poll() is None
-        return {"running": running, "label": self.label, "rtsp_url": self.rtsp_url}
+        return {
+            "running": running,
+            "label": self.label,
+            "rtsp_url": self.rtsp_url,
+            "resolution": {"width": self.width, "height": self.height},
+        }
 
 
 def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy):
@@ -442,6 +526,13 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
 
     def json_bytes(payload: dict[str, Any]) -> bytes:
         return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    def active_frame_size() -> tuple[int, int]:
+        status = local_proxy.status()
+        resolution = status.get("resolution", {})
+        width = int(resolution.get("width") or args.track_width)
+        height = int(resolution.get("height") or args.track_height)
+        return max(1, width), max(1, height)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *values):
@@ -625,6 +716,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             y = max(0.0, min(1.0, float(data.get("y", 0.0) or 0.0)))
             width = max(0.0, min(1.0 - x, float(data.get("width", 0.0) or 0.0)))
             height = max(0.0, min(1.0 - y, float(data.get("height", 0.0) or 0.0)))
+            frame_width, frame_height = active_frame_size()
             zoom_factor = min(1.0 / max(width, 0.05), 1.0 / max(height, 0.05))
             state["zoom_ratio"] = max(1.0, min(args.max_zoom_ratio, state["zoom_ratio"] * zoom_factor))
             payload = {
@@ -632,11 +724,12 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "camera_type": "zoom",
                 "locked": False,
                 "zoom_ratio": state["zoom_ratio"],
-                "x": int(round(x * args.track_width)),
-                "y": int(round(y * args.track_height)),
-                "width": max(1, int(round(width * args.track_width))),
-                "height": max(1, int(round(height * args.track_height))),
+                "x": int(round(x * frame_width)),
+                "y": int(round(y * frame_height)),
+                "width": max(1, int(round(width * frame_width))),
+                "height": max(1, int(round(height * frame_height))),
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
+                "frame_size": {"width": frame_width, "height": frame_height},
             }
             rc, reply = request_services("camera_frame_zoom", payload)
             return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "request": payload, "reply": reply}
@@ -646,15 +739,17 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             y = max(0.0, min(1.0, float(data.get("y", 0.5) or 0.5)))
             width = max(0.01, min(1.0, float(data.get("width", 0.08) or 0.08)))
             height = max(0.01, min(1.0, float(data.get("height", 0.08) or 0.08)))
+            frame_width, frame_height = active_frame_size()
             payload = {
                 "payload_index": args.payload_index,
                 "camera_type": "zoom",
                 "locked": bool(data.get("locked", True)),
-                "x": int(round(x * args.track_width)),
-                "y": int(round(y * args.track_height)),
-                "width": max(1, int(round(width * args.track_width))),
-                "height": max(1, int(round(height * args.track_height))),
+                "x": int(round(x * frame_width)),
+                "y": int(round(y * frame_height)),
+                "width": max(1, int(round(width * frame_width))),
+                "height": max(1, int(round(height * frame_height))),
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
+                "frame_size": {"width": frame_width, "height": frame_height},
             }
             rc, reply = request_services("camera_aim", payload)
             return {"ok": rc == 0, "request": payload, "reply": reply}
