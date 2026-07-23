@@ -10,8 +10,14 @@ from __future__ import annotations
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import mimetypes
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
+import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -27,6 +33,8 @@ from tool_config import add_config_argument, resolve_mqtt_settings  # noqa: E402
 
 DEFAULT_PUSH_URL = "rtmp://39.185.72.155:22944/dock/NEST44202509U003?secret=44a6317ef7504d178faa077d70c0fb9dnorecord"
 DEFAULT_PLAY_URL = "https://flysee.lclfyl.top:22943/dock/NEST44202509U003.flv"
+DEFAULT_LOCAL_GIMBAL_RTSP = "rtsp://192.168.1.119:554/main"
+DEFAULT_LOCAL_MAPPING_RTSP = "rtsp://192.168.5.74:8554/LIVE"
 
 
 HTML = """<!doctype html>
@@ -36,6 +44,7 @@ HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dock3 负载控制</title>
   <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <style>
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; background: #111; color: #f4f4f5; }
@@ -83,6 +92,8 @@ HTML = """<!doctype html>
         <div class="grid">
           <button class="primary" onclick="api('/api/live/gimbal')">推云台</button>
           <button class="primary" onclick="api('/api/live/mapping')">推正射</button>
+          <button onclick="api('/api/live/local_gimbal')">内网云台</button>
+          <button onclick="api('/api/live/local_mapping')">内网正射</button>
           <button class="warn" onclick="api('/api/live/stop')">停止推流</button>
           <button onclick="api('/api/live/capability')">查询能力</button>
         </div>
@@ -125,7 +136,8 @@ HTML = """<!doctype html>
     </aside>
   </main>
 <script>
-const playUrl = location.origin + '/live.flv';
+let playUrl = '__PLAY_URL__';
+let streamMode = '__STREAM_MODE__';
 document.getElementById('playUrl').textContent = playUrl;
 let player = null;
 let dragTimer = null;
@@ -142,7 +154,16 @@ function log(obj) {
 function reloadVideo() {
   const video = document.getElementById('video');
   if (player) { player.destroy(); player = null; }
-  if (window.mpegts && mpegts.getFeatureList().mseLivePlayback) {
+  video.removeAttribute('src');
+  if (streamMode === 'hls' && video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = playUrl;
+    video.play().catch(() => {});
+  } else if (streamMode === 'hls' && window.Hls && Hls.isSupported()) {
+    player = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2 });
+    player.loadSource(playUrl);
+    player.attachMedia(video);
+    player.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+  } else if (window.mpegts && mpegts.getFeatureList().mseLivePlayback) {
     player = mpegts.createPlayer({ type: 'flv', isLive: true, url: playUrl });
     player.attachMediaElement(video);
     player.load();
@@ -158,6 +179,12 @@ async function api(path, data = {}) {
   const body = await res.json();
   log(body);
   if (body.source) document.getElementById('source').textContent = body.source;
+  if (body.play_url) {
+    playUrl = body.play_url;
+    streamMode = body.stream_mode || streamMode;
+    document.getElementById('playUrl').textContent = playUrl;
+    reloadVideo();
+  }
   return body;
 }
 function speedValue() { return Number(document.getElementById('speed').value); }
@@ -281,7 +308,88 @@ class Dock3PanelClient(MqttRequestClient):
         )
 
 
-def make_handler(args, client: Dock3PanelClient):
+class LocalRtspHlsProxy:
+    """把内网 RTSP 拉到本机 HLS，供浏览器页面直接播放。"""
+
+    def __init__(self, ffmpeg: str, codec: str, rtsp_transport: str):
+        self.ffmpeg = ffmpeg
+        self.codec = codec
+        self.rtsp_transport = rtsp_transport
+        self.root = Path(tempfile.mkdtemp(prefix="dock3-payload-hls-"))
+        self.process: subprocess.Popen | None = None
+        self.label = ""
+        self.rtsp_url = ""
+
+    def start(self, label: str, rtsp_url: str) -> dict[str, Any]:
+        if not rtsp_url:
+            return {"ok": False, "error": f"{label} RTSP 未配置"}
+        ffmpeg_path = shutil.which(self.ffmpeg) or self.ffmpeg
+        if not shutil.which(ffmpeg_path) and not Path(ffmpeg_path).exists():
+            return {"ok": False, "error": f"找不到 ffmpeg: {self.ffmpeg}"}
+
+        self.stop()
+        for item in self.root.glob("*"):
+            if item.is_file():
+                item.unlink(missing_ok=True)
+
+        playlist = self.root / "stream.m3u8"
+        segment = self.root / "segment_%05d.ts"
+        codec_args = ["-c:v", "copy"] if self.codec == "copy" else ["-c:v", self.codec, "-preset", "veryfast", "-tune", "zerolatency"]
+        command = [
+            ffmpeg_path,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-rtsp_transport",
+            self.rtsp_transport,
+            "-i",
+            rtsp_url,
+            "-an",
+            *codec_args,
+            "-f",
+            "hls",
+            "-hls_time",
+            "1",
+            "-hls_list_size",
+            "4",
+            "-hls_flags",
+            "delete_segments+append_list+omit_endlist",
+            "-hls_segment_filename",
+            str(segment),
+            str(playlist),
+        ]
+        self.process = subprocess.Popen(command)
+        self.label = label
+        self.rtsp_url = rtsp_url
+        for _ in range(30):
+            if self.process.poll() is not None:
+                return {"ok": False, "error": "ffmpeg 已退出，请检查 RTSP 地址或编码格式", "rtsp_url": rtsp_url}
+            if playlist.exists():
+                break
+            time.sleep(0.1)
+        return {"ok": True, "label": label, "rtsp_url": rtsp_url, "hls_dir": str(self.root)}
+
+    def stop(self) -> None:
+        if not self.process:
+            return
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=3)
+        self.process = None
+        self.label = ""
+        self.rtsp_url = ""
+
+    def status(self) -> dict[str, Any]:
+        running = self.process is not None and self.process.poll() is None
+        return {"running": running, "label": self.label, "rtsp_url": self.rtsp_url}
+
+
+def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy):
     lock = threading.Lock()
     state = {
         "active_label": "",
@@ -308,6 +416,7 @@ def make_handler(args, client: Dock3PanelClient):
         return rc, reply
 
     def start_live(label: str, video_id: str):
+        local_proxy.stop()
         stop_video(state["active_video_id"])
         rc, reply = request_services(
             "live_start_push",
@@ -323,6 +432,13 @@ def make_handler(args, client: Dock3PanelClient):
             state["active_label"] = label
             state["active_video_id"] = video_id
         return rc, reply
+
+    def start_local_live(label: str, rtsp_url: str):
+        stop_video(state["active_video_id"])
+        state["active_label"] = label
+        state["active_video_id"] = ""
+        result = local_proxy.start(label, rtsp_url)
+        return result
 
     def json_bytes(payload: dict[str, Any]) -> bytes:
         return json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -355,7 +471,28 @@ def make_handler(args, client: Dock3PanelClient):
 
         def do_GET(self):  # noqa: N802
             if self.path == "/":
-                self._send(200, "text/html; charset=utf-8", HTML.encode("utf-8"))
+                html = (
+                    HTML
+                    .replace("__PLAY_URL__", args.initial_play_url)
+                    .replace("__STREAM_MODE__", args.initial_stream_mode)
+                )
+                self._send(200, "text/html; charset=utf-8", html.encode("utf-8"))
+                return
+            if self.path.startswith("/hls/"):
+                rel_path = urllib.parse.urlparse(self.path).path.removeprefix("/hls/")
+                target = (local_proxy.root / rel_path).resolve()
+                if local_proxy.root.resolve() not in target.parents and target != local_proxy.root.resolve():
+                    self._send_json({"ok": False, "error": "invalid hls path"}, status=403)
+                    return
+                if not target.is_file():
+                    self._send_json({"ok": False, "error": "hls segment not ready"}, status=404)
+                    return
+                content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+                if target.suffix == ".m3u8":
+                    content_type = "application/vnd.apple.mpegurl"
+                elif target.suffix == ".ts":
+                    content_type = "video/mp2t"
+                self._send(200, content_type, target.read_bytes())
                 return
             if self.path == "/live.flv":
                 self.send_response(200)
@@ -385,18 +522,39 @@ def make_handler(args, client: Dock3PanelClient):
     def route_post(path: str, data: dict[str, Any]) -> dict[str, Any]:
         if path == "/api/live/gimbal":
             rc, reply = start_live("云台", args.gimbal_video_id)
-            return {"ok": rc == 0, "source": "云台", "reply": reply, "play_url": args.play_url}
+            return {"ok": rc == 0, "source": "公网云台", "reply": reply, "play_url": "/live.flv", "upstream": args.play_url, "stream_mode": "flv"}
 
         if path == "/api/live/mapping":
             rc, reply = start_live("正射相机", args.mapping_video_id)
-            return {"ok": rc == 0, "source": "正射相机", "reply": reply, "play_url": args.play_url}
+            return {"ok": rc == 0, "source": "公网正射相机", "reply": reply, "play_url": "/live.flv", "upstream": args.play_url, "stream_mode": "flv"}
+
+        if path == "/api/live/local_gimbal":
+            result = start_local_live("内网云台", args.local_gimbal_rtsp)
+            return {
+                "ok": bool(result.get("ok", False)),
+                "source": "内网云台",
+                "play_url": "/hls/stream.m3u8",
+                "stream_mode": "hls",
+                "local": result,
+            }
+
+        if path == "/api/live/local_mapping":
+            result = start_local_live("内网正射相机", args.local_mapping_rtsp)
+            return {
+                "ok": bool(result.get("ok", False)),
+                "source": "内网正射相机",
+                "play_url": "/hls/stream.m3u8",
+                "stream_mode": "hls",
+                "local": result,
+            }
 
         if path == "/api/live/stop":
             rc, reply = stop_video(state["active_video_id"])
+            local_proxy.stop()
             if rc == 0:
                 state["active_label"] = ""
                 state["active_video_id"] = ""
-            return {"ok": rc == 0, "source": "已停止", "reply": reply}
+            return {"ok": rc == 0, "source": "已停止", "reply": reply, "local": local_proxy.status()}
 
         if path == "/api/live/capability":
             rc, reply = request_services("live_capability_query", {}, status="ok")
@@ -518,6 +676,12 @@ def main() -> int:
     parser.add_argument("--url", default=DEFAULT_PUSH_URL)
     parser.add_argument("--play-url", default=DEFAULT_PLAY_URL)
     parser.add_argument("--url-type", type=int, default=1)
+    parser.add_argument("--local-gimbal-rtsp", default=DEFAULT_LOCAL_GIMBAL_RTSP)
+    parser.add_argument("--local-mapping-rtsp", default=DEFAULT_LOCAL_MAPPING_RTSP)
+    parser.add_argument("--auto-local-source", choices=["none", "gimbal", "mapping"], default="none")
+    parser.add_argument("--ffmpeg", default="ffmpeg")
+    parser.add_argument("--local-codec", choices=["copy", "libx264"], default="copy")
+    parser.add_argument("--local-rtsp-transport", choices=["tcp", "udp"], default="tcp")
     parser.add_argument("--payload-index", default="52-0-0")
     parser.add_argument("--gimbal-video-id", default="")
     parser.add_argument("--mapping-video-id", default="")
@@ -536,6 +700,8 @@ def main() -> int:
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     args.gimbal_video_id = args.gimbal_video_id or f"{args.sn}/52-0-0/normal-0"
     args.mapping_video_id = args.mapping_video_id or f"{args.sn}/52-0-1/mapping-0"
+    args.initial_play_url = "/live.flv"
+    args.initial_stream_mode = "flv"
 
     client = Dock3PanelClient(
         args.host,
@@ -545,9 +711,22 @@ def main() -> int:
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_control_page",
     )
-    server = ThreadingHTTPServer((args.listen_host, args.listen_port), make_handler(args, client))
+    local_proxy = LocalRtspHlsProxy(args.ffmpeg, args.local_codec, args.local_rtsp_transport)
+    if args.auto_local_source == "gimbal":
+        local_proxy.start("内网云台", args.local_gimbal_rtsp)
+        args.initial_play_url = "/hls/stream.m3u8"
+        args.initial_stream_mode = "hls"
+    elif args.auto_local_source == "mapping":
+        local_proxy.start("内网正射相机", args.local_mapping_rtsp)
+        args.initial_play_url = "/hls/stream.m3u8"
+        args.initial_stream_mode = "hls"
+
+    server = ThreadingHTTPServer((args.listen_host, args.listen_port), make_handler(args, client, local_proxy))
     print(f"控制页面: http://{args.listen_host}:{args.listen_port}")
     print(f"播放代理: http://{args.listen_host}:{args.listen_port}/live.flv")
+    print(f"内网 HLS: http://{args.listen_host}:{args.listen_port}/hls/stream.m3u8")
+    print(f"内网云台 RTSP: {args.local_gimbal_rtsp}")
+    print(f"内网正射 RTSP: {args.local_mapping_rtsp}")
     print(f"MQTT: {args.host}:{args.port}，首次点击按钮时连接")
     try:
         server.serve_forever()
@@ -555,6 +734,7 @@ def main() -> int:
         print()
     finally:
         server.server_close()
+        local_proxy.stop()
         client.disconnect()
     return 0
 
