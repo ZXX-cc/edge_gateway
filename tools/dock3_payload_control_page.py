@@ -85,9 +85,9 @@ HTML = """<!doctype html>
       <section>
         <h2>云台拖动</h2>
         <div class="pad">
-          <span></span><button onmousedown="drag(1,0)" onmouseup="stopDrag()" onclick="drag(1,0)">上</button><span></span>
-          <button onmousedown="drag(0,-1)" onmouseup="stopDrag()" onclick="drag(0,-1)">左</button><button onclick="stopDrag()">停</button><button onmousedown="drag(0,1)" onmouseup="stopDrag()" onclick="drag(0,1)">右</button>
-          <span></span><button onmousedown="drag(-1,0)" onmouseup="stopDrag()" onclick="drag(-1,0)">下</button><span></span>
+          <span></span><button onpointerdown="startDrag(1,0)" onpointerup="stopDrag()" onpointerleave="stopDrag()">上</button><span></span>
+          <button onpointerdown="startDrag(0,-1)" onpointerup="stopDrag()" onpointerleave="stopDrag()">左</button><button onclick="stopDrag()">停</button><button onpointerdown="startDrag(0,1)" onpointerup="stopDrag()" onpointerleave="stopDrag()">右</button>
+          <span></span><button onpointerdown="startDrag(-1,0)" onpointerup="stopDrag()" onpointerleave="stopDrag()">下</button><span></span>
         </div>
       </section>
       <section>
@@ -113,6 +113,7 @@ HTML = """<!doctype html>
 const playUrl = location.origin + '/live.flv';
 document.getElementById('playUrl').textContent = playUrl;
 let player = null;
+let dragTimer = null;
 function log(obj) {
   const text = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
   status.textContent = new Date().toLocaleTimeString() + '\\n' + text;
@@ -140,14 +141,25 @@ async function api(path, data = {}) {
 }
 function speedValue() { return Number(document.getElementById('speed').value); }
 function drag(pitchDir, yawDir) { return api('/api/drag', { pitch_speed: pitchDir * speedValue(), yaw_speed: yawDir * speedValue() }); }
-function stopDrag() { return api('/api/drag', { pitch_speed: 0, yaw_speed: 0 }); }
+function startDrag(pitchDir, yawDir) {
+  if (dragTimer) clearInterval(dragTimer);
+  drag(pitchDir, yawDir);
+  dragTimer = setInterval(() => drag(pitchDir, yawDir), 250);
+}
+function stopDrag() {
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  return api('/api/drag', { pitch_speed: 0, yaw_speed: 0 });
+}
 window.addEventListener('keydown', (ev) => {
   if (ev.repeat) return;
-  if (ev.key === 'w') drag(1,0);
-  if (ev.key === 's') drag(-1,0);
-  if (ev.key === 'a') drag(0,-1);
-  if (ev.key === 'd') drag(0,1);
+  if (ev.key === 'w') startDrag(1,0);
+  if (ev.key === 's') startDrag(-1,0);
+  if (ev.key === 'a') startDrag(0,-1);
+  if (ev.key === 'd') startDrag(0,1);
   if (ev.key === ' ') { ev.preventDefault(); stopDrag(); }
+});
+window.addEventListener('keyup', (ev) => {
+  if (['w', 'a', 's', 'd'].includes(ev.key)) stopDrag();
 });
 reloadVideo();
 </script>
@@ -175,6 +187,8 @@ def make_handler(args, client: Dock3PanelClient):
         "active_video_id": "",
         "quality": int(args.quality),
         "zoom_ratio": float(args.zoom_ratio),
+        "gimbal_pitch": float(args.gimbal_pitch),
+        "gimbal_yaw": float(args.gimbal_yaw),
     }
 
     def request_services(method: str, data: dict[str, Any], allowed=None, status=None):
@@ -294,8 +308,29 @@ def make_handler(args, client: Dock3PanelClient):
                 "pitch_speed": float(data.get("pitch_speed", 0.0) or 0.0),
                 "yaw_speed": float(data.get("yaw_speed", 0.0) or 0.0),
             }
-            rc, reply = request_services("camera_screen_drag", payload)
-            return {"ok": rc == 0, "request": payload, "reply": reply}
+            screen_rc, screen_reply = request_services("camera_screen_drag", payload)
+
+            gimbal_reply = None
+            gimbal_rc = 0
+            if payload["pitch_speed"] or payload["yaw_speed"]:
+                state["gimbal_pitch"] = max(
+                    -90.0,
+                    min(30.0, state["gimbal_pitch"] + payload["pitch_speed"] * args.gimbal_step_seconds),
+                )
+                state["gimbal_yaw"] = ((state["gimbal_yaw"] + payload["yaw_speed"] * args.gimbal_step_seconds + 180.0) % 360.0) - 180.0
+                gimbal_payload = {
+                    "payload_index": args.payload_index,
+                    "pitch": state["gimbal_pitch"],
+                    "yaw": state["gimbal_yaw"],
+                }
+                gimbal_rc, gimbal_reply = request_services("gimbal_rotate", gimbal_payload)
+            return {
+                "ok": screen_rc == 0 and gimbal_rc == 0,
+                "request": payload,
+                "gimbal_pose": {"pitch": state["gimbal_pitch"], "yaw": state["gimbal_yaw"]},
+                "screen_drag_reply": screen_reply,
+                "gimbal_rotate_reply": gimbal_reply,
+            }
 
         if path.startswith("/api/zoom/"):
             direction = path.rsplit("/", 1)[-1]
@@ -347,6 +382,9 @@ def main() -> int:
     parser.add_argument("--quality", type=int, default=3)
     parser.add_argument("--zoom-ratio", type=float, default=1.0)
     parser.add_argument("--zoom-step", type=float, default=0.5)
+    parser.add_argument("--gimbal-pitch", type=float, default=0.0)
+    parser.add_argument("--gimbal-yaw", type=float, default=0.0)
+    parser.add_argument("--gimbal-step-seconds", type=float, default=0.5)
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=18080)
     parser.add_argument("--quiet-stale", action="store_true")
