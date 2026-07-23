@@ -473,6 +473,30 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertIn(b"Riebo000004.JPG", cached_bytes)
         self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000004.JPG")
 
+    def test_services_payload_methods_do_not_depend_on_drc_placeholders(self):
+        camera = CameraController()
+        gimbal = GimbalController()
+
+        checks = [
+            camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+                "payload_index": "52-0-0",
+                "x": 0.5,
+                "y": 0.5,
+                "width": 0.2,
+                "height": 0.2,
+            })),
+            camera.handle_camera_mode_switch(message("camera_mode_switch", {"camera_mode": 0})),
+            camera.handle_video_storage_set(message("video_storage_set", {"video_storage_settings": []})),
+            camera.handle_camera_exposure_set(message("camera_exposure_set", {"exposure_value": 1})),
+            gimbal.handle_camera_aim(message("camera_aim", {"payload_index": "52-0-0", "locked": False})),
+            gimbal.handle_camera_screen_split(message("camera_screen_split", {"payload_index": "52-0-0", "enable": True})),
+            gimbal.handle_ir_metering_point_set(message("ir_metering_point_set", {"x": 0.4, "y": 0.6})),
+            gimbal.handle_ir_metering_area_set(message("ir_metering_area_set", {"width": 0.2, "height": 0.3})),
+        ]
+
+        for reply in checks:
+            self.assertEqual(reply["data"]["result"], 0)
+
     def test_mapping_camera_payload_state_exposes_gateway_binding(self):
         Config.merge({
             "media": {

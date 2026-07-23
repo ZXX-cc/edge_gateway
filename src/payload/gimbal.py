@@ -358,6 +358,60 @@ class GimbalController:
             },
         )
 
+    def handle_camera_aim(self, msg: dict) -> dict:
+        """双击成为 AIM (camera_aim)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        locked = bool(data.get("locked", False))
+        x = float(data.get("x", 0.5) or 0.5)
+        y = float(data.get("y", 0.5) or 0.5)
+        logger.info(
+            "Camera AIM: payload_index=%s camera_type=%s locked=%s point=(%s,%s)",
+            data.get("payload_index", ""),
+            data.get("camera_type", ""),
+            locked,
+            x,
+            y,
+        )
+
+        result = {"success": True, "message": "aim accepted locally"}
+        if locked and self._gimbal_control and self._gimbal_control.is_connected():
+            mapping = build_viewlink_call("start_track", {
+                "x": x,
+                "y": y,
+                "width": float(data.get("width", 0.1) or 0.1),
+                "height": float(data.get("height", 0.1) or 0.1),
+            })
+            logger.info("ViewLink mapped: %s", mapping)
+            result = self._execute_viewlink_call(mapping)
+
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "camera_aim"),
+                "payload_index": data.get("payload_index", ""),
+                "locked": locked,
+                "x": x,
+                "y": y,
+            }
+            self._notify_payload_state("camera_aim")
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+            "locked": locked,
+            "x": x,
+            "y": y,
+            "viewlink_result": result,
+        })
+
+    def handle_camera_screen_split(self, msg: dict) -> dict:
+        """分屏控制 (camera_screen_split)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        enabled = bool(data.get("enable", data.get("enabled", False)))
+        logger.info("Camera screen split: payload_index=%s enabled=%s", data.get("payload_index", ""), enabled)
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "payload_index": data.get("payload_index", ""),
+            "enable": enabled,
+        })
+
     def handle_camera_look_at(self, msg: dict) -> dict:
         """
         目标点指向 - 云台自动计算角度对准目标
@@ -487,6 +541,35 @@ class GimbalController:
         mode = data.get('mode', 0)
         logger.info(f"IR metering mode: {mode}")
         return MessageBuilder.build_reply(msg, result=0)
+
+    def handle_ir_metering_point_set(self, msg: dict) -> dict:
+        """IR 点测温设置 (ir_metering_point_set)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        x = data.get("x", 0.5)
+        y = data.get("y", 0.5)
+        logger.info("IR metering point: payload_index=%s point=(%s,%s)", data.get("payload_index", ""), x, y)
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "x": x,
+            "y": y,
+        })
+
+    def handle_ir_metering_area_set(self, msg: dict) -> dict:
+        """IR 区域测温设置 (ir_metering_area_set)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        logger.info(
+            "IR metering area: payload_index=%s area=(%s,%s,%s,%s)",
+            data.get("payload_index", ""),
+            data.get("x", 0.0),
+            data.get("y", 0.0),
+            data.get("width", 0.0),
+            data.get("height", 0.0),
+        )
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "x": data.get("x", 0.0),
+            "y": data.get("y", 0.0),
+            "width": data.get("width", 0.0),
+            "height": data.get("height", 0.0),
+        })
 
     def handle_ir_color_palette_set(self, msg: dict) -> dict:
         """IR色板设置"""

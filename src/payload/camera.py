@@ -763,6 +763,57 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0)
 
+    def handle_video_storage_set(self, msg: dict) -> dict:
+        """视频存储设置 (video_storage_set)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        settings = data.get('video_storage_settings', [])
+        logger.info("Video storage set: settings=%s", settings)
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "video_storage_settings": settings,
+        })
+
+    def handle_camera_frame_zoom(self, msg: dict) -> dict:
+        """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        logger.info(
+            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s)",
+            data.get("payload_index", ""),
+            data.get("camera_type", ""),
+            data.get("locked", False),
+            data.get("x", 0.0),
+            data.get("y", 0.0),
+            data.get("width", 0.0),
+            data.get("height", 0.0),
+        )
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "locked": bool(data.get("locked", False)),
+            "x": data.get("x", 0.0),
+            "y": data.get("y", 0.0),
+            "width": data.get("width", 0.0),
+            "height": data.get("height", 0.0),
+        })
+
+    def handle_camera_mode_switch(self, msg: dict) -> dict:
+        """负载相机模式切换 (camera_mode_switch)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        mode = data.get("mode")
+        if mode is None:
+            camera_mode = data.get("camera_mode", 0)
+            mode = "photo" if camera_mode == 0 else "video"
+            msg = dict(msg)
+            msg["data"] = {**data, "mode": mode}
+        return self.handle_set_camera_mode(msg)
+
+    def handle_camera_exposure_set(self, msg: dict) -> dict:
+        """相机曝光值调节 (camera_exposure_set)，属于 services 负载控制。"""
+        data = msg.get('data', {})
+        exposure_value = data.get("exposure_value", data.get("ev", 0))
+        logger.info("Camera exposure set: camera_type=%s exposure_value=%s", data.get("camera_type", ""), exposure_value)
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "camera_type": data.get("camera_type", ""),
+            "exposure_value": exposure_value,
+        })
+
     # ---- 进度上报 ----
 
     def report_photo_progress(self, current: int, total: int, storage_path: str = ""):
