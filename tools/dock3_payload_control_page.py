@@ -620,15 +620,18 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             return {"ok": rc == 0, "quality": state["quality"], "reply": reply}
 
         if path == "/api/frame_zoom":
-            # 页面框选是 0-1 归一化坐标，这里换算到默认画面坐标系再下发给负载服务。
+            # 框选变焦只调镜头倍率，不启用目标跟踪，避免云台本体跟着画面目标移动。
             x = max(0.0, min(1.0, float(data.get("x", 0.0) or 0.0)))
             y = max(0.0, min(1.0, float(data.get("y", 0.0) or 0.0)))
             width = max(0.0, min(1.0 - x, float(data.get("width", 0.0) or 0.0)))
             height = max(0.0, min(1.0 - y, float(data.get("height", 0.0) or 0.0)))
+            zoom_factor = min(1.0 / max(width, 0.05), 1.0 / max(height, 0.05))
+            state["zoom_ratio"] = max(1.0, min(args.max_zoom_ratio, state["zoom_ratio"] * zoom_factor))
             payload = {
                 "payload_index": args.payload_index,
                 "camera_type": "zoom",
-                "locked": bool(data.get("locked", True)),
+                "locked": False,
+                "zoom_ratio": state["zoom_ratio"],
                 "x": int(round(x * args.track_width)),
                 "y": int(round(y * args.track_height)),
                 "width": max(1, int(round(width * args.track_width))),
@@ -636,7 +639,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
             }
             rc, reply = request_services("camera_frame_zoom", payload)
-            return {"ok": rc == 0, "request": payload, "reply": reply}
+            return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "request": payload, "reply": reply}
 
         if path == "/api/aim":
             x = max(0.0, min(1.0, float(data.get("x", 0.5) or 0.5)))
@@ -688,6 +691,7 @@ def main() -> int:
     parser.add_argument("--quality", type=int, default=3)
     parser.add_argument("--zoom-ratio", type=float, default=1.0)
     parser.add_argument("--zoom-step", type=float, default=0.5)
+    parser.add_argument("--max-zoom-ratio", type=float, default=30.0)
     parser.add_argument("--gimbal-pitch", type=float, default=0.0)
     parser.add_argument("--gimbal-yaw", type=float, default=0.0)
     parser.add_argument("--gimbal-step-seconds", type=float, default=0.5)

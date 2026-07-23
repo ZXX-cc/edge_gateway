@@ -229,7 +229,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
 
-    def test_camera_frame_zoom_uses_viewlink_start_track(self):
+    def test_camera_frame_zoom_uses_viewlink_zoom_without_tracking(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -240,11 +240,13 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             "y": 216,
             "width": 640,
             "height": 360,
+            "zoom_ratio": 4.0,
             "normalized": {"x": 0.2, "y": 0.2, "width": 0.333, "height": 0.333},
         }))
 
         self.assertEqual(reply["data"]["result"], 0)
-        self.assertEqual(direct_payload.calls, [("start_track", 384, 216, 640, 360)])
+        self.assertEqual(direct_payload.calls, [("zoom_to", 4.0)])
+        self.assertEqual(reply["data"]["zoom_ratio"], 4.0)
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
 
     def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):

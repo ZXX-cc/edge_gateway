@@ -779,8 +779,9 @@ class CameraController:
         y = int(float(data.get("y", 0) or 0))
         width = max(1, int(float(data.get("width", 1) or 1)))
         height = max(1, int(float(data.get("height", 1) or 1)))
+        zoom_ratio = float(data.get("zoom_ratio", self._zoom_level) or self._zoom_level)
         logger.info(
-            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s)",
+            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s) zoom_ratio=%s",
             data.get("payload_index", ""),
             data.get("camera_type", ""),
             data.get("locked", False),
@@ -788,17 +789,21 @@ class CameraController:
             y,
             width,
             height,
+            zoom_ratio,
         )
 
         result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
         if self._gimbal_control and self._gimbal_control.is_connected():
-            # Dock3 框选变焦在当前硬件上落到 ViewLink 目标跟踪，坐标由测试页面换算为画面像素。
-            result = self._gimbal_control.start_track(x, y, width, height)
-            logger.info("ViewLink frame zoom/start track: %s", result)
+            # 框选变焦只设置镜头倍率；AIM 锁定才会进入 ViewLink 目标跟踪，避免云台本体联动。
+            result = self._gimbal_control.zoom_to(zoom_ratio)
+            logger.info("ViewLink frame zoom/zoom_to: %s", result)
 
         success = bool(result.get("success", False))
+        if success:
+            self._zoom_level = zoom_ratio
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "locked": bool(data.get("locked", False)),
+            "zoom_ratio": zoom_ratio,
             "x": x,
             "y": y,
             "width": width,
