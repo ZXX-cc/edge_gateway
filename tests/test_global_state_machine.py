@@ -77,6 +77,13 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
     def test_drc_active_blocks_new_mission(self):
         self.check("flighttask_execute", snapshot(drc="active"), False, "drc_active")
 
+    def test_services_payload_screen_controls_do_not_require_drc_active(self):
+        idle = snapshot(drc="idle")
+        self.check("camera_screen_drag", idle, True)
+        self.check("camera_aim", idle, True)
+        self.check("camera_screen_split", idle, True)
+        self.check("drc_gimbal_speed_push", idle, False, "invalid_state_transition")
+
     def test_prepare_upload_allows_online_dock_but_execute_still_requires_ready(self):
         self.check("flighttask_prepare", snapshot(dock="online"), True)
         self.check("flighttask_execute", snapshot(dock="online"), False, "dock_not_ready")
