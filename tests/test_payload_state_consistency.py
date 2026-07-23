@@ -127,6 +127,14 @@ class FakeDirectPayload:
         self.calls.append(("stop_focus",))
         return {"success": True}
 
+    def start_track(self, x, y, width, height):
+        self.calls.append(("start_track", x, y, width, height))
+        return {"success": True}
+
+    def stop_track(self):
+        self.calls.append(("stop_track",))
+        return {"success": True}
+
 
 class FakeFlightControl:
     def __init__(self, armed=False):
@@ -220,6 +228,24 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(direct_payload.calls, [("move", -200, 150)])
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
+
+    def test_camera_frame_zoom_uses_viewlink_start_track(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "x": 384,
+            "y": 216,
+            "width": 640,
+            "height": 360,
+            "normalized": {"x": 0.2, "y": 0.2, "width": 0.333, "height": 0.333},
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("start_track", 384, 216, 640, 360)])
+        self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
 
     def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):
         camera = CameraController()

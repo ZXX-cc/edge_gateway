@@ -775,22 +775,36 @@ class CameraController:
     def handle_camera_frame_zoom(self, msg: dict) -> dict:
         """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
         data = msg.get('data', {})
+        x = int(float(data.get("x", 0) or 0))
+        y = int(float(data.get("y", 0) or 0))
+        width = max(1, int(float(data.get("width", 1) or 1)))
+        height = max(1, int(float(data.get("height", 1) or 1)))
         logger.info(
             "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s)",
             data.get("payload_index", ""),
             data.get("camera_type", ""),
             data.get("locked", False),
-            data.get("x", 0.0),
-            data.get("y", 0.0),
-            data.get("width", 0.0),
-            data.get("height", 0.0),
+            x,
+            y,
+            width,
+            height,
         )
-        return MessageBuilder.build_reply(msg, result=0, data={
+
+        result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            # Dock3 框选变焦在当前硬件上落到 ViewLink 目标跟踪，坐标由测试页面换算为画面像素。
+            result = self._gimbal_control.start_track(x, y, width, height)
+            logger.info("ViewLink frame zoom/start track: %s", result)
+
+        success = bool(result.get("success", False))
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "locked": bool(data.get("locked", False)),
-            "x": data.get("x", 0.0),
-            "y": data.get("y", 0.0),
-            "width": data.get("width", 0.0),
-            "height": data.get("height", 0.0),
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "normalized": data.get("normalized", {}),
+            "viewlink_result": result,
         })
 
     def handle_camera_mode_switch(self, msg: dict) -> dict:

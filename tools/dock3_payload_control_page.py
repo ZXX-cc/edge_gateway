@@ -44,8 +44,10 @@ HTML = """<!doctype html>
     header { padding: 14px 18px; border-bottom: 1px solid #2a2a2d; display: flex; justify-content: space-between; gap: 14px; }
     h1 { font-size: 18px; margin: 0; font-weight: 650; }
     .hint { color: #a1a1aa; font-size: 13px; }
-    .video-wrap { display: grid; place-items: center; background: #050505; min-height: 0; }
+    .video-wrap { position: relative; display: grid; place-items: center; background: #050505; min-height: 0; overflow: hidden; touch-action: none; }
     video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+    .select-layer { position: absolute; inset: 0; cursor: crosshair; }
+    .select-box { position: absolute; border: 2px solid #22c55e; background: rgba(34, 197, 94, .16); box-shadow: 0 0 0 1px rgba(0,0,0,.55); display: none; pointer-events: none; }
     aside { border-left: 1px solid #2a2a2d; padding: 16px; overflow: auto; background: #18181b; }
     section { margin-bottom: 18px; }
     h2 { font-size: 14px; margin: 0 0 10px; color: #e4e4e7; }
@@ -69,7 +71,10 @@ HTML = """<!doctype html>
         <div><h1>Dock3 负载控制</h1><div class="hint" id="source">等待推流</div></div>
         <button onclick="reloadVideo()">刷新画面</button>
       </header>
-      <div class="video-wrap"><video id="video" controls autoplay muted playsinline></video></div>
+      <div class="video-wrap" id="videoWrap">
+        <video id="video" controls autoplay muted playsinline></video>
+        <div class="select-layer" id="selectLayer"><div class="select-box" id="selectBox"></div></div>
+      </div>
       <footer id="playUrl"></footer>
     </div>
     <aside>
@@ -104,6 +109,16 @@ HTML = """<!doctype html>
         </div>
       </section>
       <section>
+        <h2>框选/AIM</h2>
+        <div class="grid">
+          <button class="primary" onclick="frameZoom()">框选变焦</button>
+          <button onclick="aimLock()">AIM 锁定</button>
+          <button class="warn" onclick="api('/api/track/stop')">停止跟踪</button>
+          <button onclick="clearSelection()">清除框选</button>
+        </div>
+        <div class="hint" id="boxText" style="margin-top:8px">在画面上拖动鼠标框选目标</div>
+      </section>
+      <section>
         <h2>日志</h2>
         <div class="status" id="status">页面已就绪</div>
       </section>
@@ -114,6 +129,12 @@ const playUrl = location.origin + '/live.flv';
 document.getElementById('playUrl').textContent = playUrl;
 let player = null;
 let dragTimer = null;
+let selection = null;
+let selecting = false;
+let startPoint = null;
+const selectLayer = document.getElementById('selectLayer');
+const selectBox = document.getElementById('selectBox');
+const boxText = document.getElementById('boxText');
 function log(obj) {
   const text = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
   status.textContent = new Date().toLocaleTimeString() + '\\n' + text;
@@ -150,6 +171,86 @@ function stopDrag() {
   if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
   return api('/api/drag', { pitch_speed: 0, yaw_speed: 0 });
 }
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+function pointFromEvent(ev) {
+  const rect = selectLayer.getBoundingClientRect();
+  return {
+    x: clamp(ev.clientX - rect.left, 0, rect.width),
+    y: clamp(ev.clientY - rect.top, 0, rect.height),
+    w: rect.width,
+    h: rect.height
+  };
+}
+function drawSelection(a, b) {
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  const width = Math.abs(a.x - b.x);
+  const height = Math.abs(a.y - b.y);
+  selectBox.style.display = 'block';
+  selectBox.style.left = left + 'px';
+  selectBox.style.top = top + 'px';
+  selectBox.style.width = width + 'px';
+  selectBox.style.height = height + 'px';
+  return { left, top, width, height, layerWidth: a.w, layerHeight: a.h };
+}
+function saveSelection(box) {
+  if (box.width < 8 || box.height < 8) {
+    clearSelection();
+    return;
+  }
+  selection = {
+    x: box.left / box.layerWidth,
+    y: box.top / box.layerHeight,
+    width: box.width / box.layerWidth,
+    height: box.height / box.layerHeight
+  };
+  boxText.textContent = `框选: x=${selection.x.toFixed(3)}, y=${selection.y.toFixed(3)}, w=${selection.width.toFixed(3)}, h=${selection.height.toFixed(3)}`;
+}
+function clearSelection() {
+  selection = null;
+  selecting = false;
+  selectBox.style.display = 'none';
+  boxText.textContent = '在画面上拖动鼠标框选目标';
+}
+function requireSelection() {
+  if (!selection) {
+    log('请先在画面上拖动鼠标框选目标');
+    throw new Error('no selection');
+  }
+  return selection;
+}
+function frameZoom() { return api('/api/frame_zoom', requireSelection()); }
+function aimLock() {
+  const box = requireSelection();
+  return api('/api/aim', {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+    width: box.width,
+    height: box.height,
+    locked: true
+  });
+}
+selectLayer.addEventListener('pointerdown', (ev) => {
+  selecting = true;
+  startPoint = pointFromEvent(ev);
+  selectLayer.setPointerCapture(ev.pointerId);
+  drawSelection(startPoint, startPoint);
+});
+selectLayer.addEventListener('pointermove', (ev) => {
+  if (!selecting || !startPoint) return;
+  drawSelection(startPoint, pointFromEvent(ev));
+});
+selectLayer.addEventListener('pointerup', (ev) => {
+  if (!selecting || !startPoint) return;
+  const box = drawSelection(startPoint, pointFromEvent(ev));
+  saveSelection(box);
+  selecting = false;
+  startPoint = null;
+});
+selectLayer.addEventListener('dblclick', (ev) => {
+  const p = pointFromEvent(ev);
+  api('/api/aim', { x: p.x / p.w, y: p.y / p.h, width: 0.08, height: 0.08, locked: true });
+});
 window.addEventListener('keydown', (ev) => {
   if (ev.repeat) return;
   if (ev.key === 'w') startDrag(1,0);
@@ -360,6 +461,47 @@ def make_handler(args, client: Dock3PanelClient):
             )
             return {"ok": rc == 0, "quality": state["quality"], "reply": reply}
 
+        if path == "/api/frame_zoom":
+            # 页面框选是 0-1 归一化坐标，这里换算到默认画面坐标系再下发给负载服务。
+            x = max(0.0, min(1.0, float(data.get("x", 0.0) or 0.0)))
+            y = max(0.0, min(1.0, float(data.get("y", 0.0) or 0.0)))
+            width = max(0.0, min(1.0 - x, float(data.get("width", 0.0) or 0.0)))
+            height = max(0.0, min(1.0 - y, float(data.get("height", 0.0) or 0.0)))
+            payload = {
+                "payload_index": args.payload_index,
+                "camera_type": "zoom",
+                "locked": bool(data.get("locked", True)),
+                "x": int(round(x * args.track_width)),
+                "y": int(round(y * args.track_height)),
+                "width": max(1, int(round(width * args.track_width))),
+                "height": max(1, int(round(height * args.track_height))),
+                "normalized": {"x": x, "y": y, "width": width, "height": height},
+            }
+            rc, reply = request_services("camera_frame_zoom", payload)
+            return {"ok": rc == 0, "request": payload, "reply": reply}
+
+        if path == "/api/aim":
+            x = max(0.0, min(1.0, float(data.get("x", 0.5) or 0.5)))
+            y = max(0.0, min(1.0, float(data.get("y", 0.5) or 0.5)))
+            width = max(0.01, min(1.0, float(data.get("width", 0.08) or 0.08)))
+            height = max(0.01, min(1.0, float(data.get("height", 0.08) or 0.08)))
+            payload = {
+                "payload_index": args.payload_index,
+                "camera_type": "zoom",
+                "locked": bool(data.get("locked", True)),
+                "x": int(round(x * args.track_width)),
+                "y": int(round(y * args.track_height)),
+                "width": max(1, int(round(width * args.track_width))),
+                "height": max(1, int(round(height * args.track_height))),
+                "normalized": {"x": x, "y": y, "width": width, "height": height},
+            }
+            rc, reply = request_services("camera_aim", payload)
+            return {"ok": rc == 0, "request": payload, "reply": reply}
+
+        if path == "/api/track/stop":
+            rc, reply = request_services("viewlink_stop_track", {"payload_index": args.payload_index})
+            return {"ok": rc == 0, "reply": reply}
+
         return {"ok": False, "error": "not found"}
 
     return Handler
@@ -385,6 +527,8 @@ def main() -> int:
     parser.add_argument("--gimbal-pitch", type=float, default=0.0)
     parser.add_argument("--gimbal-yaw", type=float, default=0.0)
     parser.add_argument("--gimbal-step-seconds", type=float, default=0.5)
+    parser.add_argument("--track-width", type=int, default=1920)
+    parser.add_argument("--track-height", type=int, default=1080)
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=18080)
     parser.add_argument("--quiet-stale", action="store_true")
