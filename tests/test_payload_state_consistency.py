@@ -91,6 +91,10 @@ class FakeDirectPayload:
         self.calls.append(("stop_recording",))
         return {"success": True}
 
+    def set_record_mode(self, mode):
+        self.calls.append(("set_record_mode", int(mode)))
+        return {"success": True}
+
     def turn_to(self, yaw, pitch):
         self.calls.append(("turn_to", yaw, pitch))
         return {"success": True}
@@ -176,8 +180,34 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         self.assertEqual(started["data"]["result"], 0)
         self.assertEqual(stopped["data"]["result"], 0)
-        self.assertEqual(direct_payload.calls, [("start_recording",), ("stop_recording",)])
+        self.assertEqual(direct_payload.calls, [("set_record_mode", 2), ("start_recording",), ("stop_recording",)])
         self.assertEqual(connection.master.mav.commands, [])
+
+    def test_camera_mode_switch_maps_photo_mode_to_viewlink_record_mode(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_mode_switch(message("camera_mode_switch", {"camera_mode": 0}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "photo")
+        self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
+        self.assertEqual(direct_payload.calls, [("set_record_mode", 1)])
+
+    def test_start_photo_uses_viewlink_photograph_not_live_frame_capture(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_start_photo(message("start_photo", {"count": 1, "interval": 0.1}))
+        thread = camera._photo_session_thread
+        if thread:
+            thread.join(timeout=2.0)
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["photo_source"], "viewlink_sdk")
+        self.assertEqual(direct_payload.calls, [("set_record_mode", 1), ("take_photo",)])
 
     def test_gimbal_prefers_direct_payload_sdk_when_connected(self):
         gimbal = GimbalController()

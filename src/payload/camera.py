@@ -13,7 +13,7 @@ from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.modules.gimbal_control import VLKFocusMode
+from src.modules.gimbal_control import VLKFocusMode, VLKRecordMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 from web.mavlink.camera import (
@@ -58,6 +58,9 @@ class CameraController:
         self._is_recording = False
         self._recording_time = 0
         self._photo_count = 0
+        self._photo_session_thread = None
+        self._photo_session_stop = threading.Event()
+        self._photo_session_lock = threading.Lock()
         self._zoom_level = 1.0
         self._exposure_mode = 'auto'
         self._focus_mode = 'auto_focus'
@@ -410,6 +413,86 @@ class CameraController:
 
     # ---- 拍照API ----
 
+    def _viewlink_connected(self) -> bool:
+        return bool(self._gimbal_control and self._gimbal_control.is_connected())
+
+    @staticmethod
+    def _camera_mode_name(raw_mode) -> str:
+        if raw_mode is None:
+            return "photo"
+        if isinstance(raw_mode, int):
+            return {0: "photo", 1: "video", 2: "playback"}.get(raw_mode, "photo")
+        text = str(raw_mode).strip().lower()
+        aliases = {
+            "0": "photo",
+            "photo": "photo",
+            "shoot": "photo",
+            "capture": "photo",
+            "1": "video",
+            "video": "video",
+            "record": "video",
+            "recording": "video",
+            "live": "video",
+            "livestream": "video",
+            "2": "playback",
+            "playback": "playback",
+        }
+        return aliases.get(text, "photo")
+
+    def _set_viewlink_record_mode(self, mode_name: str) -> tuple[bool, Optional[dict]]:
+        """Set ViewLink photo/video mode when the SDK exposes an equivalent."""
+        if not self._viewlink_connected():
+            return False, None
+        mode_map = {
+            "photo": VLKRecordMode.PHOTO,
+            "video": VLKRecordMode.RECORD,
+        }
+        if mode_name not in mode_map:
+            return False, {
+                "success": True,
+                "message": f"ViewLink has no explicit {mode_name} camera mode",
+                "skipped": True,
+            }
+        result = self._gimbal_control.set_record_mode(mode_map[mode_name])
+        logger.info("ViewLink camera mode mapped to record mode: mode=%s result=%s", mode_name, result)
+        return True, result
+
+    def _start_viewlink_photo_session(self, count: int, interval: float) -> dict:
+        if not self._viewlink_connected():
+            return {"success": False, "message": "ViewLink control is not connected"}
+
+        with self._photo_session_lock:
+            if self._photo_session_thread and self._photo_session_thread.is_alive():
+                return {"success": False, "message": "Photo session already running"}
+
+            self._photo_session_stop.clear()
+
+            def run_session():
+                taken = 0
+                while not self._photo_session_stop.is_set():
+                    result = self._gimbal_control.take_photo()
+                    if result.get("success"):
+                        self._photo_count += 1
+                        taken += 1
+                        self._save_media_metadata_sync("photo")
+                        self.report_photo_progress(self._photo_count, self._photo_count)
+                    else:
+                        logger.warning("ViewLink photo session command failed: %s", result)
+                        break
+                    if count > 0 and taken >= count:
+                        break
+                    if self._photo_session_stop.wait(interval):
+                        break
+
+            self._photo_session_thread = threading.Thread(
+                target=run_session,
+                name="viewlink-photo-session",
+                daemon=True,
+            )
+            self._photo_session_thread.start()
+
+        return {"success": True, "message": "ViewLink photo session started"}
+
     def handle_camera_photo_take(self, msg: dict) -> dict:
         """
         单次拍照
@@ -504,6 +587,30 @@ class CameraController:
 
         logger.info(f"Start photo: mode={mode}, count={count}, interval={interval}s")
 
+        if self._viewlink_connected():
+            self._set_viewlink_record_mode("photo")
+            try:
+                count_value = max(0, int(count))
+            except (TypeError, ValueError):
+                count_value = 1
+            try:
+                interval_value = max(0.1, float(interval))
+            except (TypeError, ValueError):
+                interval_value = 1.0
+            result = self._start_viewlink_photo_session(count_value, interval_value)
+            return MessageBuilder.build_reply(
+                msg,
+                result=0 if result.get("success") else -1,
+                data={
+                    "camera_mode": "photo",
+                    "photo_source": "viewlink_sdk",
+                    "count": count_value,
+                    "interval": interval_value,
+                    "viewlink_result": result,
+                },
+                msg_str=result.get("message", ""),
+            )
+
         success, _ = self._send_mapped_camera_command('start_photo', data)
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
@@ -511,6 +618,17 @@ class CameraController:
     def handle_stop_photo(self, msg: dict) -> dict:
         """停止连续拍照"""
         logger.info("Stop photo")
+
+        with self._photo_session_lock:
+            thread = self._photo_session_thread
+            if thread and thread.is_alive():
+                self._photo_session_stop.set()
+                thread.join(timeout=2.0)
+                return MessageBuilder.build_reply(msg, result=0, data={
+                    "photo_source": "viewlink_sdk",
+                    "stopped": True,
+                    "running": thread.is_alive(),
+                })
 
         success, _ = self._send_mapped_camera_command('stop_photo', msg.get('data', {}))
 
@@ -537,6 +655,7 @@ class CameraController:
 
         # 优先使用 ViewLink SDK 开始录像
         if self._gimbal_control and self._gimbal_control.is_connected():
+            self._set_viewlink_record_mode("video")
             logger.info("ViewLink mapped: %s", build_viewlink_call("start_recording", data))
             result = self._gimbal_control.start_recording()
             success = result.get('success', False)
@@ -594,7 +713,7 @@ class CameraController:
         Request: { mode: 'photo'/'video'/'playback' }
         """
         data = msg.get('data', {})
-        mode_str = data.get('mode', 'photo')
+        mode_str = self._camera_mode_name(data.get('mode', data.get('camera_mode', 'photo')))
         self._log_camera_setting_mapping('set_camera_mode', data)
 
         mode_map = {'photo': self.MODE_PHOTO, 'video': self.MODE_VIDEO, 'playback': self.MODE_PLAYBACK}
@@ -602,7 +721,15 @@ class CameraController:
 
         logger.info(f"Camera mode: {mode_str}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        viewlink_attempted, viewlink_result = self._set_viewlink_record_mode(mode_str)
+        success = not viewlink_attempted or bool(viewlink_result and viewlink_result.get("success"))
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+            "camera_mode": self._mode,
+            "mode": mode_str,
+            "photo_source": "camera_sdk",
+            "viewlink_result": viewlink_result,
+        })
 
     def handle_set_exposure_mode(self, msg: dict) -> dict:
         """
