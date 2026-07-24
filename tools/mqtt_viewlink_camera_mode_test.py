@@ -196,6 +196,12 @@ def _verify_viewlink_record_mode(client: MqttRequestClient, args, mode: str) -> 
     mode_name = viewlink.get("mode_name", "")
     print(f"ViewLink record mode readback: mode={actual} {mode_name}")
     if actual != expected:
+        if actual == 0 and not args.require_record_mode:
+            print(
+                "ViewLink SDK still reports record mode NONE after switching; "
+                "continuing because some devices only expose an active mode during capture/recording."
+            )
+            return 0
         print(
             f"ViewLink record mode did not switch: expected {expected} for {mode}, actual {actual} ({mode_name})",
             file=sys.stderr,
@@ -218,20 +224,41 @@ def _take_photo(client: MqttRequestClient, args) -> int:
 
 
 def _download_latest_photo(args) -> int:
+    return _download_photo(args, previous_urls=None)
+
+
+def _discover_photos(args) -> list[str]:
+    return discover_media_links(
+        args.media_url,
+        args.media_timeout,
+        PHOTO_EXTENSIONS,
+        max_depth=max(0, args.media_max_depth),
+    )
+
+
+def _download_photo(args, previous_urls: set[str] | None) -> int:
     media_url = args.media_url
     if not media_url:
         return 0
     print(f"read ViewLink media page: {media_url}")
-    try:
-        photos = discover_media_links(
-            media_url,
-            args.media_timeout,
-            PHOTO_EXTENSIONS,
-            max_depth=max(0, args.media_max_depth),
-        )
-    except Exception as exc:
-        print(f"failed to read ViewLink media page: {exc}", file=sys.stderr)
-        return 40
+    deadline = time.time() + max(0.0, args.media_poll_timeout)
+    photos: list[str] = []
+    while True:
+        try:
+            photos = _discover_photos(args)
+        except Exception as exc:
+            print(f"failed to read ViewLink media page: {exc}", file=sys.stderr)
+            return 40
+        if previous_urls is None:
+            break
+        new_photos = [photo for photo in photos if photo not in previous_urls]
+        if new_photos:
+            photos = new_photos
+            break
+        if time.time() >= deadline:
+            print("no new photo appeared on ViewLink media page after capture", file=sys.stderr)
+            return 43
+        time.sleep(max(0.1, args.media_poll_interval))
     if not photos:
         print("no photo links found on ViewLink media page", file=sys.stderr)
         return 41
@@ -321,12 +348,19 @@ def main() -> int:
         action="store_true",
         help="do not read back ViewLink record mode after switching",
     )
+    parser.add_argument(
+        "--require-record-mode",
+        action="store_true",
+        help="fail when ViewLink readback stays NONE after setting photo/video mode",
+    )
     parser.add_argument("--take-photo", action="store_true", help="take one independent photo after mode switching")
     parser.add_argument("--photo-wait", type=float, default=1.0)
     parser.add_argument("--media-url", default="", help="ViewLink media page, e.g. http://192.168.2.119:8554/download/")
     parser.add_argument("--download-media", action="store_true", help="download the latest discovered photo")
     parser.add_argument("--output-dir", default="logs/viewlink_media")
     parser.add_argument("--media-timeout", type=float, default=10.0)
+    parser.add_argument("--media-poll-timeout", type=float, default=8.0)
+    parser.add_argument("--media-poll-interval", type=float, default=1.0)
     parser.add_argument("--media-max-depth", type=int, default=4)
     parser.add_argument("--skip-bind-check", action="store_true")
     parser.add_argument("--skip-viewlink-connect", action="store_true")
@@ -347,6 +381,10 @@ def main() -> int:
         parser.error("--photo-wait must be non-negative")
     if args.mode_settle < 0:
         parser.error("--mode-settle must be non-negative")
+    if args.media_poll_timeout < 0:
+        parser.error("--media-poll-timeout must be non-negative")
+    if args.media_poll_interval < 0:
+        parser.error("--media-poll-interval must be non-negative")
     if args.download_media and not args.media_url:
         parser.error("--download-media requires --media-url")
 
@@ -377,11 +415,19 @@ def main() -> int:
             rc = _switch_camera_mode(client, args, mode)
             if rc != 0:
                 return rc
+        previous_photos = None
+        if args.take_photo and args.media_url:
+            try:
+                previous_photos = set(_discover_photos(args))
+                print(f"ViewLink media baseline photos={len(previous_photos)}")
+            except Exception as exc:
+                print(f"failed to read ViewLink media baseline: {exc}", file=sys.stderr)
+                return 40
         if args.take_photo:
             rc = _take_photo(client, args)
             if rc != 0:
                 return rc
-        rc = _download_latest_photo(args)
+        rc = _download_photo(args, previous_photos)
         if rc != 0:
             return rc
         print(

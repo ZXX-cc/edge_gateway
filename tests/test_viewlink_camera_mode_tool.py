@@ -10,7 +10,7 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
-from mqtt_viewlink_camera_mode_test import _switch_camera_mode
+from mqtt_viewlink_camera_mode_test import _download_photo, _switch_camera_mode
 from viewlink_media_download import latest_media_link_by_http_metadata, latest_media_link
 
 
@@ -36,7 +36,7 @@ class FakeClient:
                     "viewlink_result": {
                         "success": True,
                         "mode": self.record_mode,
-                        "mode_name": "拍照模式" if self.record_mode == 1 else "录像模式",
+                        "mode_name": {0: "无模式", 1: "拍照模式", 2: "录像模式"}.get(self.record_mode, "未知"),
                     },
                 }
             }
@@ -51,6 +51,7 @@ def build_args(**overrides):
         "allow_local_mode_only": False,
         "verify_record_mode": True,
         "mode_settle": 0.0,
+        "require_record_mode": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -75,6 +76,20 @@ class ViewLinkCameraModeToolTest(unittest.TestCase):
 
         self.assertEqual(rc, 31)
 
+    def test_switch_camera_mode_allows_none_readback_by_default(self):
+        client = FakeClient(record_mode=0)
+
+        rc = _switch_camera_mode(client, build_args(), "photo")
+
+        self.assertEqual(rc, 0)
+
+    def test_switch_camera_mode_can_require_record_mode_readback(self):
+        client = FakeClient(record_mode=0)
+
+        rc = _switch_camera_mode(client, build_args(require_record_mode=True), "photo")
+
+        self.assertEqual(rc, 31)
+
     def test_latest_media_link_uses_timestamp_like_filename(self):
         urls = [
             "http://device/download/IMG_20260724_101500.jpg",
@@ -95,6 +110,23 @@ class ViewLinkCameraModeToolTest(unittest.TestCase):
 
         with patch("viewlink_media_download.remote_last_modified", side_effect=lambda url, timeout: modified[url]):
             self.assertEqual(latest_media_link_by_http_metadata(urls, 1.0), urls[1])
+
+    def test_download_photo_waits_for_new_media_after_capture(self):
+        args = build_args(
+            media_url="http://device/download/",
+            media_timeout=1.0,
+            media_poll_timeout=0.0,
+            media_poll_interval=0.1,
+            download_media=False,
+            media_max_depth=1,
+        )
+        old_url = "http://device/download/IMG_20260724_101400.jpg"
+        new_url = "http://device/download/IMG_20260724_101500.jpg"
+
+        with patch("mqtt_viewlink_camera_mode_test.discover_media_links", return_value=[old_url, new_url]):
+            rc = _download_photo(args, {old_url})
+
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
