@@ -124,6 +124,7 @@ class MediaManager:
         # 回调
         self._event_callback: Optional[Callable] = None
         self._request_sender: Optional[Callable] = None
+        self._camera_controller = None
 
         # 数据库相关
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -163,6 +164,10 @@ class MediaManager:
     def set_request_sender(self, sender: Callable):
         """设置请求发送器（用于 requests 通道）"""
         self._request_sender = sender
+
+    def set_camera_controller(self, camera_controller):
+        """注入相机控制器，用于直播切流后直接拍照。"""
+        self._camera_controller = camera_controller
 
     def set_event_loop(self, loop):
         """注入异步事件循环引用"""
@@ -1120,11 +1125,50 @@ class MediaManager:
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
             self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key)
 
+        photo = self._take_photo_after_lens_change(msg, video_id, video_type)
         self._publish_live_status_event(TASK_STATUS_OK)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
             "video_id": video_id,
             "video_type": self._live_video_type,
+            "photo": photo,
         }))
+
+    def _take_photo_after_lens_change(self, msg: dict, video_id: str, video_type: str) -> dict:
+        """切换直播视频源后直接拍照，不切换相机模式。"""
+        if not self._camera_controller or not hasattr(self._camera_controller, "handle_camera_photo_take"):
+            logger.warning("Live lens changed but camera controller is not available for direct photo")
+            return {"status": "skipped", "reason": "camera_controller_unavailable"}
+
+        photo_msg = {
+            "tid": msg.get("tid"),
+            "bid": msg.get("bid"),
+            "gateway": msg.get("gateway", self.gateway_sn),
+            "method": "camera_photo_take",
+            "data": {
+                "camera_index": 0,
+                "camera_type": video_type,
+                "video_id": video_id,
+                "trigger": "live_lens_change",
+            },
+        }
+        logger.info(
+            "Live lens change triggers direct photo: video_id=%s, video_type=%s",
+            video_id,
+            video_type,
+        )
+        try:
+            reply = self._camera_controller.handle_camera_photo_take(photo_msg)
+        except Exception as exc:
+            logger.warning("Direct photo after live lens change failed: %s", exc, exc_info=True)
+            return {"status": "failed", "reason": str(exc)}
+
+        data = reply.get("data", {}) if isinstance(reply, dict) else {}
+        result = data.get("result") if isinstance(data, dict) else None
+        return {
+            "status": "ok" if result == 0 else "failed",
+            "result": result,
+            "reply": reply,
+        }
 
     def handle_set_livestream_quality(self, msg: dict) -> dict:
         """

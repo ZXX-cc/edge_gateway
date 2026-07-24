@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test whether ViewLink photo mode/photo capture interrupts an RTSP preview stream."""
+"""Test whether ViewLink mode changes or direct photo capture interrupt an RTSP preview stream."""
 
 from __future__ import annotations
 
@@ -228,7 +228,10 @@ def run_test(client: MqttRequestClient, args) -> int:
     try:
         print(f"warm up RTSP stream for {args.stream_warmup:.1f}s")
         time.sleep(args.stream_warmup)
-        _print_phase("before_switch", monitor)
+        _print_phase("before_action", monitor)
+
+        if args.direct_photo_only:
+            args.take_photo = True
 
         if args.media_url and args.take_photo:
             try:
@@ -241,20 +244,24 @@ def run_test(client: MqttRequestClient, args) -> int:
         before_mode = _read_record_mode(client, args)
         print(f"record_mode_before={json.dumps(before_mode, ensure_ascii=False)}")
 
-        for mode in args.mode_sequence:
-            rc = _switch_camera_mode(client, args, mode)
-            if rc != 0:
-                return rc
-            _print_phase(f"after_switch_{mode}", monitor)
+        if args.direct_photo_only:
+            print("direct_photo_only=true; skip camera_mode_switch and call camera_photo_take directly")
+        else:
+            for mode in args.mode_sequence:
+                rc = _switch_camera_mode(client, args, mode)
+                if rc != 0:
+                    return rc
+                _print_phase(f"after_switch_{mode}", monitor)
 
         after_mode = _read_record_mode(client, args)
-        print(f"record_mode_after_switch={json.dumps(after_mode, ensure_ascii=False)}")
+        print(f"record_mode_after_action={json.dumps(after_mode, ensure_ascii=False)}")
 
         if args.take_photo:
             rc = _take_photo(client, args)
             if rc != 0:
                 return rc
-            _print_phase("after_take_photo", monitor)
+            phase_name = "after_direct_photo" if args.direct_photo_only else "after_take_photo"
+            _print_phase(phase_name, monitor)
 
         print(f"observe RTSP stream for {args.stream_observe:.1f}s")
         time.sleep(args.stream_observe)
@@ -269,6 +276,7 @@ def run_test(client: MqttRequestClient, args) -> int:
     finally:
         monitor.stop()
         summary = {
+            "scenario": "direct_photo_only" if args.direct_photo_only else "mode_switch_then_optional_photo",
             "rtsp_url": args.rtsp_url,
             "frames": monitor.last_frame,
             "max_frame_gap_seconds": round(monitor.max_frame_gap, 3),
@@ -286,7 +294,7 @@ def run_test(client: MqttRequestClient, args) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Test whether ViewLink photo mode/capture affects RTSP stream")
+    parser = argparse.ArgumentParser(description="Test whether ViewLink mode changes or direct photo capture affects RTSP stream")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
@@ -302,6 +310,11 @@ def main() -> int:
     parser.add_argument("--mode", type=_mode_sequence, default=["photo"], help="photo, video, or both")
     parser.add_argument("--mode-settle", type=float, default=0.5)
     parser.add_argument("--require-record-mode", action="store_true")
+    parser.add_argument(
+        "--direct-photo-only",
+        action="store_true",
+        help="保持当前相机模式，不调用 camera_mode_switch；RTSP 拉流中直接执行 camera_photo_take。",
+    )
     parser.add_argument("--take-photo", action="store_true")
     parser.add_argument("--photo-wait", type=float, default=3.0)
     parser.add_argument("--media-url", default="")
