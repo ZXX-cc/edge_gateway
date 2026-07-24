@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test whether ViewLink mode changes or direct photo capture interrupt an RTSP preview stream."""
+"""Test whether direct ViewLink photo capture interrupts an RTSP preview stream."""
 
 from __future__ import annotations
 
@@ -211,8 +211,8 @@ def _print_phase(label: str, monitor: RtspMonitor) -> None:
     print(f"[phase] {label}: {json.dumps(monitor.snapshot(), ensure_ascii=False)}")
 
 
-def run_test(client: MqttRequestClient, args) -> int:
-    monitor = RtspMonitor(
+def _build_monitor(args) -> RtspMonitor:
+    return RtspMonitor(
         ffmpeg=args.ffmpeg,
         rtsp_url=args.rtsp_url,
         rtsp_transport=args.rtsp_transport,
@@ -220,6 +220,10 @@ def run_test(client: MqttRequestClient, args) -> int:
         stall_threshold=args.stall_threshold,
         verbose=args.verbose_ffmpeg,
     )
+
+
+def run_test(client: MqttRequestClient, args, *, monitor: RtspMonitor | None = None, sleep_fn=time.sleep) -> int:
+    monitor = monitor or _build_monitor(args)
     if not monitor.start():
         monitor.stop()
         return 50
@@ -227,10 +231,10 @@ def run_test(client: MqttRequestClient, args) -> int:
     previous_photos = None
     try:
         print(f"warm up RTSP stream for {args.stream_warmup:.1f}s")
-        time.sleep(args.stream_warmup)
+        sleep_fn(args.stream_warmup)
         _print_phase("before_action", monitor)
 
-        if args.direct_photo_only:
+        if args.direct_photo_only or args.direct_photo_then_video:
             args.take_photo = True
 
         if args.media_url and args.take_photo:
@@ -244,8 +248,8 @@ def run_test(client: MqttRequestClient, args) -> int:
         before_mode = _read_record_mode(client, args)
         print(f"record_mode_before={json.dumps(before_mode, ensure_ascii=False)}")
 
-        if args.direct_photo_only:
-            print("direct_photo_only=true; skip camera_mode_switch and call camera_photo_take directly")
+        if args.direct_photo_only or args.direct_photo_then_video:
+            print("skip camera_mode_switch before photo; call camera_photo_take while RTSP is running")
         else:
             for mode in args.mode_sequence:
                 rc = _switch_camera_mode(client, args, mode)
@@ -260,12 +264,21 @@ def run_test(client: MqttRequestClient, args) -> int:
             rc = _take_photo(client, args)
             if rc != 0:
                 return rc
-            phase_name = "after_direct_photo" if args.direct_photo_only else "after_take_photo"
+            phase_name = "after_direct_photo" if (args.direct_photo_only or args.direct_photo_then_video) else "after_take_photo"
             _print_phase(phase_name, monitor)
 
-        print(f"observe RTSP stream for {args.stream_observe:.1f}s")
-        time.sleep(args.stream_observe)
-        _print_phase("after_observe", monitor)
+        print(f"observe RTSP stream after photo for {args.stream_observe:.1f}s")
+        sleep_fn(args.stream_observe)
+        _print_phase("after_photo_observe", monitor)
+
+        if args.switch_video_after_photo or args.direct_photo_then_video:
+            rc = _switch_camera_mode(client, args, "video")
+            if rc != 0:
+                return rc
+            _print_phase("after_switch_video", monitor)
+            print(f"observe RTSP stream after switching video mode for {args.stream_observe_after_video:.1f}s")
+            sleep_fn(args.stream_observe_after_video)
+            _print_phase("after_video_observe", monitor)
 
         if args.media_url:
             rc = _download_photo(args, previous_photos)
@@ -276,7 +289,13 @@ def run_test(client: MqttRequestClient, args) -> int:
     finally:
         monitor.stop()
         summary = {
-            "scenario": "direct_photo_only" if args.direct_photo_only else "mode_switch_then_optional_photo",
+            "scenario": (
+                "direct_photo_then_video"
+                if args.direct_photo_then_video
+                else "direct_photo_only"
+                if args.direct_photo_only
+                else "mode_switch_then_optional_photo"
+            ),
             "rtsp_url": args.rtsp_url,
             "frames": monitor.last_frame,
             "max_frame_gap_seconds": round(monitor.max_frame_gap, 3),
@@ -294,7 +313,7 @@ def run_test(client: MqttRequestClient, args) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Test whether ViewLink mode changes or direct photo capture affects RTSP stream")
+    parser = argparse.ArgumentParser(description="Test whether direct ViewLink photo capture affects an RTSP stream")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
@@ -315,6 +334,16 @@ def main() -> int:
         action="store_true",
         help="保持当前相机模式，不调用 camera_mode_switch；RTSP 拉流中直接执行 camera_photo_take。",
     )
+    parser.add_argument(
+        "--switch-video-after-photo",
+        action="store_true",
+        help="直接拍照并观察后，再调用 camera_mode_switch 切到 video，验证拍照后能否切回视频模式。",
+    )
+    parser.add_argument(
+        "--direct-photo-then-video",
+        action="store_true",
+        help="新现场测试快捷模式：拍照前不切相机模式，直接拍照，然后切回 video 并继续观察视频流。",
+    )
     parser.add_argument("--take-photo", action="store_true")
     parser.add_argument("--photo-wait", type=float, default=3.0)
     parser.add_argument("--media-url", default="")
@@ -330,6 +359,7 @@ def main() -> int:
     parser.add_argument("--stream-startup-timeout", type=float, default=8.0)
     parser.add_argument("--stream-warmup", type=float, default=5.0)
     parser.add_argument("--stream-observe", type=float, default=8.0)
+    parser.add_argument("--stream-observe-after-video", type=float, default=8.0)
     parser.add_argument("--stall-threshold", type=float, default=3.0)
     parser.add_argument("--skip-bind-check", action="store_true")
     parser.add_argument("--skip-viewlink-connect", action="store_true")
@@ -352,6 +382,7 @@ def main() -> int:
         "stream_startup_timeout",
         "stream_warmup",
         "stream_observe",
+        "stream_observe_after_video",
         "stall_threshold",
     ):
         if getattr(args, name) < 0:
