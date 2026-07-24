@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import email.utils
 import html.parser
 import os
 import posixpath
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -108,6 +110,49 @@ def safe_filename(url: str) -> str:
     if not name:
         name = "downloaded_media"
     return name.replace(os.sep, "_")
+
+
+def media_sort_key(url: str) -> tuple[int, str]:
+    """Return a stable key that favors timestamp-like names over page order."""
+    name = safe_filename(url)
+    stem = posixpath.splitext(name)[0]
+    digits = "".join(re.findall(r"\d+", stem))
+    if digits:
+        return int(digits[-18:]), name.lower()
+    return 0, name.lower()
+
+
+def latest_media_link(urls: list[str]) -> str:
+    if not urls:
+        raise ValueError("no media links")
+    return max(urls, key=media_sort_key)
+
+
+def remote_last_modified(url: str, timeout: float) -> float:
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "edge-gateway-viewlink-media/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw_value = response.headers.get("Last-Modified", "")
+    if not raw_value:
+        return 0.0
+    parsed = email.utils.parsedate_to_datetime(raw_value)
+    return parsed.timestamp()
+
+
+def latest_media_link_by_http_metadata(urls: list[str], timeout: float) -> str:
+    if not urls:
+        raise ValueError("no media links")
+    best_url = urls[0]
+    best_key = (0.0, media_sort_key(best_url))
+    for media_url in urls:
+        try:
+            modified = remote_last_modified(media_url, timeout)
+        except Exception:
+            modified = 0.0
+        candidate_key = (modified, media_sort_key(media_url))
+        if candidate_key > best_key:
+            best_url = media_url
+            best_key = candidate_key
+    return best_url
 
 
 def download_file(url: str, output_dir: Path, timeout: float) -> Path:

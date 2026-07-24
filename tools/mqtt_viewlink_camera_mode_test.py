@@ -17,10 +17,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 from mqtt_test_client import MqttRequestClient, result_code
 from tool_config import add_config_argument, resolve_mqtt_settings
-from viewlink_media_download import discover_media_links, download_file
+from viewlink_media_download import discover_media_links, download_file, latest_media_link_by_http_metadata
 
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".dng")
+VIEWLINK_RECORD_MODES = {"photo": 1, "video": 2}
 
 
 def _reply_data(reply: Any) -> dict[str, Any]:
@@ -170,6 +171,36 @@ def _switch_camera_mode(client: MqttRequestClient, args, mode: str) -> int:
     if data.get("mode") != mode:
         print(f"camera_mode_switch replied unexpected mode: {data.get('mode')!r}", file=sys.stderr)
         return 30
+    if args.verify_record_mode:
+        return _verify_viewlink_record_mode(client, args, mode)
+    return 0
+
+
+def _verify_viewlink_record_mode(client: MqttRequestClient, args, mode: str) -> int:
+    expected = VIEWLINK_RECORD_MODES.get(mode)
+    if expected is None:
+        return 0
+    time.sleep(max(0.0, args.mode_settle))
+    rc, reply = _request_service(
+        client,
+        "viewlink_get_record_mode",
+        {},
+        args.timeout,
+        require_viewlink_success=True,
+        verbose=True,
+    )
+    if rc != 0:
+        return rc
+    viewlink = _viewlink_result(reply)
+    actual = viewlink.get("mode")
+    mode_name = viewlink.get("mode_name", "")
+    print(f"ViewLink record mode readback: mode={actual} {mode_name}")
+    if actual != expected:
+        print(
+            f"ViewLink record mode did not switch: expected {expected} for {mode}, actual {actual} ({mode_name})",
+            file=sys.stderr,
+        )
+        return 31
     return 0
 
 
@@ -205,7 +236,7 @@ def _download_latest_photo(args) -> int:
         print("no photo links found on ViewLink media page", file=sys.stderr)
         return 41
 
-    latest = photos[-1]
+    latest = latest_media_link_by_http_metadata(photos, args.media_timeout)
     print(f"latest_photo_url={latest}")
     if not args.download_media:
         return 0
@@ -255,6 +286,8 @@ def _dry_run(args) -> None:
                 "mode": mode,
             },
         ])
+        if not args.skip_record_mode_verify and mode in VIEWLINK_RECORD_MODES:
+            steps.append(["viewlink_get_record_mode", {}])
     if args.take_photo:
         steps.append([
             "camera_photo_take",
@@ -282,6 +315,12 @@ def main() -> int:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-type", default="zoom")
     parser.add_argument("--mode", type=_mode_sequence, default=["photo"], help="photo, video, or both")
+    parser.add_argument("--mode-settle", type=float, default=0.5, help="seconds to wait before reading ViewLink mode")
+    parser.add_argument(
+        "--skip-record-mode-verify",
+        action="store_true",
+        help="do not read back ViewLink record mode after switching",
+    )
     parser.add_argument("--take-photo", action="store_true", help="take one independent photo after mode switching")
     parser.add_argument("--photo-wait", type=float, default=1.0)
     parser.add_argument("--media-url", default="", help="ViewLink media page, e.g. http://192.168.2.119:8554/download/")
@@ -302,9 +341,12 @@ def main() -> int:
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
     args.mode_sequence = args.mode
+    args.verify_record_mode = not args.skip_record_mode_verify
 
     if args.photo_wait < 0:
         parser.error("--photo-wait must be non-negative")
+    if args.mode_settle < 0:
+        parser.error("--mode-settle must be non-negative")
     if args.download_media and not args.media_url:
         parser.error("--download-media requires --media-url")
 

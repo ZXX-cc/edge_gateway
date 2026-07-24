@@ -1105,7 +1105,7 @@ class GimbalControl:
             dict: {"mode": int, "mode_name": str}
         """
         if not self._connected:
-            return {"mode": -1, "mode_name": "未连接"}
+            return {"success": False, "mode": -1, "mode_name": "未连接"}
 
         mode = self._lib.VLK_GetRecordMode()
         mode_names = {
@@ -1115,6 +1115,7 @@ class GimbalControl:
         }
 
         return {
+            "success": True,
             "mode": mode,
             "mode_name": mode_names.get(mode, f"未知({mode})")
         }
