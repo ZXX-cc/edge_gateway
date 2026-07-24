@@ -9,9 +9,19 @@
 import argparse
 import json
 import sys
-import termios
-import tty
 from pathlib import Path
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Windows only
+    msvcrt = None
+
+try:
+    import termios
+    import tty
+except ImportError:  # pragma: no cover - POSIX only
+    termios = None
+    tty = None
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +167,14 @@ def read_command(args) -> str:
         return normalize_command(input("live-switch> "))
 
     print("live-switch> ", end="", flush=True)
+    if msvcrt is not None:
+        command = msvcrt.getwch()
+        print(command)
+        return normalize_command(command)
+
+    if termios is None or tty is None:
+        return normalize_command(input())
+
     old_settings = termios.tcgetattr(sys.stdin)
     try:
         tty.setcbreak(sys.stdin.fileno())
