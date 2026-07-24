@@ -35,6 +35,7 @@ from src.utils.logger import init_logger, get_logger
 from src.utils.message import MessageBuilder
 from src.utils.production_readiness import validate_production_config
 from src.utils.runtime_overrides import build_runtime_overrides
+from src.utils.local_history_logger import LocalHistoryLogger
 from src.mqtt.client import MQTTClient
 from src.mqtt.topic_router import TopicRouter
 from src.core.connection import MAVLinkConnection
@@ -185,6 +186,7 @@ class EdgeGateway:
         self.rtk_module: RTKModule = None
         self.global_state: GatewayEventReducer = None
         self.command_admission: CommandAdmissionEngine = None
+        self.history_logger: LocalHistoryLogger = None
 
     def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
@@ -199,6 +201,7 @@ class EdgeGateway:
             # 数据库必须在业务模块初始化前完成后端选择；SessionLocal 是稳定代理，
             # 后续同步/异步调用都会落到这里选定的 MongoDB 或 SQLite。
             configure_database(Config.get_database_config())
+            self.history_logger = LocalHistoryLogger()
 
             # 2. 初始化日志
             log_config = Config.get('logging', {})
@@ -927,6 +930,8 @@ class EdgeGateway:
             else:
                 self.mqtt.publish_event(event)
         def device_state_cb(state):
+            if self.history_logger:
+                self.history_logger.record_device_state_change(gateway_sn, state, source='device_manager')
             self.telemetry_reporter.report_state(gateway_sn, state)
 
         self.device.set_callbacks(device_event_cb, device_state_cb)
@@ -963,12 +968,22 @@ class EdgeGateway:
             for sub_device in self.device.get_all_sub_devices():
                 if sub_device.online:
                     persist_telemetry(sub_device.sn, osd_data)
+                    if self.history_logger:
+                        self.history_logger.record_flight_telemetry(
+                            sub_device.sn, osd_data, source='aircraft_osd'
+                        )
                     self.telemetry_reporter.report_osd(sub_device.sn, osd_data)
                     published_drone_osd = True
             if not published_drone_osd:
                 persist_telemetry(gateway_sn, osd_data)
+                if self.history_logger:
+                    self.history_logger.record_flight_telemetry(
+                        gateway_sn, osd_data, source='aircraft_osd'
+                    )
 
         def state_cb(state_data):
+            if self.history_logger:
+                self.history_logger.record_device_state_change(gateway_sn, state_data, source='telemetry_state')
             self.telemetry_reporter.report_state(gateway_sn, state_data)
 
         self.telemetry.set_callbacks(osd_cb, state_cb)
@@ -994,6 +1009,8 @@ class EdgeGateway:
         def dock_event_cb(event):
             self.mqtt.publish_event(event)
         def dock_state_cb(state):
+            if self.history_logger:
+                self.history_logger.record_device_state_change(gateway_sn, state, source='dock_manager')
             self.telemetry_reporter.report_state(gateway_sn, state)
         self.dock.set_callbacks(dock_event_cb, dock_state_cb)
         self.dock.set_telemetry_reporter(self.telemetry_reporter)

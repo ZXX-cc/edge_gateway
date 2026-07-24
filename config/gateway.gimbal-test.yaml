@@ -156,6 +156,12 @@ retention:
   vacuum_interval_hours: 24
   max_db_size_mb: 50
 
+local_history:
+  enabled: true
+  dir: "logs/history"
+  flight_telemetry_days: 7
+  device_state_days: 7
+
 debug:
   enabled: false
   websocket_port: 7681

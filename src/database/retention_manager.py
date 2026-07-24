@@ -47,6 +47,12 @@ class DataRetentionManager:
         self._operation_days = Config.get('retention.operation_days', 3)
         self._alarm_days = Config.get('retention.alarm_days', 1)
         self._media_uploaded_days = Config.get('retention.media_uploaded_days', 7)
+        self._local_history_flight_telemetry_days = Config.get(
+            'local_history.flight_telemetry_days', 7
+        )
+        self._local_history_device_state_days = Config.get(
+            'local_history.device_state_days', 7
+        )
         self._cleanup_interval_hours = Config.get('retention.cleanup_interval_hours', 1)
         self._vacuum_interval_hours = Config.get('retention.vacuum_interval_hours', 24)
         self._max_db_size_mb = Config.get('retention.max_db_size_mb', 50)
@@ -57,6 +63,8 @@ class DataRetentionManager:
             'operation': 0,
             'alarm': 0,
             'media_uploaded': 0,
+            'flight_telemetry_history': 0,
+            'device_state_history': 0,
         }
         self._last_vacuum_time = 0
 
@@ -84,7 +92,9 @@ class DataRetentionManager:
                     f"telemetry={self._telemetry_hours}h, "
                     f"operation={self._operation_days}d, "
                     f"alarm={self._alarm_days}d, "
-                    f"media_uploaded={self._media_uploaded_days}d")
+                    f"media_uploaded={self._media_uploaded_days}d, "
+                    f"flight_telemetry_history={self._local_history_flight_telemetry_days}d, "
+                    f"device_state_history={self._local_history_device_state_days}d")
 
     async def stop(self):
         """异步停止数据保留管理器"""
@@ -170,6 +180,8 @@ class DataRetentionManager:
                 'operation': 0,
                 'alarm': 0,
                 'media_uploaded': 0,
+                'flight_telemetry_history': 0,
+                'device_state_history': 0,
             }
 
             if is_mongo_session(session):
@@ -201,6 +213,8 @@ class DataRetentionManager:
             else:
                 await self._clean_expired_sqlalchemy(session, deleted_counts)
 
+            deleted_counts.update(self._clean_expired_local_history())
+
             await session.commit()
 
             self._last_cleanup_time = time.time()
@@ -210,6 +224,22 @@ class DataRetentionManager:
                 logger.info(f"Data retention cleanup: {deleted_counts}")
 
             return deleted_counts
+
+    def _clean_expired_local_history(self) -> dict:
+        """清理本地原始遥测和设备状态变更历史日志。"""
+        try:
+            from src.utils.local_history_logger import LocalHistoryLogger
+
+            history_logger = LocalHistoryLogger()
+            history_logger.flight_telemetry_days = int(self._local_history_flight_telemetry_days)
+            history_logger.device_state_days = int(self._local_history_device_state_days)
+            return history_logger.cleanup_expired()
+        except Exception as exc:
+            logger.warning("Local history retention cleanup failed: %s", exc, exc_info=True)
+            return {
+                'flight_telemetry_history': 0,
+                'device_state_history': 0,
+            }
 
     async def _clean_expired_sqlalchemy(self, session, deleted_counts):
         """保留 SQLite 回退模式原有的 SQLAlchemy 清理逻辑。"""
@@ -279,6 +309,8 @@ class DataRetentionManager:
                 'operation_days': self._operation_days,
                 'alarm_days': self._alarm_days,
                 'media_uploaded_days': self._media_uploaded_days,
+                'local_history_flight_telemetry_days': self._local_history_flight_telemetry_days,
+                'local_history_device_state_days': self._local_history_device_state_days,
                 'cleanup_interval_hours': self._cleanup_interval_hours,
                 'vacuum_interval_hours': self._vacuum_interval_hours,
                 'max_db_size_mb': self._max_db_size_mb

@@ -372,6 +372,13 @@ retention:
   vacuum_interval_hours: 24 # 数据库压缩间隔(小时)
   max_db_size_mb: 50 # 最大数据库大小(MB)
 
+# --- 本地历史日志 ---
+local_history:
+  enabled: true # 是否保存本地历史日志
+  dir: "logs/history" # 本地历史日志根目录
+  flight_telemetry_days: 7 # 飞机原始飞行历史遥测保留天数
+  device_state_days: 7 # 设备状态变更历史保留天数
+
 # --- 远程调试 ---
 debug:
   enabled: true

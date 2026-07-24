@@ -579,6 +579,8 @@ firmware/config 均无可归因旧回包；一键启航流程同时通过。该�
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
 
+本地历史日志：网关会把飞机原始飞行遥测追加到 `logs/history/flight_telemetry/YYYY-MM-DD.jsonl`，把设备状态变更追加到 `logs/history/device_state/YYYY-MM-DD.jsonl`。默认保留 7 日，清理动作跟随 `DataRetentionManager` 的 `retention.cleanup_interval_hours` 周期执行；手动留证可执行 `python -m unittest -v tests.test_retention_manager > "$EVIDENCE_DIR/retention_history.log" 2>&1`，并在网关运行后用 `find logs/history -type f -name '*.jsonl' -maxdepth 3` 确认文件生成。
+
 模拟故障注入完整验收统一执行 `bash scripts/fault_hms_acceptance.sh`。它串行验证八类独立日志、隔离数据保留、七类机巢故障、HMS/events/OSD/state、操作记录，以及 MQTT 断开恢复、重复请求和错误 topic，并在 `logs/acceptance_evidence/<时间>/` 生成汇总 JSON、日志尾部、隔离数据库和 SHA256 清单。详细启动方式和边界见 `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md`。
 
 2026-07-13 Ubuntu 正式证据已通过：提交 `0934955` 下执行一键脚本，5 个专项单测、八类独立日志和隔离数据保留均通过；7 类故障全部 `result=passed`，重复请求 `state_count=1/reply_replayed=true`，错误 topic 返回 `325001`，MQTT 重连后 OSD 恢复；MongoDB `edge_gateway` 回读 12 条已完成操作记录。证据目录为 `logs/acceptance_evidence/20260713_104438/`。

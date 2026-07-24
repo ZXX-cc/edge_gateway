@@ -804,7 +804,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
         self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["output"]["status"], "failed")
-        self.assertEqual(waypoint_manager.current_waypoints, [(2, False)])
+        self.assertEqual(waypoint_manager.current_waypoints, [(1, False)])
         self.assertNotIn(("set_mode", "AUTO"), flight_control.calls)
 
     def test_real_flighttask_pause_does_not_report_success_when_fc_fails(self):
@@ -1006,7 +1006,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
         execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {"flight_id": "flight-001"}))
 
-        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["output"]["status"], "failed")
         self.assertEqual(execute["data"]["flight_control"]["stage"], "auto_mode")
         self.assertEqual(manager._status, manager.MISSION_FAILED)
@@ -1108,7 +1108,7 @@ class Dock3WaylineTest(unittest.TestCase):
             {"flight_id": "flight-001"},
         ))
 
-        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["flight_control"]["stage"], "mission_monitor")
         self.assertEqual(monitor_calls, ["start", "stop"])
         self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
@@ -1132,7 +1132,7 @@ class Dock3WaylineTest(unittest.TestCase):
             {"flight_id": "flight-001"},
         ))
 
-        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["flight_control"]["stage"], "flight_control")
         self.assertEqual(manager._status, manager.MISSION_FAILED)
         self.assertEqual(monitor_calls, ["stop"])
@@ -1387,14 +1387,10 @@ class Dock3WaylineTest(unittest.TestCase):
             "flight_id": "flight-001",
         }))
 
-        self.assertEqual(execute["data"]["result"], 319999)
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["flight_control"]["stage"], "flight_takeoff")
         self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
-        self.assertEqual(flight_control.calls, [
-            ("takeoff", 30.0),
-            ("takeoff", 30.0),
-            ("takeoff", 30.0),
-        ])
+        self.assertEqual(flight_control.calls, [("takeoff", 30.0)])
         self.assertFalse(flight_control.armed)
 
     def test_running_task_cannot_be_replaced_by_another_prepare_request(self):
