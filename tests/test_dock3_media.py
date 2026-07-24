@@ -64,6 +64,21 @@ def base_msg(method, data):
     }
 
 
+class FakeCameraController:
+    def __init__(self):
+        self.calls = []
+
+    def handle_camera_photo_take(self, msg):
+        self.calls.append(("camera_photo_take", msg))
+        return {
+            "tid": msg.get("tid"),
+            "bid": msg.get("bid"),
+            "gateway": msg.get("gateway"),
+            "method": "camera_photo_take",
+            "data": {"result": 0},
+        }
+
+
 class Dock3MediaHelperTest(unittest.TestCase):
     def test_media_type_for_common_extensions(self):
         self.assertEqual(media_type_for_file("a.JPG"), "photo")
@@ -355,6 +370,33 @@ class Dock3MediaManagerTest(unittest.TestCase):
             len([event for event in events if event.get("method") == "live_status_notify"]),
             4,
         )
+
+    def test_live_lens_change_takes_photo_directly_without_camera_mode_switch(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        camera = FakeCameraController()
+        manager.set_camera_controller(camera)
+        video_id = "EDGEGW001/0/normal"
+
+        start = manager.handle_live_start_push(base_msg("live_start_push", {
+            "url": "mock://dock3/live",
+            "url_type": 4,
+            "video_id": video_id,
+            "video_quality": 2,
+        }))
+        self.assertEqual(start["data"]["result"], 0)
+
+        lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
+            "video_type": "zoom",
+        }))
+
+        self.assertEqual(lens["data"]["result"], 0)
+        self.assertEqual(lens["data"]["photo"]["status"], "ok")
+        self.assertEqual([call[0] for call in camera.calls], ["camera_photo_take"])
+        photo_data = camera.calls[0][1]["data"]
+        self.assertEqual(photo_data["trigger"], "live_lens_change")
+        self.assertEqual(photo_data["camera_type"], "zoom")
+        self.assertEqual(photo_data["video_id"], video_id)
 
     def test_live_capability_includes_official_camera_index(self):
         manager = MediaManager()

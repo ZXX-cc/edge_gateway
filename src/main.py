@@ -233,6 +233,7 @@ class EdgeGateway:
             self.gimbal = GimbalController()
             self.third_party = ThirdPartyController()
             self.media = MediaManager()
+            self.media.set_camera_controller(self.camera)
             self.drc = DrcController()
             self.dock = DockManager()
             self.log_mgr = LogManager()
