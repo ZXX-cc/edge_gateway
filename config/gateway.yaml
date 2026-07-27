@@ -27,13 +27,14 @@ database:
 # --- NanoMQ 本地Broker配置 ---
 nanomq:
   enabled: true
-  host: "192.168.1.100"
-  port: 1883
+  type: "tcp"
+  host: "39.185.72.155"
+  port: 11883
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
   keepalive: 60
-  username: ""
-  password: ""
+  username: "admin"
+  password: "sys@mqtt.2022"
 
   # 控制信令Topic前缀
   topic_prefix: "thing/product"
@@ -49,10 +50,10 @@ nanomq:
 # --- 云端MQTT配置 ---
 cloud:
   enabled: false # 默认关闭，配置后启用
-  broker_host: ""
-  broker_port: 8883
-  username: ""
-  password: ""
+  broker_host: "tcp://39.185.72.155"
+  broker_port: 11883
+  username: "admin"
+  password: "sys@mqtt.2022"
   client_id: ""
 
   # SSL配置

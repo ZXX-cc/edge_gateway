@@ -8,6 +8,7 @@ import time
 import threading
 import uuid
 import copy
+from urllib.parse import urlparse
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Dict, Optional, List
@@ -133,6 +134,20 @@ class MQTTClient:
         with self._dedup_lock:
             self._dedup_inflight.discard(key)
 
+    @staticmethod
+    def _normalize_broker_address(host: str, port: int):
+        """Allow config values like tcp://host:port while passing plain host/port to Paho."""
+        host = str(host or "").strip()
+        if "://" not in host:
+            return host, int(port)
+
+        parsed = urlparse(host)
+        if parsed.scheme not in ("tcp", "mqtt"):
+            raise ValueError(f"unsupported MQTT broker scheme: {parsed.scheme}")
+        if not parsed.hostname:
+            raise ValueError(f"invalid MQTT broker host: {host}")
+        return parsed.hostname, int(parsed.port or port)
+
     def set_command_admission(self, admission: CommandAdmissionEngine):
         """Inject the global command-admission engine."""
         self._command_admission = admission
@@ -157,8 +172,10 @@ class MQTTClient:
             if username:
                 self.client.username_pw_set(username, password)
 
-            host = self.config['host']
-            port = self.config['port']
+            host, port = self._normalize_broker_address(
+                self.config['host'],
+                self.config['port'],
+            )
             logger.info(f"Connecting to NanoMQ at {host}:{port}...")
             self.client.connect(host, port, keepalive=60)
 

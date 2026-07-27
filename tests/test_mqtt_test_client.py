@@ -30,6 +30,12 @@ class FakeMqttClient:
     def __init__(self, *args, **kwargs):
         self.published = []
         self.subscriptions = []
+        self.username = None
+        self.password = None
+
+    def username_pw_set(self, username, password=None):
+        self.username = username
+        self.password = password
 
     def connect(self, host, port, keepalive=30):
         self.host = host
@@ -190,6 +196,22 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
 
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(failed_client.connect(0.1))
+
+    def test_connect_sets_mqtt_credentials_when_provided(self):
+        authed_client = MqttRequestClient(
+            "127.0.0.1",
+            1883,
+            "EDGEGW001",
+            quiet_stale=True,
+            username="admin",
+            password="secret",
+            mqtt_module=FakeMqttModule,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(authed_client.connect(0.1))
+        self.assertEqual(authed_client.client.username, "admin")
+        self.assertEqual(authed_client.client.password, "secret")
 
     def setUp(self):
         self.client = MqttRequestClient(

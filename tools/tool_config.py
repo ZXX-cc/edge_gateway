@@ -3,12 +3,13 @@
 
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = "config/gateway.yaml"
-DEFAULT_MQTT_HOST = "192.168.1.100"
-DEFAULT_MQTT_PORT = 1883
-DEFAULT_GATEWAY_SN = "EDGE-GW-001"
+DEFAULT_MQTT_HOST = "39.185.72.155"
+DEFAULT_MQTT_PORT = 11883
+DEFAULT_GATEWAY_SN = "EDGEGW001"
 
 
 def add_config_argument(parser) -> None:
@@ -50,18 +51,50 @@ def _nested(data: Dict[str, Any], *keys: str, default=None):
     return default if value is None else value
 
 
+def _normalize_broker_address(host, port):
+    """Return the plain host/port pair expected by paho-mqtt."""
+    host = str(host or "").strip()
+    raw_port = port or DEFAULT_MQTT_PORT
+
+    if "://" not in host:
+        try:
+            return host, int(raw_port)
+        except (TypeError, ValueError):
+            return host, DEFAULT_MQTT_PORT
+
+    parsed = urlparse(host)
+    if parsed.scheme not in ("tcp", "mqtt"):
+        raise ValueError(f"unsupported MQTT broker scheme: {parsed.scheme}")
+    if not parsed.hostname:
+        raise ValueError(f"invalid MQTT broker host: {host}")
+
+    try:
+        parsed_port = int(parsed.port or raw_port)
+    except (TypeError, ValueError):
+        parsed_port = DEFAULT_MQTT_PORT
+    return parsed.hostname, parsed_port
+
+
 def resolve_mqtt_settings(args):
     data = load_config(getattr(args, "config", DEFAULT_CONFIG))
     mqtt_config = _nested(data, "nanomq", default={}) or {}
+    cloud_config = _nested(data, "cloud", default={}) or {}
     gateway_config = _nested(data, "gateway", default={}) or {}
 
-    host = getattr(args, "host", None) or mqtt_config.get("host") or DEFAULT_MQTT_HOST
-    raw_port = getattr(args, "port", None) or mqtt_config.get("port") or DEFAULT_MQTT_PORT
+    host = (
+        getattr(args, "host", None)
+        or mqtt_config.get("host")
+        or cloud_config.get("broker_host")
+        or DEFAULT_MQTT_HOST
+    )
+    raw_port = (
+        getattr(args, "port", None)
+        or mqtt_config.get("port")
+        or cloud_config.get("broker_port")
+        or DEFAULT_MQTT_PORT
+    )
     sn = getattr(args, "sn", None) or gateway_config.get("sn") or DEFAULT_GATEWAY_SN
 
-    try:
-        port = int(raw_port)
-    except (TypeError, ValueError):
-        port = DEFAULT_MQTT_PORT
+    host, port = _normalize_broker_address(host, raw_port)
 
     return host, port, str(sn)

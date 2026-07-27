@@ -55,6 +55,27 @@ def build_client(mqtt_module, client_id: str):
     return mqtt_module.Client(client_id=client_id)
 
 
+def _default_credentials() -> tuple[str, str]:
+    try:
+        from tool_config import DEFAULT_CONFIG, load_config
+    except Exception:
+        return "", ""
+
+    data = load_config(DEFAULT_CONFIG)
+    if not isinstance(data, dict):
+        return "", ""
+
+    for section_name in ("nanomq", "cloud"):
+        section = data.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        username = str(section.get("username") or "").strip()
+        password = str(section.get("password") or "")
+        if username:
+            return username, password
+    return "", ""
+
+
 def result_code(message: Any) -> Optional[int]:
     if not isinstance(message, dict):
         return None
@@ -141,6 +162,8 @@ class MqttRequestClient:
         subscribe_status: bool = False,
         observe_topics: Optional[Iterable[str]] = None,
         subscribe_default_replies: bool = True,
+        username: str = "",
+        password: str = "",
         mqtt_module=None,
     ):
         if mqtt_module is None:
@@ -152,6 +175,10 @@ class MqttRequestClient:
         self.host = host
         self.port = int(port)
         self.sn = sn
+        if not username:
+            username, password = _default_credentials()
+        self.username = username
+        self.password = password
         self.qos = qos
         self.quiet_stale = quiet_stale
         self.subscribe_default_replies = subscribe_default_replies
@@ -190,6 +217,8 @@ class MqttRequestClient:
     def connect(self, timeout: float) -> bool:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
+        if self.username and hasattr(self.client, "username_pw_set"):
+            self.client.username_pw_set(self.username, self.password)
         try:
             self.client.connect(self.host, self.port, keepalive=30)
         except OSError as exc:
