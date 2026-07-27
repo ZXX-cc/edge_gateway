@@ -45,7 +45,6 @@ from src.cloud_api.dock3_device import (
     THING_VERSION,
     build_sub_device_payload,
     build_update_topo_payload,
-    bx160_model_sub_type,
     normalize_sub_device,
     validate_update_topo_payload,
 )
@@ -215,7 +214,7 @@ class DeviceManager:
         # ===== 拓扑信息 =====
         self._gateway_domain = str(Config.get('device.topology.domain', GATEWAY_DOMAIN) or GATEWAY_DOMAIN)
         self._gateway_type = self._config_int('device.topology.type', GATEWAY_TYPE)
-        self._gateway_sub_type = self._gateway_sub_type_from_config()
+        self._gateway_sub_type = self._config_int('device.topology.sub_type', GATEWAY_SUB_TYPE)
         self._gateway_device_secret = str(Config.get('device.topology.device_secret', '') or '')
         self._gateway_nonce = str(Config.get('device.topology.nonce', '') or '')
         self._gateway_thing_version = str(Config.get('device.topology.thing_version', THING_VERSION) or THING_VERSION)
@@ -287,12 +286,6 @@ class DeviceManager:
             return int(value)
         except (TypeError, ValueError):
             return default
-
-    @staticmethod
-    def _gateway_sub_type_from_config() -> int:
-        configured_sub_type = DeviceManager._config_int('device.topology.sub_type', GATEWAY_SUB_TYPE)
-        model_code = Config.get('device.topology.model_code')
-        return bx160_model_sub_type(model_code, configured_sub_type)
 
     def _gateway_topology_keys(self) -> Set[Tuple[str, int, int]]:
         return {(self._gateway_domain, self._gateway_type, self._gateway_sub_type)}

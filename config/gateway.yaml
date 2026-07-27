@@ -117,17 +117,15 @@ device:
   # 网关不会自动生成 device_secret/nonce。
   # 这些字段会用于 update_topo 上报到云端：
   # - domain：网关设备的命名空间，Dock/Dock3 机场通常为 "3"
-  # - type：网关设备的产品类型，需与 DJI 上云 API 产品支持列表一致
-  # - model_code：BX160 机巢配置代号；会映射为 sub_type：
-  #   01=20倍单光->0，02=20倍三光->1，03=五射->2，04=多光谱->3，05=其他->4
-  # - sub_type：网关设备的产品子类型；未配置 model_code 时直接使用该值
+  # - type：BX160 机巢产品类型：
+  #   119=01/20倍单光，120=02/20倍三光，121=03/五射，122=04/多光谱，123=05/其他
+  # - sub_type：网关设备的产品子类型，当前 BX160 默认为 0
   # - device_secret：网关设备密钥，由云端/设备绑定侧提供
   # - nonce：网关拓扑上报 nonce，由云端/设备绑定侧提供
   # - thing_version：网关设备物模型版本
   topology:
     domain: "3"
     type: 119
-    model_code: "01"
     sub_type: 0
     device_secret: "egw_7f9c2a8d4b6e41c0a93f5d82e1b7c6a4"
     nonce: "n_20260727_8b3f6d91a0e24c5f"

@@ -16,15 +16,10 @@ GATEWAY_DOMAIN = "3"
 GATEWAY_TYPE = 119
 GATEWAY_SUB_TYPE = 0
 THING_VERSION = "1.1.2"
-BX160_MODEL_SUB_TYPES = {
-    "01": 0,  # 20x single-light
-    "02": 1,  # 20x triple-light
-    "03": 2,  # five-lens
-    "04": 3,  # multispectral
-    "05": 4,  # other
-}
+BX160_GATEWAY_TYPES = {119, 120, 121, 122, 123}
 GATEWAY_TOPOLOGY_KEYS = {
-    (GATEWAY_DOMAIN, GATEWAY_TYPE, GATEWAY_SUB_TYPE),
+    (GATEWAY_DOMAIN, device_type, GATEWAY_SUB_TYPE)
+    for device_type in BX160_GATEWAY_TYPES
 }
 SUB_DEVICE_TOPOLOGY_KEYS = {
     ("0", 60, 0),
@@ -66,16 +61,6 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def bx160_model_sub_type(model_code: Any, default: int = GATEWAY_SUB_TYPE) -> int:
-    """Map BX160 01-05 model codes to Dock3 update_topo sub_type."""
-    if model_code is None:
-        return default
-    code = str(model_code).strip()
-    if code.isdigit():
-        code = code.zfill(2)
-    return BX160_MODEL_SUB_TYPES.get(code, default)
 
 
 def build_sub_device_payload(

@@ -17,7 +17,6 @@ from src.cloud_api.dock3_device import (
     THING_VERSION,
     build_sub_device_payload,
     build_update_topo_payload,
-    bx160_model_sub_type,
     validate_update_topo_payload,
 )
 from mqtt_dock3_device_test import build_extra_sub_device
@@ -117,13 +116,18 @@ class Dock3DeviceTopologyTest(unittest.TestCase):
         self.assertEqual(device["sub_type"], 0)
         self.assertEqual(device["index"], "B")
 
-    def test_bx160_model_codes_map_to_gateway_sub_type(self):
-        self.assertEqual(bx160_model_sub_type("01"), 0)
-        self.assertEqual(bx160_model_sub_type("02"), 1)
-        self.assertEqual(bx160_model_sub_type("03"), 2)
-        self.assertEqual(bx160_model_sub_type("04"), 3)
-        self.assertEqual(bx160_model_sub_type("05"), 4)
-        self.assertEqual(bx160_model_sub_type("unknown", default=9), 9)
+    def test_bx160_gateway_types_are_allowed_in_strict_topology(self):
+        for gateway_type in (119, 120, 121, 122, 123):
+            payload = build_update_topo_payload(
+                device_type=gateway_type,
+                device_secret="gw-secret",
+                nonce="gw-nonce",
+                sub_devices=[],
+            )
+
+            ok, errors = validate_update_topo_payload(payload, strict=True)
+
+            self.assertTrue(ok, errors)
 
 
 if __name__ == "__main__":
