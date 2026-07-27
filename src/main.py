@@ -261,6 +261,7 @@ class EdgeGateway:
             self.cloud_conn = CloudConnectionManager(self.mqtt)
             self.telemetry_reporter = TelemetryReporter(self.mqtt)
             self.capability_reporter = CapabilityReporter(self.mqtt)
+            self.device.set_cloud_connection(self.cloud_conn)
 
             # 8.1 初始化全局状态机/命令准入层。具体 MAVLink/机巢源会在 start()
             # 中创建后再次注入，初始化阶段先覆盖 MQTT、设备、任务、DRC、Dock。
@@ -279,7 +280,6 @@ class EdgeGateway:
 
             # 9. 设置回调
             self._setup_callbacks()
-            self._auto_bind_gateway_for_test_runtime()
 
             # 8. 注册API处理器
             self._register_handlers()
@@ -293,19 +293,19 @@ class EdgeGateway:
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
 
-    def _auto_bind_gateway_for_test_runtime(self):
+    def _auto_bind_gateway_for_test_runtime(self) -> bool:
         """Bind the gateway automatically in test mode so local payload checks can run directly."""
         if str(Config.get('runtime.mode', 'test')).lower() == 'production':
-            return
+            return False
         if not bool(Config.get('device.auto_bind_on_startup', True)):
-            return
+            return False
         workspace_id = str(Config.get('device.auto_bind_workspace_id', 'local_test_workspace') or 'local_test_workspace')
         workspace_name = str(Config.get('device.auto_bind_workspace_name', '本地测试工作空间') or '本地测试工作空间')
         state = self.device.get_device_state() if self.device else {}
         if state.get('state') in {'bound', 'online'}:
-            return
+            return False
         logger.info("Auto binding gateway for test runtime: workspace_id=%s", workspace_id)
-        self.device.bind_device(workspace_id, workspace_name)
+        return self.device.bind_device(workspace_id, workspace_name)
 
     def _configure_payload_connections(self):
         """Configure direct payload adapters without depending on flight control."""
@@ -601,19 +601,11 @@ class EdgeGateway:
 
             self._refresh_state_machine_sources()
 
-            # 启动云端连接管理（上报在线、启动心跳）
+            # 云端连接管理由 MQTT 连接成功回调启动，避免自动绑定/拓扑上报早于
+            # broker 可用。
             if self.cloud_conn:
-                logger.info("Starting cloud connection manager...")
-                self.cloud_conn.report_device_online()
-                self.cloud_conn.start_heartbeat()
-
-                # 设置 DeviceManager 的云端连接（无论MAVLink是否连接）
                 if self.device:
                     self.device.set_cloud_connection(self.cloud_conn)
-
-                    # 边缘端：设备上线后自动查询绑定状态（requests/requests_reply 模式）
-                    # Direction: up → 设备主动发送 airport_bind_status 到云端
-                    self.device.auto_query_bind_status_on_startup()
 
             self.running = True
             logger.info("Edge Gateway started successfully")
@@ -919,6 +911,27 @@ class EdgeGateway:
         finally:
             loop.close()
 
+    def _on_mqtt_connected_for_startup_sync(self):
+        """Run startup cloud/device sync only after MQTT is connected."""
+        if self.cloud_conn:
+            logger.info("Starting cloud connection manager after MQTT connect...")
+            self.cloud_conn.report_device_online()
+            self.cloud_conn.start_heartbeat()
+
+        if not self.device:
+            return
+
+        if self.cloud_conn:
+            self.device.set_cloud_connection(self.cloud_conn)
+
+        auto_bound = self._auto_bind_gateway_for_test_runtime()
+        if auto_bound:
+            return
+
+        # Edge side startup binding check uses requests/requests_reply. If the
+        # gateway is already bound, this path reports update_topo immediately.
+        self.device.auto_query_bind_status_on_startup()
+
     def _setup_callbacks(self):
         """设置各模块的回调函数"""
         gateway_sn = Config.get_gateway_sn()
@@ -942,6 +955,7 @@ class EdgeGateway:
 
         # 注册 requests_reply 处理器
         self.mqtt.set_requests_reply_handler(self.cloud_conn.handle_requests_reply)
+        self.mqtt.register_connect_callback(self._on_mqtt_connected_for_startup_sync)
 
         # 启动请求清理线程
         self.cloud_conn._start_request_cleaner()
