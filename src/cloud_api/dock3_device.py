@@ -9,7 +9,7 @@ status message:
 Keep this module focused on the payload contract so DeviceManager, cloud
 simulators, and smoke tests share the same schema rules.
 """
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 GATEWAY_DOMAIN = "3"
@@ -116,7 +116,12 @@ def build_update_topo_payload(
     }
 
 
-def validate_update_topo_payload(data: Any, strict: bool = False) -> Tuple[bool, List[str]]:
+def validate_update_topo_payload(
+    data: Any,
+    strict: bool = False,
+    gateway_topology_keys: Optional[Set[Tuple[str, int, int]]] = None,
+    sub_device_topology_keys: Optional[Set[Tuple[str, int, int]]] = None,
+) -> Tuple[bool, List[str]]:
     errors: List[str] = []
     if not isinstance(data, dict):
         return False, ["update_topo data must be an object"]
@@ -146,7 +151,8 @@ def validate_update_topo_payload(data: Any, strict: bool = False) -> Tuple[bool,
 
     if strict and isinstance(data.get("domain"), str) and isinstance(data.get("type"), int) and not isinstance(data.get("type"), bool) and isinstance(data.get("sub_type"), int) and not isinstance(data.get("sub_type"), bool):
         gateway_key = (data.get("domain"), data.get("type"), data.get("sub_type"))
-        if gateway_key not in GATEWAY_TOPOLOGY_KEYS:
+        allowed_gateway_keys = gateway_topology_keys or GATEWAY_TOPOLOGY_KEYS
+        if gateway_key not in allowed_gateway_keys:
             errors.append(f"unsupported gateway topology: domain={gateway_key[0]}, type={gateway_key[1]}, sub_type={gateway_key[2]}")
 
     sub_devices = data.get("sub_devices")
@@ -186,7 +192,8 @@ def validate_update_topo_payload(data: Any, strict: bool = False) -> Tuple[bool,
             errors.append(f"sub_devices[{index}].thing_version must be {THING_VERSION}")
         if strict and isinstance(device.get("domain"), str) and isinstance(device.get("type"), int) and not isinstance(device.get("type"), bool) and isinstance(device.get("sub_type"), int) and not isinstance(device.get("sub_type"), bool):
             sub_key = (device.get("domain"), device.get("type"), device.get("sub_type"))
-            if sub_key not in SUB_DEVICE_TOPOLOGY_KEYS:
+            allowed_sub_device_keys = sub_device_topology_keys or SUB_DEVICE_TOPOLOGY_KEYS
+            if sub_key not in allowed_sub_device_keys:
                 errors.append(
                     f"sub_devices[{index}] unsupported topology: "
                     f"domain={sub_key[0]}, type={sub_key[1]}, sub_type={sub_key[2]}"

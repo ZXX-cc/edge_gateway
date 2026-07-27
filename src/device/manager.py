@@ -26,7 +26,7 @@ import shutil
 import asyncio
 import copy
 import uuid
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable, List, Set, Tuple
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.command_trace import trace_command
@@ -212,12 +212,12 @@ class DeviceManager:
         self._writable_props = sorted(writable_property_names())
 
         # ===== 拓扑信息 =====
-        self._gateway_domain = GATEWAY_DOMAIN
-        self._gateway_type = GATEWAY_TYPE
-        self._gateway_sub_type = GATEWAY_SUB_TYPE
+        self._gateway_domain = str(Config.get('device.topology.domain', GATEWAY_DOMAIN) or GATEWAY_DOMAIN)
+        self._gateway_type = self._config_int('device.topology.type', GATEWAY_TYPE)
+        self._gateway_sub_type = self._config_int('device.topology.sub_type', GATEWAY_SUB_TYPE)
         self._gateway_device_secret = str(Config.get('device.topology.device_secret', '') or '')
         self._gateway_nonce = str(Config.get('device.topology.nonce', '') or '')
-        self._gateway_thing_version = THING_VERSION
+        self._gateway_thing_version = str(Config.get('device.topology.thing_version', THING_VERSION) or THING_VERSION)
 
         # 子设备列表
         self._sub_devices: Dict[str, SubDevice] = {}
@@ -276,6 +276,28 @@ class DeviceManager:
 
         # ===== 启动时加载持久化数据 =====
         self._load_persisted_data()
+
+    @staticmethod
+    def _config_int(key_path: str, default: int) -> int:
+        value = Config.get(key_path, default)
+        if isinstance(value, bool):
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _gateway_topology_keys(self) -> Set[Tuple[str, int, int]]:
+        return {(self._gateway_domain, self._gateway_type, self._gateway_sub_type)}
+
+    def _sub_device_topology_keys(self) -> Set[Tuple[str, int, int]]:
+        keys = {("0", 60, 0), ("0", 91, 0)}
+        for device in self._sub_devices.values():
+            try:
+                keys.add((device.domain, int(device.type), int(device.sub_type)))
+            except (TypeError, ValueError):
+                continue
+        return keys
 
     def set_event_loop(self, loop):
         """注入异步事件循环引用"""
@@ -1433,7 +1455,12 @@ class DeviceManager:
     def report_update_topo(self):
         """主动上报设备拓扑（update_topo）"""
         payload = self.build_topo_payload()
-        valid, errors = validate_update_topo_payload(payload, strict=True)
+        valid, errors = validate_update_topo_payload(
+            payload,
+            strict=True,
+            gateway_topology_keys=self._gateway_topology_keys(),
+            sub_device_topology_keys=self._sub_device_topology_keys(),
+        )
         if not valid:
             logger.error("Update topo payload invalid: %s", "; ".join(errors))
             return False
@@ -3530,7 +3557,12 @@ class DeviceManager:
         """
         data = msg.get('data', {})
 
-        valid, errors = validate_update_topo_payload(data, strict=True)
+        valid, errors = validate_update_topo_payload(
+            data,
+            strict=True,
+            gateway_topology_keys=self._gateway_topology_keys(),
+            sub_device_topology_keys=self._sub_device_topology_keys(),
+        )
         if not valid:
             reason = "; ".join(errors)
             logger.warning("Rejected invalid update_topo payload: %s", reason)

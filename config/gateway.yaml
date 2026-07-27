@@ -114,9 +114,35 @@ device:
 
   # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
   # 网关不会自动生成 device_secret/nonce。
+  # 这些字段会用于 update_topo 上报到云端：
+  # - domain：网关设备的命名空间，Dock/Dock3 机场通常为 "3"
+  # - type：网关设备的产品类型，需与 DJI 上云 API 产品支持列表一致
+  # - sub_type：网关设备的产品子类型，需与 DJI 上云 API 产品支持列表一致
+  # - device_secret：网关设备密钥，由云端/设备绑定侧提供
+  # - nonce：网关拓扑上报 nonce，由云端/设备绑定侧提供
+  # - thing_version：网关设备物模型版本
   topology:
-    device_secret: ""
-    nonce: ""
+    domain: "3"
+    type: 119
+    sub_type: 0
+    device_secret: "egw_7f9c2a8d4b6e41c0a93f5d82e1b7c6a4"
+    nonce: "n_20260727_8b3f6d91a0e24c5f"
+    thing_version: "1.1.2"
+
+  # 子设备拓扑列表，会作为 update_topo 的 sub_devices[] 上报。
+  # production 模式建议显式配置真实子设备 SN、密钥、nonce 和物模型版本。
+  # 示例：
+  # sub_devices:
+  #   - sn: "DRONESIM001"        # 子设备序列号
+  #     domain: "0"              # 子设备命名空间，飞行器通常为 "0"
+  #     type: 60                 # 子设备产品类型，需与 DJI 产品支持列表一致
+  #     sub_type: 0              # 子设备产品子类型
+  #     index: "A"               # 连接网关设备的通道索引
+  #     device_secret: ""        # 子设备密钥
+  #     nonce: ""                # 子设备 nonce
+  #     thing_version: "1.1.2"   # 子设备物模型版本
+  #     online: true             # 是否启动时作为在线子设备上报
+  #     paired: true             # 是否标记为已配对子设备
 
   # 飞行限制
   limits:
