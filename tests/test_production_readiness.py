@@ -16,11 +16,14 @@ class ProductionReadinessTest(unittest.TestCase):
             "gateway": {"sn": "EDGEGW001"},
             "nanomq": {"host": "127.0.0.1"},
             "device": {"topology": {}},
+            "security": {"mqtt": {}},
         })
 
         self.assertTrue(any("test identity" in error for error in errors))
         self.assertIn("device.topology.device_secret is required in production mode", errors)
         self.assertIn("device.topology.nonce is required in production mode", errors)
+        self.assertIn("security.mqtt.downstream_auth_enabled must be true in production mode", errors)
+        self.assertIn("security.mqtt.sign_secret must be at least 16 characters in production mode", errors)
 
     def test_production_accepts_explicit_real_chain_metadata(self):
         errors = validate_production_config({
@@ -36,6 +39,12 @@ class ProductionReadinessTest(unittest.TestCase):
                         "nonce": "aircraft-nonce",
                     }
                 ],
+            },
+            "security": {
+                "mqtt": {
+                    "downstream_auth_enabled": True,
+                    "sign_secret": "real-chain-secret",
+                }
             },
         })
 

@@ -589,6 +589,40 @@ class MediaManager:
             logger.error(f"HTTP upload failed: {e}")
             return False
 
+    @staticmethod
+    def _credential_expired(credentials: dict) -> bool:
+        """校验 OSS 临时凭证是否已过期；小数值按相对 TTL 秒处理。"""
+        if not isinstance(credentials, dict):
+            return False
+
+        candidates = []
+        output = credentials.get("output") if isinstance(credentials.get("output"), dict) else {}
+        containers = [
+            credentials,
+            credentials.get("credentials") if isinstance(credentials.get("credentials"), dict) else {},
+            output,
+            output.get("credentials") if isinstance(output.get("credentials"), dict) else {},
+        ]
+        for container in containers:
+            if isinstance(container, dict):
+                for key in ("expire", "expire_time", "expired_at", "expiration"):
+                    if key in container:
+                        candidates.append(container.get(key))
+
+        now_seconds = int(time.time())
+        now_ms = int(time.time() * 1000)
+        for value in candidates:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            expire = int(value)
+            if expire <= 0:
+                return True
+            if expire >= 1_000_000_000_000 and expire <= now_ms:
+                return True
+            if 1_000_000_000 <= expire < 1_000_000_000_000 and expire <= now_seconds:
+                return True
+        return False
+
     def _update_upload_progress(self, file_id: str, progress: int, status: str):
         """更新上传进度"""
         async def _update_status():
@@ -652,6 +686,10 @@ class MediaManager:
             if not credentials:
                 logger.warning(f"Failed to get credentials for {file_name}")
                 time.sleep(5)
+                continue
+            if self._credential_expired(credentials):
+                logger.warning("Upload credentials expired for %s", file_name)
+                self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
                 continue
 
             upload_url = credentials.get('upload_url', '')

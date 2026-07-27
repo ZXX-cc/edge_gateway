@@ -252,6 +252,22 @@ local_history:
   flight_telemetry_days: 7 # 飞机原始飞行历史遥测保留天数
   device_state_days: 7 # 设备状态变更历史保留天数
 
+# --- 本地可校验安全策略 ---
+security:
+  mqtt:
+    downstream_auth_enabled: false # 生产环境必须开启云端下行 HMAC 签名校验
+    reply_auth_enabled: false # 云端 requests_reply/status_reply 签名校验，需平台约定后开启
+    sign_algorithm: "hmac-sha256"
+    sign_secret: "" # 生产环境至少 16 字符，平台和网关保持一致
+    timestamp_window_seconds: 300 # MQTT timestamp 允许时间窗
+    nonce_ttl_seconds: 300 # nonce 防重放缓存时长
+    require_nonce: true
+  drc:
+    heartbeat_timestamp_window_seconds: 30 # DRC 心跳 timestamp 允许时间窗
+    require_heartbeat_seq_increasing: true # DRC 心跳 seq 必须递增
+  mission:
+    schedule_clock_skew_seconds: 60 # 航线定时/条件任务允许的时钟误差
+
 # --- 远程调试 ---
 debug:
   enabled: true

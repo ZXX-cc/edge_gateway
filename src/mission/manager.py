@@ -3727,6 +3727,41 @@ class MissionManager:
 
     # ---- 大疆标准FlightTask接口 ----
 
+    def _schedule_clock_skew_ms(self) -> int:
+        seconds = int(Config.get("security.mission.schedule_clock_skew_seconds", 60))
+        return max(0, seconds) * 1000
+
+    def _validate_prepare_time_policy(self, task_type: int, execute_time: int,
+                                      ready_conditions: dict) -> tuple[bool, str]:
+        """准备阶段校验定时任务和条件任务是否已经过期。"""
+        now_ms = int(time.time() * 1000)
+        skew_ms = self._schedule_clock_skew_ms()
+        if task_type == 1 and execute_time and execute_time < now_ms - skew_ms:
+            return False, "flighttask_prepare execute_time 已过期"
+
+        end_time = ready_conditions.get("end_time") if isinstance(ready_conditions, dict) else None
+        if isinstance(end_time, int) and not isinstance(end_time, bool) and now_ms > end_time + skew_ms:
+            return False, "flighttask_prepare ready_conditions.end_time 已过期"
+        return True, ""
+
+    def _validate_execute_time_policy(self) -> tuple[bool, str]:
+        """执行阶段校验定时任务和条件任务窗口。"""
+        now_ms = int(time.time() * 1000)
+        skew_ms = self._schedule_clock_skew_ms()
+        if self._task_type == 1 and self._execute_time and now_ms < int(self._execute_time) - skew_ms:
+            return False, "flighttask_execute 当前时间早于 execute_time"
+
+        if isinstance(self._ready_conditions, dict):
+            begin_time = self._ready_conditions.get("begin_time")
+            end_time = self._ready_conditions.get("end_time")
+            if isinstance(begin_time, int) and not isinstance(begin_time, bool):
+                if now_ms < begin_time - skew_ms:
+                    return False, "flighttask_execute 当前时间早于 ready_conditions.begin_time"
+            if isinstance(end_time, int) and not isinstance(end_time, bool):
+                if now_ms > end_time + skew_ms:
+                    return False, "flighttask_execute ready_conditions.end_time 已过期"
+        return True, ""
+
     @serialize_flighttask
     def handle_flighttask_prepare(self, msg: dict) -> dict:
         """
@@ -3765,6 +3800,18 @@ class MissionManager:
         out_of_control_action = payload['out_of_control_action']
         exit_wayline_when_rc_lost = payload['exit_wayline_when_rc_lost']
         simulate_mission = payload['simulate_mission']
+        time_ok, time_reason = self._validate_prepare_time_policy(
+            task_type,
+            execute_time,
+            ready_conditions,
+        )
+        if not time_ok:
+            logger.warning("Flighttask prepare time policy rejected: %s", time_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=time_reason,
+            )
         if isinstance(simulate_mission, dict) and simulate_mission.get('is_enable') == 1:
             reason = "simulate_mission is disabled; real flight execution is required"
             logger.warning("Flighttask prepare rejected: %s", reason)
@@ -4047,6 +4094,16 @@ class MissionManager:
                 flight_id,
                 result,
                 f"当前任务状态不允许执行: {self._get_task_status_name()}",
+            )
+
+        time_ok, time_reason = self._validate_execute_time_policy()
+        if not time_ok:
+            logger.warning("Flighttask execute time policy rejected: %s", time_reason)
+            return self._reject_flighttask_request(
+                msg,
+                flight_id,
+                DEVICE_STATE_UNSUPPORTED,
+                time_reason,
             )
 
         self._current_task_id = flight_id

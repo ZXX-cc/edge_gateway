@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import types
 import unittest
 
@@ -32,6 +33,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink.mavutil"] = fake_mavutil
 
 from src.drc.controller import DrcController
+from src.utils.config import Config
 from src.utils.dji_error_codes import (
     DEVICE_COMMAND_TIMEOUT,
     DOCK_COMMUNICATION_ERROR,
@@ -76,6 +78,9 @@ class FakeCameraController:
 
 
 class Dock3DrcTest(unittest.TestCase):
+    def tearDown(self):
+        Config._data = {}
+
     def test_official_dock3_drc_scope_contains_core_methods(self):
         for method in [
             "drc_mode_enter",
@@ -114,6 +119,21 @@ class Dock3DrcTest(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertTrue(any("osd_frequency" in error for error in errors))
+
+    def test_drc_mode_enter_rejects_expired_broker_epoch_time(self):
+        ok, errors = validate_drc_mode_enter({
+            "mqtt_broker": {
+                "address": "127.0.0.1:8883",
+                "client_id": "drc-EDGE-GW-001",
+                "username": "user",
+                "password": "token",
+                "expire_time": int(time.time()) - 1,
+                "enable_tls": False,
+            },
+        })
+
+        self.assertFalse(ok)
+        self.assertTrue(any("expired" in error for error in errors))
 
     def test_stick_control_accepts_official_center_channels(self):
         ok, normalized, errors = normalize_stick_control({
@@ -177,6 +197,35 @@ class Dock3DrcTest(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertTrue(any("seq" in error for error in errors))
+
+    def test_drc_heartbeat_rejects_old_timestamp_and_non_increasing_seq(self):
+        Config._data = {
+            "security": {
+                "drc": {
+                    "heartbeat_timestamp_window_seconds": 30,
+                    "require_heartbeat_seq_increasing": True,
+                }
+            }
+        }
+        controller = DrcController()
+        controller._drc_enabled = True
+
+        first = controller.handle_drc_heart_beat({
+            "method": "heart_beat",
+            "data": {"seq": 1, "timestamp": int(time.time() * 1000)},
+        })
+        repeated = controller.handle_drc_heart_beat({
+            "method": "heart_beat",
+            "data": {"seq": 1, "timestamp": int(time.time() * 1000)},
+        })
+        old = controller.handle_drc_heart_beat({
+            "method": "heart_beat",
+            "data": {"seq": 2, "timestamp": int((time.time() - 60) * 1000)},
+        })
+
+        self.assertEqual(first["data"]["result"], 0)
+        self.assertEqual(repeated["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(old["data"]["result"], INVALID_COMMAND_FORMAT)
 
     def test_flight_authority_grab_returns_status_info(self):
         controller = DrcController()
@@ -267,7 +316,7 @@ class Dock3DrcTest(unittest.TestCase):
             "method": "heart_beat",
             "tid": "tid-heartbeat",
             "gateway": "EDGEGW001",
-            "data": {"seq": 1, "timestamp": 1783416000000},
+            "data": {"seq": 1, "timestamp": int(time.time() * 1000)},
         })
 
         self.assertEqual(reply["data"]["result"], 0)

@@ -24,6 +24,7 @@ from src.utils.dji_error_codes import (
     normalize_error_code,
     normalize_reply_error_codes,
 )
+from src.utils.mqtt_security import MqttSecurityValidator
 from src.utils.request_trace import get_request_trace_recorder
 from src.state_machine.command_admission import CommandAdmissionEngine
 
@@ -77,6 +78,7 @@ class MQTTClient:
         self._dedup_ttl_seconds = max(10, int(self.config.get('dedup_ttl_seconds', 300)))
         self._dedup_max_entries = max(32, int(self.config.get('dedup_max_entries', 1024)))
         self._command_admission: Optional[CommandAdmissionEngine] = None
+        self._security_validator = MqttSecurityValidator()
 
     @staticmethod
     def _dedup_key(source_topic: str, payload: dict):
@@ -710,8 +712,64 @@ class MQTTClient:
                 ("payload", format_with_labels(payload, max_length=3000)),
             ]))
 
+            if is_downstream_command:
+                security = self._security_validator.validate_downstream(msg.topic, payload)
+                if not security.accepted:
+                    trace_command(
+                        "mqtt_security_rejected",
+                        topic=msg.topic,
+                        method=method,
+                        tid=payload.get("tid"),
+                        reason=security.reason,
+                    )
+                    self._trace.record(
+                        "mqtt_security_rejected",
+                        direction="in",
+                        topic=msg.topic,
+                        payload=payload,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        error=security.message,
+                        extra={"reason": security.reason},
+                    )
+                    logger.warning(
+                        "MQTT security rejected: topic=%s method=%s tid=%s reason=%s message=%s",
+                        msg.topic,
+                        method,
+                        payload.get("tid"),
+                        security.reason,
+                        security.message,
+                    )
+                    if payload.get('need_reply') == 1:
+                        error_reply = self._build_error_reply(
+                            payload,
+                            -3,
+                            security.message,
+                            self.gateway_sn,
+                            context="invalid_request",
+                        )
+                        self._publish_reply_for_source_topic(msg.topic, error_reply)
+                    return
+
             # 特殊处理 sys/product/{sn}/status_reply
             if msg.topic.endswith('/status_reply'):
+                security = self._security_validator.validate_reply(msg.topic, payload)
+                if not security.accepted:
+                    self._trace.record(
+                        "mqtt_status_reply_security_rejected",
+                        direction="in",
+                        topic=msg.topic,
+                        payload=payload,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        error=security.message,
+                        extra={"reason": security.reason},
+                    )
+                    logger.warning(
+                        "MQTT status_reply security rejected: method=%s tid=%s reason=%s",
+                        method,
+                        payload.get("tid"),
+                        security.reason,
+                    )
+                    return
                 result = payload.get('data', {}).get('result', -1)
                 if self._status_reply_handler:
                     try:
@@ -745,6 +803,24 @@ class MQTTClient:
 
             # 特殊处理 thing/product/{sn}/requests_reply
             if msg.topic.endswith('/requests_reply'):
+                security = self._security_validator.validate_reply(msg.topic, payload)
+                if not security.accepted:
+                    self._trace.record(
+                        "mqtt_requests_reply_security_rejected",
+                        direction="in",
+                        topic=msg.topic,
+                        payload=payload,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        error=security.message,
+                        extra={"reason": security.reason},
+                    )
+                    logger.warning(
+                        "MQTT requests_reply security rejected: method=%s tid=%s reason=%s",
+                        method,
+                        payload.get("tid"),
+                        security.reason,
+                    )
+                    return
                 result = payload.get('data', {}).get('result', -1)
                 if self._requests_reply_handler:
                     try:

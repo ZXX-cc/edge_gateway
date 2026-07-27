@@ -162,6 +162,21 @@ local_history:
   flight_telemetry_days: 7
   device_state_days: 7
 
+security:
+  mqtt:
+    downstream_auth_enabled: false
+    reply_auth_enabled: false
+    sign_algorithm: "hmac-sha256"
+    sign_secret: ""
+    timestamp_window_seconds: 300
+    nonce_ttl_seconds: 300
+    require_nonce: true
+  drc:
+    heartbeat_timestamp_window_seconds: 30
+    require_heartbeat_seq_increasing: true
+  mission:
+    schedule_clock_skew_seconds: 60
+
 debug:
   enabled: false
   websocket_port: 7681

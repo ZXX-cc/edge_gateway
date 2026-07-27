@@ -33,6 +33,8 @@ DRONE_YAW_SPEED_MAX = 90.0
 TAKEOFF_POINT_MIN_HEIGHT = 5.0
 TAKEOFF_POINT_MAX_HEIGHT = 500.0
 TAKEOFF_POINT_MAX_SPEED = 17.0
+EPOCH_SECONDS_THRESHOLD = 1_000_000_000
+EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000
 
 OFFICIAL_DOCK3_DRC_METHODS = frozenset({
     "obstacle_avoidance_notify",
@@ -103,6 +105,19 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_expired_epoch_time(value: Any, now_seconds: float | None = None) -> bool:
+    """判断秒/毫秒绝对过期时间是否已经过期；小数值按相对 TTL 处理。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    now_seconds = time.time() if now_seconds is None else now_seconds
+    expire = int(value)
+    if expire >= EPOCH_MILLISECONDS_THRESHOLD:
+        return expire <= int(now_seconds * 1000)
+    if expire >= EPOCH_SECONDS_THRESHOLD:
+        return expire <= int(now_seconds)
+    return False
+
+
 def _in_range(value: Any, minimum: float, maximum: float) -> bool:
     return _is_number(value) and minimum <= float(value) <= maximum
 
@@ -135,6 +150,8 @@ def validate_drc_mode_enter(data: Any) -> Tuple[bool, List[str]]:
                 or broker.get("expire_time") <= 0
             ):
                 errors.append("mqtt_broker.expire_time must be positive int seconds")
+            elif _is_expired_epoch_time(broker.get("expire_time")):
+                errors.append("mqtt_broker.expire_time has expired")
             if "enable_tls" in broker and not isinstance(broker.get("enable_tls"), bool):
                 errors.append("mqtt_broker.enable_tls must be bool")
 

@@ -79,6 +79,7 @@ class DrcController:
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_running = False
         self._last_cloud_heartbeat = 0  # 云端心跳时间戳
+        self._last_cloud_heartbeat_seq = None  # 云端心跳序号
         self._last_device_heartbeat = 0  # 设备心跳时间戳
         self._heartbeat_timeout = 30  # 心跳超时时间（秒）
 
@@ -572,6 +573,7 @@ class DrcController:
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
         self._flight_authority_grabbed = False
+        self._last_cloud_heartbeat_seq = None
 
         # 上报退出事件
         result = DEVICE_COMMAND_TIMEOUT if reason == "heartbeat_timeout" else -1
@@ -633,6 +635,7 @@ class DrcController:
         self._drc_enabled = True
         self._flight_authority_grabbed = True
         self._session_id = str(int(time.time() * 1000))
+        self._last_cloud_heartbeat_seq = None
         logger.info(f"DRC mode entered, session={self._session_id}")
 
         # 5. 启动心跳监控
@@ -695,6 +698,7 @@ class DrcController:
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
         self._flight_authority_grabbed = False
+        self._last_cloud_heartbeat_seq = None
         logger.info("DRC mode exited")
 
         # 5. 上报退出状态事件
@@ -717,7 +721,18 @@ class DrcController:
         if not self._drc_enabled:
             return MessageBuilder.build_reply(msg, result=DEVICE_STATE_UNSUPPORTED, msg_str="DRC not enabled")
 
+        heartbeat_valid, heartbeat_reason = self._validate_cloud_heartbeat_window(normalized)
+        if not heartbeat_valid:
+            logger.warning("DRC heartbeat rejected: %s", heartbeat_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=heartbeat_reason,
+            )
+
         self._last_cloud_heartbeat = time.time()
+        if "seq" in normalized:
+            self._last_cloud_heartbeat_seq = normalized["seq"]
         reply_data = {
             "drc_state": 2,
             "session_id": self._session_id,
@@ -731,6 +746,24 @@ class DrcController:
     def handle_drc_heartbeat(self, msg: dict) -> dict:
         """Compatibility alias for older local tests."""
         return self.handle_drc_heart_beat(msg)
+
+    def _validate_cloud_heartbeat_window(self, normalized: dict) -> tuple[bool, str]:
+        """校验云端 DRC 心跳时间窗和 seq 单调递增。"""
+        window_seconds = int(Config.get("security.drc.heartbeat_timestamp_window_seconds", 30))
+        if window_seconds > 0:
+            now_ms = int(time.time() * 1000)
+            timestamp = int(normalized.get("timestamp", 0))
+            if abs(now_ms - timestamp) > window_seconds * 1000:
+                return False, "DRC heartbeat timestamp 超出允许时间窗"
+
+        require_seq_increasing = bool(
+            Config.get("security.drc.require_heartbeat_seq_increasing", True)
+        )
+        if require_seq_increasing and "seq" in normalized:
+            seq = int(normalized["seq"])
+            if self._last_cloud_heartbeat_seq is not None and seq <= self._last_cloud_heartbeat_seq:
+                return False, "DRC heartbeat seq 必须递增"
+        return True, ""
 
     def handle_flight_authority_grab(self, msg: dict) -> dict:
         """获取飞行控制权，供 Dock3 联调脚本验证控制链路。"""
@@ -1608,6 +1641,7 @@ class DrcController:
             self._session_id = ""
             self._active_fly_to_point = None
             self._active_takeoff_to_point = None
+            self._last_cloud_heartbeat_seq = None
             self.report_drc_status_notify(drc_state=0, result=0)
             self._write_audit_log("emergency_stop", land_message)
         return MessageBuilder.build_reply(

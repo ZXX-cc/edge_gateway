@@ -581,6 +581,22 @@ firmware/config 均无可归因旧回包；一键启航流程同时通过。该�
 
 本地历史日志：网关会把飞机原始飞行遥测追加到 `logs/history/flight_telemetry/YYYY-MM-DD.jsonl`，把设备状态变更追加到 `logs/history/device_state/YYYY-MM-DD.jsonl`。默认保留 7 日，清理动作跟随 `DataRetentionManager` 的 `retention.cleanup_interval_hours` 周期执行；手动留证可执行 `python -m unittest -v tests.test_retention_manager > "$EVIDENCE_DIR/retention_history.log" 2>&1`，并在网关运行后用 `find logs/history -type f -name '*.jsonl' -maxdepth 3` 确认文件生成。
 
+本地安全校验不依赖真机：`security.mqtt` 可开启云端下行和云端 reply 的 HMAC-SHA256 `timestamp + nonce + sign` 校验，nonce 会按 TTL 防重放；`security.drc` 控制 DRC 心跳 timestamp 时间窗和 seq 递增；`security.mission` 控制航线定时/条件任务允许的时钟误差。默认测试配置不强制签名，production 模式会要求 `security.mqtt.downstream_auth_enabled=true` 且 `sign_secret` 至少 16 字符。留证命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_local_security
+mkdir -p "$EVIDENCE_DIR"
+
+python -m unittest -v \
+  tests.test_mqtt_security \
+  tests.test_production_readiness \
+  tests.test_dock3_drc \
+  tests.test_dock3_wayline \
+  tests.test_dock3_media \
+  > "$EVIDENCE_DIR/local_security.log" 2>&1
+```
+
 模拟故障注入完整验收统一执行 `bash scripts/fault_hms_acceptance.sh`。它串行验证八类独立日志、隔离数据保留、七类机巢故障、HMS/events/OSD/state、操作记录，以及 MQTT 断开恢复、重复请求和错误 topic，并在 `logs/acceptance_evidence/<时间>/` 生成汇总 JSON、日志尾部、隔离数据库和 SHA256 清单。详细启动方式和边界见 `docs/FAULT_INJECTION_HMS_ACCEPTANCE.md`。
 
 2026-07-13 Ubuntu 正式证据已通过：提交 `0934955` 下执行一键脚本，5 个专项单测、八类独立日志和隔离数据保留均通过；7 类故障全部 `result=passed`，重复请求 `state_count=1/reply_replayed=true`，错误 topic 返回 `325001`，MQTT 重连后 OSD 恢复；MongoDB `edge_gateway` 回读 12 条已完成操作记录。证据目录为 `logs/acceptance_evidence/20260713_104438/`。

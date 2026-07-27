@@ -317,6 +317,17 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(output["credentials"]["expire"], 3600)
         self.assertEqual(output["object_key_prefix"], "dock3/")
 
+    def test_upload_credentials_expiration_accepts_ttl_and_rejects_expired_epoch(self):
+        self.assertFalse(MediaManager._credential_expired({
+            "credentials": {"expire": 3600},
+        }))
+        self.assertTrue(MediaManager._credential_expired({
+            "credentials": {"expire": int(time.time()) - 1},
+        }))
+        self.assertTrue(MediaManager._credential_expired({
+            "output": {"credentials": {"expire": int(time.time() * 1000) - 1000}},
+        }))
+
     def test_live_mock_lifecycle_emits_status_events(self):
         events = []
         manager = MediaManager()

@@ -1227,6 +1227,52 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("execute_time" in error for error in errors))
 
+    def test_wayline_time_policy_rejects_expired_and_early_schedule(self):
+        original_config = Config._data
+        Config._data = {"security": {"mission": {"schedule_clock_skew_seconds": 0}}}
+        try:
+            manager = MissionManager()
+            now_ms = int(time.time() * 1000)
+
+            prepare_ok, prepare_reason = manager._validate_prepare_time_policy(
+                1,
+                now_ms - 1000,
+                {},
+            )
+            manager._task_type = 1
+            manager._execute_time = now_ms + 60_000
+            execute_ok, execute_reason = manager._validate_execute_time_policy()
+
+            self.assertFalse(prepare_ok)
+            self.assertIn("execute_time", prepare_reason)
+            self.assertFalse(execute_ok)
+            self.assertIn("execute_time", execute_reason)
+        finally:
+            Config._data = original_config
+
+    def test_wayline_time_policy_rejects_ready_condition_window(self):
+        original_config = Config._data
+        Config._data = {"security": {"mission": {"schedule_clock_skew_seconds": 0}}}
+        try:
+            manager = MissionManager()
+            now_ms = int(time.time() * 1000)
+
+            prepare_ok, prepare_reason = manager._validate_prepare_time_policy(
+                2,
+                0,
+                {"end_time": now_ms - 1000},
+            )
+            manager._task_type = 2
+            manager._ready_conditions = {"begin_time": now_ms + 60_000}
+            execute_ok, execute_reason = manager._validate_execute_time_policy()
+
+            self.assertFalse(prepare_ok)
+            self.assertIn("end_time", prepare_reason)
+            self.assertFalse(execute_ok)
+            self.assertIn("begin_time", execute_reason)
+        finally:
+            Config._data = original_config
+
     def test_mission_manager_wayline_lifecycle_outputs_dock3_status(self):
         original_config = Config._data
         Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}

@@ -41,6 +41,8 @@ def validate_production_config(config: Dict[str, Any]) -> List[str]:
     device = config.get("device") or {}
     topology = device.get("topology") or {}
     mqtt_cfg = config.get("nanomq") or {}
+    security = config.get("security") or {}
+    mqtt_security = security.get("mqtt") or {}
 
     gateway_sn = _text(gateway.get("sn"))
     if not gateway_sn:
@@ -55,6 +57,12 @@ def validate_production_config(config: Dict[str, Any]) -> List[str]:
 
     if not _text(mqtt_cfg.get("host")):
         errors.append("nanomq.host / EMQX host is required in production mode")
+
+    if not bool(mqtt_security.get("downstream_auth_enabled")):
+        errors.append("security.mqtt.downstream_auth_enabled must be true in production mode")
+    sign_secret = _text(mqtt_security.get("sign_secret"))
+    if len(sign_secret) < 16:
+        errors.append("security.mqtt.sign_secret must be at least 16 characters in production mode")
 
     for index, sub_device in enumerate(device.get("sub_devices") or []):
         sn = _text(sub_device.get("sn"))
