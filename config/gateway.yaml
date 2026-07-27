@@ -4,8 +4,8 @@
 
 # --- 网关身份 ---
 gateway:
-  sn: "EDGEGW001" # 网关序列号；DJI Demo topic 匹配要求纯字母数字
-  name: "EdgeGateway-01" # 网关名称
+  sn: "BXD020120260727" # 网关序列号；DJI Demo topic 匹配要求纯字母数字
+  name: "BXD020120260727" # 网关名称
   product_type: "edge-gateway" # 产品类型
 
 # --- 运行模式 ---
