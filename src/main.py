@@ -187,6 +187,7 @@ class EdgeGateway:
         self.global_state: GatewayEventReducer = None
         self.command_admission: CommandAdmissionEngine = None
         self.history_logger: LocalHistoryLogger = None
+        self._startup_connections_ready = False
 
     def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
@@ -607,6 +608,9 @@ class EdgeGateway:
                 if self.device:
                     self.device.set_cloud_connection(self.cloud_conn)
 
+            self._startup_connections_ready = True
+            self._on_mqtt_connected_for_startup_sync()
+
             self.running = True
             logger.info("Edge Gateway started successfully")
             return True
@@ -913,8 +917,15 @@ class EdgeGateway:
 
     def _on_mqtt_connected_for_startup_sync(self):
         """Run startup cloud/device sync only after MQTT is connected."""
+        if not self._startup_connections_ready:
+            logger.info("MQTT connected before MAVLink startup completed; deferring device sync")
+            return
+        if not self.mqtt or not self.mqtt.connected:
+            logger.info("MQTT is not connected; skip startup device sync")
+            return
+
         if self.cloud_conn:
-            logger.info("Starting cloud connection manager after MQTT connect...")
+            logger.info("Starting cloud connection manager after all startup connections...")
             self.cloud_conn.report_device_online()
             self.cloud_conn.start_heartbeat()
 
