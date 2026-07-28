@@ -77,6 +77,14 @@ class FakeCameraController:
         return {"data": {"result": 0}}
 
 
+class FakeTelemetry:
+    def __init__(self, data):
+        self.data = data
+
+    def get_telemetry_data(self):
+        return dict(self.data)
+
+
 class Dock3DrcTest(unittest.TestCase):
     def tearDown(self):
         Config._data = {}
@@ -539,6 +547,76 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertTrue(controller._flight_authority_grabbed)
         self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 45.0, 80.0), mode.calls)
+
+    def test_drone_emergency_stop_holds_current_position_during_unreached_point_flight(self):
+        controller = DrcController()
+        mode = FakeModeControl()
+        controller.set_mode_control(mode)
+        controller.set_telemetry_module(FakeTelemetry({
+            "latitude": -35.3620,
+            "longitude": 149.1640,
+            "altitudeRelative": 42.0,
+        }))
+        events = []
+        controller.set_event_callback(events.append)
+
+        update = controller.handle_fly_to_point_update({
+            "method": "fly_to_point_update",
+            "tid": "tid-flyto",
+            "gateway": "EDGEGW001",
+            "data": {
+                "fly_to_id": "flyto-001",
+                "max_speed": 8,
+                "points": [{
+                    "latitude": -35.3632622,
+                    "longitude": 149.1652375,
+                    "height": 45,
+                }],
+            },
+        })
+        controller._send_zero_velocity = lambda: (True, False, "")
+
+        reply = controller.handle_drone_emergency_stop({
+            "method": "drone_emergency_stop",
+            "tid": "tid-estop",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+
+        self.assertEqual(update["data"]["result"], 0)
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["action"], "hold_current_position")
+        self.assertTrue(reply["data"]["output"]["loiter_ok"])
+        self.assertFalse(reply["data"]["output"]["land_ok"])
+        self.assertIn(("guided_loiter_at_point", -35.3620, 149.1640, 42.0, 80.0), mode.calls)
+        self.assertNotIn(("set_mode", "QLAND"), mode.calls)
+        self.assertNotIn(("set_mode", "LAND"), mode.calls)
+        self.assertIsNone(controller.get_drc_status()["active_fly_to_point"])
+        self.assertFalse(controller.get_drc_status()["enabled"])
+        self.assertEqual(events[-2]["method"], "fly_to_point_progress")
+        self.assertEqual(events[-2]["data"]["status"], "wayline_cancel")
+        self.assertEqual(events[-1]["method"], "drc_status_notify")
+        self.assertEqual(events[-1]["data"]["drc_state"], 0)
+
+    def test_drone_emergency_stop_without_active_point_flight_still_lands(self):
+        controller = DrcController()
+        mode = FakeModeControl()
+        controller.set_mode_control(mode)
+        controller._drc_enabled = True
+        controller._send_zero_velocity = lambda: (True, False, "")
+
+        reply = controller.handle_drone_emergency_stop({
+            "method": "drone_emergency_stop",
+            "tid": "tid-estop",
+            "gateway": "EDGEGW001",
+            "data": {},
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+        self.assertTrue(reply["data"]["output"]["land_ok"])
+        self.assertIn(("set_mode", "QLAND"), mode.calls)
+        self.assertNotIn(("guided_loiter_at_point", -35.3620, 149.1640, 42.0, 80.0), mode.calls)
 
     def test_payload_control_accepts_official_three_part_payload_index(self):
         controller = DrcController()

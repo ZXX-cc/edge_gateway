@@ -250,6 +250,111 @@ class DrcController:
             return self._mode_control.guided_goto(latitude, longitude, height)
         return {"success": False, "message": "guided flight adapter not available"}
 
+    def _get_current_point_flight_telemetry(self) -> tuple:
+        """读取当前位置，用于指点飞行急停后的当前位置盘旋。"""
+        if not self._telemetry_module or not hasattr(self._telemetry_module, "get_telemetry_data"):
+            return None, "telemetry module not available"
+
+        try:
+            telemetry = self._telemetry_module.get_telemetry_data()
+        except Exception as exc:
+            logger.warning("DRC emergency hold telemetry unavailable: %s", exc)
+            return None, str(exc)
+
+        current_lat = telemetry.get("latitude")
+        current_lon = telemetry.get("longitude")
+        if current_lat is None or current_lon is None:
+            return None, "current latitude/longitude unavailable"
+
+        try:
+            current_lat = float(current_lat)
+            current_lon = float(current_lon)
+        except (TypeError, ValueError):
+            return None, "current latitude/longitude invalid"
+
+        if not (-90 <= current_lat <= 90 and -180 <= current_lon <= 180):
+            return None, "current latitude/longitude out of range"
+        if current_lat == 0.0 and current_lon == 0.0:
+            return None, "current latitude/longitude unavailable"
+
+        return telemetry, ""
+
+    def _active_point_flight_target(self) -> tuple:
+        """返回当前指点飞行目标；没有 active 任务时返回 None。"""
+        if self._active_fly_to_point:
+            points = self._active_fly_to_point.get("points") or []
+            if points:
+                return "fly_to_point", self._active_fly_to_point, points[0]
+
+        if self._active_takeoff_to_point:
+            target = self._active_takeoff_to_point.get("target") or {}
+            if target:
+                return "takeoff_to_point", self._active_takeoff_to_point, {
+                    "latitude": target.get("target_latitude"),
+                    "longitude": target.get("target_longitude"),
+                    "height": target.get("target_height"),
+                }
+
+        return None, None, None
+
+    def _point_flight_emergency_hold(self) -> tuple:
+        """
+        指点飞行未到点时，急停转为当前位置平飞盘旋。
+
+        Returns:
+            (handled, ok, message, output)
+        """
+        flight_kind, active_flight, target_point = self._active_point_flight_target()
+        if not active_flight or not target_point:
+            return False, False, "", {}
+
+        telemetry, telemetry_error = self._get_current_point_flight_telemetry()
+        if telemetry is None:
+            return False, False, telemetry_error, {}
+
+        try:
+            target_lat = float(target_point.get("latitude"))
+            target_lon = float(target_point.get("longitude"))
+        except (TypeError, ValueError):
+            return False, False, "active point flight target invalid", {}
+
+        current_lat = float(telemetry["latitude"])
+        current_lon = float(telemetry["longitude"])
+        distance = self._distance_meters(current_lat, current_lon, target_lat, target_lon)
+        arrival_radius = float(Config.get('device.drc.point_flight_arrival_radius', 5.0) or 5.0)
+        if distance <= arrival_radius:
+            return False, False, f"point flight target reached: distance={distance:.1f}m", {}
+
+        loiter_height = (
+            telemetry.get("altitudeRelative")
+            or telemetry.get("height")
+            or target_point.get("height")
+            or telemetry.get("altitude")
+            or 0
+        )
+        try:
+            loiter_height = float(loiter_height)
+        except (TypeError, ValueError):
+            loiter_height = float(target_point.get("height") or 0)
+
+        result = self._send_guided_loiter_target(current_lat, current_lon, loiter_height)
+        ok = bool(result.get("success"))
+        message = result.get("message", "current position loiter" if ok else "current position loiter failed")
+        output = {
+            "status": "ok" if ok else "failed",
+            "action": "hold_current_position",
+            "flight_kind": flight_kind,
+            "distance_to_target": distance,
+            "arrival_radius": arrival_radius,
+            "loiter_point": {
+                "latitude": current_lat,
+                "longitude": current_lon,
+                "height": loiter_height,
+            },
+            "message": message,
+        }
+        return True, ok, message, output
+
     def _set_emergency_land_mode(self) -> tuple:
         """进入紧急降落模式，优先复用 FlightControl.land。"""
         if self._flight_control and hasattr(self._flight_control, "land"):
@@ -1618,7 +1723,6 @@ class DrcController:
         """
         logger.info("Drone emergency stop!")
         brake_sent, brake_simulated, brake_error = self._send_zero_velocity()
-        land_ok, land_simulated, land_message = self._set_emergency_land_mode()
         if brake_error and not brake_simulated:
             return MessageBuilder.build_reply(
                 msg,
@@ -1633,6 +1737,45 @@ class DrcController:
                 },
             )
 
+        hold_handled, hold_ok, hold_message, hold_output = self._point_flight_emergency_hold()
+        if hold_handled:
+            if self._active_fly_to_point:
+                fly_to_id = self._active_fly_to_point.get("fly_to_id", "")
+                self.report_flyto_progress(fly_to_id, "wayline_cancel", result=0 if hold_ok else DOCK_COMMUNICATION_ERROR)
+            if self._active_takeoff_to_point:
+                flight_id = self._active_takeoff_to_point.get("flight_id", "")
+                track_id = self._active_takeoff_to_point.get("track_id", "")
+                self.report_takeoff_to_point_progress(
+                    flight_id,
+                    "wayline_cancel",
+                    result=0 if hold_ok else DOCK_COMMUNICATION_ERROR,
+                    track_id=track_id,
+                )
+
+            if self._drc_enabled:
+                self._heartbeat_running = False
+                self._drc_enabled = False
+                self._session_id = ""
+                self.report_drc_status_notify(drc_state=0, result=0 if hold_ok else DOCK_COMMUNICATION_ERROR)
+            self._active_fly_to_point = None
+            self._active_takeoff_to_point = None
+            self._write_audit_log("emergency_stop_hold_current_position", hold_message)
+            return MessageBuilder.build_reply(
+                msg,
+                result=0 if hold_ok else DOCK_COMMUNICATION_ERROR,
+                msg_str="" if hold_ok else hold_message,
+                data={
+                    "output": {
+                        **hold_output,
+                        "brake_sent": brake_sent,
+                        "land_ok": False,
+                        "loiter_ok": hold_ok,
+                        "simulated": False,
+                    }
+                },
+            )
+
+        land_ok, land_simulated, land_message = self._set_emergency_land_mode()
         status = "ok" if land_ok else "failed"
         result_code = 0 if land_ok else DOCK_COMMUNICATION_ERROR
         if self._drc_enabled:
