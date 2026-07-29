@@ -133,18 +133,17 @@ device:
 
   # 子设备拓扑列表，会作为 update_topo 的 sub_devices[] 上报。
   # production 模式建议显式配置真实子设备 SN、密钥、nonce 和物模型版本。
-  # 示例：
-  # sub_devices:
-  #   - sn: "DRONESIM001"        # 子设备序列号
-  #     domain: "0"              # 子设备命名空间，飞行器通常为 "0"
-  #     type: 60                 # 子设备产品类型，需与 DJI 产品支持列表一致
-  #     sub_type: 0              # 子设备产品子类型
-  #     index: "A"               # 连接网关设备的通道索引
-  #     device_secret: ""        # 子设备密钥
-  #     nonce: ""                # 子设备 nonce
-  #     thing_version: "1.1.2"   # 子设备物模型版本
-  #     online: true             # 是否启动时作为在线子设备上报
-  #     paired: true             # 是否标记为已配对子设备
+  sub_devices:
+    - sn: "CG022620260528"     # 无人机子设备序列号
+      domain: "0"              # 子设备命名空间，飞行器通常为 "0"
+      type: 60                 # 子设备产品类型，需与 DJI 产品支持列表一致
+      sub_type: 0              # 子设备产品子类型
+      index: "A"               # 连接网关设备的通道索引
+      device_secret: ""        # 子设备密钥
+      nonce: ""                # 子设备 nonce
+      thing_version: "1.1.2"   # 子设备物模型版本
+      online: true             # 是否启动时作为在线子设备上报
+      paired: true             # 是否标记为已配对子设备
 
   # 飞行限制
   limits:
