@@ -341,6 +341,51 @@ def aircraft_mode_code(telemetry: Dict[str, Any]) -> Optional[int]:
     return mode_code if 0 <= mode_code <= 10 else None
 
 
+def derive_aircraft_mode_code_from_real_state(
+    telemetry: Dict[str, Any],
+    mission_status: Optional[str] = None,
+    wayline_mission_state: Optional[int] = None,
+    auto_takeoff_state: Optional[str] = None,
+    nest_status: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Derive Dock3 aircraft mode_code from real telemetry and business state.
+
+    This intentionally does not map MAVLink ``flight_mode`` to Dock3
+    ``mode_code``.  The output is built from real observed signals:
+    connection/GPS/armed from aircraft telemetry, plus mission/takeoff state
+    from the gateway's active business modules.
+    """
+    explicit = aircraft_mode_code(telemetry)
+    if explicit is not None:
+        return explicit
+
+    connected = telemetry.get("connection_status") == "connected"
+    if not connected:
+        return 0
+
+    try:
+        wayline_state = int(wayline_mission_state) if wayline_mission_state is not None else None
+    except (TypeError, ValueError):
+        wayline_state = None
+
+    mission_status_text = str(mission_status or "").lower()
+    if mission_status_text == "running" or wayline_state in {6, 8}:
+        return 5
+
+    takeoff_state_text = str(auto_takeoff_state or "").upper()
+    nest = nest_status if isinstance(nest_status, dict) else {}
+    if takeoff_state_text == "EXECUTING" or bool(nest.get("takeoff_in_progress")):
+        return 4
+
+    if bool(telemetry.get("armed", False)):
+        return 3
+
+    if gps_fixed_to_dock3_state(telemetry.get("gps_fixed", 0)) == 2:
+        return 2
+
+    return 1
+
+
 def _finite_number(value: Any, default: float) -> float:
     """拒绝 NaN/Inf，避免无效浮点数进入 JSON OSD。"""
     try:

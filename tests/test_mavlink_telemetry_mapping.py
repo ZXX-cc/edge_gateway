@@ -18,6 +18,7 @@ from web.mavlink.telemetry.mapping import (  # noqa: E402
     aircraft_mode_code,
     apply_mavlink_message,
     build_osd_data,
+    derive_aircraft_mode_code_from_real_state,
     new_telemetry_state,
 )
 from web.mavlink.properties.mapping import build_properties_from_osd  # noqa: E402
@@ -112,6 +113,36 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(aircraft_mode_code({"aircraft_mode_code": 5}), 5)
         self.assertEqual(aircraft_mode_code({"mode_code": "3"}), 3)
         self.assertIsNone(aircraft_mode_code({"mode_code": 99}))
+
+    def test_derive_aircraft_mode_code_from_real_runtime_state(self):
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "disconnected",
+        }), 0)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 0,
+            "armed": False,
+        }), 1)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": False,
+        }), 2)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }), 3)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, auto_takeoff_state="EXECUTING"), 4)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, mission_status="running", wayline_mission_state=6), 5)
 
     def test_gps_quality_falls_back_to_satellite_count(self):
         telemetry = new_telemetry_state()
