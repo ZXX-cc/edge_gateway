@@ -17,7 +17,6 @@ from typing import Any, Dict, Iterable, Optional
 from src.mavlink.flight_modes import (
     parse_flight_mode,
     flight_mode_profile,
-    mode_to_dji_code,
 )
 
 
@@ -313,14 +312,33 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         "gimbal_roll": _finite_number(telemetry.get("gimbal_roll"), 0.0),
         "gimbal_yaw": _finite_number(telemetry.get("gimbal_yaw"), 0.0) % 360.0,
         "obstacle_state": telemetry.get("obstacle_state", {}),
-        "mode_code": mode_to_dji_code(telemetry.get("flight_mode", "UNKNOWN")),
         "gear": 1 if telemetry.get("armed", False) else 0,
         "flight_time": telemetry.get("flight_time", 0),
         "timestamp": int(time.time() * 1000),
     }
+    mode_code = aircraft_mode_code(telemetry)
+    if mode_code is not None:
+        osd["mode_code"] = mode_code
     if current > 0:
         osd["battery"]["current"] = int(current * 1000)
     return osd
+
+
+def aircraft_mode_code(telemetry: Dict[str, Any]) -> Optional[int]:
+    """Return a real Dock3 aircraft mode_code when an upstream source provides it.
+
+    Do not synthesize this field from MAVLink ``flight_mode``.  Dock3 aircraft
+    ``mode_code`` is a flight-state enum, while ArduPilot flight modes are
+    autopilot modes.  Reporting a guessed value is worse than omitting it.
+    """
+    raw = telemetry.get("aircraft_mode_code", telemetry.get("mode_code"))
+    if raw is None:
+        return None
+    try:
+        mode_code = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return mode_code if 0 <= mode_code <= 10 else None
 
 
 def _finite_number(value: Any, default: float) -> float:
@@ -354,7 +372,6 @@ def build_dock3_properties_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str
         "longitude": telemetry.get("longitude", 0.0),
         "latitude": telemetry.get("latitude", 0.0),
         "height": telemetry.get("altitudeRelative", 0.0),
-        "mode_code": mode_to_dji_code(telemetry.get("flight_mode", "UNKNOWN")),
         "electricity": battery_remaining,
         "drone_charge_state": {
             "capacity_percent": battery_remaining,
@@ -372,6 +389,9 @@ def build_dock3_properties_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str
         },
         "wind_speed": telemetry.get("windSpeed", 0.0),
     }
+    mode_code = aircraft_mode_code(telemetry)
+    if mode_code is not None:
+        properties["mode_code"] = mode_code
 
     return {key: value for key, value in properties.items() if value is not None}
 

@@ -14,7 +14,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from web.mavlink.telemetry.mapping import apply_mavlink_message, build_osd_data, new_telemetry_state  # noqa: E402
+from web.mavlink.telemetry.mapping import (  # noqa: E402
+    aircraft_mode_code,
+    apply_mavlink_message,
+    build_osd_data,
+    new_telemetry_state,
+)
 from web.mavlink.properties.mapping import build_properties_from_osd  # noqa: E402
 
 
@@ -86,7 +91,7 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
 
         self.assertEqual(telemetry["flight_mode_profile"], "copter")
         self.assertEqual(telemetry["flight_mode"], "LAND")
-        self.assertEqual(osd["mode_code"], 7)
+        self.assertNotIn("mode_code", osd)
         self.assertEqual(osd["gear"], 1)
 
         apply_mavlink_message(
@@ -96,6 +101,17 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
 
         self.assertEqual(telemetry["flight_mode_profile"], "plane")
         self.assertEqual(telemetry["flight_mode"], "GUIDED")
+
+    def test_aircraft_mode_code_only_uses_explicit_dock3_source(self):
+        self.assertIsNone(aircraft_mode_code({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+            "flight_mode": "AUTO",
+        }))
+        self.assertEqual(aircraft_mode_code({"aircraft_mode_code": 5}), 5)
+        self.assertEqual(aircraft_mode_code({"mode_code": "3"}), 3)
+        self.assertIsNone(aircraft_mode_code({"mode_code": 99}))
 
     def test_gps_quality_falls_back_to_satellite_count(self):
         telemetry = new_telemetry_state()
