@@ -1191,7 +1191,7 @@ class EdgeGateway:
         def media_state_cb(state):
             if self.history_logger:
                 self.history_logger.record_device_state_change(gateway_sn, state, source='media_manager')
-            self.telemetry_reporter.report_state(gateway_sn, state)
+            self.mqtt.publish_state(gateway_sn, state)
         self.media.set_state_callback(media_state_cb)
         self.media.set_request_sender(self.cloud_conn.send_request)
 
