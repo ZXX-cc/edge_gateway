@@ -158,8 +158,8 @@ device:
 
   # 飞行限制
   limits:
-    max_height: 120 # 最大飞行高度(m)
-    max_distance: 10000 # 最大飞行距离(m)
+    max_height: 500 # 最大飞行高度(m)
+    max_distance: 50000 # 最大飞行距离(m)
     max_speed: 15 # 最大速度(m/s)
     return_home_power: 30 # 返航预留电量(%)
 
