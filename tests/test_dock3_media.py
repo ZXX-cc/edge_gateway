@@ -346,7 +346,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(start["data"]["result"], 0)
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
         self.assertTrue(manager._live_streaming)
-        live_status = states[-1]["property"]["live_status"]
+        live_status = states[-1]["live_status"]
         self.assertEqual(live_status[0]["video_id"], video_id)
         self.assertEqual(live_status[0]["status"], "in_progress")
         self.assertEqual(live_status[0]["video_quality"], 2)
@@ -357,7 +357,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         }))
         self.assertEqual(quality["data"]["result"], 0)
         self.assertEqual(manager._live_quality, 3)
-        self.assertEqual(states[-1]["property"]["live_status"][0]["video_quality"], 3)
+        self.assertEqual(states[-1]["live_status"][0]["video_quality"], 3)
 
         lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
             "video_type": "zoom",

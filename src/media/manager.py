@@ -950,7 +950,7 @@ class MediaManager:
                 self.gateway_sn,
             ))
         if self._state_callback:
-            self._state_callback({"property": {"live_status": [self._live_status_state_item(data)]}})
+            self._state_callback({"live_status": [self._live_status_state_item(data)]})
 
     @staticmethod
     def _live_status_state_item(data: dict) -> dict:
