@@ -349,6 +349,16 @@ class EdgeGateway:
             'device_callsign': device_callsign or Config.get_gateway_sn(),
             'device_model_key': device_model_key,
         }
+        bind_devices = [bind_device]
+        if bool(cfg.get('bind_sub_devices', True)):
+            for sub_device in self.device.get_all_sub_devices():
+                bind_devices.append({
+                    'sn': sub_device.sn,
+                    'device_binding_code': binding_code,
+                    'organization_id': organization_id,
+                    'device_callsign': sub_device.sn,
+                    'device_model_key': f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
+                })
 
         def _on_get_reply(method: str, msg: dict):
             result = msg.get('data', {}).get('result', -1)
@@ -356,7 +366,7 @@ class EdgeGateway:
                 logger.error("Configured organization query failed: result=%s", result)
                 return
             logger.info("Configured organization query succeeded; sending organization bind")
-            self.device.bind_to_organization([bind_device])
+            self.device.bind_to_organization(bind_devices)
 
         logger.info("Configured organization binding enabled; querying organization before bind")
         tid = self.device.query_organization_from_cloud(binding_code, organization_id, callback=_on_get_reply)

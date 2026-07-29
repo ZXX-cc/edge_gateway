@@ -121,6 +121,7 @@ device:
     organization_id: "org_sim_001"
     device_callsign: "BXD020120260727"
     device_model_key: "dock3-sim"
+    bind_sub_devices: true
 
   # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
   # 网关不会自动生成 device_secret/nonce。
