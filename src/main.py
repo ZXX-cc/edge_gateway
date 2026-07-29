@@ -1096,6 +1096,8 @@ class EdgeGateway:
             return
 
         auto_bound = self._auto_bind_gateway_for_test_runtime()
+        if self.device:
+            self.device.notify_payload_state(force=True)
         if auto_bound:
             return
 
@@ -1238,10 +1240,14 @@ class EdgeGateway:
 
         def camera_event_cb(event):
             self.mqtt.publish_event(event)
+            if self.device:
+                self.device.notify_payload_state()
         self.camera.set_event_callback(camera_event_cb)
 
         def gimbal_event_cb(event):
             self.mqtt.publish_event(event)
+            if self.device:
+                self.device.notify_payload_state()
         self.gimbal.set_event_callback(gimbal_event_cb)
 
     def _handle_drc_event(self, event: dict):

@@ -183,6 +183,7 @@ class DeviceManager:
         self._dock_manager = None          # DockManager - 机场管理
         self._cloud_conn = None            # CloudConnectionManager - 云端请求
         self._payload_state_provider = None # Direct payload state provider
+        self._last_payload_state_report: Dict[str, Any] = {}
 
         # ===== 组织绑定信息持久化 =====
         self._org_data_path = os.path.join(
@@ -898,6 +899,28 @@ class DeviceManager:
             if notify and self._state_callback:
                 self._notify_state({"property": changed})
         return updates
+
+    def build_payload_state_update(self) -> Dict[str, Any]:
+        """Build Dock3 payload state data keyed by official payload index."""
+        payload = self._build_gimbal_payload_property()
+        payload_index = str(payload.get("payload_index") or "")
+        if not payload_index:
+            return {}
+        return {payload_index: copy.deepcopy(payload)}
+
+    def notify_payload_state(self, force: bool = False) -> bool:
+        """Report payload properties on thing/product/{sn}/state."""
+        if not self._state_callback:
+            return False
+        state = self.build_payload_state_update()
+        if not state:
+            return False
+        previous = getattr(self, "_last_payload_state_report", {})
+        if not force and previous == state:
+            return False
+        self._last_payload_state_report = copy.deepcopy(state)
+        self._state_callback(state)
+        return True
 
     def update_properties(self, updates: Dict[str, Any], notify: bool = True):
         """批量更新属性（内部遥测/机巢更新用）"""
