@@ -2,7 +2,9 @@
 """Category smoke test for DJI Dock3 live protocol."""
 
 import argparse
+import json
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +28,40 @@ class Dock3LiveClient(MqttRequestClient):
 
     def ignored_total(self):
         return self.stale_total()
+
+    def wait_live_state(self, previous_count: int, timeout: float, *, video_id: str, expected_status: int) -> int:
+        topic = f"thing/product/{self.sn}/state"
+        deadline = time.time() + timeout
+        seen = previous_count
+        while time.time() < deadline:
+            payload = self.wait_observed(topic, seen, max(0.05, deadline - time.time()))
+            if payload is None:
+                break
+            seen = self.observed_count(topic)
+            data = payload.get("data", {}) if isinstance(payload, dict) else {}
+            properties = data.get("property", {}) if isinstance(data, dict) else {}
+            live_status = properties.get("live_status") if isinstance(properties, dict) else None
+            if not isinstance(live_status, list):
+                continue
+            for item in live_status:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("video_id") != video_id:
+                    continue
+                if item.get("status") != expected_status:
+                    continue
+                if not isinstance(item.get("error_status"), int):
+                    continue
+                return 0
+
+        latest = self.observed_by_topic.get(topic, [])[-3:]
+        print(
+            f"timeout waiting live_status state: video_id={video_id}, status={expected_status}",
+            file=sys.stderr,
+        )
+        if latest:
+            print(json.dumps(latest, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 14
 
 
 def run_live_checks(client: Dock3LiveClient, args) -> int:
@@ -66,6 +102,8 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         return 10
 
     status_before = client.event_count("live_status_notify")
+    state_topic = f"thing/product/{args.sn}/state"
+    state_before = client.observed_count(state_topic)
     rc, start = client.request(
         "live_start_push",
         {
@@ -79,6 +117,9 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         [0],
         "in_progress",
     )
+    if rc != 0:
+        return rc
+    rc = client.wait_live_state(state_before, args.timeout, video_id=video_id, expected_status=1)
     if rc != 0:
         return rc
     session_id = start.get("data", {}).get("session_id")
@@ -95,6 +136,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         return rc
 
     status_before = client.event_count("live_status_notify")
+    state_before = client.observed_count(state_topic)
     rc, _ = client.request(
         "live_set_quality",
         {"video_id": video_id, "video_quality": 3},
@@ -102,6 +144,9 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         [0],
         "ok",
     )
+    if rc != 0:
+        return rc
+    rc = client.wait_live_state(state_before, args.timeout, video_id=video_id, expected_status=1)
     if rc != 0:
         return rc
     rc, _ = client.wait_event("live_status_notify", status_before, args.timeout, expected_status="ok")
@@ -127,6 +172,7 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         return 0
 
     status_before = client.event_count("live_status_notify")
+    state_before = client.observed_count(state_topic)
     rc, _ = client.request(
         "live_stop_push",
         {"video_id": video_id},
@@ -134,6 +180,9 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
         [0],
         "ok",
     )
+    if rc != 0:
+        return rc
+    rc = client.wait_live_state(state_before, args.timeout, video_id=video_id, expected_status=0)
     if rc != 0:
         return rc
     rc, _ = client.wait_event("live_status_notify", status_before, args.timeout, expected_status="ok")
@@ -182,6 +231,7 @@ def main():
         quiet_stale=args.quiet_stale,
         client_id_prefix="edge_gateway_dock3_live",
         subscribe_events=True,
+        observe_topics={f"thing/product/{args.sn}/state"},
     )
     if not client.connect(args.timeout):
         print("timeout waiting for MQTT connection", file=sys.stderr)

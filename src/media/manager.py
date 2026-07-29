@@ -931,7 +931,13 @@ class MediaManager:
             finally:
                 self._ffmpeg_process = None
 
-    def _publish_live_status_event(self, status: str, reason: str = ""):
+    def _publish_live_status_event(
+        self,
+        status: str,
+        reason: str = "",
+        *,
+        live_status: Optional[int] = None,
+    ):
         data = live_status_event_data(
             status=status,
             video_id=self._live_video_id,
@@ -950,24 +956,24 @@ class MediaManager:
                 self.gateway_sn,
             ))
         if self._state_callback:
-            self._state_callback({"live_status": [self._live_status_state_item(data)]})
+            self._state_callback({"property": {"live_status": [
+                self._live_status_state_item(data, live_status=live_status)
+            ]}})
 
     @staticmethod
-    def _live_status_state_item(data: dict) -> dict:
+    def _live_status_state_item(data: dict, live_status: Optional[int] = None) -> dict:
         output = data.get("output", {}) if isinstance(data, dict) else {}
-        item = {
+        task_status = output.get("status", "")
+        status_value = live_status
+        if status_value is None:
+            status_value = 1 if task_status == TASK_STATUS_IN_PROGRESS else 0
+        return {
             "video_id": data.get("video_id", ""),
-            "session_id": data.get("session_id", ""),
-            "status": output.get("status", ""),
-            "url_type": data.get("url_type", 4),
-            "video_quality": data.get("video_quality", 0),
             "video_type": data.get("video_type", "normal"),
-            "timestamp": data.get("timestamp", int(time.time() * 1000)),
+            "video_quality": data.get("video_quality", 0),
+            "status": status_value,
+            "error_status": 0 if task_status in {TASK_STATUS_OK, TASK_STATUS_IN_PROGRESS} else 1,
         }
-        for key in ("url", "source", "reason"):
-            if data.get(key):
-                item[key] = data[key]
-        return item
 
     def _ffmpeg_monitor(self, process: Optional[subprocess.Popen] = None):
         """监控 ffmpeg 进程状态"""
@@ -1064,7 +1070,7 @@ class MediaManager:
                     msg_str="Live video source unavailable",
                 )
 
-        self._publish_live_status_event(TASK_STATUS_IN_PROGRESS)
+        self._publish_live_status_event(TASK_STATUS_IN_PROGRESS, live_status=1)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_IN_PROGRESS, {
             'session_id': self._live_session_id,
             'video_id': self._live_video_id,
@@ -1110,7 +1116,7 @@ class MediaManager:
         self._stop_ffmpeg()
 
         self._live_video_id = video_id or self._live_video_id
-        self._publish_live_status_event(TASK_STATUS_OK)
+        self._publish_live_status_event(TASK_STATUS_OK, live_status=0)
 
         stopped_session = self._live_session_id
         self._live_streaming = False
@@ -1188,7 +1194,7 @@ class MediaManager:
             self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key)
 
         photo = self._take_photo_after_lens_change(msg, video_id, video_type)
-        self._publish_live_status_event(TASK_STATUS_OK)
+        self._publish_live_status_event(TASK_STATUS_OK, live_status=1 if self._live_streaming else 0)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
             "video_id": video_id,
             "video_type": self._live_video_type,
@@ -1262,7 +1268,7 @@ class MediaManager:
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
             self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_source_key)
 
-        self._publish_live_status_event(TASK_STATUS_OK)
+        self._publish_live_status_event(TASK_STATUS_OK, live_status=1 if self._live_streaming else 0)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
             "video_id": video_id,
             "video_quality": self._live_quality,
