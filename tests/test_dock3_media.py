@@ -330,9 +330,11 @@ class Dock3MediaManagerTest(unittest.TestCase):
 
     def test_live_mock_lifecycle_emits_status_events(self):
         events = []
+        states = []
         manager = MediaManager()
         manager.gateway_sn = "EDGEGW001"
         manager.set_event_callback(events.append)
+        manager.set_state_callback(states.append)
         video_id = "EDGEGW001/0/normal"
 
         start = manager.handle_live_start_push(base_msg("live_start_push", {
@@ -344,6 +346,10 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(start["data"]["result"], 0)
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
         self.assertTrue(manager._live_streaming)
+        live_status = states[-1]["property"]["live_status"]
+        self.assertEqual(live_status[0]["video_id"], video_id)
+        self.assertEqual(live_status[0]["status"], "in_progress")
+        self.assertEqual(live_status[0]["video_quality"], 2)
 
         quality = manager.handle_live_set_quality(base_msg("live_set_quality", {
             "video_id": video_id,
@@ -351,6 +357,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         }))
         self.assertEqual(quality["data"]["result"], 0)
         self.assertEqual(manager._live_quality, 3)
+        self.assertEqual(states[-1]["property"]["live_status"][0]["video_quality"], 3)
 
         lens = manager.handle_live_lens_change(base_msg("live_lens_change", {
             "video_type": "zoom",

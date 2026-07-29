@@ -144,26 +144,6 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.manager.update_properties({"mode_code": 4}, notify=True)
         self.assertEqual(len(self.states), before)
 
-    def test_payload_state_reports_dynamic_payload_index(self):
-        self.manager.set_payload_state_provider(lambda: {
-            "gimbal": {
-                "payload_index": "52-0-0",
-                "gimbal": {"pitch": -12.04, "roll": 3.02, "yaw": 190},
-            }
-        })
-
-        self.assertTrue(self.manager.notify_payload_state(force=True))
-
-        state = self.states[-1]
-        self.assertIn("52-0-0", state)
-        payload = state["52-0-0"]
-        self.assertEqual(payload["payload_index"], "52-0-0")
-        self.assertEqual(payload["gimbal_pitch"], -12.0)
-        self.assertEqual(payload["gimbal_roll"], 3.0)
-        self.assertEqual(payload["gimbal_yaw"], -170.0)
-        self.assertEqual(payload["measure_target_error_state"], 3)
-        self.assertNotIn("property", state)
-
     def test_configured_sub_device_is_available_for_binding_and_topology(self):
         Config._data = {
             "gateway": {"sn": "EDGEGW001"},

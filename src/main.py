@@ -1096,8 +1096,6 @@ class EdgeGateway:
             return
 
         auto_bound = self._auto_bind_gateway_for_test_runtime()
-        if self.device:
-            self.device.notify_payload_state(force=True)
         if auto_bound:
             return
 
@@ -1190,6 +1188,11 @@ class EdgeGateway:
         def media_event_cb(event):
             self.mqtt.publish_event(event)
         self.media.set_event_callback(media_event_cb)
+        def media_state_cb(state):
+            if self.history_logger:
+                self.history_logger.record_device_state_change(gateway_sn, state, source='media_manager')
+            self.telemetry_reporter.report_state(gateway_sn, state)
+        self.media.set_state_callback(media_state_cb)
         self.media.set_request_sender(self.cloud_conn.send_request)
 
         # DRC事件回调
@@ -1240,14 +1243,10 @@ class EdgeGateway:
 
         def camera_event_cb(event):
             self.mqtt.publish_event(event)
-            if self.device:
-                self.device.notify_payload_state()
         self.camera.set_event_callback(camera_event_cb)
 
         def gimbal_event_cb(event):
             self.mqtt.publish_event(event)
-            if self.device:
-                self.device.notify_payload_state()
         self.gimbal.set_event_callback(gimbal_event_cb)
 
     def _handle_drc_event(self, event: dict):

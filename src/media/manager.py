@@ -123,6 +123,7 @@ class MediaManager:
 
         # 回调
         self._event_callback: Optional[Callable] = None
+        self._state_callback: Optional[Callable] = None
         self._request_sender: Optional[Callable] = None
         self._camera_controller = None
 
@@ -160,6 +161,10 @@ class MediaManager:
     def set_event_callback(self, callback: Callable):
         """设置事件上报回调"""
         self._event_callback = callback
+
+    def set_state_callback(self, callback: Callable):
+        """设置物模型 state 上报回调"""
+        self._state_callback = callback
 
     def set_request_sender(self, sender: Callable):
         """设置请求发送器（用于 requests 通道）"""
@@ -927,23 +932,42 @@ class MediaManager:
                 self._ffmpeg_process = None
 
     def _publish_live_status_event(self, status: str, reason: str = ""):
-        if not self._event_callback:
-            return
-        self._event_callback(MessageBuilder.build_event(
-            "live_status_notify",
-            live_status_event_data(
-                status=status,
-                video_id=self._live_video_id,
-                session_id=self._live_session_id,
-                url_type=self._live_protocol,
-                video_quality=self._live_quality,
-                video_type=self._live_video_type,
-                url=self._live_url,
-                reason=reason,
-                source=self._get_video_source(self._live_source_key),
-            ),
-            self.gateway_sn,
-        ))
+        data = live_status_event_data(
+            status=status,
+            video_id=self._live_video_id,
+            session_id=self._live_session_id,
+            url_type=self._live_protocol,
+            video_quality=self._live_quality,
+            video_type=self._live_video_type,
+            url=self._live_url,
+            reason=reason,
+            source=self._get_video_source(self._live_source_key),
+        )
+        if self._event_callback:
+            self._event_callback(MessageBuilder.build_event(
+                "live_status_notify",
+                data,
+                self.gateway_sn,
+            ))
+        if self._state_callback:
+            self._state_callback({"property": {"live_status": [self._live_status_state_item(data)]}})
+
+    @staticmethod
+    def _live_status_state_item(data: dict) -> dict:
+        output = data.get("output", {}) if isinstance(data, dict) else {}
+        item = {
+            "video_id": data.get("video_id", ""),
+            "session_id": data.get("session_id", ""),
+            "status": output.get("status", ""),
+            "url_type": data.get("url_type", 4),
+            "video_quality": data.get("video_quality", 0),
+            "video_type": data.get("video_type", "normal"),
+            "timestamp": data.get("timestamp", int(time.time() * 1000)),
+        }
+        for key in ("url", "source", "reason"):
+            if data.get(key):
+                item[key] = data[key]
+        return item
 
     def _ffmpeg_monitor(self, process: Optional[subprocess.Popen] = None):
         """监控 ffmpeg 进程状态"""
