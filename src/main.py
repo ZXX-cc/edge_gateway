@@ -1284,7 +1284,6 @@ class EdgeGateway:
             'putter_close': self.device.handle_putter_close,
             'device_lock': self.device.handle_device_lock,
             'device_unlock': self.device.handle_device_unlock,
-            'camera_mode_switch': self.device.handle_camera_mode_switch,
             'supplement_light_open': self.device.handle_supplement_light_open,
             'supplement_light_close': self.device.handle_supplement_light_close,
             'sdr_workmode_switch': self.device.handle_sdr_workmode_switch,
@@ -1401,7 +1400,6 @@ class EdgeGateway:
 
         # ---- 相机控制API (Camera Control) ----
         self.router.register_batch({
-            'camera_photo_take': self.camera.handle_camera_photo_take,
             'start_photo': self.camera.handle_start_photo,
             'stop_photo': self.camera.handle_stop_photo,
             'start_record': self.camera.handle_start_record,
@@ -1412,7 +1410,6 @@ class EdgeGateway:
             'set_focus_mode': self.camera.handle_set_focus_mode,
             'set_focus_value': self.camera.handle_set_focus_value,
             'spot_focus': self.camera.handle_spot_focus,
-            'photo_storage_set': self.camera.handle_photo_storage_set,
             'camera_recover': self.camera.handle_camera_recover,
             'camera_reset': self.camera.handle_camera_reset,
             'set_shutter_speed': self.camera.handle_set_shutter_speed,
@@ -1424,23 +1421,13 @@ class EdgeGateway:
             'set_frame_rate': self.camera.handle_set_frame_rate,
             'set_video_encoding': self.camera.handle_set_video_encoding,
             'camera_capability_query': self.camera.handle_camera_capability_query,
-            'camera_photo_stop': self.camera.handle_camera_photo_stop,
-            'camera_recording_start': self.camera.handle_camera_recording_start,
-            'camera_recording_stop': self.camera.handle_camera_recording_stop,
-            'camera_focal_length_set': self.camera.handle_camera_focal_length_set,
-            'camera_point_focus_action': self.camera.handle_camera_point_focus_action,
-            'camera_exposure_mode_set': self.camera.handle_camera_exposure_mode_set,
-            'camera_focus_mode_set': self.camera.handle_camera_focus_mode_set,
-            'camera_focus_value_set': self.camera.handle_camera_focus_value_set,
         }, category='payload')
 
         # ---- 云台控制API (Gimbal Control) ----
         self.router.register_batch({
             'gimbalRotate': self.gimbal.handle_gimbal_rotate,
             'gimbal_rotate': self.gimbal.handle_gimbal_rotate,
-            'camera_look_at': self.gimbal.handle_camera_look_at,
             'set_gimbal_mode': self.gimbal.handle_set_gimbal_mode,
-            'gimbal_reset': self.gimbal.handle_gimbal_reset,
             'gimbal_capability_query': self.gimbal.handle_gimbal_capability_query,
             'gimbal_status_query': self.gimbal.handle_gimbal_status_query,
             'camera_screen_drag': self.gimbal.handle_camera_screen_drag,
@@ -1489,7 +1476,6 @@ class EdgeGateway:
 
         # ---- 红外相机API (IR Thermal) ----
         self.router.register_batch({
-            'ir_metering_mode_set': self.gimbal.handle_ir_metering_mode_set,
             'ir_color_palette_set': self.gimbal.handle_ir_color_palette_set,
             'ir_display_mode_set': self.gimbal.handle_ir_display_mode_set,
             'ir_isotherm_set': self.gimbal.handle_ir_isotherm_set,
@@ -1509,7 +1495,6 @@ class EdgeGateway:
             'psdk_function_set': self.third_party.handle_psdk_function_set,
             'set_thermal_mode': self.third_party.handle_set_thermal_mode,
             'set_palette': self.third_party.handle_set_palette,
-            'payload_authority_grab': self.third_party.handle_payload_authority_grab,
             'payload_authority_release': self.third_party.handle_payload_authority_release,
             'payload_status_query': self.third_party.handle_payload_status_query,
             'parachute_open': self.third_party.handle_parachute_open,
@@ -1568,7 +1553,6 @@ class EdgeGateway:
             'drone_control': self.drc.handle_drone_control,
             'payload_control': self.drc.handle_payload_control,
             'flight_authority_grab': self.drc.handle_flight_authority_grab,
-            'payload_authority_grab': self.drc.handle_payload_authority_grab,
             'drc_gimbal_speed_push': self.drc.handle_drc_gimbal_speed_push,
             'fly_to_point': self.drc.handle_fly_to_point,
             'fly_to_point_stop': self.drc.handle_fly_to_point_stop,
@@ -1602,6 +1586,7 @@ class EdgeGateway:
             'camera_look_at': self.gimbal.handle_camera_look_at,
             'photo_storage_set': self.camera.handle_photo_storage_set,
             'video_storage_set': self.camera.handle_video_storage_set,
+            'payload_authority_grab': self.third_party.handle_payload_authority_grab,
             'ir_metering_mode_set': self.gimbal.handle_ir_metering_mode_set,
             'ir_metering_point_set': self.gimbal.handle_ir_metering_point_set,
             'ir_metering_area_set': self.gimbal.handle_ir_metering_area_set,
