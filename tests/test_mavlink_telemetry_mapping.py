@@ -176,6 +176,18 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertTrue(telemetry["battery_available"])
         self.assertEqual(build_osd_data(telemetry)["battery"]["voltage"], 16600)
 
+    def test_osd_includes_aircraft_limit_fields_when_available(self):
+        telemetry = new_telemetry_state()
+        telemetry.update({
+            "height_limit": 120,
+            "distance_limit": 10000,
+        })
+
+        osd = build_osd_data(telemetry)
+
+        self.assertEqual(osd["height_limit"], 120.0)
+        self.assertEqual(osd["distance_limit"], 10000.0)
+
     def test_zero_battery_without_electrical_measurement_stays_unavailable(self):
         telemetry = new_telemetry_state()
 

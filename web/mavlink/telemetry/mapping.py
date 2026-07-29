@@ -319,9 +319,33 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     mode_code = aircraft_mode_code(telemetry)
     if mode_code is not None:
         osd["mode_code"] = mode_code
+    height_limit = _limit_value(
+        telemetry.get("height_limit"),
+        telemetry.get("max_height"),
+        telemetry.get("flight_height_limit"),
+    )
+    if height_limit is not None:
+        osd["height_limit"] = height_limit
+    distance_limit = _limit_value(
+        telemetry.get("distance_limit"),
+        telemetry.get("max_distance"),
+        telemetry.get("flight_distance_limit"),
+    )
+    if distance_limit is not None:
+        osd["distance_limit"] = distance_limit
     if current > 0:
         osd["battery"]["current"] = int(current * 1000)
     return osd
+
+
+def _limit_value(*values: Any) -> Optional[float]:
+    for value in values:
+        if value is None:
+            continue
+        parsed = _finite_number(value, None)
+        if parsed is not None and parsed >= 0:
+            return parsed
+    return None
 
 
 def aircraft_mode_code(telemetry: Dict[str, Any]) -> Optional[int]:

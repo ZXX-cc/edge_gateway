@@ -92,6 +92,21 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _finite_non_negative_number(*values: Any) -> float | None:
+    parsed = None
+    for value in values:
+        if value is None:
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        break
+    if parsed is None or parsed != parsed or parsed < 0:
+        return None
+    return parsed
+
+
 def _normalize_udp_target_host(host: str) -> str:
     """Convert wildcard bind addresses to a usable UDP destination."""
     if host in ("0.0.0.0", "::", ""):
@@ -823,6 +838,31 @@ class EdgeGateway:
             nest_status=nest_status,
         )
 
+    def _apply_aircraft_limit_fields(self, osd_data: dict) -> None:
+        """Ensure aircraft OSD carries flight height/distance limits."""
+        if not isinstance(osd_data, dict):
+            return
+        telemetry = self.telemetry.get_current_data() if self.telemetry else {}
+        height_limit = _finite_non_negative_number(
+            telemetry.get("height_limit"),
+            telemetry.get("max_height"),
+            telemetry.get("flight_height_limit"),
+        )
+        if height_limit is None:
+            height_limit = _finite_non_negative_number(Config.get("device.limits.max_height"))
+        if height_limit is not None:
+            osd_data["height_limit"] = height_limit
+
+        distance_limit = _finite_non_negative_number(
+            telemetry.get("distance_limit"),
+            telemetry.get("max_distance"),
+            telemetry.get("flight_distance_limit"),
+        )
+        if distance_limit is None:
+            distance_limit = _finite_non_negative_number(Config.get("device.limits.max_distance"))
+        if distance_limit is not None:
+            osd_data["distance_limit"] = distance_limit
+
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""
         try:
@@ -1107,6 +1147,7 @@ class EdgeGateway:
 
         def osd_cb(osd_data):
             self._apply_real_aircraft_mode_code(osd_data)
+            self._apply_aircraft_limit_fields(osd_data)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
             self._report_dock_osd_if_due(force=True)
