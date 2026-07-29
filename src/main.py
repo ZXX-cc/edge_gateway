@@ -321,15 +321,27 @@ class EdgeGateway:
             logger.warning("Organization binding enabled but cloud connection is not ready")
             return True
 
-        state = self.device.get_device_state() if self.device else {}
-        if state.get('state') in {'bound', 'online'}:
-            logger.info("Organization binding skipped because device is already %s", state.get('state'))
-            return True
-
         binding_code = str(cfg.get('device_binding_code', '') or '').strip()
         organization_id = str(cfg.get('organization_id', '') or '').strip()
         device_model_key = str(cfg.get('device_model_key', '') or '').strip()
         device_callsign = str(cfg.get('device_callsign', '') or Config.get_gateway_sn()).strip()
+        bind_sub_devices = bool(cfg.get('bind_sub_devices', True))
+        sub_devices = self.device.get_all_sub_devices() if bind_sub_devices else []
+        try:
+            request_timeout = max(30, int(cfg.get('request_timeout_seconds', 120) or 120))
+        except (TypeError, ValueError):
+            request_timeout = 120
+
+        state = self.device.get_device_state() if self.device else {}
+        if state.get('state') in {'bound', 'online'} and not sub_devices:
+            logger.info("Organization binding skipped because device is already %s", state.get('state'))
+            return True
+        if state.get('state') in {'bound', 'online'} and sub_devices:
+            logger.info(
+                "Device is already %s; continuing configured organization bind for %s sub-devices",
+                state.get('state'),
+                len(sub_devices),
+            )
 
         missing = []
         if not binding_code:
@@ -350,15 +362,14 @@ class EdgeGateway:
             'device_model_key': device_model_key,
         }
         bind_devices = [bind_device]
-        if bool(cfg.get('bind_sub_devices', True)):
-            for sub_device in self.device.get_all_sub_devices():
-                bind_devices.append({
-                    'sn': sub_device.sn,
-                    'device_binding_code': binding_code,
-                    'organization_id': organization_id,
-                    'device_callsign': sub_device.sn,
-                    'device_model_key': f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
-                })
+        for sub_device in sub_devices:
+            bind_devices.append({
+                'sn': sub_device.sn,
+                'device_binding_code': binding_code,
+                'organization_id': organization_id,
+                'device_callsign': sub_device.sn,
+                'device_model_key': f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
+            })
 
         def _on_get_reply(method: str, msg: dict):
             result = msg.get('data', {}).get('result', -1)
@@ -366,10 +377,15 @@ class EdgeGateway:
                 logger.error("Configured organization query failed: result=%s", result)
                 return
             logger.info("Configured organization query succeeded; sending organization bind")
-            self.device.bind_to_organization(bind_devices)
+            self.device.bind_to_organization(bind_devices, timeout=request_timeout)
 
         logger.info("Configured organization binding enabled; querying organization before bind")
-        tid = self.device.query_organization_from_cloud(binding_code, organization_id, callback=_on_get_reply)
+        tid = self.device.query_organization_from_cloud(
+            binding_code,
+            organization_id,
+            callback=_on_get_reply,
+            timeout=request_timeout,
+        )
         if not tid:
             logger.error("Configured organization query was not sent")
         return True

@@ -3329,7 +3329,8 @@ class DeviceManager:
         self._schedule_async(self._save_binding_to_db())
 
     def query_organization_from_cloud(self, binding_code: str, org_id: str,
-                                       callback: Callable = None) -> str:
+                                       callback: Callable = None,
+                                       timeout: int = 30) -> str:
         """
         主动向云端查询组织信息 (airport_organization_get)
 
@@ -3340,6 +3341,7 @@ class DeviceManager:
             binding_code: 设备绑定码
             org_id: 组织ID
             callback: 回调函数
+            timeout: 云端回包超时时间（秒）
 
         Returns:
             tid: 事务ID
@@ -3355,7 +3357,7 @@ class DeviceManager:
             if callback:
                 callback(method, msg)
 
-        tid = self._cloud_conn.send_request('airport_organization_get', data, _on_reply)
+        tid = self._cloud_conn.send_request('airport_organization_get', data, _on_reply, timeout=timeout)
         logger.info(f"Query organization sent: tid={tid}, org={org_id}")
         return tid
 
@@ -3381,7 +3383,8 @@ class DeviceManager:
             logger.warning(f"Organization query failed: result={result}, name={org_name}")
 
     def bind_to_organization(self, bind_devices: list,
-                              callback: Callable = None) -> str:
+                              callback: Callable = None,
+                              timeout: int = 30) -> str:
         """
         主动向云端发起设备绑定到组织 (airport_organization_bind)
 
@@ -3393,6 +3396,7 @@ class DeviceManager:
                 [{sn, device_binding_code, organization_id,
                   device_callsign, device_model_key}, ...]
             callback: 回调函数
+            timeout: 云端回包超时时间（秒）
 
         Returns:
             tid: 事务ID
@@ -3421,7 +3425,7 @@ class DeviceManager:
             if callback:
                 callback(method, msg)
 
-        tid = self._cloud_conn.send_request('airport_organization_bind', data, _on_reply)
+        tid = self._cloud_conn.send_request('airport_organization_bind', data, _on_reply, timeout=timeout)
         logger.info(f"Bind to organization sent: tid={tid}, devices={len(bind_devices)}")
         return tid
 
