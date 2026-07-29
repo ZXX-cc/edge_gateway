@@ -308,6 +308,62 @@ class EdgeGateway:
         logger.info("Auto binding gateway for test runtime: workspace_id=%s", workspace_id)
         return self.device.bind_device(workspace_id, workspace_name)
 
+    def _start_configured_organization_binding(self) -> bool:
+        """Start configured Dock3 organization binding during startup, when enabled."""
+        cfg = Config.get('device.organization_binding', {}) or {}
+        if not bool(cfg.get('enabled', False)):
+            return False
+
+        if not self.device:
+            logger.error("Organization binding enabled but DeviceManager is not available")
+            return True
+        if not self.cloud_conn or not self.cloud_conn.is_cloud_connected:
+            logger.warning("Organization binding enabled but cloud connection is not ready")
+            return True
+
+        state = self.device.get_device_state() if self.device else {}
+        if state.get('state') in {'bound', 'online'}:
+            logger.info("Organization binding skipped because device is already %s", state.get('state'))
+            return True
+
+        binding_code = str(cfg.get('device_binding_code', '') or '').strip()
+        organization_id = str(cfg.get('organization_id', '') or '').strip()
+        device_model_key = str(cfg.get('device_model_key', '') or '').strip()
+        device_callsign = str(cfg.get('device_callsign', '') or Config.get_gateway_sn()).strip()
+
+        missing = []
+        if not binding_code:
+            missing.append('device.organization_binding.device_binding_code')
+        if not organization_id:
+            missing.append('device.organization_binding.organization_id')
+        if not device_model_key:
+            missing.append('device.organization_binding.device_model_key')
+        if missing:
+            logger.error("Organization binding enabled but required config is missing: %s", ", ".join(missing))
+            return True
+
+        bind_device = {
+            'sn': Config.get_gateway_sn(),
+            'device_binding_code': binding_code,
+            'organization_id': organization_id,
+            'device_callsign': device_callsign or Config.get_gateway_sn(),
+            'device_model_key': device_model_key,
+        }
+
+        def _on_get_reply(method: str, msg: dict):
+            result = msg.get('data', {}).get('result', -1)
+            if result != 0:
+                logger.error("Configured organization query failed: result=%s", result)
+                return
+            logger.info("Configured organization query succeeded; sending organization bind")
+            self.device.bind_to_organization([bind_device])
+
+        logger.info("Configured organization binding enabled; querying organization before bind")
+        tid = self.device.query_organization_from_cloud(binding_code, organization_id, callback=_on_get_reply)
+        if not tid:
+            logger.error("Configured organization query was not sent")
+        return True
+
     def _configure_payload_connections(self):
         """Configure direct payload adapters without depending on flight control."""
         self.payload_config = Config.get_payload_config()
@@ -934,6 +990,9 @@ class EdgeGateway:
 
         if self.cloud_conn:
             self.device.set_cloud_connection(self.cloud_conn)
+
+        if self._start_configured_organization_binding():
+            return
 
         auto_bound = self._auto_bind_gateway_for_test_runtime()
         if auto_bound:

@@ -113,6 +113,15 @@ device:
   auto_bind_workspace_id: "local_test_workspace"
   auto_bind_workspace_name: "本地测试工作空间"
 
+  # DOCK3 正式组织绑定。启用后，启动时会先发 airport_organization_get，
+  # 查询成功后再发 airport_organization_bind。默认关闭，避免误用占位绑定码。
+  organization_binding:
+    enabled: false
+    device_binding_code: ""
+    organization_id: ""
+    device_callsign: "BXD020120260727"
+    device_model_key: ""
+
   # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
   # 网关不会自动生成 device_secret/nonce。
   # 这些字段会用于 update_topo 上报到云端：
