@@ -3205,7 +3205,8 @@ class DeviceManager:
     # 云端通过 requests_reply 回复，由 handle_org_requests_reply() 处理
 
     def query_bind_status_from_cloud(self, device_sns: list = None,
-                                      callback: Callable = None) -> str:
+                                      callback: Callable = None,
+                                      timeout: int = 30) -> str:
         """
         主动向云端查询设备绑定状态 (airport_bind_status)
 
@@ -3216,6 +3217,7 @@ class DeviceManager:
         Args:
             device_sns: 要查询的设备SN列表，None则查询网关自身+子设备
             callback: 回调函数，签名为 (method, msg) -> None
+            timeout: 云端回包超时时间（秒）
 
         Returns:
             tid: 事务ID，用于匹配响应
@@ -3237,7 +3239,7 @@ class DeviceManager:
             if callback:
                 callback(method, msg)
 
-        tid = self._cloud_conn.send_request('airport_bind_status', data, _on_reply)
+        tid = self._cloud_conn.send_request('airport_bind_status', data, _on_reply, timeout=timeout)
         logger.info(f"Query bind status sent: tid={tid}, devices={len(device_sns)}")
         return tid
 

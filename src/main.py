@@ -24,7 +24,7 @@ import signal
 import threading
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -325,7 +325,11 @@ class EdgeGateway:
         return self.device.bind_device(workspace_id, workspace_name)
 
     def _start_configured_organization_binding(self) -> bool:
-        """Start configured Dock3 organization binding during startup, when enabled."""
+        """启动配置驱动的 Dock3 上云绑定链路。
+
+        上云绑定先向平台查询当前绑定状态；只有平台明确返回未绑定的设备，
+        才继续执行组织查询和正式绑定，避免启动时重复绑定已绑定设备。
+        """
         cfg = Config.get('device.organization_binding', {}) or {}
         if not bool(cfg.get('enabled', False)):
             return False
@@ -348,38 +352,15 @@ class EdgeGateway:
         except (TypeError, ValueError):
             request_timeout = 120
 
-        state = self.device.get_device_state() if self.device else {}
-        if state.get('state') in {'bound', 'online'} and not sub_devices:
-            logger.info("Organization binding skipped because device is already %s", state.get('state'))
-            return True
-        if state.get('state') in {'bound', 'online'} and sub_devices:
-            logger.info(
-                "Device is already %s; continuing configured organization bind for %s sub-devices",
-                state.get('state'),
-                len(sub_devices),
-            )
-
-        missing = []
-        if not binding_code:
-            missing.append('device.organization_binding.device_binding_code')
-        if not organization_id:
-            missing.append('device.organization_binding.organization_id')
-        if not device_model_key:
-            missing.append('device.organization_binding.device_model_key')
-        if missing:
-            logger.error("Organization binding enabled but required config is missing: %s", ", ".join(missing))
-            return True
-
-        bind_device = {
+        bind_candidates = [{
             'sn': Config.get_gateway_sn(),
             'device_binding_code': binding_code,
             'organization_id': organization_id,
             'device_callsign': device_callsign or Config.get_gateway_sn(),
             'device_model_key': device_model_key,
-        }
-        bind_devices = [bind_device]
+        }]
         for sub_device in sub_devices:
-            bind_devices.append({
+            bind_candidates.append({
                 'sn': sub_device.sn,
                 'device_binding_code': binding_code,
                 'organization_id': organization_id,
@@ -387,23 +368,100 @@ class EdgeGateway:
                 'device_model_key': f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
             })
 
-        def _on_get_reply(method: str, msg: dict):
-            result = msg.get('data', {}).get('result', -1)
-            if result != 0:
-                logger.error("Configured organization query failed: result=%s", result)
-                return
-            logger.info("Configured organization query succeeded; sending organization bind")
-            self.device.bind_to_organization(bind_devices, timeout=request_timeout)
+        device_sns = [dev['sn'] for dev in bind_candidates]
 
-        logger.info("Configured organization binding enabled; querying organization before bind")
-        tid = self.device.query_organization_from_cloud(
-            binding_code,
-            organization_id,
-            callback=_on_get_reply,
+        def _missing_config(unbound_devices: list) -> list:
+            missing = []
+            if not binding_code:
+                missing.append('device.organization_binding.device_binding_code')
+            if not organization_id:
+                missing.append('device.organization_binding.organization_id')
+            gateway_unbound = any(dev.get('sn') == Config.get_gateway_sn() for dev in unbound_devices)
+            if gateway_unbound and not device_model_key:
+                missing.append('device.organization_binding.device_model_key')
+            for dev in unbound_devices:
+                if not dev.get('device_model_key'):
+                    missing.append(f"device_model_key for {dev.get('sn', '<unknown>')}")
+            return missing
+
+        def _unbound_devices_from_status(msg: dict) -> Optional[list]:
+            data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
+            result = data.get('result', -1)
+            if result != 0:
+                logger.error("Configured bind status query failed: result=%s", result)
+                return None
+            output = data.get('output', {}) if isinstance(data.get('output', {}), dict) else {}
+            statuses = output.get('bind_status', [])
+            status_by_sn = {
+                str(item.get('sn', '')): bool(item.get('is_device_bind_organization', False))
+                for item in statuses
+                if isinstance(item, dict)
+            }
+            return [
+                dev for dev in bind_candidates
+                if not status_by_sn.get(dev['sn'], False)
+            ]
+
+        def _start_org_lookup_and_bind(unbound_devices: list):
+            missing = _missing_config(unbound_devices)
+            if missing:
+                logger.error(
+                    "Organization binding enabled but required config is missing: %s",
+                    ", ".join(missing),
+                )
+                return
+
+            def _on_get_reply(method: str, msg: dict):
+                result = msg.get('data', {}).get('result', -1)
+                if result != 0:
+                    logger.error("Configured organization query failed: result=%s", result)
+                    return
+                logger.info(
+                    "Configured organization query succeeded; binding %s unbound devices",
+                    len(unbound_devices),
+                )
+                self.device.bind_to_organization(unbound_devices, timeout=request_timeout)
+
+            logger.info(
+                "Configured organization binding: querying organization before binding %s devices",
+                len(unbound_devices),
+            )
+            tid = self.device.query_organization_from_cloud(
+                binding_code,
+                organization_id,
+                callback=_on_get_reply,
+                timeout=request_timeout,
+            )
+            if not tid:
+                logger.error("Configured organization query was not sent")
+
+        def _on_bind_status_reply(method: str, msg: dict):
+            unbound_devices = _unbound_devices_from_status(msg)
+            if unbound_devices is None:
+                return
+            if not unbound_devices:
+                logger.info(
+                    "Configured organization binding skipped: all queried devices are already bound"
+                )
+                self.device.report_update_topo()
+                return
+            logger.info(
+                "Configured organization binding: %s/%s devices are unbound",
+                len(unbound_devices),
+                len(bind_candidates),
+            )
+            _start_org_lookup_and_bind(unbound_devices)
+
+        logger.info(
+            "Configured organization binding enabled; querying bind status before organization bind"
+        )
+        tid = self.device.query_bind_status_from_cloud(
+            device_sns,
+            callback=_on_bind_status_reply,
             timeout=request_timeout,
         )
         if not tid:
-            logger.error("Configured organization query was not sent")
+            logger.error("Configured bind status query was not sent")
         return True
 
     def _configure_payload_connections(self):
