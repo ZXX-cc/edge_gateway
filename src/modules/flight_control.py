@@ -608,31 +608,22 @@ class FlightControl(BaseModule):
         }
 
     def pause_mission(self) -> Dict:
-        if self.mode_profile == "plane":
-            # 当前 ArduPlane/QuadPlane 对 MAV_CMD_DO_PAUSE_CONTINUE 会明确返回
-            # UNSUPPORTED。真实 SITL 中 QLOITER 可能无法保高，暂停航线时
-            # 改用固定翼 LOITER 作为可由 HEARTBEAT 确认的 hold 模式。
-            return self._pause_with_hold_modes(
-                ["LOITER"],
-                "plane profile 使用受控 hold 模式，不发送原生暂停命令",
-            )
-
-        native_result = self._send_pause_continue(pause=True)
-        if native_result.get("success"):
-            result = dict(native_result)
-            result.update({
-                "pause_strategy": "native_command",
-                "target_mode": None,
-                "native_pause": True,
-                "fallback_reason": "",
-                "fallback_from": "",
-            })
-            return result
-
-        return self._pause_with_hold_modes(
-            ["LOITER", "BRAKE", "POSHOLD"],
-            native_result.get("message") or "原生暂停命令失败",
-        )
+        mode_result = self.set_mode("GUIDED")
+        result = dict(mode_result)
+        result.update({
+            "action": "暂停",
+            "pause_strategy": "guided_mode",
+            "target_mode": "GUIDED",
+            "native_pause": False,
+            "fallback_reason": "",
+            "fallback_from": "",
+            "hold_attempts": [{
+                "mode": "GUIDED",
+                "success": bool(mode_result.get("success")),
+                "message": mode_result.get("message", ""),
+            }],
+        })
+        return result
 
     def resume_mission(self) -> Dict:
         if self.mode_profile == "plane":
@@ -815,10 +806,7 @@ class FlightControl(BaseModule):
 
     def _takeoff_mode_candidates(self) -> list[str]:
         """Return safe mode priority for NAV_TAKEOFF on the active profile."""
-        # User-issued MAV_CMD_NAV_TAKEOFF is accepted by the SITL/ArduPilot
-        # stacks we validate against only from GUIDED.  TAKEOFF remains a
-        # fallback for profiles that expose it but do not support GUIDED.
-        return ["GUIDED", "TAKEOFF"]
+        return ["GUIDED"]
 
     def _ensure_armed_for_takeoff(self) -> Dict:
         """Ensure the vehicle is armed before sending NAV_TAKEOFF."""
@@ -1008,11 +996,10 @@ class FlightControl(BaseModule):
 
     def one_click_return(self) -> Dict:
         """
-        一键返航（智能选择RTL或QRTL）
+        一键返航入口。
 
-        逻辑参考Mission Planner：
-        - 固定翼模式（RTL/AUTO/FBWA/CRUISE/GUIDED等） → 切换到RTL
-        - 垂直起降模式（QRTL/QSTABILIZE/QHOVER/QLOITER等） → 切换到QRTL
+        当前客户机型只开放 GUIDED/AUTO，任务链路不再主动切 RTL/QRTL。
+        返航动作先切 GUIDED，后续位置/返航策略由上层或飞控侧接管。
         """
         self.log(f"🏠 执行一键返航 (sysid={self.target_system}, 当前模式={self.current_mode_name})")
 
@@ -1024,33 +1011,9 @@ class FlightControl(BaseModule):
             "original_mode": self.current_mode_name
         }
 
-        # 判断当前模式类型，智能选择返航模式
-        current_mode_upper = self.current_mode_name.upper() if self.current_mode_name else ""
-
-        # 定义QuadPlane模式（垂直起降）
-        quadplane_modes = ["QRTL", "QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "QACRO", "QAUTOTUNE"]
-
-        # 定义固定翼模式
-        fixed_wing_modes = ["RTL", "AUTO", "FBWA", "FBWB", "CRUISE", "GUIDED",
-                            "LOITER", "CIRCLE", "MANUAL", "STABILIZE", "TRAINING", "ACRO"]
-
-        # 根据当前模式选择返航模式
-        if current_mode_upper in quadplane_modes:
-            target_mode = "QRTL"
-            mode_type = "QuadPlane"
-            self.log(f"检测到垂直起降模式 ({current_mode_upper})，切换到QRTL")
-        elif current_mode_upper in fixed_wing_modes:
-            target_mode = "RTL"
-            mode_type = "固定翼"
-            self.log(f"检测到固定翼模式 ({current_mode_upper})，切换到RTL")
-        else:
-            # 未知模式，默认使用RTL
-            target_mode = "RTL"
-            mode_type = "未知"
-            self.log(f"未识别模式 ({current_mode_upper})，默认切换到RTL", "WARNING")
-
+        target_mode = "GUIDED"
         result["target_mode"] = target_mode
-        result["mode_type"] = mode_type
+        result["mode_type"] = "guided_only"
 
         # 执行模式切换
         self.log(f"切换到{target_mode}模式...")
@@ -1073,7 +1036,7 @@ class FlightControl(BaseModule):
         })
 
         result["success"] = True
-        result["message"] = f"一键返航成功！已从{current_mode_upper}切换到{target_mode}模式，飞机将返回起飞点"
+        result["message"] = f"一键返航入口已切换到{target_mode}模式"
         self.log(result["message"])
 
         return result
@@ -1375,13 +1338,7 @@ class FlightControl(BaseModule):
 
         result = {"success": False, "message": "", "target_system": self.target_system}
 
-        # ArduCopter 使用 LAND；QuadPlane/Plane 有 QLAND 时优先使用 QLAND。
-        landing_mode = self._first_available_mode(["QLAND", "LAND"])
-        if not landing_mode:
-            result["message"] = f"当前机型不支持降落模式，profile={self.mode_profile}"
-            self.log(result["message"], "ERROR")
-            return result
-
+        landing_mode = "GUIDED"
         mode_result = self.set_mode(landing_mode)
 
         if not mode_result["success"]:
@@ -1391,7 +1348,7 @@ class FlightControl(BaseModule):
 
         result["success"] = True
         result["mode"] = landing_mode
-        result["message"] = f"降落命令已发送，飞机将在当前位置降落（{landing_mode}）"
+        result["message"] = f"降落入口已切换到{landing_mode}模式"
         self.log(result["message"])
 
         return result

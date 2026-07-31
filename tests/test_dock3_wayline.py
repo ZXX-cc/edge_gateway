@@ -72,6 +72,7 @@ from src.cloud_api.dock3_wayline import normalize_prepare_payload, parse_wayline
 from src.mission.manager import MissionManager
 from src.utils.config import Config
 from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_TIMEOUT,
     DEVICE_STATE_UNSUPPORTED,
     DOCK_BUSY,
     INVALID_COMMAND_FORMAT,
@@ -244,6 +245,8 @@ class RecordingRealWaylineFlightControl:
     def __init__(self):
         self.calls = []
         self.armed = False
+        self._last_heartbeat_time = time.time()
+        self._last_heartbeat_monotonic = time.monotonic()
 
     def get_available_modes(self):
         return ["QSTABILIZE", "QHOVER", "QLOITER", "QLAND", "AUTO", "GUIDED", "MANUAL"]
@@ -277,6 +280,16 @@ class RecordingRealWaylineFlightControl:
         self.calls.append(("arm_and_wait", readiness_timeout))
         self.armed = True
         return {"success": True, "message": "ok"}
+
+    def wait_until_armable(self, timeout=30.0):
+        self.calls.append(("wait_until_armable", timeout))
+        return {
+            "success": True,
+            "message": "ready",
+            "prearm_present": True,
+            "prearm_enabled": True,
+            "prearm_healthy": True,
+        }
 
     def _wait_for_armed(self, target_state, timeout=10.0):
         self.calls.append(("wait_for_armed", target_state))
@@ -320,6 +333,13 @@ class UnreadyRealWaylineFlightControl(RecordingRealWaylineFlightControl):
             "message": "等待飞控预解锁就绪超时: 飞控预解锁检查尚未通过",
         }
 
+    def wait_until_armable(self, timeout=30.0):
+        self.calls.append(("wait_until_armable", timeout))
+        return {
+            "success": False,
+            "message": "等待飞控预解锁就绪超时: 飞控预解锁检查尚未通过",
+        }
+
 
 class RecordingNest:
     def __init__(self):
@@ -328,6 +348,8 @@ class RecordingNest:
             "nest_heartbeat": True,
             "plc_heartbeat": True,
             "drone_heartbeat": True,
+            "drone_heartbeat_last_toggle": time.time(),
+            "drone_heartbeat_toggle_count": 1,
             "estop_state": False,
             "fault_state": False,
             "system_busy": False,
@@ -345,6 +367,11 @@ class RecordingNest:
 
     def send_gcs_command(self, command):
         self.calls.append(getattr(command, "name", str(command)))
+        return True
+
+    def drone_power_on(self):
+        self.calls.append("DRONE_POWER_ON")
+        return True
 
     def request_takeoff(self):
         self.calls.append("request_takeoff")
@@ -364,6 +391,8 @@ class RecordingTelemetry:
             "satelliteNumber": 16,
             "gps_signal_level": 5,
             "gps_fixed": True,
+            "rtk_flag": True,
+            "gps_fix_type": 6,
             "armed": False,
             "flight_mode": "GUIDED",
         }
@@ -649,6 +678,7 @@ class Dock3WaylineTest(unittest.TestCase):
                 manager.set_event_callback(events.append)
                 manager.set_waypoint_manager(waypoint_manager)
                 manager.set_flight_control(RecordingRealWaylineFlightControl())
+                manager.set_nest_module(RecordingNest())
                 manager._breakpoint_file_path = lambda: str(breakpoint_path)
                 manager.stop_mission_monitor = lambda: True
                 manager._run_prepare_self_check = lambda simulate_enabled: (True, [], {})
@@ -725,6 +755,7 @@ class Dock3WaylineTest(unittest.TestCase):
             flight_control = RecordingRealWaylineFlightControl()
             manager.set_waypoint_manager(waypoint_manager)
             manager.set_flight_control(flight_control)
+            manager.set_telemetry_module(RecordingTelemetry())
             manager._breakpoint_file_path = lambda: str(breakpoint_path)
             manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
             manager.stop_mission_monitor = lambda: None
@@ -732,6 +763,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager._run_prepare_self_check = lambda simulate_enabled: (True, [], {})
             manager._run_takeoff_flow_nest_step = lambda steps, command_name: True
             manager._request_takeoff_from_nest_for_flow = lambda steps, flow_name: True
+            manager._wait_takeoff_allowed = lambda timeout=30.0: (True, "", {"takeoff_allowed": True})
 
             manager._current_task_id = "flight-001"
             manager._current_wayline = [
@@ -773,7 +805,6 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(len(waypoint_manager.added), 3)
             self.assertEqual(waypoint_manager.upload_calls, [15.0])
             self.assertEqual(waypoint_manager.current_waypoints, [(0, False)])
-            self.assertIn(("takeoff", 30.0), flight_control.calls)
             self.assertIn(("set_mode", "AUTO"), flight_control.calls)
 
     def test_flighttask_execute_rejects_when_breakpoint_seek_not_confirmed(self):
@@ -782,10 +813,12 @@ class Dock3WaylineTest(unittest.TestCase):
         flight_control = RecordingRealWaylineFlightControl()
         manager.set_waypoint_manager(waypoint_manager)
         manager.set_flight_control(flight_control)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager.start_mission_monitor = lambda: None
         manager._run_prepare_self_check = lambda simulate_enabled: (True, [], {})
         manager._run_takeoff_flow_nest_step = lambda steps, command_name: True
         manager._request_takeoff_from_nest_for_flow = lambda steps, flow_name: True
+        manager._wait_takeoff_allowed = lambda timeout=30.0: (True, "", {"takeoff_allowed": True})
         manager._confirm_current_waypoint_at_least = lambda waypoint_index, timeout=5.0: False
 
         manager._current_task_id = "flight-001"
@@ -805,7 +838,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["output"]["status"], "failed")
         self.assertEqual(waypoint_manager.current_waypoints, [(1, False)])
-        self.assertNotIn(("set_mode", "AUTO"), flight_control.calls)
+        self.assertIn(("set_mode", "AUTO"), flight_control.calls)
 
     def test_real_flighttask_pause_does_not_report_success_when_fc_fails(self):
         manager = MissionManager()
@@ -818,18 +851,18 @@ class Dock3WaylineTest(unittest.TestCase):
 
         pause = manager.handle_flighttask_pause(base_msg("flighttask_pause", {}))
 
-        self.assertEqual(pause["data"]["result"], WAYLINE_EXECUTION_FAILED)
+        self.assertEqual(pause["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(pause["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
-        self.assertEqual(flight_control.calls, [("pause_mission", None)])
+        self.assertEqual(flight_control.calls, [("set_mode", "GUIDED")])
 
     def test_pause_does_not_overwrite_completion_already_being_processed(self):
         class SuccessfulPauseFlightControl:
             def __init__(self):
                 self.calls = []
 
-            def pause_mission(self):
-                self.calls.append("pause")
+            def set_mode(self, mode):
+                self.calls.append(("set_mode", mode))
                 return {"success": True, "message": "paused"}
 
         manager = MissionManager()
@@ -881,13 +914,14 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(pause_reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertEqual(flight_control.calls, [])
 
-    def test_mission_completion_runs_real_return_land_and_dock_recovery(self):
+    def test_mission_completion_runs_fixed_wing_return_without_qland_or_dock_recovery(self):
         manager = MissionManager()
         flight_control = RecordingRealWaylineFlightControl()
         nest = RecordingNest()
         events = []
         manager.set_flight_control(flight_control)
         manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager.set_event_callback(events.append)
         manager._current_task_id = "flight-complete"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
@@ -903,8 +937,14 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertTrue(completed)
         self.assertEqual(manager._status, manager.MISSION_COMPLETED)
         self.assertIn(("one_click_return", None), flight_control.calls)
-        self.assertIn(("land", None), flight_control.calls)
-        self.assertEqual(nest.calls[-3:], ["CLAMP_TIGHTEN", "DOOR_CLOSE", "CHARGE_START"])
+        self.assertNotIn(("land", None), flight_control.calls)
+        self.assertNotIn("CLAMP_TIGHTEN", nest.calls)
+        self.assertNotIn("DOOR_CLOSE", nest.calls)
+        self.assertNotIn("CHARGE_START", nest.calls)
+        self.assertTrue(any(
+            step.get("name") == "fixed_wing_recovery_guard"
+            for step in manager._last_completion_flow_steps
+        ))
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
 
     def test_mission_completion_retries_and_reports_failure_without_fake_success(self):
@@ -942,15 +982,12 @@ class Dock3WaylineTest(unittest.TestCase):
         release_pause = threading.Event()
 
         class BlockingPauseFlightControl:
-            def pause_mission(self):
+            def set_mode(self, mode):
                 pause_started.set()
                 release_pause.wait(1.0)
                 return {
                     "success": True,
                     "message": "paused",
-                    "pause_strategy": "hold_mode",
-                    "target_mode": "QLOITER",
-                    "native_pause": False,
                 }
 
         manager = MissionManager()
@@ -1010,10 +1047,9 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["output"]["status"], "failed")
         self.assertEqual(execute["data"]["flight_control"]["stage"], "auto_mode")
         self.assertEqual(manager._status, manager.MISSION_FAILED)
-        self.assertEqual(monitor_calls, ["start", "stop"])
-        self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
+        self.assertEqual(monitor_calls, ["stop"])
+        self.assertEqual(nest.calls, [])
         self.assertEqual(flight_control.calls, [
-            ("takeoff", 30.0),
             ("set_mode", "AUTO"),
             ("set_mode", "AUTO"),
             ("set_mode", "AUTO"),
@@ -1026,6 +1062,7 @@ class Dock3WaylineTest(unittest.TestCase):
         events = []
         manager.set_flight_control(flight_control)
         manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager.set_event_callback(events.append)
         manager._current_task_id = "flight-retry"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
@@ -1056,6 +1093,7 @@ class Dock3WaylineTest(unittest.TestCase):
         events = []
         manager.set_flight_control(flight_control)
         manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager.set_event_callback(events.append)
         manager._current_task_id = "flight-reject"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
@@ -1095,6 +1133,7 @@ class Dock3WaylineTest(unittest.TestCase):
         nest = RecordingNest()
         manager.set_flight_control(flight_control)
         manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager._current_task_id = "flight-001"
         manager._current_wayline = [{"seq": 0}, {"seq": 1}]
         manager._status = manager.MISSION_IDLE
@@ -1111,8 +1150,12 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["flight_control"]["stage"], "mission_monitor")
         self.assertEqual(monitor_calls, ["start", "stop"])
-        self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
-        self.assertEqual(flight_control.calls, [("takeoff", 30.0)])
+        self.assertEqual(nest.calls, ["DOOR_OPEN", "request_takeoff"])
+        self.assertEqual(flight_control.calls, [
+            ("set_mode", "AUTO"),
+            ("wait_until_armable", 30.0),
+            ("arm_and_wait", 30.0),
+        ])
         self.assertTrue(flight_control.armed)
 
     def test_real_flighttask_execute_fails_closed_without_flight_control(self):
@@ -1282,6 +1325,7 @@ class Dock3WaylineTest(unittest.TestCase):
             nest = RecordingNest()
             manager.set_event_callback(events.append)
             manager.set_nest_module(nest)
+            manager.set_flight_control(RecordingRealWaylineFlightControl())
             waypoint_manager = RecordingWaypointManager()
             manager.set_waypoint_manager(waypoint_manager)
             manager.start_mission_monitor = lambda: None
@@ -1314,7 +1358,7 @@ class Dock3WaylineTest(unittest.TestCase):
             }))
             self.assertEqual(execute["data"]["result"], 0)
             self.assertEqual(execute["data"]["output"]["status"], "in_progress")
-            self.assertEqual(nest.calls, ["request_takeoff"])
+            self.assertEqual(nest.calls, ["DRONE_POWER_ON", "request_takeoff"])
         finally:
             Config._data = original_config
 
@@ -1324,6 +1368,7 @@ class Dock3WaylineTest(unittest.TestCase):
         nest = RecordingNest()
         manager.set_flight_control(flight_control)
         manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
         manager.start_mission_monitor = lambda: None
         manager._simulate_mission = {"is_enable": 0}
         manager._current_task_id = "flight-001"
@@ -1336,10 +1381,11 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["result"], 0)
         self.assertEqual(execute["data"]["output"]["status"], "in_progress")
         self.assertEqual(flight_control.calls, [
-            ("takeoff", 30.0),
             ("set_mode", "AUTO"),
+            ("wait_until_armable", 30.0),
+            ("arm_and_wait", 30.0),
         ])
-        self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
+        self.assertEqual(nest.calls, ["DOOR_OPEN", "request_takeoff"])
 
     def test_flighttask_prepare_uploads_wayline_to_flight_controller_when_main_mavlink_enabled(self):
         original_config = Config._data
@@ -1353,6 +1399,7 @@ class Dock3WaylineTest(unittest.TestCase):
             manager.set_nest_module(nest)
             manager.set_waypoint_manager(waypoint_manager)
             manager.set_flight_control(flight_control)
+            manager.set_telemetry_module(RecordingTelemetry())
             manager.set_event_callback(events.append)
             manager.start_mission_monitor = lambda: True
             manager.stop_mission_monitor = lambda: True
@@ -1383,15 +1430,16 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(execute["data"]["result"], 0)
             self.assertEqual(execute["data"]["output"]["status"], "in_progress")
             self.assertEqual(flight_control.calls, [
-                ("takeoff", 30.0),
                 ("set_mode", "AUTO"),
+                ("wait_until_armable", 30.0),
+                ("arm_and_wait", 30.0),
             ])
-            self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
+            self.assertEqual(nest.calls, ["DRONE_POWER_ON", "DOOR_OPEN", "request_takeoff"])
             self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
         finally:
             Config._data = original_config
 
-    def test_flighttask_prepare_does_not_upload_when_nest_link_configured_before_module_injection(self):
+    def test_flighttask_prepare_fails_when_nest_link_configured_before_module_injection(self):
         original_config = Config._data
         Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
         try:
@@ -1410,9 +1458,10 @@ class Dock3WaylineTest(unittest.TestCase):
                     "simulate_mission": {"is_enable": 0},
                 }))
 
-            self.assertEqual(prepare["data"]["result"], 0)
-            self.assertEqual(prepare["data"]["output"]["ext"]["file"]["delegated_to"], "nest")
-            self.assertFalse(prepare["data"]["output"]["ext"]["file"]["parsed"])
+            self.assertNotEqual(prepare["data"]["result"], 0)
+            self.assertEqual(prepare["data"]["output"]["status"], "failed")
+            self.assertIn("aircraft_power_on", prepare["data"]["errors"])
+            self.assertIn("aircraft_power_on", prepare["data"]["self_check"])
             self.assertEqual(waypoint_manager.upload_calls, [])
         finally:
             Config._data = original_config
@@ -1434,9 +1483,12 @@ class Dock3WaylineTest(unittest.TestCase):
         }))
 
         self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
-        self.assertEqual(execute["data"]["flight_control"]["stage"], "flight_takeoff")
-        self.assertEqual(nest.calls, ["CHARGE_STOP", "DOOR_OPEN", "CLAMP_RELEASE", "request_takeoff"])
-        self.assertEqual(flight_control.calls, [("takeoff", 30.0)])
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "execute_preflight_ready")
+        self.assertEqual(nest.calls, ["DOOR_OPEN"])
+        self.assertEqual(flight_control.calls, [
+            ("set_mode", "AUTO"),
+            ("wait_until_armable", 30.0),
+        ])
         self.assertFalse(flight_control.armed)
 
     def test_running_task_cannot_be_replaced_by_another_prepare_request(self):

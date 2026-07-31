@@ -415,6 +415,15 @@ class DroneNestModule(BaseModule):
             emergency_landing = bool(boolstate2 & (1 << 4))
             takeoff_allowed = bool(boolstate2 & (1 << 5))
 
+            # 飞机心跳位按协议周期翻转，prepare 阶段用最近翻转时间确认机巢侧链路。
+            now = time.time()
+            previous_drone_heartbeat = self.environment_data.get("drone_heartbeat")
+            if previous_drone_heartbeat is not None and previous_drone_heartbeat != drone_heartbeat:
+                self.environment_data["drone_heartbeat_last_toggle"] = now
+                self.environment_data["drone_heartbeat_toggle_count"] = (
+                    int(self.environment_data.get("drone_heartbeat_toggle_count") or 0) + 1
+                )
+
             # 更新状态数据
             self.environment_data.update({
                 "nest_heartbeat": nest_heartbeat,

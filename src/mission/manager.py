@@ -1187,13 +1187,11 @@ class MissionManager:
 
     def _run_real_wayline_takeoff_flow(self, msg: dict, flight_id: str) -> dict:
         """
-        Execute a prepared wayline through the real dock + flight-controller flow.
+        执行已准备好的真实航线任务。
 
-        The ordering mirrors docs/业务流程.md: preflight self-check, dock prepare,
-        dock takeoff permission, aircraft takeoff, then AUTO wayline execution.
+        真实机巢交接顺序：校验 -> 切 AUTO -> 开盖 -> 等待飞机自检/RTK
+        -> 请求机巢放飞 -> 等待起飞允许 -> 解锁飞机 -> 进入航线执行。
         """
-        data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
-        takeoff_height = self._as_float(data.get('takeoff_height', data.get('height', 30)), 30.0)
         resume_from_breakpoint = bool(self._break_point or self._breakpoint_waypoint_idx > 0)
         breakpoint_index = max(0, int(self._breakpoint_waypoint_idx or 0))
         resume_seek_index = self._resume_seek_waypoint_index() if resume_from_breakpoint else 0
@@ -1269,14 +1267,37 @@ class MissionManager:
                     upload_reason or 'Waypoint upload to flight controller failed',
                 )
 
-        for command_name in ('charge_close', 'cover_open', 'putter_open'):
-            if not self._run_takeoff_flow_nest_step(steps, command_name):
-                return self._fail_real_wayline_execute(
-                    msg,
-                    flight_id,
-                    command_name,
-                    f'{command_name} failed',
-                )
+        if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'auto_mode',
+                'flighttask_execute failed',
+            )
+
+        if not self._run_takeoff_flow_nest_step(steps, 'cover_open'):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'cover_open',
+                'cover_open failed',
+            )
+
+        preflight_ok, preflight_reason, preflight_details = self._wait_execute_preflight_ready(30.0)
+        self._record_takeoff_flow_step(
+            steps,
+            'execute_preflight_ready',
+            status=STATUS_OK if preflight_ok else STATUS_FAILED,
+            result=0 if preflight_ok else -1,
+            detail={'success': preflight_ok, 'message': preflight_reason, **preflight_details},
+        )
+        if not preflight_ok:
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'execute_preflight_ready',
+                preflight_reason or 'execute preflight check failed',
+            )
 
         if not self._request_takeoff_from_nest_for_flow(steps, 'flighttask_execute'):
             return self._fail_real_wayline_execute(
@@ -1286,12 +1307,32 @@ class MissionManager:
                 'Nest takeoff request failed',
             )
 
-        if not self._run_takeoff_flow_flight_step(steps, 'flight_takeoff', 'takeoff', takeoff_height):
+        takeoff_allowed, takeoff_allowed_reason, takeoff_allowed_details = self._wait_takeoff_allowed(30.0)
+        self._record_takeoff_flow_step(
+            steps,
+            'takeoff_allowed',
+            status=STATUS_OK if takeoff_allowed else STATUS_FAILED,
+            result=0 if takeoff_allowed else -1,
+            detail={
+                'success': takeoff_allowed,
+                'message': takeoff_allowed_reason,
+                **takeoff_allowed_details,
+            },
+        )
+        if not takeoff_allowed:
             return self._fail_real_wayline_execute(
                 msg,
                 flight_id,
-                'flight_takeoff',
-                'flight_takeoff failed',
+                'takeoff_allowed',
+                takeoff_allowed_reason or 'takeoff_allowed timeout',
+            )
+
+        if not self._run_takeoff_flow_flight_step(steps, 'flight_arm', 'arm_and_wait', 10.0, 30.0):
+            return self._fail_real_wayline_execute(
+                msg,
+                flight_id,
+                'flight_arm',
+                'flight arm failed',
             )
 
         # The monitor must be alive before AUTO starts consuming the uploaded
@@ -1353,14 +1394,6 @@ class MissionManager:
                 )
             self._current_waypoint_idx = resume_seek_index
 
-        if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
-            return self._fail_real_wayline_execute(
-                msg,
-                flight_id,
-                'auto_mode',
-                'flighttask_execute failed',
-            )
-
         self._status = self.MISSION_RUNNING
         self._wayline_mission_state = 6  # 航线执行
         self._current_step = 23  # 航线执行中
@@ -1390,7 +1423,9 @@ class MissionManager:
 
     def _run_mission_completion_flow(self, flight_id: str, source: str = "mission_completed") -> bool:
         """
-        航线末航点完成后的真实闭环：返航 -> 降落 -> 夹紧 -> 关盖 -> 充电。
+        航线末航点完成后的真实闭环。
+        固定翼/QuadPlane 真机默认只下发 RTL/QRTL 返航，避免网关主动切
+        QLAND/LAND 或在未确认落舱时执行夹紧、关盖、充电。
         这里不生成模拟完成；任一真实 adapter 缺失或控制失败都会让任务进入 failed。
         """
         steps: List[dict] = []
@@ -1414,6 +1449,27 @@ class MissionManager:
             if not self._run_takeoff_flow_flight_step(steps, 'return_home', 'one_click_return'):
                 self._fail_mission_completion_flow(flight_id, steps, 'return_home failed')
                 return False
+
+        fixed_wing_profile = (
+            self._flight_control is not None
+            and getattr(self._flight_control, "mode_profile", "plane") == "plane"
+        )
+        if fixed_wing_profile and not self._bool_config(
+            'mission.completion.allow_fixed_wing_land',
+            False,
+        ):
+            self._record_takeoff_flow_step(
+                steps,
+                'fixed_wing_recovery_guard',
+                detail={
+                    'flight_id': flight_id,
+                    'reason': 'fixed_wing_uses_rtl_or_qrtl_only',
+                    'auto_land_skipped': True,
+                    'nest_recovery_skipped': True,
+                },
+            )
+            self._last_completion_flow_steps = list(steps)
+            return True
 
         if self._bool_config('mission.completion.auto_land', True):
             if not self._run_takeoff_flow_flight_step(steps, 'landing', 'land'):
@@ -1504,6 +1560,202 @@ class MissionManager:
         except Exception as exc:
             logger.warning("Get telemetry snapshot failed: %s", exc)
         return {}
+
+    def _flight_control_heartbeat_status(self, max_age: float) -> Dict[str, Any]:
+        now_wall = time.time()
+        now_monotonic = time.monotonic()
+        candidates = []
+
+        if self._flight_control:
+            monotonic_ts = self._as_float(
+                getattr(self._flight_control, "_last_heartbeat_monotonic", 0.0),
+                0.0,
+            )
+            wall_ts = self._as_float(
+                getattr(self._flight_control, "_last_heartbeat_time", 0.0),
+                0.0,
+            )
+            if monotonic_ts > 0:
+                candidates.append(("flight_control_monotonic", now_monotonic - monotonic_ts))
+            if wall_ts > 0:
+                candidates.append(("flight_control_wall", now_wall - wall_ts))
+
+        if self._mavlink_conn:
+            wall_ts = self._as_float(getattr(self._mavlink_conn, "last_heartbeat_time", 0.0), 0.0)
+            if wall_ts > 0:
+                candidates.append(("mavlink_connection", now_wall - wall_ts))
+
+        candidates = [(source, age) for source, age in candidates if age >= 0]
+        if not candidates:
+            return {
+                "ok": False,
+                "reason": "未收到飞机 MAVLink 心跳",
+                "source": None,
+                "heartbeat_age": None,
+            }
+
+        source, age = min(candidates, key=lambda item: item[1])
+        return {
+            "ok": age <= max_age,
+            "reason": "" if age <= max_age else f"飞机 MAVLink 心跳超时: {age:.1f}s > {max_age:.1f}s",
+            "source": source,
+            "heartbeat_age": age,
+        }
+
+    def _nest_drone_heartbeat_toggle_status(self, max_age: float) -> Dict[str, Any]:
+        nest = self._get_nest_snapshot()
+        if not nest:
+            return {
+                "ok": False,
+                "reason": "未收到机巢状态帧",
+                "last_toggle_age": None,
+                "toggle_count": 0,
+            }
+
+        now = time.time()
+        last_toggle = self._as_float(nest.get("drone_heartbeat_last_toggle"), 0.0)
+        toggle_count = int(self._as_float(nest.get("drone_heartbeat_toggle_count"), 0.0))
+        if last_toggle <= 0 or toggle_count <= 0:
+            return {
+                "ok": False,
+                "reason": "机巢 boolstate1 bit1 尚未检测到翻转",
+                "drone_heartbeat": nest.get("drone_heartbeat"),
+                "last_toggle_age": None,
+                "toggle_count": toggle_count,
+            }
+
+        age = now - last_toggle
+        return {
+            "ok": age <= max_age,
+            "reason": "" if age <= max_age else f"机巢 boolstate1 bit1 翻转超时: {age:.1f}s > {max_age:.1f}s",
+            "drone_heartbeat": nest.get("drone_heartbeat"),
+            "last_toggle_age": age,
+            "toggle_count": toggle_count,
+        }
+
+    def _power_on_aircraft_for_prepare(self) -> Tuple[bool, str]:
+        if not self._nest_module:
+            return False, "机巢模块未就绪，无法执行飞机上电"
+
+        try:
+            if hasattr(self._nest_module, "drone_power_on"):
+                sent = self._nest_module.drone_power_on()
+            else:
+                from src.generated_dialect.gcs_order_protocol import GCSCommand
+                sent = self._nest_module.send_gcs_command(GCSCommand.DRONE_POWER_ON)
+        except Exception as exc:
+            logger.error("Prepare aircraft power-on failed: %s", exc)
+            return False, f"飞机上电命令发送失败: {exc}"
+
+        if sent is False:
+            return False, "飞机上电命令未发送成功"
+        trace_command(
+            "prepare_aircraft_power_on",
+            label="prepare阶段飞机上电",
+            method="flighttask_prepare",
+            ordinary_order="0x0B01",
+            takeoff_land_order="0x00",
+        )
+        return True, ""
+
+    def _wait_prepare_aircraft_connected(self, timeout: float = 30.0) -> Tuple[bool, str, Dict[str, Any]]:
+        deadline = time.monotonic() + max(timeout, 0.0)
+        poll_interval = 0.2
+        heartbeat_max_age = 3.0
+        toggle_max_age = 3.0
+        details: Dict[str, Any] = {}
+
+        while True:
+            mavlink_status = self._flight_control_heartbeat_status(heartbeat_max_age)
+            nest_status = self._nest_drone_heartbeat_toggle_status(toggle_max_age)
+            details = {
+                "mavlink_heartbeat": mavlink_status,
+                "nest_drone_heartbeat_toggle": nest_status,
+            }
+            if mavlink_status.get("ok") and nest_status.get("ok"):
+                trace_command(
+                    "prepare_aircraft_connected",
+                    label="prepare阶段飞机连接成功",
+                    method="flighttask_prepare",
+                    mavlink_source=mavlink_status.get("source"),
+                    mavlink_heartbeat_age=mavlink_status.get("heartbeat_age"),
+                    nest_toggle_count=nest_status.get("toggle_count"),
+                    nest_toggle_age=nest_status.get("last_toggle_age"),
+                )
+                return True, "", details
+
+            if time.monotonic() >= deadline:
+                reasons = [
+                    item.get("reason")
+                    for item in (mavlink_status, nest_status)
+                    if item.get("reason")
+                ]
+                return False, "；".join(reasons) or "等待飞机连接超时", details
+
+            time.sleep(poll_interval)
+
+    def _rtk_fixed_status(self) -> Dict[str, Any]:
+        telemetry = self._get_telemetry_snapshot()
+        if not telemetry:
+            return {"ok": False, "reason": "未收到飞机 GPS/RTK 遥测", "telemetry": {}}
+
+        gps_fixed = telemetry.get("gps_fixed")
+        rtk_flag = telemetry.get("rtk_flag")
+        fix_type = telemetry.get("gps_fix_type", telemetry.get("fix_type"))
+        try:
+            fix_type_int = int(fix_type) if fix_type is not None and fix_type != "" else None
+        except (TypeError, ValueError):
+            fix_type_int = None
+
+        rtk_fixed = bool(rtk_flag) or (fix_type_int is not None and fix_type_int >= 6)
+        gps_ok = bool(gps_fixed) or rtk_fixed
+        ok = gps_ok and rtk_fixed
+        return {
+            "ok": ok,
+            "reason": "" if ok else "飞机 GPS 未达到 RTK Fixed 状态",
+            "gps_fixed": gps_fixed,
+            "rtk_flag": rtk_flag,
+            "gps_fix_type": fix_type,
+        }
+
+    def _wait_execute_preflight_ready(self, timeout: float = 30.0) -> Tuple[bool, str, Dict[str, Any]]:
+        """等待 SYS_STATUS 预解锁检查和 RTK Fixed 同时满足。"""
+        if not self._flight_control or not hasattr(self._flight_control, "wait_until_armable"):
+            return False, "飞控预解锁检查接口不可用", {}
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        prearm = self._flight_control.wait_until_armable(timeout=timeout)
+        if not prearm.get("success"):
+            return (
+                False,
+                prearm.get("message") or "飞机 SYS_STATUS 预解锁检查未通过",
+                {"prearm": prearm, "rtk": self._rtk_fixed_status()},
+            )
+
+        rtk = self._rtk_fixed_status()
+        while not rtk.get("ok") and time.monotonic() < deadline:
+            time.sleep(0.2)
+            rtk = self._rtk_fixed_status()
+        details = {"prearm": prearm, "rtk": rtk}
+        if rtk.get("ok"):
+            return True, "", details
+        return False, rtk.get("reason") or "飞机 GPS 未达到 RTK Fixed 状态", details
+
+    def _wait_takeoff_allowed(self, timeout: float = 30.0) -> Tuple[bool, str, Dict[str, Any]]:
+        """等待机巢状态帧中的 takeoff_allowed 置为 true。"""
+        deadline = time.monotonic() + max(timeout, 0.0)
+        details: Dict[str, Any] = {}
+        while True:
+            nest = self._get_nest_snapshot()
+            details = {
+                "takeoff_allowed": nest.get("takeoff_allowed") if nest else None,
+                "last_update": nest.get("last_update") if nest else None,
+            }
+            if nest and nest.get("takeoff_allowed") is True:
+                return True, "", details
+            if time.monotonic() >= deadline:
+                return False, "等待机巢起飞允许状态超时", details
+            time.sleep(0.2)
 
     def _call_nest_action(self, action_name: str, context: str = "") -> bool:
         """Best-effort nest command bridge used by mission state transitions."""
@@ -2378,10 +2630,18 @@ class MissionManager:
                     msg_str=reason,
                 )
 
-            if hasattr(self._flight_control, "pause_mission"):
-                result = self._flight_control.pause_mission()
-            else:
-                result = self._flight_control.set_mode("LOITER")
+            set_mode = getattr(self._flight_control, "set_mode", None)
+            if not callable(set_mode):
+                reason = "FlightControl set_mode not available"
+                logger.warning(f"暂停航线失败: {reason}")
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=WAYLINE_EXECUTION_FAILED,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=reason,
+                )
+
+            result = set_mode("GUIDED")
             if not result.get("success"):
                 reason = result.get("message") or "pause mission failed"
                 logger.warning(f"暂停航线失败: {reason}")
@@ -2399,9 +2659,9 @@ class MissionManager:
 
             logger.info(
                 "Dock3 pause control confirmed: strategy=%s, target_mode=%s, native=%s",
-                result.get("pause_strategy", "legacy"),
-                result.get("target_mode"),
-                result.get("native_pause"),
+                "guided_mode",
+                "GUIDED",
+                False,
             )
 
             self._status = self.MISSION_PAUSED
@@ -3904,6 +4164,28 @@ class MissionManager:
                     "当前航线任务正在执行，不能覆盖航线文件",
                 )
 
+        power_ok, power_reason = self._power_on_aircraft_for_prepare()
+        if not power_ok:
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            return self._fail_prepare_self_check(
+                msg,
+                flight_id,
+                ["aircraft_power_on"],
+                {"aircraft_power_on": power_reason},
+            )
+
+        link_ok, link_reason, link_details = self._wait_prepare_aircraft_connected(30.0)
+        if not link_ok:
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            return self._fail_prepare_self_check(
+                msg,
+                flight_id,
+                ["aircraft_link"],
+                {"aircraft_link": link_reason, **link_details},
+            )
+
         # 保存任务属性
         self._current_task_id = flight_id
         self._task_type = task_type
@@ -4694,9 +4976,9 @@ class MissionManager:
             reason = "FlightControl not available"
             logger.warning(f"取消返航失败: {reason}")
             return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
-        result = self._flight_control.set_mode("LOITER")
+        result = self._flight_control.set_mode("GUIDED")
         if not result.get("success"):
-            reason = result.get("message") or "LOITER mode switch failed"
+            reason = result.get("message") or "GUIDED mode switch failed"
             logger.warning(f"取消返航失败: {reason}")
             return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
         self._emit_wayline_progress(STATUS_PAUSED, current_step=23, percent=self._current_progress_percent())
