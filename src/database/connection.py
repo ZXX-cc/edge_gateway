@@ -154,6 +154,10 @@ def _ensure_mongo_indexes(database) -> None:
             ([('status', ASCENDING), ('created_at', DESCENDING)], {}),
             ([('name', ASCENDING), ('execution_conditions.breakpoint_updated_at', DESCENDING)], {}),
         ],
+        "mission_platform_snapshot": [
+            ([('gateway_sn', ASCENDING)], {'unique': True}),
+            ([('updated_at', DESCENDING)], {}),
+        ],
         "waypoints": [([('mission_id', ASCENDING), ('sequence', ASCENDING)], {})],
         "device_state": [([('gateway_sn', ASCENDING)], {'unique': True})],
         "device_binding": [([('gateway_sn', ASCENDING)], {'unique': True})],

@@ -36,6 +36,10 @@ from src.utils.message import MessageBuilder
 from src.utils.production_readiness import validate_production_config
 from src.utils.runtime_overrides import build_runtime_overrides
 from src.utils.local_history_logger import LocalHistoryLogger
+from src.utils.mission_platform_snapshot import (
+    flush_latest_mission_platform_snapshot,
+    publish_platform_event_with_latest_snapshot,
+)
 from src.mqtt.client import MQTTClient
 from src.mqtt.topic_router import TopicRouter
 from src.core.connection import MAVLinkConnection
@@ -125,7 +129,6 @@ BACKGROUND_IO_METHODS = frozenset({
     'file_delete',
     'adjust_upload_priority',
 })
-
 
 def filter_dock_status_fields(updates: dict) -> dict:
     """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
@@ -1139,6 +1142,12 @@ class EdgeGateway:
             logger.info("MQTT is not connected; skip startup device sync")
             return
 
+        flush_latest_mission_platform_snapshot(
+            self.mqtt,
+            self.mission,
+            gateway_sn=Config.get_gateway_sn(),
+        )
+
         if self.cloud_conn:
             logger.info("Starting cloud connection manager after all startup connections...")
             self.cloud_conn.report_device_online()
@@ -1237,14 +1246,24 @@ class EdgeGateway:
 
         # 任务管理回调
         def mission_event_cb(event):
-            self.mqtt.publish_event(event)
+            publish_platform_event_with_latest_snapshot(
+                self.mqtt,
+                event,
+                gateway_sn=gateway_sn,
+                source='mission_manager',
+            )
             # 同步 mission 状态到 DeviceManager
             self.device.update_from_mission(event)
         self.mission.set_event_callback(mission_event_cb)
 
         # 媒体管理回调
         def media_event_cb(event):
-            self.mqtt.publish_event(event)
+            publish_platform_event_with_latest_snapshot(
+                self.mqtt,
+                event,
+                gateway_sn=gateway_sn,
+                source='media_manager',
+            )
         self.media.set_event_callback(media_event_cb)
         def media_state_cb(state):
             if self.history_logger:
@@ -1313,7 +1332,12 @@ class EdgeGateway:
             data = event.get('data', {})
             if 'drc_state' in data:
                 self.device.update_properties({'drc_state': data['drc_state']})
-        self.mqtt.publish_event(event)
+        publish_platform_event_with_latest_snapshot(
+            self.mqtt,
+            event,
+            gateway_sn=Config.get_gateway_sn(),
+            source='drc_controller',
+        )
 
     def _register_handlers(self):
         """注册所有API处理器到路由器"""

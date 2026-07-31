@@ -198,6 +198,29 @@ MongoDB `missions.execution_conditions.breakpoint`，字段包含 `task_id`、
 断点，本地 JSON 只作为兼容兜底。平台和脚本只看到“从断点第 N 点续飞”，飞控索引
 换算只在网关内部执行，不出现在平台命令、脚本参数或脚本输出中。
 
+2026-07-31 断链航线平台快照：航线任务执行期间，如果 MQTT 与平台断开或发布失败，
+网关不会把所有航线事件排队堆积，只会在数据库 `mission_platform_snapshot` 表/集合中
+按 `gateway_sn` 覆盖保存一条最新快照。覆盖范围包括 `flighttask_progress`、
+`flighttask_ready`、`flight_setup_exception_notify`、`return_home_info`、
+`device_exit_homing_notify`、`one_key_takeoff_progress`、DRC 指点/起飞进度以及航线媒体
+上传事件。MQTT 重连后，网关先补推数据库中的最新快照；该补推成功后删除数据库记录，
+随后再主动推送一次当前实时 `flighttask_progress`，确保平台第一时间看到断链期间的最新
+状态和重连时刻的实时状态。
+
+Ubuntu 逻辑验收命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_mission_platform_snapshot
+mkdir -p "$EVIDENCE_DIR"
+
+python -m unittest -v tests.test_mission_platform_snapshot \
+  > "$EVIDENCE_DIR/mission_platform_snapshot.log" 2>&1
+```
+
+通过标准：日志中 `Ran 2 tests` 且 `OK`；第一条用例证明断链快照只保留最新一条，
+第二条用例证明发布失败会入库、重连补推成功后清库，并追加一次当前实时航线状态。
+
 2026-07-16 `20260716_130947_wayline_breakpoint_relaunch_retry` 已完成真实 SITL
 断点重执行专项：`/home/fenghuolun/zwz/HD.kml` 初次执行到航点 1 后下发
 `flighttask_return`，回包保存 `break_point.index=1` 并进入 `paused`；再次执行时由网关

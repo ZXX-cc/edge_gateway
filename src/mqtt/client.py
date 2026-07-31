@@ -349,6 +349,7 @@ class MQTTClient:
         ok = self.publish(topic, data, qos=1)
         if data.get('method') != 'heartbeat':
             self._trace_publish("mqtt_publish_event", topic, data, ok=ok)
+        return ok
 
     def publish_service_reply(self, data: dict):
         """发布服务响应"""

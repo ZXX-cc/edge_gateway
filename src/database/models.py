@@ -81,6 +81,24 @@ class MissionProgress(Base):
         return f"<MissionProgress(mission={self.mission_id}, seq={self.current_waypoint_seq})>"
 
 
+class MissionPlatformSnapshot(Base):
+    __tablename__ = "mission_platform_snapshot"
+
+    gateway_sn = Column(String(64), primary_key=True)
+    method = Column(String(128), nullable=False)
+    flight_id = Column(String(255), default="")
+    source = Column(String(64), default="")
+    payload = Column(JSON, nullable=False)
+    created_at = Column(Integer, default=lambda: int(time.time() * 1000))
+    updated_at = Column(Integer, default=lambda: int(time.time() * 1000))
+
+    def __repr__(self):
+        return (
+            f"<MissionPlatformSnapshot(gateway={self.gateway_sn}, "
+            f"method={self.method}, flight_id={self.flight_id})>"
+        )
+
+
 class DeviceState(Base):
     __tablename__ = "device_state"
 

@@ -857,6 +857,19 @@ class MissionManager:
         )
         self._event_callback(event)
 
+    def build_current_wayline_progress_event(self) -> Optional[dict]:
+        """构造当前航线实时状态事件，用于平台重连后的第一时间补报。"""
+        if self._status == self.MISSION_IDLE and not self._current_task_id:
+            return None
+        return MessageBuilder.build_event(
+            'flighttask_progress',
+            {
+                'result': 0,
+                **self._wayline_reply_data(status=self._wayline_status_name()),
+            },
+            self.gateway_sn,
+        )
+
     def _record_takeoff_flow_step(self, steps: list, name: str, status: str = STATUS_OK,
                                   result: int = 0, detail: dict = None):
         step = {
