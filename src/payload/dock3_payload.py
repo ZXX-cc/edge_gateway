@@ -76,6 +76,7 @@ def build_live_capacity(
     gateway_sn: str,
     config: Optional[Mapping[str, Any]] = None,
     video_endpoint: str = "",
+    default_device_sn: str = "",
 ) -> Dict[str, Any]:
     payload_config = _payload_cloud_config(config)
     camera_index = payload_index_from_config(config)
@@ -98,7 +99,7 @@ def build_live_capacity(
         ],
     }
     device = {
-        "sn": str(payload_config.get("device_sn") or gateway_sn),
+        "sn": str(payload_config.get("device_sn") or default_device_sn or gateway_sn),
         "available_video_number": 1,
         "coexist_video_number_max": 1,
         "camera_list": [camera],
@@ -117,9 +118,10 @@ def build_live_capacity_from_devices(
     *,
     gateway_sn: str,
     devices: Optional[Mapping[str, Any]] = None,
+    default_device_sn: str = "",
 ) -> Dict[str, Any]:
     """Build Dock3 live capacity from all configured realtime video payloads."""
-    camera_list: List[Dict[str, Any]] = []
+    device_map: Dict[str, Dict[str, Any]] = {}
     total_available = 0
     coexist_max = 0
 
@@ -144,6 +146,7 @@ def build_live_capacity_from_devices(
             gateway_sn=gateway_sn,
             config=device,
             video_endpoint=video_endpoint,
+            default_device_sn=default_device_sn,
         )
         single_device = single["device_list"][0]
         camera = single_device["camera_list"][0]
@@ -152,22 +155,32 @@ def build_live_capacity_from_devices(
             camera["video_list"][0]["source_key"] = str(
                 payload_config.get("source_key") or device_id
             )
-        camera_list.append(camera)
-        total_available += int(camera.get("available_video_number", 1) or 1)
-        coexist_max += int(camera.get("coexist_video_number_max", 1) or 1)
+        device_sn = str(single_device.get("sn") or gateway_sn)
+        capacity_device = device_map.setdefault(device_sn, {
+            "sn": device_sn,
+            "available_video_number": 0,
+            "coexist_video_number_max": 0,
+            "camera_list": [],
+        })
+        available_number = int(camera.get("available_video_number", 1) or 1)
+        coexist_number = int(camera.get("coexist_video_number_max", 1) or 1)
+        capacity_device["camera_list"].append(camera)
+        capacity_device["available_video_number"] += available_number
+        capacity_device["coexist_video_number_max"] += coexist_number
+        total_available += available_number
+        coexist_max += coexist_number
 
-    if not camera_list:
-        return build_live_capacity(gateway_sn=gateway_sn, config=None)
+    if not device_map:
+        return build_live_capacity(
+            gateway_sn=gateway_sn,
+            config=None,
+            default_device_sn=default_device_sn,
+        )
 
     return {
         "available_video_number": total_available,
         "coexist_video_number_max": max(1, coexist_max),
-        "device_list": [{
-            "sn": gateway_sn,
-            "available_video_number": total_available,
-            "coexist_video_number_max": max(1, coexist_max),
-            "camera_list": camera_list,
-        }],
+        "device_list": list(device_map.values()),
     }
 
 

@@ -145,6 +145,7 @@ def live_status_event_data(
 def live_capability_data() -> Dict[str, Any]:
     payload_config = Config.get_payload_config()
     devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+    default_device_sn = _default_live_device_sn()
     return live_task_output(TASK_STATUS_OK, {
         "supported_protocols": ["webrtc", "rtmp", "rtsp"],
         "supported_url_types": sorted(SUPPORTED_URL_TYPES),
@@ -156,5 +157,21 @@ def live_capability_data() -> Dict[str, Any]:
         "live_capacity": build_live_capacity_from_devices(
             gateway_sn=Config.get_gateway_sn(),
             devices=devices if isinstance(devices, dict) else {},
+            default_device_sn=default_device_sn,
         ),
     })
+
+
+def _default_live_device_sn() -> str:
+    device_config = Config.get("device", {}) or {}
+    sub_devices = device_config.get("sub_devices") if isinstance(device_config, dict) else []
+    if not isinstance(sub_devices, list):
+        return ""
+    selected = next(
+        (
+            item for item in sub_devices
+            if isinstance(item, dict) and item.get("online", True) and item.get("sn")
+        ),
+        None,
+    )
+    return str(selected.get("sn") or "") if isinstance(selected, dict) else ""

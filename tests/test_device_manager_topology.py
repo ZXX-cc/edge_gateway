@@ -97,6 +97,24 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(event["data"]["sub_devices"], [])
         self.assertEqual(len(self.live_capacity_states()), 1)
 
+    def test_online_sub_device_owns_live_capacity_state(self):
+        sub_device = SubDevice(
+            "DRONE-A",
+            device_type=60,
+            index="A",
+            device_secret="DRONE-A-secret",
+            nonce="DRONE-A-nonce",
+        )
+        sub_device.online = True
+        self.manager.add_sub_device(sub_device)
+
+        self.assertTrue(self.manager.report_update_topo())
+
+        capacity = self.live_capacity_states()[-1]
+        device = capacity["device_list"][0]
+        self.assertEqual(device["sn"], "DRONE-A")
+        self.assertEqual(device["camera_list"][0]["camera_index"], "52-0-0")
+
     def test_already_bound_startup_reports_topology_without_service_trigger(self):
         self.manager._device_state = self.manager.STATE_BOUND
 

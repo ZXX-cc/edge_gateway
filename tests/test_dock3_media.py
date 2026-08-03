@@ -433,6 +433,27 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(video["video_index"], "normal-0")
         self.assertIn("zoom", video["switchable_video_types"])
 
+    def test_live_capability_uses_configured_online_drone_sn(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "gateway": {"sn": "EDGEGW001"},
+            "device": {
+                "sub_devices": [
+                    {"sn": "DRONE-A", "online": True},
+                ],
+            },
+        })
+        try:
+            manager = MediaManager()
+            manager.gateway_sn = "EDGEGW001"
+            reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+        finally:
+            Config._data = original
+
+        device = reply["data"]["live_capacity"]["device_list"][0]
+        self.assertEqual(device["sn"], "DRONE-A")
+        self.assertEqual(device["camera_list"][0]["camera_index"], "52-0-0")
+
     def test_live_capability_includes_mapping_camera(self):
         original = deepcopy(Config.all())
         Config.merge({

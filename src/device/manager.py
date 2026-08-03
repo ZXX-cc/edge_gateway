@@ -881,7 +881,13 @@ class DeviceManager:
         return build_live_capacity_from_devices(
             gateway_sn=getattr(self, "gateway_sn", Config.get_gateway_sn()),
             devices=devices if isinstance(devices, dict) else {},
+            default_device_sn=self._default_live_capacity_device_sn(),
         )
+
+    def _default_live_capacity_device_sn(self) -> str:
+        sub_devices = getattr(self, "_sub_devices", {})
+        selected = next((dev for dev in sub_devices.values() if dev.online), None)
+        return selected.sn if selected else ""
 
     def _refresh_payload_properties(self, notify: bool = False) -> Dict[str, Any]:
         updates = {
