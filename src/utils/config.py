@@ -133,8 +133,18 @@ DEFAULT_PAYLOAD_DEVICES = {
             'control_audio': {
                 'direction': 'gateway_to_payload',
                 'transport': 'vendor_protocol',
+                'adapter': '',
                 'endpoint': '',
                 'timing': 'on_demand',
+                'serial': {
+                    'port': '',
+                    'baudrate': 115200,
+                    'timeout_seconds': 1.0,
+                    'write_timeout_seconds': 1.0,
+                    'wait_reply': False,
+                    'auto_connect': False,
+                    'text_encoding': 'utf-8',
+                },
             },
         },
     },

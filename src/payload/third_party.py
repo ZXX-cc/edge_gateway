@@ -7,6 +7,8 @@ from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
+from src.payload.jz_speaker import JzSpeakerAdapter, JzSpeakerResult
 
 logger = get_logger("third_party")
 
@@ -40,6 +42,8 @@ class ThirdPartyController:
         self._speaker_volume = 80
         self._speaker_playing = False
         self._tts_text = ""
+        self._speaker_play_mode = 0
+        self._speaker_adapter = JzSpeakerAdapter()
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -57,6 +61,17 @@ class ThirdPartyController:
         """注入网关直连负载拓扑及连接状态提供器。"""
         self._payload_topology = topology
         self._payload_state_provider = state_provider
+        speaker = topology.get_device('speaker') if topology else {}
+        control = (speaker.get('channels') or {}).get('control_audio') or {}
+        serial_config = control.get('serial') if isinstance(control.get('serial'), dict) else {}
+        self._speaker_adapter = JzSpeakerAdapter({
+            **serial_config,
+            'enabled': bool(speaker.get('enabled', True)) and control.get('adapter') == 'jz_speaker',
+        })
+        if self._speaker_adapter.auto_connect:
+            result = self._speaker_adapter.connect()
+            if not result.ok:
+                logger.warning("JZ speaker auto connect failed: %s", result.message)
 
     def _send_mavlink_command(self, command: int, params: list) -> bool:
         """发送MAVLink COMMAND_LONG"""
@@ -212,22 +227,42 @@ class ThirdPartyController:
         volume = data.get('volume', 80)
         voice_type = data.get('voice_type', 'default')
 
+        if not text:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data={'output': {'status': 'failed', 'message': 'tts text is required'}},
+            )
+
         self._tts_text = text
         self._speaker_volume = volume
 
         logger.info(f"TTS: text='{text}', speed={speed}, volume={volume}, voice={voice_type}")
 
-        # TODO: 调用TTS引擎并播放
+        result = self._speaker_adapter.play_tts(
+            text,
+            speed=speed,
+            volume=volume,
+            voice_type=voice_type,
+        )
+        if result.ok:
+            self._speaker_playing = True
+            self.report_speaker_tts_play_progress(
+                int(data.get('psdk_index', 0) or 0),
+                "ok",
+                100,
+                step_key="play",
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._speaker_reply(msg, result)
 
     def handle_drc_speaker_play_volume_set(self, msg: dict) -> dict:
         """播放音量设置"""
         data = msg.get('data', {})
         volume = data.get('volume', 80)
-        self._speaker_volume = max(0, min(100, volume))
+        self._speaker_volume = max(0, min(100, self._as_int(volume, 80)))
         logger.info(f"Speaker volume: {self._speaker_volume}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._speaker_reply(msg, self._speaker_adapter.set_volume(self._speaker_volume))
 
     def handle_drc_speaker_audio_play(self, msg: dict) -> dict:
         """
@@ -236,25 +271,40 @@ class ThirdPartyController:
         Request: { file_id, play_mode(0=单次/1=循环) }
         """
         data = msg.get('data', {})
-        file_id = data.get('file_id', '')
+        file_id = data.get('file_id') or data.get('file_name') or data.get('filename') or ''
         play_mode = data.get('play_mode', 0)
 
         logger.info(f"Audio play: file={file_id}, mode={play_mode}")
-        self._speaker_playing = True
+        mode_result = self._speaker_adapter.set_play_mode(play_mode)
+        result = self._speaker_adapter.play_audio(str(file_id))
+        if result.ok:
+            self._speaker_playing = True
+            self._speaker_play_mode = 1 if self._as_int(play_mode, 0) else 0
+            self.report_speaker_audio_play_progress(
+                int(data.get('psdk_index', 0) or 0),
+                "ok",
+                100,
+                step_key="play",
+                md5=str(data.get('md5', '') or ''),
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._speaker_reply(msg, result if result.ok else mode_result if not mode_result.ok else result)
 
     def handle_drc_speaker_audio_pause(self, msg: dict) -> dict:
         """暂停播放"""
         logger.info("Audio pause")
-        self._speaker_playing = False
-        return MessageBuilder.build_reply(msg, result=0)
+        result = self._speaker_adapter.pause_audio()
+        if result.ok:
+            self._speaker_playing = False
+        return self._speaker_reply(msg, result)
 
     def handle_drc_speaker_audio_stop(self, msg: dict) -> dict:
         """停止播放"""
         logger.info("Audio stop")
-        self._speaker_playing = False
-        return MessageBuilder.build_reply(msg, result=0)
+        result = self._speaker_adapter.stop_audio()
+        if result.ok:
+            self._speaker_playing = False
+        return self._speaker_reply(msg, result)
 
     # ---- PSDK API ----
 
@@ -395,10 +445,17 @@ class ThirdPartyController:
     def handle_speaker_status_query(self, msg: dict) -> dict:
         """喊话器状态查询"""
         logger.info("Speaker status query")
+        adapter_status = self._speaker_adapter.query_status()
+        if "volume" in adapter_status:
+            self._speaker_volume = adapter_status["volume"]
+        if adapter_status.get("play_state"):
+            self._speaker_playing = adapter_status["play_state"] != "idle"
         return MessageBuilder.build_reply(msg, result=0, data={
             'playing': self._speaker_playing,
             'volume': self._speaker_volume,
-            'tts_text': self._tts_text
+            'tts_text': self._tts_text,
+            'play_mode': self._speaker_play_mode,
+            'adapter': adapter_status,
         })
 
     def handle_payload_capability_query(self, msg: dict) -> dict:
@@ -503,8 +560,10 @@ class ThirdPartyController:
         data = msg.get('data', {})
         psdk_index = data.get('psdk_index', 0)
         logger.info(f"Speaker replay: index={psdk_index}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        result = self._speaker_adapter.replay()
+        if result.ok:
+            self._speaker_playing = True
+        return self._speaker_reply(msg, result)
 
     def handle_speaker_play_mode_set(self, msg: dict) -> dict:
         """
@@ -519,8 +578,10 @@ class ThirdPartyController:
         psdk_index = data.get('psdk_index', 0)
         play_mode = data.get('play_mode', 0)
         logger.info(f"Speaker play mode set: index={psdk_index}, mode={play_mode}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        result = self._speaker_adapter.set_play_mode(play_mode)
+        if result.ok:
+            self._speaker_play_mode = 1 if self._as_int(play_mode, 0) else 0
+        return self._speaker_reply(msg, result)
 
     # ---- 喊话器接口别名 ----
 
@@ -555,3 +616,20 @@ class ThirdPartyController:
         别名，调用 drc_speaker_play_volume_set
         """
         return self.handle_drc_speaker_play_volume_set(msg)
+
+    def _speaker_reply(self, msg: dict, result: JzSpeakerResult) -> dict:
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if result.ok else DOCK_SYSTEM_ERROR,
+            data={'output': result.as_output()},
+            msg_str="" if result.ok else result.message,
+        )
+
+    @staticmethod
+    def _as_int(value, default: int) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default

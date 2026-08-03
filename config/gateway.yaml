@@ -388,8 +388,17 @@ payload:
         control_audio:
           direction: "gateway_to_payload"
           transport: "vendor_protocol"
+          adapter: "jz_speaker" # 极至喊话器协议 2.4；port 留空时仅模拟回包，不访问硬件
           endpoint: ""
           timing: "on_demand"
+          serial:
+            port: "" # Linux 示例：/dev/ttyUSB0 或 /dev/ttyAMA0；Windows 示例：COM3
+            baudrate: 115200
+            timeout_seconds: 1.0
+            write_timeout_seconds: 1.0
+            wait_reply: false # 设 true 会等待设备 5B 5B 77 回包；无回包会按失败处理
+            auto_connect: false
+            text_encoding: "utf-8"
 
 # --- RTK/NTRIP配置 ---
 rtk:
