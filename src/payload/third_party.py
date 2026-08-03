@@ -46,6 +46,7 @@ class ThirdPartyController:
         self._tts_text = ""
         self._speaker_play_mode = 0
         self._speaker_adapter = JzSpeakerAdapter()
+        self._speaker_control_config = {}
         self._fixed_text_loop_stop = threading.Event()
         self._fixed_text_loop_thread: Optional[threading.Thread] = None
         self._fixed_text_loop = {}
@@ -68,6 +69,7 @@ class ThirdPartyController:
         self._payload_state_provider = state_provider
         speaker = topology.get_device('speaker') if topology else {}
         control = (speaker.get('channels') or {}).get('control_audio') or {}
+        self._speaker_control_config = control
         serial_config = control.get('serial') if isinstance(control.get('serial'), dict) else {}
         tcp_config = control.get('tcp') if isinstance(control.get('tcp'), dict) else {}
         self._speaker_adapter = JzSpeakerAdapter({
@@ -280,10 +282,21 @@ class ThirdPartyController:
         Request: { file_id, play_mode(0=单次/1=循环) }
         """
         data = msg.get('data', {})
-        file_id = data.get('file_id') or data.get('file_name') or data.get('filename') or ''
-        play_mode = data.get('play_mode', 0)
+        defaults = self._speaker_control_config.get('audio_file_play') or {}
+        file_id = (
+            data.get('file_id')
+            or data.get('file_name')
+            or data.get('filename')
+            or defaults.get('filename')
+            or ''
+        )
+        play_mode = data.get('play_mode', defaults.get('play_mode', 0))
+        volume = data.get('volume', defaults.get('volume'))
 
         logger.info(f"Audio play: file={file_id}, mode={play_mode}")
+        if volume is not None:
+            self._speaker_adapter.set_volume(volume)
+            self._speaker_volume = self._as_int(volume, self._speaker_volume)
         mode_result = self._speaker_adapter.set_play_mode(play_mode)
         result = self._speaker_adapter.play_audio(str(file_id))
         if result.ok:
@@ -624,17 +637,24 @@ class ThirdPartyController:
     def handle_speaker_fixed_text_loop_start(self, msg: dict) -> dict:
         """固定文本循环播放。重复调用会用新文本覆盖旧循环。"""
         data = msg.get('data', {})
-        text = str(data.get('text') or data.get('fixed_text') or '')
+        defaults = self._speaker_control_config.get('fixed_text_loop') or {}
+        text = str(data.get('text') or data.get('fixed_text') or defaults.get('text') or '')
         if not text:
             return MessageBuilder.build_reply(
                 msg,
                 result=INVALID_COMMAND_FORMAT,
                 data={'output': {'status': 'failed', 'message': 'fixed text is required'}},
             )
-        interval_seconds = max(1.0, self._as_float(data.get('interval_seconds'), 10.0))
-        volume = data.get('volume', self._speaker_volume)
-        speed = data.get('speed', 50)
-        voice_type = data.get('voice_type', 'default')
+        interval_seconds = max(
+            1.0,
+            self._as_float(
+                data.get('interval_seconds'),
+                self._as_float(defaults.get('interval_seconds'), 10.0),
+            ),
+        )
+        volume = data.get('volume', defaults.get('volume', self._speaker_volume))
+        speed = data.get('speed', defaults.get('speed', 50))
+        voice_type = data.get('voice_type', defaults.get('voice_type', 'default'))
 
         self._stop_fixed_text_loop()
         first = self._speaker_adapter.play_tts(

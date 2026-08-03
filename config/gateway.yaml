@@ -407,6 +407,25 @@ payload:
             wait_reply: false # 设 true 会等待设备 5B 5B 77 回包；无回包会按失败处理
             auto_connect: false
             text_encoding: "utf-8"
+          fixed_text_loop:
+            text: "固定文本循环播放测试" # 固定文本循环播放内容
+            interval_seconds: 5 # 每隔多少秒重复下发一次 TTS
+            volume: 40
+            speed: 50
+            voice_type: "female"
+          audio_file_play:
+            filename: "01.wav" # 喊话指令默认播放的文件名；可先用 list-files 查询设备内文件
+            play_mode: 0 # 0=单次播放，1=循环播放
+            volume: 40
+            duration_seconds: 5 # 直连测试时自动停止等待秒数；0=不自动停止
+          realtime_voice:
+            input_type: "dshow" # Windows 麦克风采集使用 dshow
+            audio_device: "阵列麦克风 (AMD Audio Device)"
+            sample_rate: 16000
+            channels: 1
+            bitrate: "32k"
+            frame_duration_ms: 20
+            volume: 40
 
 # --- RTK/NTRIP配置 ---
 rtk:
