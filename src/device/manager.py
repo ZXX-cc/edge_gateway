@@ -911,7 +911,11 @@ class DeviceManager:
         live_capacity = updates.get("live_capacity", self._properties.get("live_capacity"))
         if live_capacity is None:
             return
-        logger.info("Live capacity state reported%s", f": {reason}" if reason else "")
+        logger.info(
+            "Live capacity state reported%s: %s",
+            f": {reason}" if reason else "",
+            json.dumps(live_capacity, ensure_ascii=False, separators=(",", ":")),
+        )
         self._notify_state({"property": {"live_capacity": live_capacity}})
 
     def update_properties(self, updates: Dict[str, Any], notify: bool = True):

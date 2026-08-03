@@ -44,6 +44,8 @@ VALID_RETURN_TYPES = {0, 1}
 VALID_BREAKPOINT_STATES = {0, 1}
 WAYLINE_FILE_EXTENSIONS = {".kmz", ".kml", ".wpml", ".xml", ".waypoints"}
 MAX_WAYLINE_XML_BYTES = 2 * 1024 * 1024
+MIN_WAYPOINT_ALTITUDE_METERS = 120.0
+POSITION_WAYPOINT_COMMANDS = {16, 17, 18, 19, 20, 21, 22, 82, 84, 85}
 
 
 def _is_int(value: Any) -> bool:
@@ -286,6 +288,26 @@ def _parse_qgc_wpl(text: str) -> List[dict]:
     return waypoints
 
 
+def _waypoint_requires_min_altitude(waypoint: dict) -> bool:
+    command = int(waypoint.get("command", 16) or 0)
+    if command not in POSITION_WAYPOINT_COMMANDS:
+        return False
+    lat = _to_float(waypoint.get("latitude"), 0.0)
+    lon = _to_float(waypoint.get("longitude"), 0.0)
+    return -90 <= lat <= 90 and -180 <= lon <= 180 and not (lat == 0.0 and lon == 0.0)
+
+
+def _validate_waypoint_altitudes(waypoints: List[dict]) -> List[str]:
+    violations = []
+    for index, waypoint in enumerate(waypoints):
+        if not _waypoint_requires_min_altitude(waypoint):
+            continue
+        altitude = _to_float(waypoint.get("altitude"), 0.0)
+        if altitude < MIN_WAYPOINT_ALTITUDE_METERS:
+            violations.append(f"seq={waypoint.get('seq', index)} altitude={altitude:g}m")
+    return violations
+
+
 def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
     warnings: List[str] = []
     waypoints: List[dict] = []
@@ -366,6 +388,16 @@ def parse_wayline_file(file_info: Any) -> Tuple[Dict[str, Any], List[dict]]:
                 summary["warnings"].append("no waypoint coordinates found")
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         summary["warnings"].append(str(exc))
+        return summary, []
+
+    altitude_violations = _validate_waypoint_altitudes(waypoints)
+    if altitude_violations:
+        summary["warnings"].append(
+            "waypoint altitude below minimum "
+            f"{MIN_WAYPOINT_ALTITUDE_METERS:g}m: {', '.join(altitude_violations)}"
+        )
+        summary["waypoint_count"] = 0
+        summary["parsed"] = False
         return summary, []
 
     summary["waypoint_count"] = len(waypoints)
