@@ -1048,7 +1048,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(execute["data"]["flight_control"]["stage"], "auto_mode")
         self.assertEqual(manager._status, manager.MISSION_FAILED)
         self.assertEqual(monitor_calls, ["stop"])
-        self.assertEqual(nest.calls, [])
+        self.assertEqual(nest.calls, ["abort_takeoff"])
         self.assertEqual(flight_control.calls, [
             ("set_mode", "AUTO"),
             ("set_mode", "AUTO"),
@@ -1116,6 +1116,7 @@ class Dock3WaylineTest(unittest.TestCase):
         failure = execute["data"]["failure"]
         self.assertEqual(failure["category"], "hardware_or_rejected")
         self.assertFalse(failure["retryable"])
+        self.assertEqual(nest.calls, ["abort_takeoff"])
         failed_progress = [
             event for event in events
             if event.get("method") == "flighttask_progress"
@@ -1157,6 +1158,34 @@ class Dock3WaylineTest(unittest.TestCase):
             ("arm_and_wait", 30.0),
         ])
         self.assertTrue(flight_control.armed)
+
+    def test_real_flighttask_execute_aborts_nest_when_takeoff_allowed_times_out(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        nest = RecordingNest()
+        manager.set_flight_control(flight_control)
+        manager.set_nest_module(nest)
+        manager.set_telemetry_module(RecordingTelemetry())
+        manager._current_task_id = "flight-001"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._status = manager.MISSION_IDLE
+        manager._simulate_mission = {"is_enable": 0}
+        manager.stop_mission_monitor = lambda: True
+        manager._wait_takeoff_allowed = lambda timeout=30.0: (
+            False,
+            "takeoff_allowed timeout",
+            {"takeoff_allowed": False},
+        )
+
+        execute = manager.handle_flighttask_execute(base_msg(
+            "flighttask_execute",
+            {"flight_id": "flight-001"},
+        ))
+
+        self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
+        self.assertEqual(execute["data"]["output"]["status"], "failed")
+        self.assertEqual(execute["data"]["flight_control"]["stage"], "takeoff_allowed")
+        self.assertEqual(nest.calls, ["DOOR_OPEN", "request_takeoff", "abort_takeoff"])
 
     def test_real_flighttask_execute_fails_closed_without_flight_control(self):
         manager = MissionManager()
@@ -1484,7 +1513,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
         self.assertEqual(execute["data"]["result"], WAYLINE_EXECUTION_FAILED)
         self.assertEqual(execute["data"]["flight_control"]["stage"], "execute_preflight_ready")
-        self.assertEqual(nest.calls, ["DOOR_OPEN"])
+        self.assertEqual(nest.calls, ["DOOR_OPEN", "abort_takeoff"])
         self.assertEqual(flight_control.calls, [
             ("set_mode", "AUTO"),
             ("wait_until_armable", 30.0),

@@ -1198,6 +1198,64 @@ class MissionManager:
         )
         return False
 
+    def _abort_takeoff_from_nest_for_flow(self, steps: list, flow_name: str, reason: str) -> bool:
+        """自检失败时通知机巢终止起飞流程，不覆盖原始失败原因。"""
+        if not self._nest_module or not hasattr(self._nest_module, 'abort_takeoff'):
+            self._record_takeoff_flow_step(
+                steps,
+                'nest_takeoff_abort',
+                status=STATUS_FAILED,
+                result=-1,
+                detail={
+                    'success': False,
+                    'simulated': False,
+                    'flow': flow_name,
+                    'reason': reason,
+                    'message': 'nest_module_missing_abort_takeoff',
+                },
+            )
+            return False
+        try:
+            result = self._nest_module.abort_takeoff()
+            success = bool(result.get('success', result is True)) if isinstance(result, dict) else bool(result)
+            detail = result if isinstance(result, dict) else {'success': success}
+            self._record_takeoff_flow_step(
+                steps,
+                'nest_takeoff_abort',
+                status=STATUS_OK if success else STATUS_FAILED,
+                result=0 if success else -1,
+                detail={
+                    **detail,
+                    'success': success,
+                    'simulated': False,
+                    'flow': flow_name,
+                    'reason': reason,
+                },
+            )
+            return success
+        except Exception as exc:
+            logger.warning("Nest takeoff abort failed after preflight check failure: %s", exc)
+            self._record_takeoff_flow_step(
+                steps,
+                'nest_takeoff_abort',
+                status=STATUS_FAILED,
+                result=-1,
+                detail={
+                    'success': False,
+                    'simulated': False,
+                    'flow': flow_name,
+                    'reason': reason,
+                    'message': str(exc),
+                },
+            )
+            return False
+
+    def _fail_before_takeoff_allowed(self, msg: dict, flight_id: str, steps: list,
+                                     stage: str, reason: str) -> dict:
+        """起飞允许前任一环节失败时，先通知机巢终止起飞，再返回原始失败。"""
+        self._abort_takeoff_from_nest_for_flow(steps, 'flighttask_execute', reason)
+        return self._fail_real_wayline_execute(msg, flight_id, stage, reason)
+
     def _run_real_wayline_takeoff_flow(self, msg: dict, flight_id: str) -> dict:
         """
         执行已准备好的真实航线任务。
@@ -1231,9 +1289,10 @@ class MissionManager:
                 result=-1,
                 detail={'success': False, 'errors': self_check_reasons, 'details': self_check_details},
             )
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'self_check',
                 '; '.join(self_check_reasons) or 'self check failed',
             )
@@ -1245,16 +1304,18 @@ class MissionManager:
 
         if resume_from_breakpoint:
             if not self._current_wayline:
-                return self._fail_real_wayline_execute(
+                return self._fail_before_takeoff_allowed(
                     msg,
                     flight_id,
+                    steps,
                     'breakpoint_wayline',
                     'Breakpoint resume requires a restored wayline',
                 )
             if breakpoint_index >= len(self._current_wayline):
-                return self._fail_real_wayline_execute(
+                return self._fail_before_takeoff_allowed(
                     msg,
                     flight_id,
+                    steps,
                     'breakpoint_index',
                     f'Breakpoint index out of range: {breakpoint_index}/{len(self._current_wayline)}',
                 )
@@ -1273,25 +1334,28 @@ class MissionManager:
                 },
             )
             if not upload_ok:
-                return self._fail_real_wayline_execute(
+                return self._fail_before_takeoff_allowed(
                     msg,
                     flight_id,
+                    steps,
                     'breakpoint_wayline_upload',
                     upload_reason or 'Waypoint upload to flight controller failed',
                 )
 
         if not self._run_takeoff_flow_flight_step(steps, 'flighttask_execute', 'set_mode', 'AUTO'):
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'auto_mode',
                 'flighttask_execute failed',
             )
 
         if not self._run_takeoff_flow_nest_step(steps, 'cover_open'):
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'cover_open',
                 'cover_open failed',
             )
@@ -1305,17 +1369,19 @@ class MissionManager:
             detail={'success': preflight_ok, 'message': preflight_reason, **preflight_details},
         )
         if not preflight_ok:
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'execute_preflight_ready',
                 preflight_reason or 'execute preflight check failed',
             )
 
         if not self._request_takeoff_from_nest_for_flow(steps, 'flighttask_execute'):
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'nest_takeoff_request',
                 'Nest takeoff request failed',
             )
@@ -1333,9 +1399,10 @@ class MissionManager:
             },
         )
         if not takeoff_allowed:
-            return self._fail_real_wayline_execute(
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 'takeoff_allowed',
                 takeoff_allowed_reason or 'takeoff_allowed timeout',
             )
@@ -4450,9 +4517,12 @@ class MissionManager:
             )
 
         if not self._flight_control:
-            return self._fail_real_wayline_execute(
+            steps: List[dict] = []
+            self._last_takeoff_flow_steps = steps
+            return self._fail_before_takeoff_allowed(
                 msg,
                 flight_id,
+                steps,
                 "flight_control",
                 "FlightControl not available",
             )

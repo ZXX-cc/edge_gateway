@@ -207,6 +207,10 @@ class EdgeGateway:
         self.command_admission: CommandAdmissionEngine = None
         self.history_logger: LocalHistoryLogger = None
         self._startup_connections_ready = False
+        self._organization_binding_retry_timer = None
+        self._organization_binding_retry_attempt = 0
+        self._organization_binding_pending_tid = ""
+        self._organization_binding_pending_stage = ""
 
     def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
@@ -337,11 +341,82 @@ class EdgeGateway:
         if not bool(cfg.get('enabled', False)):
             return False
 
+        def _retry_settings() -> tuple[int, float]:
+            try:
+                retry_limit = max(0, int(cfg.get('retry_limit', 5) or 0))
+            except (TypeError, ValueError):
+                retry_limit = 5
+            try:
+                retry_interval = max(1.0, float(cfg.get('retry_interval_seconds', 30.0) or 30.0))
+            except (TypeError, ValueError):
+                retry_interval = 30.0
+            return retry_limit, retry_interval
+
+        def _clear_retry_timer():
+            timer = self._organization_binding_retry_timer
+            self._organization_binding_retry_timer = None
+            if timer:
+                timer.cancel()
+
+        def _schedule_retry(reason: str):
+            retry_limit, retry_interval = _retry_settings()
+            if retry_limit <= 0:
+                logger.warning("Configured organization binding retry disabled: reason=%s", reason)
+                return
+            if self._organization_binding_retry_attempt >= retry_limit:
+                logger.error(
+                    "Configured organization binding retry limit reached: attempts=%s, reason=%s",
+                    self._organization_binding_retry_attempt,
+                    reason,
+                )
+                return
+            if self._organization_binding_retry_timer:
+                return
+            self._organization_binding_retry_attempt += 1
+            attempt = self._organization_binding_retry_attempt
+            logger.warning(
+                "Configured organization binding will retry in %.1fs: attempt=%s/%s, reason=%s",
+                retry_interval,
+                attempt,
+                retry_limit,
+                reason,
+            )
+            timer = threading.Timer(retry_interval, self._retry_configured_organization_binding)
+            timer.daemon = True
+            self._organization_binding_retry_timer = timer
+            timer.start()
+
+        def _mark_pending(stage: str, tid: str):
+            self._organization_binding_pending_stage = stage
+            self._organization_binding_pending_tid = tid or ""
+
+        def _clear_pending(tid: str = ""):
+            if not tid or tid == self._organization_binding_pending_tid:
+                self._organization_binding_pending_stage = ""
+                self._organization_binding_pending_tid = ""
+
+        def _watch_request_timeout(stage: str, tid: str):
+            if not tid:
+                return
+
+            def _on_timeout():
+                if (
+                    self._organization_binding_pending_tid == tid
+                    and self._organization_binding_pending_stage == stage
+                ):
+                    _clear_pending(tid)
+                    _schedule_retry(f"{stage} request timeout")
+
+            timer = threading.Timer(request_timeout + 5.0, _on_timeout)
+            timer.daemon = True
+            timer.start()
+
         if not self.device:
             logger.error("Organization binding enabled but DeviceManager is not available")
             return True
         if not self.cloud_conn or not self.cloud_conn.is_cloud_connected:
             logger.warning("Organization binding enabled but cloud connection is not ready")
+            _schedule_retry("cloud connection is not ready")
             return True
 
         binding_code = str(cfg.get('device_binding_code', '') or '').strip()
@@ -392,6 +467,7 @@ class EdgeGateway:
             result = data.get('result', -1)
             if result != 0:
                 logger.error("Configured bind status query failed: result=%s", result)
+                _schedule_retry(f"bind status result={result}")
                 return None
             output = data.get('output', {}) if isinstance(data.get('output', {}), dict) else {}
             statuses = output.get('bind_status', [])
@@ -412,18 +488,57 @@ class EdgeGateway:
                     "Organization binding enabled but required config is missing: %s",
                     ", ".join(missing),
                 )
+                _schedule_retry(f"missing config: {', '.join(missing)}")
                 return
 
             def _on_get_reply(method: str, msg: dict):
+                _clear_pending(msg.get('tid', ''))
                 result = msg.get('data', {}).get('result', -1)
                 if result != 0:
                     logger.error("Configured organization query failed: result=%s", result)
+                    _schedule_retry(f"organization query result={result}")
                     return
                 logger.info(
                     "Configured organization query succeeded; binding %s unbound devices",
                     len(unbound_devices),
                 )
-                self.device.bind_to_organization(unbound_devices, timeout=request_timeout)
+
+                def _on_bind_reply(bind_method: str, bind_msg: dict):
+                    _clear_pending(bind_msg.get('tid', ''))
+                    bind_data = bind_msg.get('data', {}) if isinstance(bind_msg.get('data', {}), dict) else {}
+                    bind_result = bind_data.get('result', -1)
+                    bind_output = bind_data.get('output', {}) if isinstance(bind_data.get('output', {}), dict) else {}
+                    err_infos = bind_output.get('err_infos', [])
+                    failed_sns = {
+                        str(item.get('sn', ''))
+                        for item in err_infos
+                        if isinstance(item, dict)
+                    }
+                    gateway_failed = Config.get_gateway_sn() in failed_sns
+                    if bind_result != 0 or gateway_failed:
+                        logger.error(
+                            "Configured organization bind failed: result=%s, gateway_failed=%s, err_infos=%s",
+                            bind_result,
+                            gateway_failed,
+                            err_infos,
+                        )
+                        _schedule_retry(f"organization bind result={bind_result}")
+                        return
+                    logger.info("Configured organization bind succeeded")
+                    _clear_retry_timer()
+                    self._organization_binding_retry_attempt = 0
+
+                tid = self.device.bind_to_organization(
+                    unbound_devices,
+                    callback=_on_bind_reply,
+                    timeout=request_timeout,
+                )
+                if not tid:
+                    logger.error("Configured organization bind was not sent")
+                    _schedule_retry("organization bind was not sent")
+                else:
+                    _mark_pending("airport_organization_bind", tid)
+                    _watch_request_timeout("airport_organization_bind", tid)
 
             logger.info(
                 "Configured organization binding: querying organization before binding %s devices",
@@ -437,8 +552,13 @@ class EdgeGateway:
             )
             if not tid:
                 logger.error("Configured organization query was not sent")
+                _schedule_retry("organization query was not sent")
+            else:
+                _mark_pending("airport_organization_get", tid)
+                _watch_request_timeout("airport_organization_get", tid)
 
         def _on_bind_status_reply(method: str, msg: dict):
+            _clear_pending(msg.get('tid', ''))
             unbound_devices = _unbound_devices_from_status(msg)
             if unbound_devices is None:
                 return
@@ -446,6 +566,8 @@ class EdgeGateway:
                 logger.info(
                     "Configured organization binding skipped: all queried devices are already bound"
                 )
+                _clear_retry_timer()
+                self._organization_binding_retry_attempt = 0
                 self.device.report_update_topo()
                 return
             logger.info(
@@ -465,7 +587,18 @@ class EdgeGateway:
         )
         if not tid:
             logger.error("Configured bind status query was not sent")
+            _schedule_retry("bind status query was not sent")
+        else:
+            _mark_pending("airport_bind_status", tid)
+            _watch_request_timeout("airport_bind_status", tid)
         return True
+
+    def _retry_configured_organization_binding(self):
+        self._organization_binding_retry_timer = None
+        if not self.running:
+            logger.info("Configured organization binding retry skipped: gateway stopping")
+            return
+        self._start_configured_organization_binding()
 
     def _configure_payload_connections(self):
         """Configure direct payload adapters without depending on flight control."""
@@ -1019,6 +1152,9 @@ class EdgeGateway:
         if self.cloud_conn:
             self.cloud_conn.stop_heartbeat()
             self.cloud_conn.report_device_offline()
+        if self._organization_binding_retry_timer:
+            self._organization_binding_retry_timer.cancel()
+            self._organization_binding_retry_timer = None
 
         if self.mission:
             self.mission.stop_mission_monitor()
@@ -1074,6 +1210,9 @@ class EdgeGateway:
         if self.cloud_conn:
             self.cloud_conn.stop_heartbeat()
             self.cloud_conn.report_device_offline()
+        if self._organization_binding_retry_timer:
+            self._organization_binding_retry_timer.cancel()
+            self._organization_binding_retry_timer = None
 
         if self.mission:
             self.mission.stop_mission_monitor()
