@@ -122,7 +122,6 @@ device:
     device_callsign: "BXD020120260727"
     device_model_key: "3-119-0"
     bind_sub_devices: true
-    request_timeout_seconds: 120
 
   # 真实链路拓扑元数据。production 模式必须通过配置或启动参数提供，
   # 网关不会自动生成 device_secret/nonce。

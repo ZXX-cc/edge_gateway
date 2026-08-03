@@ -342,6 +342,8 @@ class EdgeGateway:
             return False
 
         def _retry_settings() -> tuple[int, float]:
+            # 组织绑定重试属于网关内部容错策略，不暴露到客户 YAML；
+            # 如确需调试，可通过未公开配置键覆盖，默认 5 次、失败回包间隔 30 秒。
             try:
                 retry_limit = max(0, int(cfg.get('retry_limit', 5) or 0))
             except (TypeError, ValueError):
@@ -358,7 +360,7 @@ class EdgeGateway:
             if timer:
                 timer.cancel()
 
-        def _schedule_retry(reason: str):
+        def _schedule_retry(reason: str, *, delay: float = None):
             retry_limit, retry_interval = _retry_settings()
             if retry_limit <= 0:
                 logger.warning("Configured organization binding retry disabled: reason=%s", reason)
@@ -374,14 +376,15 @@ class EdgeGateway:
                 return
             self._organization_binding_retry_attempt += 1
             attempt = self._organization_binding_retry_attempt
+            retry_delay = retry_interval if delay is None else max(0.0, float(delay))
             logger.warning(
                 "Configured organization binding will retry in %.1fs: attempt=%s/%s, reason=%s",
-                retry_interval,
+                retry_delay,
                 attempt,
                 retry_limit,
                 reason,
             )
-            timer = threading.Timer(retry_interval, self._retry_configured_organization_binding)
+            timer = threading.Timer(retry_delay, self._retry_configured_organization_binding)
             timer.daemon = True
             self._organization_binding_retry_timer = timer
             timer.start()
@@ -405,9 +408,10 @@ class EdgeGateway:
                     and self._organization_binding_pending_stage == stage
                 ):
                     _clear_pending(tid)
-                    _schedule_retry(f"{stage} request timeout")
+                    # 平台无回复时，到达内部超时阈值后立即重发下一轮绑定链路。
+                    _schedule_retry(f"{stage} request timeout", delay=0.0)
 
-            timer = threading.Timer(request_timeout + 5.0, _on_timeout)
+            timer = threading.Timer(request_timeout, _on_timeout)
             timer.daemon = True
             timer.start()
 
