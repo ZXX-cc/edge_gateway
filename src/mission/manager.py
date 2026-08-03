@@ -2157,6 +2157,8 @@ class MissionManager:
                 key: nest.get(key) for key in (
                     'nest_heartbeat', 'plc_heartbeat', 'drone_heartbeat',
                     'estop_state', 'fault_state', 'system_busy',
+                    'initializing_state', 'init_state', 'calibrate_state',
+                    'r_axis_zero', 'resident_mode', 'alternate_landing_state',
                     'emergency_landing', 'takeoff_allowed', 'gate_state',
                     'wind_speed', 'rainfall', 'error_code',
                 ) if key in nest
@@ -2176,8 +2178,18 @@ class MissionManager:
                 reasons.append(f"机巢故障状态: error_code={nest.get('error_code', 0)}")
             if nest.get('system_busy'):
                 reasons.append("机巢系统忙")
-            if nest.get('emergency_landing'):
-                reasons.append("机巢处于迫降流程")
+            if nest.get('initializing_state'):
+                reasons.append("机巢正在初始化")
+            if nest.get('init_state') is False:
+                reasons.append("机巢初始化状态未完成")
+            if nest.get('calibrate_state') is False:
+                reasons.append("机巢R轴校准未完成")
+            if nest.get('r_axis_zero') is False:
+                reasons.append("机巢R轴未归零")
+            if nest.get('resident_mode'):
+                reasons.append("机巢处于驻留模式")
+            if nest.get('alternate_landing_state') or nest.get('emergency_landing'):
+                reasons.append("机巢处于备降状态")
             if nest.get('gate_state') == 6:
                 reasons.append("舱盖状态异常")
 

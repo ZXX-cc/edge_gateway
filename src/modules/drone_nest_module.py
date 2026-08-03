@@ -37,11 +37,12 @@ class DroneNestModule(BaseModule):
     - 提供数据查询接口
     """
 
-    def __init__(self, target_system: int = 101, target_component: int = 1):
+    def __init__(self, target_system: int = 101, target_component: int = 1, protocol_version: str = "v1.3"):
         """初始化机巢遥测模块"""
         super().__init__("DroneNestModule")
         self.target_system = target_system
         self.target_component = target_component
+        self.protocol_version = self._normalize_protocol_version(protocol_version)
         self.dispatcher: Optional[MessageDispatcher] = None
 
         # 机巢环境数据
@@ -105,6 +106,16 @@ class DroneNestModule(BaseModule):
         self._last_sent_commands: List[str] = []
         self._last_sent_ordinary_order = 0
         self._last_sent_takeoff_land_order = 0
+
+    @staticmethod
+    def _normalize_protocol_version(protocol_version: str) -> str:
+        value = str(protocol_version or "v1.3").strip().lower()
+        value = value[1:] if value.startswith("v") else value
+        return "v1.7" if value == "1.7" else "v1.3"
+
+    def set_protocol_version(self, protocol_version: str):
+        self.protocol_version = self._normalize_protocol_version(protocol_version)
+        self.log(f"✅ 机巢协议版本: {self.protocol_version}")
 
     # ========== 模块关联 ==========
 
@@ -400,8 +411,16 @@ class DroneNestModule(BaseModule):
             estop_state = bool(boolstate1 & (1 << 3))
             charging_state = bool(boolstate1 & (1 << 4))
             calibrate_state = bool(boolstate1 & (1 << 5))
-            ready_state = bool(boolstate1 & (1 << 6))
-            init_state = bool(boolstate1 & (1 << 7))
+            if self.protocol_version == "v1.7":
+                initializing_state = bool(boolstate1 & (1 << 6))
+                ready_state = init_state = bool(boolstate1 & (1 << 7))
+                ready_state = ready_state and not initializing_state
+                resident_mode = bool(boolstate1 & (1 << 12))
+            else:
+                initializing_state = False
+                ready_state = bool(boolstate1 & (1 << 6))
+                init_state = bool(boolstate1 & (1 << 7))
+                resident_mode = False
             system_busy = bool(boolstate1 & (1 << 8))
             fault_state = bool(boolstate1 & (1 << 9))
             r_axis_zero = bool(boolstate1 & (1 << 10))
@@ -412,7 +431,7 @@ class DroneNestModule(BaseModule):
             landing_in_progress = bool(boolstate2 & (1 << 1))
             takeoff_abort_progress = bool(boolstate2 & (1 << 2))
             landing_abort_progress = bool(boolstate2 & (1 << 3))
-            emergency_landing = bool(boolstate2 & (1 << 4))
+            alternate_landing_state = bool(boolstate2 & (1 << 4))
             takeoff_allowed = bool(boolstate2 & (1 << 5))
 
             # 飞机心跳位按协议周期翻转，prepare 阶段用最近翻转时间确认机巢侧链路。
@@ -432,17 +451,20 @@ class DroneNestModule(BaseModule):
                 "estop_state": estop_state,
                 "charging_state": charging_state,
                 "calibrate_state": calibrate_state,
+                "initializing_state": initializing_state,
                 "ready_state": ready_state,
                 "init_state": init_state,
                 "system_busy": system_busy,
                 "fault_state": fault_state,
                 "r_axis_zero": r_axis_zero,
                 "headlight_off": headlight_off,
+                "resident_mode": resident_mode,
                 "takeoff_in_progress": takeoff_in_progress,
                 "landing_in_progress": landing_in_progress,
                 "takeoff_abort_progress": takeoff_abort_progress,
                 "landing_abort_progress": landing_abort_progress,
-                "emergency_landing": emergency_landing,
+                "alternate_landing_state": alternate_landing_state,
+                "emergency_landing": alternate_landing_state,
                 "takeoff_allowed": takeoff_allowed,
                 "clamp_state": msg.clamp_state,
                 "gate_state": msg.gate_state,
@@ -498,7 +520,12 @@ class DroneNestModule(BaseModule):
                 "plc_heartbeat": plc_heartbeat,
                 "estop_state": estop_state,
                 "takeoff_allowed": takeoff_allowed,
-                "emergency_landing": emergency_landing,
+                "alternate_landing_state": alternate_landing_state,
+                "emergency_landing": alternate_landing_state,
+                "initializing_state": initializing_state,
+                "init_state": init_state,
+                "calibrate_state": calibrate_state,
+                "resident_mode": resident_mode,
                 "system_busy": system_busy,
                 "fault_state": fault_state,
                 "r_axis_zero": r_axis_zero,
@@ -810,6 +837,10 @@ class DroneNestModule(BaseModule):
         """解除急停"""
         self.send_gcs_command(GCSCommand.ESTOP_DEACTIVATE)
 
+    def calibrate_r_axis(self):
+        """R轴校准"""
+        return self.send_gcs_command(GCSCommand.R_AXIS_CALIBRATION)
+
     def initialize_device(self):
         """设备初始化"""
         self.send_gcs_command(GCSCommand.INITIALIZE)
@@ -833,6 +864,26 @@ class DroneNestModule(BaseModule):
     def drone_power_off(self):
         """飞机下电"""
         self.send_gcs_command(GCSCommand.DRONE_POWER_OFF)
+
+    def clear_alternate_landing_state(self):
+        """清除备降点/备降状态"""
+        return self.send_gcs_command(GCSCommand.DRONE_ALTERNATE_LANDING_CLEAR)
+
+    def resident_mode_on(self):
+        """开启驻留模式"""
+        return self.send_gcs_command(GCSCommand.RESIDENT_MODE_ON)
+
+    def resident_mode_off(self):
+        """关闭驻留模式"""
+        return self.send_gcs_command(GCSCommand.RESIDENT_MODE_OFF)
+
+    def gcs_link_power_on(self):
+        """地面站链路通电"""
+        return self.send_gcs_command(GCSCommand.GCS_LINK_POWER_ON)
+
+    def gcs_link_power_off(self):
+        """地面站链路断电"""
+        return self.send_gcs_command(GCSCommand.GCS_LINK_POWER_OFF)
 
     # ========== 回调管理 ==========
 

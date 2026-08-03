@@ -78,7 +78,7 @@ TEST_POINT_DEFS = [
     ("flight_mode", "飞行模式映射", "P0", "mode_code、flight_mode、custom_mode 映射是否符合表"),
     ("flight_control", "基础飞控控制", "P0", "GUIDED/ARM/TAKEOFF/LAND/RTL/LOITER"),
     ("wayline_resume", "航线与断点续飞", "P0", "航线下发、暂停返航、断点保存、断点恢复"),
-    ("dock_v13", "机巢 v1.3 命令", "P0", "舱门、推杆、充电、急停、机巢状态"),
+    ("dock_v13", "机巢 v1.7 命令", "P0", "舱门、推杆、充电、急停、机巢状态"),
     ("one_key_takeoff", "一键启航", "P1", "准备、起飞、航线启动、进度事件"),
     ("drc", "DRC 控制链路", "P1", "抢占、心跳、摇杆/飞向点、释放"),
     ("media_live", "媒体与直播", "P1", "文件上传、相机、直播启停和状态"),

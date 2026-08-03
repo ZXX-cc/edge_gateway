@@ -188,11 +188,13 @@ class NestPropertyMapperFlowTest(unittest.TestCase):
                         | (1 << 1)
                         | (1 << 2)
                         | (1 << 4)
-                        | (1 << 6)
+                        | (1 << 5)
+                        | (1 << 7)
                         | (1 << 8)
                         | (1 << 9)
                         | (1 << 10)
                         | (1 << 11)
+                        | (1 << 12)
                     ),
                     "boolstate2": (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5),
                     "clamp_state": 2,
@@ -202,22 +204,27 @@ class NestPropertyMapperFlowTest(unittest.TestCase):
             )()
         )
         self._check_mapping(
-            "心跳、充电、busy、故障、R轴、大灯、起飞流程、终止流程、紧急降落、允许起飞状态",
+            "心跳、充电、初始化、busy、故障、R轴、大灯、驻留、起飞流程、终止流程、备降、允许起飞状态",
             response_state,
             {
                 "nest_heartbeat": True,
                 "drone_heartbeat": True,
                 "plc_heartbeat": True,
                 "charging_state": True,
+                "calibrate_state": True,
+                "initializing_state": False,
                 "ready_state": True,
+                "init_state": True,
                 "system_busy": True,
                 "fault_state": True,
                 "r_axis_zero": True,
                 "headlight_off": True,
+                "resident_mode": True,
                 "takeoff_in_progress": True,
                 "landing_in_progress": False,
                 "takeoff_abort_progress": True,
                 "landing_abort_progress": False,
+                "alternate_landing_state": True,
                 "emergency_landing": True,
                 "takeoff_allowed": True,
             },

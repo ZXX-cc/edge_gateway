@@ -228,7 +228,7 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertNotIn("thing/product/DRONESIM001/osd", topics)
 
     def test_observed_osd_and_state_samples_are_validated(self):
-        state = envelope("EDGEGW001", {"property": {"silent_mode": 1}})
+        state = envelope("EDGEGW001", {"silent_mode": 1})
 
         with contextlib.redirect_stdout(io.StringIO()):
             self.client._on_message(None, None, mqtt_message(self.client.dock_osd_topic, valid_dock_osd()))
@@ -305,7 +305,7 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.ignored_legacy_samples[0]["message_reason"], "property_changed")
 
     def test_unrelated_current_property_state_is_not_stale(self):
-        payload = envelope("EDGEGW001", {"property": {"firmware_version": "1.2.3"}})
+        payload = envelope("EDGEGW001", {"firmware_version": "1.2.3"})
 
         with contextlib.redirect_stdout(io.StringIO()):
             self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))
@@ -316,7 +316,7 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.stale_total(), 0)
 
     def test_pushmode_zero_property_is_rejected_on_state(self):
-        payload = envelope("EDGEGW001", {"property": {"mode_code": 4}})
+        payload = envelope("EDGEGW001", {"mode_code": 4})
 
         with contextlib.redirect_stdout(io.StringIO()):
             self.client._on_message(None, None, mqtt_message(self.client.state_topic, payload))

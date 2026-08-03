@@ -247,23 +247,22 @@ def validate_state(payload: Dict[str, Any], gateway_sn: str, expected_property: 
     if not isinstance(data, dict):
         return errors
 
-    properties = data.get("property")
-    if isinstance(properties, dict):
-        if not properties:
-            errors.append("state data.property must not be empty")
-        internal_fields = {
-            "flight_mode", "armed", "connection_status", "battery", "gps_fixed",
-            "putter_state", "charging_state", "electricity",
-        }
-        leaked = sorted(
-            (internal_fields | official_property_names(push_mode=0)).intersection(properties)
-        )
-        if leaked:
-            errors.append(f"state contains internal telemetry fields: {leaked}")
+    if "property" in data:
+        errors.append("state data must not contain legacy property wrapper")
+        return errors
+    if not data:
+        errors.append("state data must not be empty")
         return errors
 
-    if "sub_device" not in data:
-        errors.append("state data must contain property object or sub_device")
+    internal_fields = {
+        "flight_mode", "armed", "connection_status", "battery", "gps_fixed",
+        "putter_state", "charging_state", "electricity",
+    }
+    leaked = sorted(
+        (internal_fields | official_property_names(push_mode=0)).intersection(data)
+    )
+    if leaked:
+        errors.append(f"state contains internal telemetry fields: {leaked}")
     return errors
 
 
@@ -271,7 +270,7 @@ def is_ignorable_legacy_state(payload: Dict[str, Any], errors: List[str]) -> boo
     """
     Ignore known legacy state broadcasts left by old gateway processes.
 
-    New Dock3 state samples must have ``bid`` and ``data.property``.  Older
+    New Dock3 state samples must have ``bid`` and direct properties under ``data``. Older
     local tools published raw state changes such as ``{"reason":
     "property_changed", "data": {"cover_state": 0}}``.  Those can still be
     seen on a shared broker during E2E and should not fail the strict Dock3
@@ -279,7 +278,7 @@ def is_ignorable_legacy_state(payload: Dict[str, Any], errors: List[str]) -> boo
     """
     if payload.get("reason") != "property_changed":
         return False
-    return "state data must contain property object or sub_device" in errors
+    return any("state contains internal telemetry fields" in error for error in errors)
 
 
 def has_expected_state_property(payload: Dict[str, Any], expected_property: str) -> bool:
@@ -288,8 +287,7 @@ def has_expected_state_property(payload: Dict[str, Any], expected_property: str)
     data = payload.get("data")
     if not isinstance(data, dict):
         return False
-    properties = data.get("property")
-    return isinstance(properties, dict) and expected_property in properties
+    return expected_property in data
 
 
 def is_value_wrapped_object(node: Any) -> bool:
@@ -407,9 +405,6 @@ class Dock3OsdStateClient(MqttRequestClient):
             data = payload.get("data")
             if isinstance(data, dict):
                 sample["data_keys"] = sorted(str(key) for key in data)[:20]
-                properties = data.get("property")
-                if isinstance(properties, dict):
-                    sample["property_keys"] = sorted(str(key) for key in properties)[:20]
         self.ignored_legacy_samples.append(sample)
         if not self.quiet_stale:
             tid = payload.get("tid") if isinstance(payload, dict) else None

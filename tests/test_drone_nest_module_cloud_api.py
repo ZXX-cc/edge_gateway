@@ -59,6 +59,7 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
 
     def test_mavlink_to_cloud_api_fields_flow(self):
         print("机巢 MAVLink 到上层 API 字段流程测试开始")
+        self.module.set_protocol_version("v1.7")
 
         self._step("测试步骤1：DRONE_NEST_RESPONSE 主动上报字段构造")
         nest_response = SimpleNamespace(
@@ -72,7 +73,7 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
             charge_volt=2600,
             charge_current=50,
             error_code=0,
-            boolstate1=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 6),
+            boolstate1=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7),
             boolstate2=(1 << 0) | (1 << 5),
             clamp_state=2,
             gate_state=1,
@@ -158,6 +159,32 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
                 "reason": "PLC超时",
             },
         )
+
+    def test_default_protocol_keeps_v13_ready_bit(self):
+        nest_response = SimpleNamespace(
+            ac_temp=250,
+            nest_temperature=260,
+            env_temperature=240,
+            wind_direction=1800,
+            wind_speed=30,
+            atmospheric_pressure=1013,
+            rainfall=0,
+            charge_volt=2600,
+            charge_current=0,
+            error_code=0,
+            boolstate1=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 6),
+            boolstate2=(1 << 5),
+            clamp_state=2,
+            gate_state=2,
+            landing_light_state=2,
+        )
+
+        self.module._handle_nest_response(nest_response)
+        env = self.module.get_environment_data()
+
+        self.assertEqual(self.module.protocol_version, "v1.3")
+        self.assertTrue(env["ready_state"])
+        self.assertFalse(env["initializing_state"])
 
     def test_disconnected_nest_link_skips_command_send(self):
         connection = SimpleNamespace(

@@ -128,7 +128,7 @@ class PropertyE2EClient(MqttRequestClient):
             return
 
         self.valid_state.append(payload)
-        properties = payload.get("data", {}).get("property", {})
+        properties = payload.get("data", {})
         if not isinstance(properties, dict):
             return
         for name in self.expected_state_properties.intersection(properties):

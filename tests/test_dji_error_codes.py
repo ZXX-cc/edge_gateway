@@ -39,6 +39,17 @@ class DjiErrorCodeTest(unittest.TestCase):
             PARAMETER_SET_FAILED,
         )
 
+    def test_build_state_flattens_legacy_property_wrapper(self):
+        state = MessageBuilder.build_state(
+            "gw",
+            {"property": {"live_capacity": {"available_video_number": 1}}},
+        )
+
+        self.assertEqual(
+            state["data"],
+            {"live_capacity": {"available_video_number": 1}},
+        )
+
     def test_invalid_request_context_uses_command_format_error(self):
         self.assertEqual(
             normalize_error_code(-3, context="invalid_request"),

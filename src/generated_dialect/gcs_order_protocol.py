@@ -33,6 +33,7 @@ class GCSCommand(IntEnum):
 
     ESTOP_ACTIVATE = 0x0A01  # 急停
     ESTOP_DEACTIVATE = 0x0A02  # 解除急停
+    R_AXIS_CALIBRATION = 0x0A03  # R轴校准
     INITIALIZE = 0x0A04  # 初始化
     FAULT_RECOVERY = 0x0A05  # 故障恢复
     LIGHT_ON = 0x0A06  # 大灯开
@@ -40,6 +41,13 @@ class GCSCommand(IntEnum):
 
     DRONE_POWER_ON = 0x0B01  # 飞机上电
     DRONE_POWER_OFF = 0x0B02  # 飞机下电
+    DRONE_ALTERNATE_LANDING_CLEAR = 0x0B03  # 备降点/备降状态清除
+
+    RESIDENT_MODE_ON = 0x0C01  # 驻留模式开启
+    RESIDENT_MODE_OFF = 0x0C02  # 驻留模式关闭
+
+    GCS_LINK_POWER_ON = 0x0D01  # 地面站链路通电
+    GCS_LINK_POWER_OFF = 0x0D02  # 地面站链路断电
 
 
 # ==================== 机巢主控 → 地面站（状态位） ====================
@@ -81,7 +89,7 @@ class GCSOrderDecoded:
             lines.append(f"  🎯 归中状态: {'✅ 已归中' if self.homing else '❌ 未归中'}")
             lines.append(f"  🔋 充电状态: {'⚡ 充电中' if self.charging else '⏸️ 未充电'}")
             lines.append(f"  🚨 急停状态: {'🛑 急停中' if self.estop else '✅ 正常'}")
-            lines.append(f"  🛫 PLC备飞: {'✅ 就绪' if self.plc_ready else '❌ 未就绪'}")
+            lines.append(f"  🛫 初始化完成: {'✅ 是' if self.plc_ready else '❌ 否'}")
             lines.append(f"  🚀 允许起飞: {'✅ 允许' if self.allow_takeoff else '❌ 不允许'}")
             lines.append(f"  🛫 起飞流程: {'▶️ 执行中' if self.takeoff_in_progress else '⏸️ 未执行'}")
             lines.append(f"  🛬 降落流程: {'▶️ 执行中' if self.landing_in_progress else '⏸️ 未执行'}")
@@ -202,12 +210,18 @@ REJECT_REASONS = {
         1: "起降命令与一般命令冲突",
         2: "PLC超时",
         3: "飞机超时",
+        4: "飞机不具备下电条件：已解锁",
+        5: "驻留模式中，拒绝其他命令",
+        6: "不能开启驻留模式：飞机正在执行任务",
+        7: "驻留中，不能接受其他命令（急停除外）",
     },
     15: {  # 字节15（起降命令拒绝原因）
         1: "起降命令与一般命令冲突",
         2: "PLC超时",
         3: "飞机超时",
         4: "出现多条起降命令",
+        5: "飞机电量不足",
+        6: "驻留模式中，拒绝其他命令",
     }
 }
 

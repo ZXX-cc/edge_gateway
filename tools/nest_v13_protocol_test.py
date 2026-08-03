@@ -21,8 +21,18 @@ if str(PROJECT_ROOT) not in sys.path:
 if "pymavlink" not in sys.modules:
     pymavlink = ModuleType("pymavlink")
     pymavlink.mavutil = SimpleNamespace()
+    dialects = ModuleType("pymavlink.dialects")
+    v20 = ModuleType("pymavlink.dialects.v20")
+    ardupilotmega = ModuleType("pymavlink.dialects.v20.ardupilotmega")
+    ardupilotmega.MAV_MODE_FLAG_SAFETY_ARMED = 128
+    pymavlink.dialects = dialects
+    dialects.v20 = v20
+    v20.ardupilotmega = ardupilotmega
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
+    sys.modules["pymavlink.dialects"] = dialects
+    sys.modules["pymavlink.dialects.v20"] = v20
+    sys.modules["pymavlink.dialects.v20.ardupilotmega"] = ardupilotmega
 
 from src.generated_dialect.gcs_order_protocol import GCSCommand, REJECT_REASONS  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms  # noqa: E402

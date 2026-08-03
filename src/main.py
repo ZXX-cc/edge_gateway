@@ -755,7 +755,7 @@ class EdgeGateway:
                 self.waypoint_manager = WaypointManager()
                 rtk_config = Config.get('rtk', {})
                 self.rtk_module = RTKModule(ntrip_config=rtk_config, telemetry_module=self.telemetry_module)
-                self.nest_module = DroneNestModule()
+                self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.3'))
                 if self.mission:
                     self.mission.set_flight_control(self.flight_control)
                     self.mission.set_mode_control(self.mode_control)
@@ -812,7 +812,7 @@ class EdgeGateway:
                 self.flight_control = FlightControl()
                 self.mode_control = ModeControl()
                 self.telemetry_module = TelemetryModule(mode="real")
-                self.nest_module = DroneNestModule()
+                self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.3'))
                 self.waypoint_manager = WaypointManager()
 
                 # 初始化RTK模块（需要telemetry_module）
@@ -892,7 +892,7 @@ class EdgeGateway:
                 # 主飞控 MAVLink 连接失败不阻塞机巢链路测试。
                 if use_separate_nest_mavlink:
                     logger.info("Starting standalone nest MAVLink without main MAVLink")
-                    self.nest_module = DroneNestModule()
+                    self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.3'))
                     self._wire_nest_module_to_business()
                     self._start_nest_mavlink(nest_mavlink_config)
 
@@ -1067,6 +1067,7 @@ class EdgeGateway:
             if not self.nest_module:
                 logger.warning("Nest module not initialized, skip nest MAVLink")
                 return False
+            self.nest_module.set_protocol_version(nest_config.get('protocol_version', 'v1.3'))
 
             conn_type = nest_config.get('connection_type', 'udp')
             if conn_type == 'serial':

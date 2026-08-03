@@ -2,7 +2,7 @@
 
 本文件记录当前项目自定义机巢 MAVLink 方言的业务映射。来源文件是 `src/mavlink_definitions/drone_nest.xml`，生成代码是 `src/generated_dialect/drone_nest.py`。
 
-协议来源是客户文档 `docs/机巢协议v1.3.docx`。该协议属于设备侧适配层，最终上云 topic、method、payload、reply、字段和枚举仍必须按 DJI Dock 3 Cloud API 收敛。
+协议来源是客户文档《机巢协议v1.7》。该协议属于设备侧适配层，最终上云 topic、method、payload、reply、字段和枚举仍必须按 DJI Dock 3 Cloud API 收敛。
 
 ## 消息总览
 
@@ -12,7 +12,7 @@
 | 12004 | `DRONE_NEST_RESPONSE` | 机巢 -> 网关 | 周期上报机巢环境和状态 | `MAVLink_drone_nest_response_message` | 134 |
 | 12005 | `DRONE_NEST_ORDER_RESPONSE` | 机巢 -> 网关 | 回复命令执行结果 | `MAVLink_drone_nest_order_response_message` | 70 |
 
-协议 v1.3 通信关系：
+协议 v1.7 通信关系：
 
 | 项目 | 说明 |
 |---|---|
@@ -27,16 +27,16 @@
 
 | 字段 | 类型 | 原始单位/编码 | 业务含义 | 当前模拟器映射 |
 |---|---|---|---|---|
-| `ordinary_order` | `uint16_t` | 枚举命令字 | 普通机巢动作命令 | `0x1101` 开门，`0x1102` 关门，`0x1103` 门停止，`0x0F01` 充电，`0x0F02` 不充电，`0x1401` 夹紧，`0x1402` 夹紧释放，`0x1403` 夹紧停止，`0x0A01` 急停，`0x0A02` 解除急停，`0x0A04` 初始化，`0x0A05` 故障恢复，`0x0A06` 大灯开，`0x0A07` 大灯关，`0x0B01` 飞机上电，`0x0B02` 飞机下电 |
-| `takeoff_land_order` | `uint8_t` | 枚举命令字 | 起降相关命令 | `0x01` 起飞，`0x02` 起飞终止，`0x04` 降落终止；协议 v1.3 未定义 `LANDING_START` |
+| `ordinary_order` | `uint16_t` | 枚举命令字 | 普通机巢动作命令 | `0x1101` 开门，`0x1102` 关门，`0x1103` 门停止，`0x0F01` 充电，`0x0F02` 不充电，`0x1401` 夹紧，`0x1402` 夹紧释放，`0x1403` 夹紧停止，`0x0A01` 急停，`0x0A02` 解除急停，`0x0A03` R轴校准，`0x0A04` 初始化，`0x0A05` 故障恢复，`0x0A06` 大灯开，`0x0A07` 大灯关，`0x0B01` 飞机上电，`0x0B02` 飞机下电，`0x0B03` 备降状态清除，`0x0C01` 驻留模式开启，`0x0C02` 驻留模式关闭，`0x0D01` 地面站链路通电，`0x0D02` 地面站链路断电 |
+| `takeoff_land_order` | `uint8_t` | 枚举命令字 | 起降相关命令 | `0x01` 起飞，`0x02` 起飞终止，`0x04` 降落终止；协议 v1.7 未定义 `LANDING_START` |
 
-## v1.3 命令使用条件
+## v1.7 命令使用条件
 
-客户协议 v1.3 对动作执行条件有明确约束。当前代码后续需要把这些条件落到设备侧状态机和 Dock3 错误码/HMS 事件中。
+客户协议 v1.7 对动作执行条件有明确约束。当前代码需要把这些条件落到设备侧状态机和 Dock3 错误码/HMS 事件中。
 
-| 命令 | 命令字 | v1.3 使用条件 | Dock3 映射要求 |
+| 命令 | 命令字 | v1.7 使用条件 | Dock3 映射要求 |
 |---|---:|---|---|
-| 起飞流程 | `takeoff_land_order=0x01` | 机巢备飞、非 busy、非急停、无故障 | 起飞前检查失败时拒绝 Dock3 航线/起飞类命令，并上报明确原因 |
+| 起飞流程 | `takeoff_land_order=0x01` | 非初始化中、初始化完成、R轴校准完成、R轴归零、非 busy、非急停、无故障、允许起飞 | 起飞前检查失败时拒绝 Dock3 航线/起飞类命令，并上报明确原因 |
 | 起飞终止 | `takeoff_land_order=0x02` | 急停/故障外的任意状态 | 映射为任务终止或安全中止事件 |
 | 降落终止 | `takeoff_land_order=0x04` | 降落流程 busy，且非急停、无故障 | 映射为降落中止事件和任务状态变化 |
 | 开门 | `ordinary_order=0x1101` | 非起飞/降落流程，非急停 | 映射到 Dock3 舱盖控制和 `cover_state` |
@@ -52,7 +52,11 @@
 | 初始化 | `ordinary_order=0x0A04` | 按机巢主控内部条件执行 | 映射为维护类操作和进度事件 |
 | 故障恢复 | `ordinary_order=0x0A05` | 故障状态 | 成功后清理故障状态并上报 OSD/HMS/dock_operation |
 | 大灯开/关 | `ordinary_order=0x0A06/0x0A07` | 非急停/故障约束按主控执行 | 映射到补光灯或机场灯状态 |
-| 飞机上电/下电 | `ordinary_order=0x0B01/0x0B02` | v1.3 新增，按机巢状态约束执行 | 映射到 Dock3 飞行器电源控制类命令和状态 |
+| R轴校准 | `ordinary_order=0x0A03` | 按机巢主控内部条件执行 | 映射为维护类操作 |
+| 飞机上电/下电 | `ordinary_order=0x0B01/0x0B02` | 按机巢状态约束执行 | 映射到 Dock3 飞行器电源控制类命令和状态 |
+| 备降状态清除 | `ordinary_order=0x0B03` | 按机巢主控内部条件执行 | 清除任务安全状态 |
+| 驻留模式开/关 | `ordinary_order=0x0C01/0x0C02` | 驻留模式中拒绝其他普通命令；开启驻留时飞机不能正在执行任务 | 映射为维护/驻留状态 |
+| 地面站链路通电/断电 | `ordinary_order=0x0D01/0x0D02` | 按机巢主控内部条件执行 | 映射为链路电源控制 |
 
 ## `DRONE_NEST_RESPONSE` 字段
 
@@ -68,7 +72,7 @@
 | `charge_volt` | `uint16_t` | `/100` | V | 充电电压 |
 | `charge_current` | `uint16_t` | `/100` | A | 充电电流 |
 | `error_code` | `uint16_t` | `1` | 错误码 | 机巢故障码 |
-| `boolstate1` | `uint16_t` | bitset | 位图 | bit0 机巢心跳，bit1 飞机心跳，bit2 PLC心跳，bit3 急停，bit4 充电，bit5 校准，bit6 备飞，bit7 初始化，bit8 系统busy，bit9 故障，bit10 R轴0位，bit11 大灯状态：0开灯/1关灯 |
+| `boolstate1` | `uint16_t` | bitset | 位图 | bit0 机巢心跳，bit1 飞机心跳，bit2 PLC心跳，bit3 急停，bit4 充电，bit5 R轴校准，bit6 初始化中，bit7 初始化状态，bit8 系统busy，bit9 故障，bit10 R轴0位，bit11 大灯状态：0开灯/1关灯，bit12 驻留模式 |
 | `boolstate2` | `uint16_t` | bitset | 位图 | bit0 起飞流程运行中，bit1 降落流程运行中，bit2 起飞终止中，bit3 降落终止中，bit4 备降点状态，bit5 允许起飞 |
 | `clamp_state` | `uint8_t` | enum | 状态码 | `0` 默认，`1` 放开，`2` 夹紧，`3` 放开打开中，`4` 夹紧关闭中，`5` 暂停中，`6` 故障中 |
 | `gate_state` | `uint8_t` | enum | 状态码 | `0` 默认，`1` 打开，`2` 关闭，`3` 开启中，`4` 关闭中，`5` 暂停中，`6` 故障中 |
@@ -92,13 +96,14 @@
 | 2 | PLC 心跳 | 机巢执行器通信状态 |
 | 3 | 急停 | `emergency_stop_state`、HMS 告警 |
 | 4 | 充电中 | `drone_charge_state`、充电状态 |
-| 5 | 校准状态 | 维护/校准状态 |
-| 6 | 备飞 | 起飞前检查 |
+| 5 | R轴校准状态 | 起飞前检查、维护/校准状态 |
+| 6 | 初始化中 | 起飞前检查 |
 | 7 | 已初始化 | 机巢初始化状态 |
 | 8 | busy | 控制命令互斥和拒绝条件 |
 | 9 | fault | `alarm_state`、HMS 告警 |
 | 10 | R 轴 0 位 | 关门/任务前置条件 |
 | 11 | 大灯状态 | 补光/机场灯状态，需以客户主控定义确认 0/1 极性 |
+| 12 | 驻留模式 | 驻留期间拒绝起飞/普通命令 |
 
 `boolstate2`：
 
