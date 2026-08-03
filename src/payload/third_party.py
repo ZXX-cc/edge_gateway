@@ -2,6 +2,7 @@
 第三方负载控制模块
 处理探照灯、喊话器、PSDK等第三方负载
 """
+import base64
 from typing import Optional, Callable
 from pymavlink import mavutil
 from src.utils.logger import get_logger
@@ -64,8 +65,12 @@ class ThirdPartyController:
         speaker = topology.get_device('speaker') if topology else {}
         control = (speaker.get('channels') or {}).get('control_audio') or {}
         serial_config = control.get('serial') if isinstance(control.get('serial'), dict) else {}
+        tcp_config = control.get('tcp') if isinstance(control.get('tcp'), dict) else {}
         self._speaker_adapter = JzSpeakerAdapter({
             **serial_config,
+            **tcp_config,
+            'transport': control.get('transport') or tcp_config.get('transport') or serial_config.get('transport'),
+            'endpoint': control.get('endpoint') or tcp_config.get('endpoint') or serial_config.get('endpoint'),
             'enabled': bool(speaker.get('enabled', True)) and control.get('adapter') == 'jz_speaker',
         })
         if self._speaker_adapter.auto_connect:
@@ -583,6 +588,34 @@ class ThirdPartyController:
             self._speaker_play_mode = 1 if self._as_int(play_mode, 0) else 0
         return self._speaker_reply(msg, result)
 
+    def handle_speaker_realtime_start(self, msg: dict) -> dict:
+        """开启 OPUS 实时喊话通道。音频帧由本地/上层按 16kHz 单声道 OPUS 80 字节帧发送。"""
+        logger.info("Speaker realtime start")
+        result = self._speaker_adapter.start_realtime_speaking()
+        if result.ok:
+            self._speaker_playing = True
+        return self._speaker_reply(msg, result)
+
+    def handle_speaker_realtime_stop(self, msg: dict) -> dict:
+        """关闭 OPUS 实时喊话通道。"""
+        logger.info("Speaker realtime stop")
+        result = self._speaker_adapter.stop_realtime_speaking()
+        if result.ok:
+            self._speaker_playing = False
+        return self._speaker_reply(msg, result)
+
+    def handle_speaker_opus_frame_send(self, msg: dict) -> dict:
+        """发送一帧 80 字节 OPUS 实时喊话数据。"""
+        data = msg.get('data', {})
+        frame = self._decode_audio_frame(data)
+        if frame is None:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data={'output': {'status': 'failed', 'message': 'opus_hex or opus_base64 is required'}},
+            )
+        return self._speaker_reply(msg, self._speaker_adapter.send_opus_frame(frame))
+
     # ---- 喊话器接口别名 ----
 
     def handle_speaker_play_stop(self, msg: dict) -> dict:
@@ -616,6 +649,22 @@ class ThirdPartyController:
         别名，调用 drc_speaker_play_volume_set
         """
         return self.handle_drc_speaker_play_volume_set(msg)
+
+    @staticmethod
+    def _decode_audio_frame(data: dict) -> Optional[bytes]:
+        raw_hex = data.get('opus_hex') or data.get('frame_hex')
+        if raw_hex:
+            try:
+                return bytes.fromhex(str(raw_hex).replace(" ", ""))
+            except ValueError:
+                return None
+        raw_b64 = data.get('opus_base64') or data.get('frame_base64')
+        if raw_b64:
+            try:
+                return base64.b64decode(str(raw_b64), validate=True)
+            except Exception:
+                return None
+        return None
 
     def _speaker_reply(self, msg: dict, result: JzSpeakerResult) -> dict:
         return MessageBuilder.build_reply(

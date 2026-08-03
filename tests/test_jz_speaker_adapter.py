@@ -12,7 +12,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = mavutil
 
-from src.payload.jz_speaker import build_frame, parse_frame
+from src.payload.jz_speaker import OPUS_FRAME_BYTES, JzSpeakerAdapter, build_frame, parse_frame
 from src.payload.third_party import ThirdPartyController
 from src.payload.topology import PayloadTopology
 from src.utils.config import Config
@@ -54,8 +54,32 @@ class JzSpeakerAdapterTest(unittest.TestCase):
         speaker = Config.get_payload_config()["devices"]["speaker"]
         control = speaker["channels"]["control_audio"]
 
+        self.assertEqual(control["adapter"], "jz_speaker")
         self.assertEqual(control["serial"]["baudrate"], 115200)
         self.assertEqual(control["serial"]["text_encoding"], "utf-8")
+        self.assertEqual(control["tcp"]["host"], "")
+        self.assertEqual(control["tcp"]["tcp_port"], 0)
+
+    def test_tcp_endpoint_config_selects_tcp_transport(self):
+        adapter = JzSpeakerAdapter({
+            "enabled": True,
+            "endpoint": "tcp://192.168.10.71:71",
+        })
+
+        status = adapter.query_status()
+
+        self.assertEqual(status["connection_state"], "tcp_configured")
+        self.assertEqual(status["transport"], "tcp")
+        self.assertEqual(status["host"], "192.168.10.71")
+        self.assertEqual(status["tcp_port"], 71)
+
+    def test_rejects_non_80_byte_opus_realtime_frame(self):
+        adapter = JzSpeakerAdapter({"enabled": False})
+
+        result = adapter.send_opus_frame(b"\x00" * (OPUS_FRAME_BYTES - 1))
+
+        self.assertFalse(result.ok)
+        self.assertIn("opus frame", result.message)
 
     def test_unconfigured_speaker_tts_keeps_simulated_success(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
