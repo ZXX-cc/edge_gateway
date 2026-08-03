@@ -65,7 +65,7 @@ from src.mavlink.flight_modes import (  # noqa: E402
     parse_flight_mode,
 )
 from src.mission.manager import MissionManager  # noqa: E402
-from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, INVALID_COMMAND_FORMAT  # noqa: E402
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT  # noqa: E402
 
 
 def base_msg(data):
@@ -218,6 +218,28 @@ class FlightModeMappingTest(unittest.TestCase):
         reply = manager.handle_set_flight_mode(base_msg({"mode": 4}))
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
+
+    def test_set_flight_mode_rejects_guided_inside_takeoff_protection_zone(self):
+        manager = MissionManager()
+        flight_control = RecordingFlightControl()
+        flight_control.armed = True
+        manager.set_flight_control(flight_control)
+        manager.set_waypoint_manager(types.SimpleNamespace(
+            home_position={"lat": 44.0474824, "lon": 125.3614503}
+        ))
+        manager.set_telemetry_module(types.SimpleNamespace(
+            get_telemetry_data=lambda: {
+                "latitude": 44.0475000,
+                "longitude": 125.3614600,
+                "altitudeRelative": 80.0,
+            }
+        ))
+
+        reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("安全起飞保护区", reply["msg"])
+        self.assertEqual(flight_control.calls, [])
 
     def test_set_flight_mode_arm_avoids_non_armable_qland(self):
         for payload in ({"mode": "QLAN", "arm": True}, {"flight_mode": "QLAND", "arm": True}, {"mode_code": 7, "arm": True}):

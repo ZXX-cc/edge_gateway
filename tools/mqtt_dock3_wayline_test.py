@@ -35,9 +35,9 @@ def write_mock_kmz(path: Path):
     <Placemark>
       <LineString>
         <coordinates>
-          149.165237,-35.363262,50
-          149.165537,-35.363562,60
-          149.165837,-35.363862,70
+          149.165237,-35.363262,120
+          149.165537,-35.363562,140
+          149.165837,-35.363862,160
         </coordinates>
       </LineString>
     </Placemark>

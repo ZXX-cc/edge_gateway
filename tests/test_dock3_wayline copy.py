@@ -95,8 +95,8 @@ def write_mock_kmz(path: Path):
     <Placemark>
       <LineString>
         <coordinates>
-          149.165237,-35.363262,50
-          149.165537,-35.363562,60
+          149.165237,-35.363262,120
+          149.165537,-35.363562,140
         </coordinates>
       </LineString>
     </Placemark>
@@ -112,7 +112,7 @@ def write_mock_wpml_actions(path: Path):
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
   <Document>
     <Placemark>
-      <Point><coordinates>149.165237,-35.363262,50</coordinates></Point>
+      <Point><coordinates>149.165237,-35.363262,120</coordinates></Point>
       <wpml:waypointSpeed>8</wpml:waypointSpeed>
       <wpml:hoverTime>4</wpml:hoverTime>
       <wpml:actionGroup>
@@ -171,6 +171,7 @@ class RecordingWaypointManager:
         self.added = []
         self.upload_calls = []
         self.current_waypoints = []
+        self.home_position = {"lat": -35.363000, "lon": 149.165000, "alt": 0.0}
 
     def clear_waypoints(self):
         self.clear_calls += 1
@@ -184,6 +185,9 @@ class RecordingWaypointManager:
 
     def set_current_waypoint(self, wp_num: int, reset: bool = False):
         self.current_waypoints.append((wp_num, reset))
+        return True
+
+    def request_home_position(self):
         return True
 
 
@@ -339,7 +343,7 @@ class Dock3WaylineTest(unittest.TestCase):
                 "\n".join([
                     "QGC WPL 110",
                     "0\t1\t0\t16\t0\t0\t0\t0\t44.0474824\t125.3614503\t190.100000\t1",
-                    "1\t0\t3\t84\t0\t0\t0\t0\t44.04750440\t125.36144360\t96.000000\t1",
+                    "1\t0\t3\t84\t0\t0\t0\t0\t44.04750440\t125.36144360\t136.000000\t1",
                     "2\t0\t3\t18\t1\t1\t200\t1\t44.04087010\t125.33994320\t126.000000\t1",
                     "3\t0\t0\t177\t2\t5\t0\t0\t0\t0\t0\t1",
                 ]),

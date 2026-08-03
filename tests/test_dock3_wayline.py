@@ -99,8 +99,8 @@ def write_mock_kmz(path: Path):
     <Placemark>
       <LineString>
         <coordinates>
-          149.165237,-35.363262,50
-          149.165537,-35.363562,60
+          149.165237,-35.363262,120
+          149.165537,-35.363562,140
         </coordinates>
       </LineString>
     </Placemark>
@@ -116,7 +116,7 @@ def write_mock_wpml_actions(path: Path):
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
   <Document>
     <Placemark>
-      <Point><coordinates>149.165237,-35.363262,50</coordinates></Point>
+      <Point><coordinates>149.165237,-35.363262,120</coordinates></Point>
       <wpml:waypointSpeed>8</wpml:waypointSpeed>
       <wpml:hoverTime>4</wpml:hoverTime>
       <wpml:actionGroup>
@@ -187,6 +187,7 @@ class RecordingWaypointManager:
         self.current_waypoints = []
         self.current_waypoint = -1
         self.current_waypoint_revision = 0
+        self.home_position = {"lat": -35.363000, "lon": 149.165000, "alt": 0.0}
 
     def clear_waypoints(self):
         self.clear_calls += 1
@@ -206,6 +207,9 @@ class RecordingWaypointManager:
 
     def get_current_waypoint_snapshot(self):
         return self.current_waypoint, self.current_waypoint_revision
+
+    def request_home_position(self):
+        return True
 
 
 class NonConfirmingWaypointManager(RecordingWaypointManager):
@@ -441,7 +445,7 @@ class Dock3WaylineTest(unittest.TestCase):
                 "\n".join([
                     "QGC WPL 110",
                     "0\t1\t0\t16\t0\t0\t0\t0\t44.0474824\t125.3614503\t190.100000\t1",
-                    "1\t0\t3\t84\t0\t0\t0\t0\t44.04750440\t125.36144360\t96.000000\t1",
+                    "1\t0\t3\t84\t0\t0\t0\t0\t44.04750440\t125.36144360\t136.000000\t1",
                     "2\t0\t3\t18\t1\t1\t200\t1\t44.04087010\t125.33994320\t126.000000\t1",
                     "3\t0\t0\t177\t2\t5\t0\t0\t0\t0\t0\t1",
                 ]),
@@ -456,6 +460,57 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual([wp["command"] for wp in waypoints], [16, 84, 18, 177])
         self.assertEqual(waypoints[1]["frame"], 3)
         self.assertAlmostEqual(waypoints[1]["latitude"], 44.04750440)
+
+    def test_parse_wayline_rejects_position_waypoint_below_120m(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wpml_path = Path(tmp) / "template.wpml"
+            wpml_path.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark><Point><coordinates>149.165237,-35.363262,119</coordinates></Point></Placemark>
+  </Document>
+</kml>
+""",
+                encoding="utf-8",
+            )
+
+            summary, waypoints = parse_wayline_file({"path": str(wpml_path)})
+
+        self.assertFalse(summary["parsed"])
+        self.assertEqual(waypoints, [])
+        self.assertTrue(any("minimum 120m" in warning for warning in summary["warnings"]))
+
+    def test_existing_home_takeoff_waypoint_uses_waypoint_one_altitude_reference(self):
+        manager = MissionManager()
+        waypoint_manager = RecordingWaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+
+        ok, normalized, reason, details = manager._normalize_wayline_for_flight([
+            {
+                "seq": 0,
+                "latitude": waypoint_manager.home_position["lat"],
+                "longitude": waypoint_manager.home_position["lon"],
+                "altitude": 130,
+                "command": 16,
+                "frame": 3,
+            },
+            {
+                "seq": 1,
+                "latitude": waypoint_manager.home_position["lat"] + 0.001,
+                "longitude": waypoint_manager.home_position["lon"] + 0.001,
+                "altitude": 150,
+                "command": 16,
+                "frame": 3,
+            },
+        ])
+
+        self.assertTrue(ok, reason)
+        self.assertEqual(len(normalized), 2)
+        self.assertFalse(details["inserted_home_transition"])
+        self.assertTrue(details["adjusted_home_transition"])
+        self.assertEqual(details["home_transition_next_seq"], 1)
+        self.assertAlmostEqual(normalized[0]["altitude"], 110.0)
 
     def test_mission_manager_executes_waypoint_actions_once(self):
         manager = MissionManager()
@@ -712,7 +767,7 @@ class Dock3WaylineTest(unittest.TestCase):
                 self.assertEqual(manager._breakpoint_waypoint_idx, 1)
                 self.assertEqual(manager._break_point["breakpoint_type"], "passive_auto_return")
                 self.assertEqual(waypoint_manager.clear_calls, 1)
-                self.assertEqual(len(waypoint_manager.added), 2)
+                self.assertEqual(len(waypoint_manager.added), 3)
                 superseded_events = [
                     event for event in events
                     if event.get("method") == "flighttask_progress"
@@ -854,7 +909,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(pause["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(pause["data"]["output"]["status"], "rejected")
         self.assertEqual(manager._status, manager.MISSION_RUNNING)
-        self.assertEqual(flight_control.calls, [("set_mode", "GUIDED")])
+        self.assertEqual(flight_control.calls, [("set_mode", "LOITER")])
 
     def test_pause_does_not_overwrite_completion_already_being_processed(self):
         class SuccessfulPauseFlightControl:
@@ -1448,9 +1503,13 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(prepare["data"]["output"]["status"], "sent")
             self.assertTrue(prepare["data"]["output"]["ext"]["file"]["parsed"])
             self.assertNotEqual(prepare["data"]["output"]["ext"]["file"].get("delegated_to"), "nest")
-            self.assertEqual(prepare["data"]["output"]["ext"]["waypoint_count"], 2)
+            self.assertEqual(prepare["data"]["output"]["ext"]["waypoint_count"], 3)
+            self.assertTrue(prepare["data"]["output"]["ext"]["file"]["inserted_home_transition"])
             self.assertEqual(waypoint_manager.clear_calls, 1)
-            self.assertEqual(len(waypoint_manager.added), 2)
+            self.assertEqual(len(waypoint_manager.added), 3)
+            self.assertAlmostEqual(waypoint_manager.added[0]["lat"], waypoint_manager.home_position["lat"])
+            self.assertAlmostEqual(waypoint_manager.added[0]["lon"], waypoint_manager.home_position["lon"])
+            self.assertAlmostEqual(waypoint_manager.added[0]["alt"], 80.0)
             self.assertEqual(waypoint_manager.upload_calls, [15.0])
 
             execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {

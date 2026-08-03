@@ -83,6 +83,16 @@ class RecordingFlightControl(FlightControl):
         return dict(self.arm_wait_result)
 
 
+class SendingFlightControl(FlightControl):
+    def __init__(self):
+        super().__init__()
+        self.sent_messages = []
+
+    def _send_message(self, msg):
+        self.sent_messages.append(msg)
+        return True
+
+
 class FlightControlP0ModeSelectionTest(unittest.TestCase):
     def test_copter_takeoff_uses_guided_then_nav_takeoff(self):
         control = RecordingFlightControl()
@@ -121,6 +131,23 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertEqual(control.command_calls[0]["command"], 22)
         self.assertEqual(control.command_calls[0]["param7"], 25)
 
+    def test_guided_rejected_inside_vertical_takeoff_protection_zone(self):
+        control = SendingFlightControl()
+        control._set_mode_profile("plane")
+        control.is_armed = True
+        control.home_position = {"lat": 44.0474824, "lon": 125.3614503}
+        control.current_position = {
+            "lat": 44.0475000,
+            "lon": 125.3614600,
+            "relative_altitude": 80.0,
+        }
+
+        result = control.set_mode("GUIDED")
+
+        self.assertFalse(result["success"], result)
+        self.assertIn("安全起飞保护区", result["message"])
+        self.assertEqual(control.sent_messages, [])
+
     def test_copter_land_uses_guided_mode(self):
         control = RecordingFlightControl()
         control._set_mode_profile("copter")
@@ -141,7 +168,7 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertEqual(result["mode"], "GUIDED")
         self.assertEqual(control.mode_calls, ["GUIDED"])
 
-    def test_plane_pause_uses_guided_without_native_command(self):
+    def test_plane_pause_uses_loiter_without_native_command(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
 
@@ -149,12 +176,12 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["GUIDED"])
-        self.assertEqual(result["pause_strategy"], "guided_mode")
-        self.assertEqual(result["target_mode"], "GUIDED")
+        self.assertEqual(control.mode_calls, ["LOITER"])
+        self.assertEqual(result["pause_strategy"], "loiter_mode")
+        self.assertEqual(result["target_mode"], "LOITER")
         self.assertFalse(result["native_pause"])
 
-    def test_plane_pause_uses_single_guided_mode(self):
+    def test_plane_pause_uses_single_loiter_mode(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
 
@@ -169,15 +196,15 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["GUIDED"])
+        self.assertEqual(control.mode_calls, ["LOITER"])
         self.assertEqual(control.mode_timeouts, [10.0])
-        self.assertEqual(result["target_mode"], "GUIDED")
+        self.assertEqual(result["target_mode"], "LOITER")
         self.assertEqual(
             [attempt["success"] for attempt in result["hold_attempts"]],
             [True],
         )
 
-    def test_plane_pause_fails_when_guided_not_confirmed(self):
+    def test_plane_pause_fails_when_loiter_not_confirmed(self):
         control = RecordingFlightControl()
         control._set_mode_profile("plane")
 
@@ -192,9 +219,9 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertFalse(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["GUIDED"])
+        self.assertEqual(control.mode_calls, ["LOITER"])
         self.assertEqual(control.mode_timeouts, [10.0])
-        self.assertEqual(result["target_mode"], "GUIDED")
+        self.assertEqual(result["target_mode"], "LOITER")
         self.assertFalse(result["native_pause"])
         self.assertEqual(len(result["hold_attempts"]), 1)
 
@@ -215,7 +242,7 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertEqual(captured, {"target_mode": 19, "timeout": 8.0})
 
-    def test_copter_pause_uses_guided_mode(self):
+    def test_copter_pause_uses_loiter_mode(self):
         control = RecordingFlightControl()
         control._set_mode_profile("copter")
         control._wait_for_command_ack = lambda *args, **kwargs: {
@@ -228,12 +255,12 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["GUIDED"])
-        self.assertEqual(result["pause_strategy"], "guided_mode")
+        self.assertEqual(control.mode_calls, ["LOITER"])
+        self.assertEqual(result["pause_strategy"], "loiter_mode")
         self.assertFalse(result["native_pause"])
-        self.assertEqual(result["target_mode"], "GUIDED")
+        self.assertEqual(result["target_mode"], "LOITER")
 
-    def test_copter_pause_uses_guided_mode_even_when_native_pause_would_fail(self):
+    def test_copter_pause_uses_loiter_mode_even_when_native_pause_would_fail(self):
         control = RecordingFlightControl()
         control._set_mode_profile("copter")
         control._wait_for_command_ack = lambda *args, **kwargs: {
@@ -246,9 +273,9 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual(control.command_calls, [])
-        self.assertEqual(control.mode_calls, ["GUIDED"])
-        self.assertEqual(result["pause_strategy"], "guided_mode")
-        self.assertEqual(result["target_mode"], "GUIDED")
+        self.assertEqual(control.mode_calls, ["LOITER"])
+        self.assertEqual(result["pause_strategy"], "loiter_mode")
+        self.assertEqual(result["target_mode"], "LOITER")
         self.assertFalse(result["native_pause"])
 
     def test_in_progress_ack_waits_for_final_success(self):

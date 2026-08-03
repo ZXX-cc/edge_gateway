@@ -28,6 +28,8 @@ from src.utils.dji_error_codes import (
 )
 from src.mavlink.flight_modes import mode_to_dji_code, normalize_flight_mode_request
 from src.cloud_api.dock3_wayline import (
+    MIN_WAYPOINT_ALTITUDE_METERS,
+    POSITION_WAYPOINT_COMMANDS,
     STATUS_CANCELED,
     STATUS_FAILED,
     STATUS_IN_PROGRESS,
@@ -58,6 +60,8 @@ logger = get_logger("mission")
 
 DB_WRITE_RETRY_COUNT = 10
 DB_WRITE_RETRY_INTERVAL_SECONDS = 0.2
+HOME_TRANSITION_ALTITUDE_OFFSET_METERS = 40.0
+LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
 
 
 def serialize_flighttask(handler):
@@ -1641,6 +1645,45 @@ class MissionManager:
             logger.warning("Get telemetry snapshot failed: %s", exc)
         return {}
 
+    def _mode_change_protection_reason(self, mode_name: str) -> str:
+        if str(mode_name or "").upper() not in LOITER_GUIDED_PROTECTED_MODES:
+            return ""
+        if self._flight_control and hasattr(self._flight_control, "is_armed_status"):
+            try:
+                if not self._flight_control.is_armed_status():
+                    return ""
+            except Exception as exc:
+                logger.warning("Read armed status for mode protection failed: %s", exc)
+
+        home = self._aircraft_home_lat_lon(wait_seconds=0.0)
+        telemetry = self._get_telemetry_snapshot()
+        position = self._extract_lat_lon(telemetry)
+        if not home or not position:
+            return ""
+
+        rel_alt = telemetry.get("altitudeRelative", telemetry.get("relative_altitude"))
+        if rel_alt is None:
+            rel_alt = telemetry.get("relativeAltitude", telemetry.get("alt_rel"))
+        if rel_alt is None:
+            return ""
+        rel_altitude = self._as_float(rel_alt, 0.0)
+        safe_altitude = self._as_float(
+            Config.get("mission.safety.safe_takeoff_altitude", MIN_WAYPOINT_ALTITUDE_METERS),
+            MIN_WAYPOINT_ALTITUDE_METERS,
+        )
+        protected_radius = self._as_float(
+            Config.get("mission.safety.vertical_takeoff_protection_radius", safe_altitude),
+            safe_altitude,
+        )
+        distance = self._distance_meters(home[0], home[1], position[0], position[1])
+        if distance <= protected_radius and rel_altitude < safe_altitude:
+            return (
+                f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
+                f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
+                f"{protected_radius:.1f}m/{safe_altitude:.1f}m 内"
+            )
+        return ""
+
     def _flight_control_heartbeat_status(self, max_age: float) -> Dict[str, Any]:
         now_wall = time.time()
         now_monotonic = time.monotonic()
@@ -1892,6 +1935,174 @@ class MissionManager:
             not bool(Config.get('mavlink.enabled', True))
             and bool(Config.get('nest_mavlink.enabled', False))
         )
+
+    @staticmethod
+    def _is_position_waypoint(waypoint: Dict[str, Any]) -> bool:
+        try:
+            command = int(waypoint.get("command", 16) or 0)
+        except (TypeError, ValueError):
+            command = 16
+        if command not in POSITION_WAYPOINT_COMMANDS:
+            return False
+        lat = MissionManager._as_float(waypoint.get("latitude"), 0.0)
+        lon = MissionManager._as_float(waypoint.get("longitude"), 0.0)
+        return -90 <= lat <= 90 and -180 <= lon <= 180 and not (lat == 0.0 and lon == 0.0)
+
+    def _validate_min_wayline_altitude(self, waypoints: List[dict]) -> Tuple[bool, str]:
+        minimum = self._as_float(
+            Config.get("mission.wayline.min_waypoint_altitude", MIN_WAYPOINT_ALTITUDE_METERS),
+            MIN_WAYPOINT_ALTITUDE_METERS,
+        )
+        violations = []
+        for index, waypoint in enumerate(waypoints):
+            if waypoint.get("inserted_by_gateway") or not self._is_position_waypoint(waypoint):
+                continue
+            altitude = self._as_float(waypoint.get("altitude"), 0.0)
+            if altitude < minimum:
+                violations.append(f"seq={waypoint.get('seq', index)} altitude={altitude:g}m")
+        if violations:
+            return False, f"航点高度低于最低要求 {minimum:g}m: {', '.join(violations)}"
+        return True, ""
+
+    @staticmethod
+    def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        radius = 6371000.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        d_phi = math.radians(lat2 - lat1)
+        d_lambda = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2.0) ** 2
+        )
+        return radius * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+    @staticmethod
+    def _extract_lat_lon(source: Any) -> Optional[Tuple[float, float]]:
+        if not isinstance(source, dict):
+            return None
+        lat = source.get("lat", source.get("latitude"))
+        lon = source.get("lon", source.get("lng", source.get("longitude")))
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            return None
+        if not -90 <= lat_f <= 90 or not -180 <= lon_f <= 180:
+            return None
+        if lat_f == 0.0 and lon_f == 0.0:
+            return None
+        return lat_f, lon_f
+
+    def _aircraft_home_lat_lon(self, wait_seconds: float = 0.0) -> Optional[Tuple[float, float]]:
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        requested = False
+        while True:
+            candidates = []
+            if self._waypoint_manager:
+                candidates.append(getattr(self._waypoint_manager, "home_position", None))
+            if self._flight_control:
+                candidates.append(getattr(self._flight_control, "home_position", None))
+            for candidate in candidates:
+                home = self._extract_lat_lon(candidate)
+                if home:
+                    return home
+
+            if not requested and self._waypoint_manager and hasattr(self._waypoint_manager, "request_home_position"):
+                requested = True
+                try:
+                    self._waypoint_manager.request_home_position()
+                except Exception as exc:
+                    logger.warning("Request home position failed: %s", exc)
+
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+    def _normalize_wayline_for_flight(self, waypoints: List[dict]) -> Tuple[bool, List[dict], str, Dict[str, Any]]:
+        altitude_ok, altitude_reason = self._validate_min_wayline_altitude(waypoints)
+        if not altitude_ok:
+            return False, [], altitude_reason, {"min_waypoint_altitude": MIN_WAYPOINT_ALTITUDE_METERS}
+        if not waypoints:
+            return False, [], "No waypoints parsed from wayline file", {}
+
+        normalized = [dict(waypoint) for waypoint in waypoints]
+        if normalized[0].get("inserted_by_gateway") == "home_transition":
+            return True, normalized, "", {"inserted_home_transition": False}
+
+        position_indices = [
+            index for index, waypoint in enumerate(normalized)
+            if self._is_position_waypoint(waypoint)
+        ]
+        if not position_indices:
+            return True, normalized, "", {"inserted_home_transition": False}
+
+        wait_seconds = self._as_float(
+            Config.get("mission.wayline.home_position_wait_seconds", 1.0),
+            1.0,
+        )
+        home = self._aircraft_home_lat_lon(wait_seconds=wait_seconds)
+        if not home:
+            return False, [], "Home position not available; cannot insert takeoff transition waypoint", {}
+
+        home_lat, home_lon = home
+        takeoff_index = position_indices[0]
+        takeoff = normalized[takeoff_index]
+
+        takeoff_lat = self._as_float(takeoff.get("latitude"), 0.0)
+        takeoff_lon = self._as_float(takeoff.get("longitude"), 0.0)
+        if self._distance_meters(home_lat, home_lon, takeoff_lat, takeoff_lon) <= 1.0:
+            next_index = position_indices[1] if len(position_indices) > 1 else takeoff_index
+            next_waypoint = normalized[next_index]
+            next_alt = self._as_float(next_waypoint.get("altitude"), MIN_WAYPOINT_ALTITUDE_METERS)
+            transition_altitude = max(0.0, next_alt - HOME_TRANSITION_ALTITUDE_OFFSET_METERS)
+            takeoff.update({
+                "latitude": home_lat,
+                "longitude": home_lon,
+                "altitude": transition_altitude,
+                "action_type": takeoff.get("action_type") or "home_transition",
+                "adjusted_by_gateway": "home_transition",
+            })
+            for index, waypoint in enumerate(normalized):
+                waypoint["seq"] = index
+            return True, normalized, "", {
+                "inserted_home_transition": False,
+                "adjusted_home_transition": True,
+                "home_transition_waypoint_seq": takeoff_index,
+                "home_transition_next_seq": next_index,
+                "home_transition_altitude": transition_altitude,
+                "home_transition_offset": HOME_TRANSITION_ALTITUDE_OFFSET_METERS,
+            }
+
+        next_waypoint = takeoff
+        next_alt = self._as_float(next_waypoint.get("altitude"), MIN_WAYPOINT_ALTITUDE_METERS)
+        transition_altitude = max(0.0, next_alt - HOME_TRANSITION_ALTITUDE_OFFSET_METERS)
+        transition = {
+            "seq": takeoff_index,
+            "latitude": home_lat,
+            "longitude": home_lon,
+            "altitude": transition_altitude,
+            "speed": next_waypoint.get("speed"),
+            "command": 16,
+            "frame": next_waypoint.get("frame", 3),
+            "param1": 0.0,
+            "param2": 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "autocontinue": 1,
+            "action_type": "home_transition",
+            "inserted_by_gateway": "home_transition",
+        }
+        normalized.insert(takeoff_index, transition)
+        for index, waypoint in enumerate(normalized):
+            waypoint["seq"] = index
+        return True, normalized, "", {
+            "inserted_home_transition": True,
+            "home_transition_waypoint_seq": takeoff_index,
+            "home_transition_next_seq": takeoff_index + 1,
+            "home_transition_altitude": transition_altitude,
+            "home_transition_offset": HOME_TRANSITION_ALTITUDE_OFFSET_METERS,
+        }
 
     def _upload_wayline_to_flight_controller(self, waypoints: List[dict]) -> Tuple[bool, str]:
         if not self._waypoint_manager:
@@ -2481,7 +2692,17 @@ class MissionManager:
             except Exception as e:
                 logger.warning(f"Waypoint {i} parse failed: {e}")
 
-        self._current_wayline = parsed_waypoints
+        normalize_ok, normalized_wayline, normalize_reason, normalize_details = self._normalize_wayline_for_flight(parsed_waypoints)
+        if not normalize_ok:
+            logger.warning("Wayline normalization failed: %s", normalize_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=normalize_reason,
+                data=normalize_details,
+            )
+
+        self._current_wayline = normalized_wayline
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0
 
@@ -2733,7 +2954,17 @@ class MissionManager:
                     msg_str=reason,
                 )
 
-            result = set_mode("GUIDED")
+            protection_reason = self._mode_change_protection_reason("LOITER")
+            if protection_reason:
+                logger.warning("暂停航线被起飞保护区拒绝: %s", protection_reason)
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=WAYLINE_EXECUTION_FAILED,
+                    data=self._wayline_reply_data(STATUS_REJECTED, current_step=self._current_step),
+                    msg_str=protection_reason,
+                )
+
+            result = set_mode("LOITER")
             if not result.get("success"):
                 reason = result.get("message") or "pause mission failed"
                 logger.warning(f"暂停航线失败: {reason}")
@@ -2751,8 +2982,8 @@ class MissionManager:
 
             logger.info(
                 "Dock3 pause control confirmed: strategy=%s, target_mode=%s, native=%s",
-                "guided_mode",
-                "GUIDED",
+                "loiter_mode",
+                "LOITER",
                 False,
             )
 
@@ -2909,6 +3140,15 @@ class MissionManager:
 
         fly_to_id = str(int(time.time() * 1000))
         logger.info(f"Flyto: lat={lat}, lon={lon}, alt={alt}, speed={speed}")
+
+        protection_reason = self._mode_change_protection_reason("GUIDED")
+        if protection_reason:
+            logger.warning("Flyto rejected by takeoff protection: %s", protection_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str=protection_reason,
+            )
 
         # 通过MAVLink发送位置目标
         if self._mode_control:
@@ -3131,6 +3371,14 @@ class MissionManager:
 
         # 切换到悬停模式
         if self._flight_control:
+            protection_reason = self._mode_change_protection_reason("LOITER")
+            if protection_reason:
+                logger.warning("Cancel return home rejected by takeoff protection: %s", protection_reason)
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_STATE_UNSUPPORTED,
+                    msg_str=protection_reason,
+                )
             result = self._flight_control.set_mode("LOITER")
             if not result.get("success"):
                 logger.warning(f"取消返航失败: {result.get('message')}")
@@ -3181,6 +3429,20 @@ class MissionManager:
             mode_to_dji_code(mode_name),
             normalized.source_key,
         )
+
+        protection_reason = self._mode_change_protection_reason(mode_name)
+        if protection_reason:
+            logger.warning("Set flight mode rejected by takeoff protection: %s", protection_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data={
+                    "mode": mode_name,
+                    "mode_code": mode_to_dji_code(mode_name),
+                    "requested_mode": requested_mode,
+                },
+                msg_str=protection_reason,
+            )
 
         # 通过MAVLink设置模式
         if not self._flight_control:
@@ -4321,17 +4583,29 @@ class MissionManager:
                 summary, parsed_waypoints = {}, []
                 logger.warning("Wayline parse failed: flight_id=%s error=%s", flight_id, exc)
             self._task_file_summary = summary or {}
-            self._current_wayline = list(parsed_waypoints or [])
+            normalize_ok, normalized_wayline, normalize_reason, normalize_details = self._normalize_wayline_for_flight(
+                list(parsed_waypoints or [])
+            )
+            self._current_wayline = list(normalized_wayline or [])
             if not self._current_wayline:
                 self._status = self.MISSION_FAILED
                 self._wayline_mission_state = 1
-                reason = "; ".join(self._task_file_summary.get("warnings", [])) or "No waypoints parsed from wayline file"
+                warning_reason = "; ".join(self._task_file_summary.get("warnings", []))
+                normalized_reason = "" if normalize_reason == "No waypoints parsed from wayline file" else normalize_reason
+                reason = (
+                    normalized_reason
+                    or warning_reason
+                    or normalize_reason
+                    or "No waypoints parsed from wayline file"
+                )
                 return self._fail_prepare_self_check(
                     msg,
                     flight_id,
                     ["wayline_parse"],
                     {"wayline_parse": reason},
                 )
+            self._task_file_summary.update(normalize_details or {})
+            self._task_file_summary["uploaded_waypoint_count"] = len(self._current_wayline)
             upload_ok, upload_reason = self._upload_wayline_to_flight_controller(self._current_wayline)
             if not upload_ok:
                 self._status = self.MISSION_FAILED

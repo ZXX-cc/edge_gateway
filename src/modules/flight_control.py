@@ -11,11 +11,15 @@ from enum import Enum
 from threading import Condition, Event, Lock, Thread
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from src.utils.config import Config
 from src.mavlink.flight_modes import (
     flight_mode_profile,
     mode_map_for_profile,
     parse_flight_mode,
 )
+
+MIN_SAFE_TAKEOFF_ALTITUDE_METERS = 120.0
+LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
 
 # ① 枚举新增 ENDED
 class AutoTakeoffState(Enum):
@@ -74,6 +78,8 @@ class FlightControl(BaseModule):
         self._prearm_status_monotonic = 0.0
         self._last_arm_status_text = None
         self._last_arm_status_text_time = 0.0
+        self.home_position = None
+        self.current_position = {}
 
         # 任务信息
         self.mission_count = 0
@@ -158,6 +164,12 @@ class FlightControl(BaseModule):
             self._handle_sys_status(msg)
         elif msg_type == 'STATUSTEXT':
             self._handle_statustext(msg)
+        elif msg_type == 'HOME_POSITION':
+            self._handle_home_position(msg)
+        elif msg_type == 'GLOBAL_POSITION_INT':
+            self._handle_global_position_int(msg)
+        elif msg_type == 'VFR_HUD':
+            self._handle_vfr_hud(msg)
         elif msg_type == 'MISSION_CURRENT':
             self.current_waypoint = msg.seq
         elif msg_type == 'MISSION_COUNT':
@@ -451,6 +463,31 @@ class FlightControl(BaseModule):
             self._last_arm_status_text_time = time.time()
             self._armability_condition.notify_all()
 
+    def _handle_home_position(self, msg):
+        self.home_position = {
+            "lat": getattr(msg, "latitude", 0) / 1e7,
+            "lon": getattr(msg, "longitude", 0) / 1e7,
+            "alt": getattr(msg, "altitude", 0) / 1000.0,
+            "timestamp": time.time(),
+        }
+
+    def _handle_global_position_int(self, msg):
+        self.current_position.update({
+            "lat": getattr(msg, "lat", 0) / 1e7,
+            "lon": getattr(msg, "lon", 0) / 1e7,
+            "relative_altitude": getattr(msg, "relative_alt", 0) / 1000.0,
+            "altitude": getattr(msg, "alt", 0) / 1000.0,
+            "timestamp": time.time(),
+        })
+
+    def _handle_vfr_hud(self, msg):
+        self.current_position.update({
+            "ground_speed": getattr(msg, "groundspeed", None),
+            "airspeed": getattr(msg, "airspeed", None),
+            "climb_rate": getattr(msg, "climb", None),
+            "timestamp": time.time(),
+        })
+
     def _get_ack_result_text(self, result: int) -> str:
         ack_results = {0: "接受", 1: "临时拒绝", 2: "拒绝", 3: "不支持", 4: "失败", 5: "执行中", 6: "已取消"}
         return ack_results.get(result, f"未知({result})")
@@ -608,17 +645,17 @@ class FlightControl(BaseModule):
         }
 
     def pause_mission(self) -> Dict:
-        mode_result = self.set_mode("GUIDED")
+        mode_result = self.set_mode("LOITER")
         result = dict(mode_result)
         result.update({
             "action": "暂停",
-            "pause_strategy": "guided_mode",
-            "target_mode": "GUIDED",
+            "pause_strategy": "loiter_mode",
+            "target_mode": "LOITER",
             "native_pause": False,
             "fallback_reason": "",
             "fallback_from": "",
             "hold_attempts": [{
-                "mode": "GUIDED",
+                "mode": "LOITER",
                 "success": bool(mode_result.get("success")),
                 "message": mode_result.get("message", ""),
             }],
@@ -668,6 +705,70 @@ class FlightControl(BaseModule):
 
     # ========== 模式管理（参考ModeControl） ==========
 
+    @staticmethod
+    def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        radius = 6371000.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        d_phi = math.radians(lat2 - lat1)
+        d_lambda = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2.0) ** 2
+        )
+        return radius * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+    @staticmethod
+    def _as_float(value, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _loiter_guided_gate(self, mode_name: str) -> Dict:
+        if str(mode_name or "").upper() not in LOITER_GUIDED_PROTECTED_MODES:
+            return {"success": True}
+        if not self.is_armed_status():
+            return {"success": True}
+        if not isinstance(self.home_position, dict) or not isinstance(self.current_position, dict):
+            return {"success": True}
+
+        try:
+            home_lat = float(self.home_position.get("lat"))
+            home_lon = float(self.home_position.get("lon"))
+            current_lat = float(self.current_position.get("lat"))
+            current_lon = float(self.current_position.get("lon"))
+        except (TypeError, ValueError):
+            return {"success": True}
+
+        rel_altitude = self.current_position.get("relative_altitude")
+        if rel_altitude is None:
+            return {"success": True}
+        rel_altitude = self._as_float(rel_altitude, 0.0)
+        safe_altitude = self._as_float(
+            Config.get("mission.safety.safe_takeoff_altitude", MIN_SAFE_TAKEOFF_ALTITUDE_METERS),
+            MIN_SAFE_TAKEOFF_ALTITUDE_METERS,
+        )
+        protected_radius = self._as_float(
+            Config.get("mission.safety.vertical_takeoff_protection_radius", safe_altitude),
+            safe_altitude,
+        )
+        distance = self._distance_meters(home_lat, home_lon, current_lat, current_lon)
+        if distance <= protected_radius and rel_altitude < safe_altitude:
+            return {
+                "success": False,
+                "message": (
+                    f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
+                    f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
+                    f"{protected_radius:.1f}m/{safe_altitude:.1f}m 内"
+                ),
+                "distance_from_home": distance,
+                "relative_altitude": rel_altitude,
+                "safe_takeoff_altitude": safe_altitude,
+                "protected_radius": protected_radius,
+            }
+        return {"success": True}
+
     def set_mode(self, mode: str, timeout: float = 10.0) -> Dict:
         """
         设置飞行模式（支持ArduPlane所有模式）
@@ -710,6 +811,12 @@ class FlightControl(BaseModule):
         result["mode_id"] = modenum
         result["mode_name"] = mode_name
         result["mode_profile"] = self.mode_profile
+
+        gate = self._loiter_guided_gate(mode_name)
+        if not gate.get("success"):
+            result.update(gate)
+            self.log(result["message"], "WARNING")
+            return result
 
         # 发送模式切换命令
         self.log(
