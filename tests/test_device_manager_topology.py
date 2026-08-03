@@ -80,6 +80,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
     def update_topo_events(self):
         return [event for event in self.events if event.get("method") == "update_topo"]
 
+    def live_capacity_states(self):
+        return [
+            state["property"]["live_capacity"]
+            for state in self.states
+            if "live_capacity" in state.get("property", {})
+        ]
+
     def test_report_update_topo_requests_status_reply(self):
         self.assertTrue(self.manager.report_update_topo())
 
@@ -88,6 +95,7 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(event["need_reply"], 1)
         self.assertIn("tid", event)
         self.assertEqual(event["data"]["sub_devices"], [])
+        self.assertEqual(len(self.live_capacity_states()), 1)
 
     def test_already_bound_startup_reports_topology_without_service_trigger(self):
         self.manager._device_state = self.manager.STATE_BOUND
@@ -224,7 +232,9 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         state_properties = {}
         for state in self.states:
             state_properties.update(state.get("property", {}))
-        self.assertLessEqual(set(state_properties), {"sub_device", "wireless_link_topo"})
+        self.assertLessEqual(set(state_properties), {"live_capacity", "wireless_link_topo"})
+        self.assertNotIn("sub_device", state_properties)
+        self.assertGreaterEqual(len(self.live_capacity_states()), 2)
         sub_device_state = self.manager.get_property("sub_device")
         self.assertIn(sub_device_state["device_sn"], {"DRONE-A", "DRONE-B"})
         self.assertEqual(sub_device_state["device_online_status"], 0)

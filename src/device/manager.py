@@ -899,6 +899,15 @@ class DeviceManager:
                 self._notify_state({"property": changed})
         return updates
 
+    def publish_live_capacity_state(self, reason: str = "") -> None:
+        """Publish the Dock3 livestream ability once the payload topology is known."""
+        updates = self._refresh_payload_properties(notify=False)
+        live_capacity = updates.get("live_capacity", self._properties.get("live_capacity"))
+        if live_capacity is None:
+            return
+        logger.info("Live capacity state reported%s", f": {reason}" if reason else "")
+        self._notify_state({"property": {"live_capacity": live_capacity}})
+
     def update_properties(self, updates: Dict[str, Any], notify: bool = True):
         """批量更新属性（内部遥测/机巢更新用）"""
         changed = {}
@@ -1477,6 +1486,7 @@ class DeviceManager:
             len(payload['sub_devices']),
             event.get('tid'),
         )
+        self.publish_live_capacity_state("topology_update")
         return True
 
     def handle_update_topo_reply(self, method: str, msg: dict):

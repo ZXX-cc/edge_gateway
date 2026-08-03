@@ -1294,6 +1294,8 @@ class EdgeGateway:
         if self.cloud_conn:
             logger.info("Starting cloud connection manager after all startup connections...")
             self.cloud_conn.report_device_online()
+            if self.device:
+                self.device.publish_live_capacity_state("gateway_online")
             self.cloud_conn.start_heartbeat()
 
         if not self.device:
