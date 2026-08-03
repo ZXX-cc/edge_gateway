@@ -216,7 +216,9 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'psdk_floating_window_text', 'psdk_widget_value_set',
     'psdk_input_box_text_set', 'speaker_replay', 'speaker_play_mode_set',
     'speaker_play_stop', 'speaker_audio_play_start', 'speaker_tts_play_start',
-    'speaker_play_volume_set', 'file_list_get', 'file_download',
+    'speaker_play_volume_set', 'speaker_realtime_start',
+    'speaker_opus_frame_send', 'speaker_realtime_stop',
+    'file_list_get', 'file_download',
     'download_media', 'file_delete', 'adjust_upload_priority',
     'storage_config_get', 'live_start', 'live_start_push', 'live_stop',
     'live_stop_push', 'live_camera_change', 'set_livestream_lens',
@@ -1860,6 +1862,9 @@ class EdgeGateway:
             'speaker_audio_play_start': self.third_party.handle_speaker_audio_play_start,
             'speaker_tts_play_start': self.third_party.handle_speaker_tts_play_start,
             'speaker_play_volume_set': self.third_party.handle_speaker_play_volume_set,
+            'speaker_realtime_start': self.third_party.handle_speaker_realtime_start,
+            'speaker_opus_frame_send': self.third_party.handle_speaker_opus_frame_send,
+            'speaker_realtime_stop': self.third_party.handle_speaker_realtime_stop,
         }, category='payload')
 
         # ---- 媒体管理API (Media Management) ----

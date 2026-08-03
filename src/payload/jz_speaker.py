@@ -8,8 +8,10 @@ The device uses 115200 8N1 UART and frames shaped as:
 from __future__ import annotations
 
 import time
+import socket
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+from urllib.parse import urlparse
 
 from src.utils.logger import get_logger
 
@@ -26,6 +28,7 @@ REPLY_HEAD = b"\x5B\x5B\x77"
 FRAME_TAIL = b"\x00\x23"
 MAX_TEXT_BYTES = 1000
 MAX_CHUNK_BYTES = 400
+OPUS_FRAME_BYTES = 80
 
 MODEL_NAMES = {
     0x11: "H1E",
@@ -138,27 +141,52 @@ class JzSpeakerAdapter:
     def __init__(self, config: Optional[Mapping[str, Any]] = None):
         self.config = dict(config or {})
         self.port = str(self.config.get("port") or "")
+        self.host = str(self.config.get("host") or "")
+        self.tcp_port = _as_int(self.config.get("tcp_port", self.config.get("port_tcp", self.config.get("network_port"))), 0)
+        endpoint = str(self.config.get("endpoint") or "")
+        if endpoint:
+            parsed_host, parsed_port = _parse_tcp_endpoint(endpoint)
+            self.host = self.host or parsed_host
+            self.tcp_port = self.tcp_port or parsed_port
         self.baudrate = int(self.config.get("baudrate") or 115200)
         self.timeout = float(self.config.get("timeout_seconds") or 1.0)
         self.write_timeout = float(self.config.get("write_timeout_seconds") or self.timeout)
         self.wait_reply = bool(self.config.get("wait_reply", False))
         self.auto_connect = bool(self.config.get("auto_connect", False))
         self.text_encoding = str(self.config.get("text_encoding") or "utf-8")
+        self.transport = str(self.config.get("transport") or "").lower()
         self._serial = None
+        self._socket: Optional[socket.socket] = None
         self._seq = 0
         self._last_reply: Dict[str, Any] = {}
 
     @property
     def enabled(self) -> bool:
-        return bool(self.config.get("enabled", False) and self.port)
+        return bool(self.config.get("enabled", False) and (self._tcp_configured or self.port))
+
+    @property
+    def _tcp_configured(self) -> bool:
+        return bool(self.host and self.tcp_port > 0)
+
+    @property
+    def _use_tcp(self) -> bool:
+        if self.transport in {"tcp", "network", "ethernet", "socket"}:
+            return True
+        if self.transport in {"serial", "uart"}:
+            return False
+        return self._tcp_configured
 
     @property
     def connected(self) -> bool:
+        if self._use_tcp:
+            return bool(self._socket)
         return bool(self._serial and getattr(self._serial, "is_open", False))
 
     def connection_state(self) -> str:
         if not self.enabled:
             return "simulated"
+        if self._use_tcp:
+            return "connected" if self.connected else "tcp_configured"
         if serial is None:
             return "pyserial_missing"
         if self.connected:
@@ -167,10 +195,19 @@ class JzSpeakerAdapter:
 
     def connect(self) -> JzSpeakerResult:
         if not self.enabled:
-            return JzSpeakerResult(True, simulated=True, message="speaker serial is not configured")
-        if serial is None:
+            return JzSpeakerResult(True, simulated=True, message="speaker link is not configured")
+        if self._use_tcp:
+            if not self.connected:
+                try:
+                    sock = socket.create_connection((self.host, self.tcp_port), timeout=self.timeout)
+                    sock.settimeout(self.timeout)
+                    self._socket = sock
+                except Exception as exc:
+                    logger.error("JZ speaker TCP connect failed: %s", exc)
+                    return JzSpeakerResult(False, message=str(exc))
+        elif serial is None:
             return JzSpeakerResult(False, message="pyserial is not installed")
-        if not self.connected:
+        elif not self.connected:
             try:
                 self._serial = serial.Serial(
                     self.port,
@@ -190,6 +227,12 @@ class JzSpeakerAdapter:
         return result
 
     def close(self) -> None:
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                logger.debug("JZ speaker TCP close failed", exc_info=True)
+            self._socket = None
         if self._serial:
             try:
                 self._serial.close()
@@ -222,6 +265,21 @@ class JzSpeakerAdapter:
 
     def replay(self) -> JzSpeakerResult:
         return self.resume_audio()
+
+    def next_audio(self) -> JzSpeakerResult:
+        return self.send_command(0x52, 0x08, b"\x00")
+
+    def start_realtime_speaking(self) -> JzSpeakerResult:
+        return self.send_command(0x59, 0xE1, b"\x00", ack=True)
+
+    def stop_realtime_speaking(self) -> JzSpeakerResult:
+        return self.send_command(0x59, 0xE2, b"\x00", ack=True)
+
+    def send_opus_frame(self, frame: bytes) -> JzSpeakerResult:
+        payload = bytes(frame or b"")
+        if len(payload) != OPUS_FRAME_BYTES:
+            return JzSpeakerResult(False, message=f"opus frame must be {OPUS_FRAME_BYTES} bytes")
+        return self.send_command(0x59, 0xE3, payload, ack=True)
 
     def play_tts(self, text: str, *, speed: Any = None, volume: Any = None, voice_type: Any = None) -> JzSpeakerResult:
         encoded = self._encode_text(str(text or ""))[:MAX_TEXT_BYTES]
@@ -264,11 +322,14 @@ class JzSpeakerAdapter:
     def query_status(self) -> Dict[str, Any]:
         status: Dict[str, Any] = {
             "connection_state": self.connection_state(),
+            "transport": "tcp" if self._use_tcp else "serial",
+            "host": self.host,
+            "tcp_port": self.tcp_port,
             "serial_port": self.port,
             "baudrate": self.baudrate,
             "last_reply": self._last_reply,
         }
-        if not self.enabled or serial is None:
+        if not self.enabled or (not self._use_tcp and serial is None) or not self.connected:
             return status
         volume = self.send_command(0x53, 0x01, b"\x00", ack=True)
         play_state = self.send_command(0x53, 0x02, b"\x00", ack=True)
@@ -287,7 +348,7 @@ class JzSpeakerAdapter:
         frame = build_frame(func1, func2, data, ack=1 if should_wait else 0, seq=self._next_seq())
         if not self.enabled:
             return JzSpeakerResult(True, simulated=True, message="speaker serial is not configured", frame_hex=frame.hex(" "))
-        if serial is None:
+        if not self._use_tcp and serial is None:
             return JzSpeakerResult(False, message="pyserial is not installed", frame_hex=frame.hex(" "))
         if not self.connected:
             opened = self.connect()
@@ -295,8 +356,7 @@ class JzSpeakerAdapter:
                 opened.frame_hex = frame.hex(" ")
                 return opened
         try:
-            self._serial.write(frame)
-            self._serial.flush()
+            self._write_frame(frame)
             reply = b""
             parsed: Dict[str, Any] = {}
             if should_wait:
@@ -313,13 +373,22 @@ class JzSpeakerAdapter:
             return JzSpeakerResult(True, frame_hex=frame.hex(" "), reply_hex=reply.hex(" "), output=output)
         except Exception as exc:
             logger.error("JZ speaker command failed: %s", exc)
+            if self._use_tcp:
+                self.close()
             return JzSpeakerResult(False, frame_hex=frame.hex(" "), message=str(exc))
+
+    def _write_frame(self, frame: bytes) -> None:
+        if self._use_tcp:
+            self._socket.sendall(frame)
+            return
+        self._serial.write(frame)
+        self._serial.flush()
 
     def _read_frame(self) -> bytes:
         deadline = time.monotonic() + self.timeout
         buffer = bytearray()
         while time.monotonic() < deadline:
-            chunk = self._serial.read(1)
+            chunk = self._socket.recv(1) if self._use_tcp else self._serial.read(1)
             if not chunk:
                 continue
             buffer.extend(chunk)
@@ -352,3 +421,13 @@ def _as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_tcp_endpoint(endpoint: str) -> tuple[str, int]:
+    value = endpoint.strip()
+    if not value:
+        return "", 0
+    parsed = urlparse(value if "://" in value else f"tcp://{value}")
+    host = parsed.hostname or ""
+    port = parsed.port or 0
+    return host, port

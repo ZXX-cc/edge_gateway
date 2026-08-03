@@ -387,10 +387,18 @@ payload:
       channels:
         control_audio:
           direction: "gateway_to_payload"
-          transport: "vendor_protocol"
-          adapter: "jz_speaker" # 极至喊话器协议 2.4；port 留空时仅模拟回包，不访问硬件
-          endpoint: ""
+          transport: "vendor_protocol" # vendor_protocol/tcp/serial；配置 tcp.host + tcp_port 后自动走 TCP
+          adapter: "jz_speaker" # 极至喊话器协议 2.4；未配置串口/TCP 时仅模拟回包，不访问硬件
+          endpoint: "" # 可选：tcp://192.168.10.71:71
           timing: "on_demand"
+          tcp:
+            host: "" # 厂商助手默认：1号 192.168.10.71:71，2号 192.168.10.72:72 ... 6号 192.168.10.76:76
+            tcp_port: 0
+            timeout_seconds: 1.0
+            write_timeout_seconds: 1.0
+            wait_reply: false
+            auto_connect: false
+            text_encoding: "utf-8"
           serial:
             port: "" # Linux 示例：/dev/ttyUSB0 或 /dev/ttyAMA0；Windows 示例：COM3
             baudrate: 115200
