@@ -72,7 +72,12 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
             self.assertTrue(release.wait(1), "test did not release background handler")
             return MessageBuilder.build_reply(msg, result=0, data={"status": "ok"})
 
-        self.client.register_handler("fileupload_list", slow_log_scan, background=True)
+        self.client.register_handler(
+            "fileupload_list",
+            slow_log_scan,
+            background=True,
+            reply_required=True,
+        )
         payload = {
             "tid": "background-io-1",
             "method": "fileupload_list",
@@ -106,7 +111,7 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
             calls.append(msg["tid"])
             return MessageBuilder.build_reply(msg, result=0)
 
-        self.client.register_handler("cover_open", control_handler)
+        self.client.register_handler("cover_open", control_handler, reply_required=True)
         payload = {
             "tid": "control-1",
             "method": "cover_open",
@@ -118,6 +123,110 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
 
         self.assertEqual(calls, ["control-1"])
         self.assertEqual(len(self.client.client.published), 1)
+
+    def test_services_command_replies_without_need_reply_flag(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.register_handler("live_start_push", handler, reply_required=True)
+        payload = {
+            "tid": "services-no-need-reply",
+            "method": "live_start_push",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(len(self.client.client.published), 1)
+        reply_topic, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply_topic, TopicBuilder.services_reply(self.client.gateway_sn))
+        self.assertEqual(reply["tid"], payload["tid"])
+
+    def test_services_command_without_confirmed_reply_policy_does_not_default_reply(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.register_handler("unconfirmed_service", handler)
+        payload = {
+            "tid": "services-unconfirmed",
+            "method": "unconfirmed_service",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(self.client.client.published, [])
+
+    def test_remote_debug_admission_rejection_replies_without_need_reply_flag(self):
+        class RejectDecision:
+            accepted = False
+            reason = "device_unbound"
+            message = "设备未绑定，当前命令不能进入业务执行"
+            result = 325100
+            required_state = ["device.bound", "device.online"]
+            snapshot = None
+
+            def build_reply(self, request, gateway_sn):
+                return {
+                    "bid": request.get("bid", ""),
+                    "data": {
+                        "output": {
+                            "status": "rejected",
+                            "reason": self.reason,
+                        },
+                        "result": self.result,
+                    },
+                    "gateway": request.get("gateway", gateway_sn),
+                    "tid": request.get("tid", ""),
+                    "timestamp": 1,
+                    "method": request.get("method", ""),
+                    "msg": self.message,
+                }
+
+        class RejectAdmission:
+            def check(self, method, request, source_topic):
+                return RejectDecision()
+
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.set_command_admission(RejectAdmission())
+        self.client.register_handler("debug_mode_open", handler, reply_required=True)
+        payload = {
+            "tid": "remote-debug-no-need-reply",
+            "bid": "remote-debug-bid",
+            "method": "debug_mode_open",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(len(self.client.client.published), 1)
+        reply_topic, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply_topic, TopicBuilder.services_reply(self.client.gateway_sn))
+        self.assertEqual(reply["tid"], payload["tid"])
+        self.assertEqual(reply["method"], "debug_mode_open")
+        self.assertEqual(reply["data"]["result"], 325100)
+
+    def test_drc_down_can_still_omit_reply_with_need_reply_zero(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.register_handler("stick_control", handler)
+        payload = {
+            "tid": "drc-no-reply",
+            "method": "stick_control",
+            "need_reply": 0,
+            "data": {},
+        }
+
+        self.client._on_message(
+            None,
+            None,
+            mqtt_message(TopicBuilder.drc_down(self.client.gateway_sn), payload),
+        )
+
+        self.assertEqual(self.client.client.published, [])
 
 
 if __name__ == "__main__":

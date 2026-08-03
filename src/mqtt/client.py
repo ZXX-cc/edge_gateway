@@ -49,6 +49,7 @@ class MQTTClient:
         self.connected = False
         self._handlers: Dict[str, Callable] = {}  # topic -> handler
         self._topic_handlers: Dict[str, Callable] = {}  # method -> handler
+        self._reply_required_methods = set()
         self._status_reply_handler: Optional[Callable] = None
         self._requests_reply_handler: Optional[Callable] = None
         self._connect_callbacks: List[Callable] = []
@@ -381,6 +382,21 @@ class MQTTClient:
             "takeoff_to_point",
         }
 
+    def _should_reply_to_downstream(self, source_topic: str, payload: dict) -> bool:
+        """
+        Decide whether an incoming cloud-to-device command should get a reply.
+
+        Services/property-set replies are method-level protocol decisions, not a
+        generic topic-level default. DRC realtime data keeps using need_reply
+        because high-rate stick/speed pushes may intentionally omit ACKs.
+        """
+        method = payload.get('method', '') if isinstance(payload, dict) else ''
+        if method in self._reply_required_methods:
+            return True
+        if source_topic.endswith('/services') or source_topic.endswith('/property/set'):
+            return False
+        return bool(isinstance(payload, dict) and payload.get('need_reply') == 1)
+
     @staticmethod
     def _build_error_reply(
         payload: dict,
@@ -549,7 +565,14 @@ class MQTTClient:
 
     # ---- 处理器注册 ----
 
-    def register_handler(self, method: str, handler: Callable, *, background: bool = False):
+    def register_handler(
+        self,
+        method: str,
+        handler: Callable,
+        *,
+        background: bool = False,
+        reply_required: bool = False,
+    ):
         """
         注册API方法处理器
 
@@ -558,8 +581,13 @@ class MQTTClient:
             handler: 处理函数(msg: dict) -> dict
             background: 是否在后台 IO 工作线程执行。仅用于文件扫描、删除等
                 不访问实时状态机的耗时本地操作。
+            reply_required: 该 method 是否已确认存在协议定义的下行 reply。
         """
         self._topic_handlers[method] = handler
+        if reply_required:
+            self._reply_required_methods.add(method)
+        else:
+            self._reply_required_methods.discard(method)
         if background:
             self._background_methods.add(method)
         else:
@@ -570,6 +598,7 @@ class MQTTClient:
         """注销处理器"""
         self._topic_handlers.pop(method, None)
         self._background_methods.discard(method)
+        self._reply_required_methods.discard(method)
 
     def set_status_reply_handler(self, handler: Callable):
         """设置 status_reply 处理器"""
@@ -740,7 +769,7 @@ class MQTTClient:
                         security.reason,
                         security.message,
                     )
-                    if payload.get('need_reply') == 1:
+                    if self._should_reply_to_downstream(msg.topic, payload):
                         error_reply = self._build_error_reply(
                             payload,
                             -3,
@@ -917,7 +946,7 @@ class MQTTClient:
                             error=topic_error,
                         )
                         logger.warning(f"Invalid topic for method={method}: {topic_error}")
-                        if payload.get('need_reply') == 1:
+                        if self._should_reply_to_downstream(msg.topic, payload):
                             error_reply = self._build_error_reply(
                                 payload,
                                 -3,
@@ -951,7 +980,7 @@ class MQTTClient:
                                 method,
                                 payload.get("tid"),
                             )
-                            if payload.get('need_reply') == 1:
+                            if self._should_reply_to_downstream(msg.topic, payload):
                                 self._publish_reply_for_downstream_topic(msg.topic, cached_reply)
                             return
                         if not self._claim_downstream_request(msg.topic, payload):
@@ -1043,7 +1072,7 @@ class MQTTClient:
                                     ("result", self._reply_result(reply)),
                                     ("current_state", admission.snapshot.to_dict(compact=True) if admission.snapshot else {}),
                                 ]))
-                                if payload.get('need_reply') == 1:
+                                if self._should_reply_to_downstream(msg.topic, payload):
                                     self._publish_reply_for_downstream_topic(msg.topic, reply)
                                 return
 
@@ -1083,7 +1112,7 @@ class MQTTClient:
                     error=f"No handler registered for method: {method}",
                 )
                 logger.warning(f"No handler registered for method: {method}")
-                if payload.get('need_reply') == 1:
+                if self._should_reply_to_downstream(msg.topic, payload):
                     error_reply = self._build_error_reply(
                         payload,
                         -2,
@@ -1206,7 +1235,7 @@ class MQTTClient:
                     "gateway_instance": self._trace_instance,
                     "reply_method": result.get('method') if isinstance(result, dict) else "",
                     "reply_result": self._reply_result(result),
-                    "will_reply": bool(payload.get('need_reply') == 1 and result),
+                    "will_reply": bool(self._should_reply_to_downstream(source_topic, payload) and result),
                 },
             )
             logger.info(self._format_log_block("MQTT HANDLER COMPLETED", [
@@ -1222,7 +1251,7 @@ class MQTTClient:
                 self._remember_downstream_reply(source_topic, payload, result)
             elif is_downstream_command:
                 self._release_downstream_request(source_topic, payload)
-            if payload.get('need_reply') == 1 and result:
+            if self._should_reply_to_downstream(source_topic, payload) and result:
                 self._publish_reply_for_downstream_topic(source_topic, result)
         except Exception as error:
             self._handle_handler_exception(payload, source_topic, started, error)
@@ -1239,7 +1268,7 @@ class MQTTClient:
             error=str(error),
         )
         logger.error(f"Handler error for {method}: {error}", exc_info=True)
-        if payload.get('need_reply') == 1:
+        if self._should_reply_to_downstream(source_topic, payload):
             error_reply = self._build_error_reply(
                 payload,
                 -1,

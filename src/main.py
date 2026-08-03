@@ -130,6 +130,122 @@ BACKGROUND_IO_METHODS = frozenset({
     'adjust_upload_priority',
 })
 
+# Platform-to-gateway method reply policy. Keep this explicit: a method should
+# only be added after confirming the platform can下发 it and the Cloud API page
+# defines services_reply/property-set_reply for that downlink command.
+DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
+    # property/set -> property/set_reply
+    'property_set',
+
+    # services -> services_reply: device / dock management
+    'ota_create', 'ota_cancel', 'firmware_upgrade', 'firmware_upgrade_cancel',
+    'config_update', 'config_get', 'config_rollback', 'property_get',
+    'gateway_state_query', 'device_binding', 'device_unbinding',
+    'device_reboot', 'format_sd_card', 'cover_open', 'cover_close',
+    'charge_open', 'charge_close', 'putter_open', 'putter_close',
+    'device_lock', 'device_unlock', 'supplement_light_open',
+    'supplement_light_close', 'sdr_workmode_switch', 'sim_slot_switch',
+    'esim_activate', 'esim_operator_switch', 'alternate_land_point_set',
+    'rtk_ref_points_set', 'rtk_calibration', 'rtk_ref_points_query',
+    'device_exit_rtk_mode', 'device_enter_simulation_mode',
+    'device_exit_simulation_mode', 'device_calibration', 'device_format',
+    'device_reset', 'workspace_bind_status', 'workspace_get',
+    'hms_get', 'hms_clear', 'device_log_list_get',
+    'device_log_upload', 'device_capability_query', 'cover_force_close',
+    'drone_open', 'drone_close', 'drone_format', 'debug_mode_open',
+    'debug_mode_close', 'battery_maintenance_switch',
+    'air_conditioner_mode_switch', 'alarm_state_switch',
+    'battery_store_mode_switch', 'config',
+    'airsense_warning', 'dock_status_query', 'dock_control',
+    'dock_alarm_query', 'dock_task_schedule_query', 'dock_task_schedule_set',
+    'dock_emergency_stop', 'dock_reset', 'dock_weather_query',
+
+    # services -> services_reply: mission / wayline / job
+    'load_wayline', 'upload_wayline', 'execute_task', 'cancel_task',
+    'pause_wayline', 'resume_wayline', 'flyto', 'take_off',
+    'one_key_takeoff_flow', 'one_key_return_home', 'cancel_return_home',
+    'set_flight_mode', 'go_home', 'landing', 'emergency_stop',
+    'start_takeoff_to_point', 'return_home', 'go_to_altitude',
+    'wayline_task_create', 'wayline_task_execute', 'wayline_task_pause',
+    'wayline_task_resume', 'wayline_task_cancel', 'wayline_task_query',
+    'wayline_mission_upload', 'wayline_mission_download',
+    'wayline_mission_delete', 'wayline_mission_query', 'flighttask_prepare',
+    'flighttask_execute', 'flighttask_undo', 'flighttask_stop',
+    'flighttask_return', 'flighttask_progress', 'flighttask_progress_get',
+    'flighttask_pause', 'flighttask_resume', 'resume_wayline_task',
+    'flight_setup_abort', 'flighttask_create', 'flighttask_recovery',
+    'return_home_cancel', 'return_specific_home', 'flighttask_resource_get',
+    'in_flight_wayline_deliver', 'in_flight_wayline_stop',
+    'in_flight_wayline_recover', 'in_flight_wayline_cancel',
+    'job_create', 'job_delete', 'job_query',
+
+    # services -> services_reply: payload / media / live
+    'start_photo', 'stop_photo', 'start_record', 'stop_record',
+    'set_camera_mode', 'set_exposure_mode', 'zoom', 'set_focus_mode',
+    'set_focus_value', 'spot_focus', 'camera_recover', 'camera_reset',
+    'set_shutter_speed', 'set_iso', 'set_white_balance', 'set_aperture',
+    'set_metering_mode', 'set_resolution', 'set_frame_rate',
+    'set_video_encoding', 'camera_capability_query', 'gimbalRotate',
+    'gimbal_rotate', 'set_gimbal_mode', 'gimbal_capability_query',
+    'gimbal_status_query', 'camera_screen_drag', 'viewlink_initialize',
+    'viewlink_connect', 'viewlink_disconnect', 'viewlink_is_connected',
+    'viewlink_move', 'viewlink_stop', 'viewlink_home', 'viewlink_turn_to',
+    'viewlink_zoom_in', 'viewlink_zoom_out', 'viewlink_stop_zoom',
+    'viewlink_zoom_to', 'viewlink_focus_in', 'viewlink_focus_out',
+    'viewlink_stop_focus', 'viewlink_set_focus_mode',
+    'viewlink_get_focus_mode', 'viewlink_switch_eo_digital_zoom',
+    'viewlink_ir_digital_zoom_in', 'viewlink_ir_digital_zoom_out',
+    'viewlink_switch_defog', 'viewlink_is_defog_on', 'viewlink_switch_laser',
+    'viewlink_laser_single', 'viewlink_laser_zoom_in',
+    'viewlink_laser_zoom_out', 'viewlink_laser_stop_zoom',
+    'viewlink_set_laser_zoom_mode', 'viewlink_start_track',
+    'viewlink_stop_track', 'viewlink_is_tracking', 'viewlink_take_photo',
+    'viewlink_start_recording', 'viewlink_stop_recording',
+    'viewlink_is_recording', 'viewlink_set_record_mode',
+    'viewlink_get_record_mode', 'ir_color_palette_set',
+    'ir_display_mode_set', 'ir_isotherm_set', 'ir_zoom_set',
+    'drc_light_control_set', 'drc_light_calibration',
+    'drc_light_fine_tuning_set', 'drc_speaker_tts_set',
+    'drc_speaker_play_volume_set', 'drc_speaker_audio_play',
+    'drc_speaker_audio_pause', 'drc_speaker_audio_stop',
+    'psdk_function_set', 'set_thermal_mode', 'set_palette',
+    'payload_authority_release', 'payload_status_query', 'parachute_open',
+    'parachute_status_query', 'night_vision_mode_set', 'gas_detector_data_get',
+    'radar_status_query', 'searchlight_status_query', 'speaker_status_query',
+    'payload_capability_query', 'psdk_ui_resource_upload_result',
+    'psdk_floating_window_text', 'psdk_widget_value_set',
+    'psdk_input_box_text_set', 'speaker_replay', 'speaker_play_mode_set',
+    'speaker_play_stop', 'speaker_audio_play_start', 'speaker_tts_play_start',
+    'speaker_play_volume_set', 'file_list_get', 'file_download',
+    'download_media', 'file_delete', 'adjust_upload_priority',
+    'storage_config_get', 'live_start', 'live_start_push', 'live_stop',
+    'live_stop_push', 'live_camera_change', 'set_livestream_lens',
+    'set_livestream_quality', 'live_capability_query',
+    'highest_priority_upload_flighttask_media',
+    'upload_flighttask_media_prioritize', 'live_lens_change',
+    'live_set_quality', 'camera_frame_zoom', 'camera_mode_switch',
+    'camera_photo_take', 'camera_photo_stop', 'camera_recording_start',
+    'camera_recording_stop', 'camera_focal_length_set',
+    'camera_exposure_set', 'camera_focus_mode_set', 'camera_focus_value_set',
+    'camera_point_focus_action', 'camera_exposure_mode_set', 'camera_aim',
+    'camera_screen_split', 'gimbal_reset', 'camera_look_at',
+    'photo_storage_set', 'video_storage_set', 'payload_authority_grab',
+    'ir_metering_mode_set', 'ir_metering_point_set', 'ir_metering_area_set',
+
+    # services -> services_reply: DRC mode / point-flight methods confirmed as
+    # service calls. Realtime drc/down stick/speed methods are intentionally not
+    # listed here and continue to follow need_reply.
+    'drc_mode_enter', 'drc_mode_exit', 'takeoff_to_point',
+    'fly_to_point', 'fly_to_point_stop', 'fly_to_point_update',
+
+    # services -> services_reply: log / flysafe / flight area / custom data
+    'fileupload_list', 'fileupload_start', 'fileupload_update',
+    'unlock_license_switch', 'unlock_license_update', 'unlock_license_list',
+    'flight_areas_update', 'flight_areas_get',
+    'custom_data_transmission_from_esdk', 'custom_data_transmission_to_esdk',
+    'custom_data_transmission_from_psdk', 'custom_data_transmission_to_psdk',
+})
+
 def filter_dock_status_fields(updates: dict) -> dict:
     """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
     dock_updates = {}
@@ -735,6 +851,7 @@ class EdgeGateway:
                         method,
                         handler,
                         background=method in BACKGROUND_IO_METHODS,
+                        reply_required=method in DOWNSTREAM_REPLY_REQUIRED_METHODS,
                     )
             else:
                 logger.warning("MQTT not connected, running in offline mode")
