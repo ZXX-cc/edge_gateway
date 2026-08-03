@@ -29,6 +29,7 @@ FRAME_TAIL = b"\x00\x23"
 MAX_TEXT_BYTES = 1000
 MAX_CHUNK_BYTES = 400
 OPUS_FRAME_BYTES = 80
+MAX_OPUS_FRAME_BYTES = 400
 
 MODEL_NAMES = {
     0x11: "H1E",
@@ -270,16 +271,42 @@ class JzSpeakerAdapter:
         return self.send_command(0x52, 0x08, b"\x00")
 
     def start_realtime_speaking(self) -> JzSpeakerResult:
-        return self.send_command(0x59, 0xE1, b"\x00", ack=True)
+        return self.send_command(0x59, 0xE1, b"\x00", ack=False)
 
     def stop_realtime_speaking(self) -> JzSpeakerResult:
-        return self.send_command(0x59, 0xE2, b"\x00", ack=True)
+        return self.send_command(0x59, 0xE2, b"\x00", ack=False)
 
     def send_opus_frame(self, frame: bytes) -> JzSpeakerResult:
         payload = bytes(frame or b"")
-        if len(payload) != OPUS_FRAME_BYTES:
-            return JzSpeakerResult(False, message=f"opus frame must be {OPUS_FRAME_BYTES} bytes")
-        return self.send_command(0x59, 0xE3, payload, ack=True)
+        if not payload or len(payload) > MAX_OPUS_FRAME_BYTES:
+            return JzSpeakerResult(False, message=f"opus frame must be 1-{MAX_OPUS_FRAME_BYTES} bytes")
+        return self.send_command(0x59, 0xE3, payload, ack=False)
+
+    def query_audio_files(self) -> JzSpeakerResult:
+        if not self.enabled:
+            return JzSpeakerResult(
+                True,
+                simulated=True,
+                message="speaker serial is not configured",
+                frame_hex=build_frame(0x58, 0x01, b"\x00", ack=1, seq=self._next_seq()).hex(" "),
+                output={"count": 0, "files": [], "query_supported": True},
+            )
+        result = self.send_command(0x58, 0x01, b"\x00", ack=True, collect_list=True)
+        if not result.ok:
+            return result
+        frames = result.output.get("frames", []) if result.output else []
+        return JzSpeakerResult(
+            True,
+            frame_hex=result.frame_hex,
+            reply_hex=result.reply_hex,
+            output=parse_audio_file_list_frames(frames),
+        )
+
+    def query_current_audio_file(self) -> JzSpeakerResult:
+        result = self.send_command(0x53, 0x04, b"\x00", ack=True)
+        if result.ok and result.output and isinstance(result.output.get("data"), bytes):
+            result.output["filename"] = _decode_name(result.output["data"], self.text_encoding)
+        return result
 
     def play_tts(self, text: str, *, speed: Any = None, volume: Any = None, voice_type: Any = None) -> JzSpeakerResult:
         encoded = self._encode_text(str(text or ""))[:MAX_TEXT_BYTES]
@@ -343,7 +370,15 @@ class JzSpeakerAdapter:
                 status["play_state"] = PLAY_STATE_NAMES.get(data[0], f"unknown_{data[0]}")
         return status
 
-    def send_command(self, func1: int, func2: int, data: bytes = b"\x00", *, ack: Optional[bool] = None) -> JzSpeakerResult:
+    def send_command(
+        self,
+        func1: int,
+        func2: int,
+        data: bytes = b"\x00",
+        *,
+        ack: Optional[bool] = None,
+        collect_list: bool = False,
+    ) -> JzSpeakerResult:
         should_wait = self.wait_reply if ack is None else bool(ack)
         frame = build_frame(func1, func2, data, ack=1 if should_wait else 0, seq=self._next_seq())
         if not self.enabled:
@@ -359,15 +394,34 @@ class JzSpeakerAdapter:
             self._write_frame(frame)
             reply = b""
             parsed: Dict[str, Any] = {}
+            frames: List[Dict[str, Any]] = []
             if should_wait:
-                reply = self._read_frame()
-                parsed = parse_frame(reply)
+                if collect_list:
+                    reply_chunks: List[bytes] = []
+                    while True:
+                        current = self._read_frame()
+                        if not current:
+                            break
+                        reply_chunks.append(current)
+                        item = parse_frame(current)
+                        frames.append(item)
+                        if not item.get("valid"):
+                            return JzSpeakerResult(False, frame_hex=frame.hex(" "), reply_hex=current.hex(" "), message=item.get("error", "invalid reply"))
+                        if item.get("func1") == 0x58 and item.get("func2") == 0xFF:
+                            break
+                    reply = b"".join(reply_chunks)
+                    parsed = frames[-1] if frames else {"valid": False, "error": "empty reply"}
+                else:
+                    reply = self._read_frame()
+                    parsed = parse_frame(reply)
                 self._last_reply = parsed
                 if not parsed.get("valid"):
                     return JzSpeakerResult(False, frame_hex=frame.hex(" "), reply_hex=reply.hex(" "), message=parsed.get("error", "invalid reply"))
             output = {"func1": func1, "func2": func2}
             if parsed:
                 output.update(parsed)
+                if frames:
+                    output["frames"] = frames
                 if parsed.get("data"):
                     output["model_code"] = parsed["data"][0]
             return JzSpeakerResult(True, frame_hex=frame.hex(" "), reply_hex=reply.hex(" "), output=output)
@@ -431,3 +485,31 @@ def _parse_tcp_endpoint(endpoint: str) -> tuple[str, int]:
     host = parsed.hostname or ""
     port = parsed.port or 0
     return host, port
+
+
+def parse_audio_file_list_frames(frames: Iterable[Mapping[str, Any]], encoding: str = "utf-8") -> Dict[str, Any]:
+    files: List[str] = []
+    count = 0
+    complete = False
+    for frame in frames:
+        if not frame.get("valid") or frame.get("func1") != 0x58:
+            continue
+        data = frame.get("data") or b""
+        if frame.get("func2") == 0x00:
+            count = data[0] if data else 0
+        elif frame.get("func2") == 0x02:
+            name = _decode_name(bytes(data), encoding)
+            if name:
+                files.append(name)
+        elif frame.get("func2") == 0xFF:
+            complete = True
+    return {
+        "count": count if count else len(files),
+        "files": files,
+        "complete": complete,
+        "query_supported": True,
+    }
+
+
+def _decode_name(data: bytes, encoding: str = "utf-8") -> str:
+    return bytes(data or b"").rstrip(b"\x00").decode(encoding, errors="ignore")

@@ -3,6 +3,7 @@
 处理探照灯、喊话器、PSDK等第三方负载
 """
 import base64
+import threading
 from typing import Optional, Callable
 from pymavlink import mavutil
 from src.utils.logger import get_logger
@@ -45,6 +46,9 @@ class ThirdPartyController:
         self._tts_text = ""
         self._speaker_play_mode = 0
         self._speaker_adapter = JzSpeakerAdapter()
+        self._fixed_text_loop_stop = threading.Event()
+        self._fixed_text_loop_thread: Optional[threading.Thread] = None
+        self._fixed_text_loop = {}
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -460,6 +464,7 @@ class ThirdPartyController:
             'volume': self._speaker_volume,
             'tts_text': self._tts_text,
             'play_mode': self._speaker_play_mode,
+            'fixed_text_loop': dict(self._fixed_text_loop),
             'adapter': adapter_status,
         })
 
@@ -605,7 +610,7 @@ class ThirdPartyController:
         return self._speaker_reply(msg, result)
 
     def handle_speaker_opus_frame_send(self, msg: dict) -> dict:
-        """发送一帧 80 字节 OPUS 实时喊话数据。"""
+        """发送一帧 OPUS 实时喊话数据，协议数据区最大 400 字节。"""
         data = msg.get('data', {})
         frame = self._decode_audio_frame(data)
         if frame is None:
@@ -615,6 +620,70 @@ class ThirdPartyController:
                 data={'output': {'status': 'failed', 'message': 'opus_hex or opus_base64 is required'}},
             )
         return self._speaker_reply(msg, self._speaker_adapter.send_opus_frame(frame))
+
+    def handle_speaker_fixed_text_loop_start(self, msg: dict) -> dict:
+        """固定文本循环播放。重复调用会用新文本覆盖旧循环。"""
+        data = msg.get('data', {})
+        text = str(data.get('text') or data.get('fixed_text') or '')
+        if not text:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                data={'output': {'status': 'failed', 'message': 'fixed text is required'}},
+            )
+        interval_seconds = max(1.0, self._as_float(data.get('interval_seconds'), 10.0))
+        volume = data.get('volume', self._speaker_volume)
+        speed = data.get('speed', 50)
+        voice_type = data.get('voice_type', 'default')
+
+        self._stop_fixed_text_loop()
+        first = self._speaker_adapter.play_tts(
+            text,
+            speed=speed,
+            volume=volume,
+            voice_type=voice_type,
+        )
+        if not first.ok:
+            return self._speaker_reply(msg, first)
+
+        self._tts_text = text
+        self._speaker_volume = self._as_int(volume, self._speaker_volume)
+        self._speaker_playing = True
+        self._fixed_text_loop = {
+            'enabled': True,
+            'text': text,
+            'interval_seconds': interval_seconds,
+            'volume': self._speaker_volume,
+            'speed': speed,
+            'voice_type': voice_type,
+        }
+        self._fixed_text_loop_stop.clear()
+        self._fixed_text_loop_thread = threading.Thread(
+            target=self._fixed_text_loop_worker,
+            args=(text, interval_seconds, speed, self._speaker_volume, voice_type),
+            name="speaker-fixed-text-loop",
+            daemon=True,
+        )
+        self._fixed_text_loop_thread.start()
+        output = first.as_output()
+        output['fixed_text_loop'] = dict(self._fixed_text_loop)
+        return MessageBuilder.build_reply(msg, result=0, data={'output': output})
+
+    def handle_speaker_fixed_text_loop_stop(self, msg: dict) -> dict:
+        """停止固定文本循环播放，并下发停止播放指令。"""
+        self._stop_fixed_text_loop()
+        result = self._speaker_adapter.stop_audio()
+        if result.ok:
+            self._speaker_playing = False
+        return self._speaker_reply(msg, result)
+
+    def handle_speaker_audio_file_list_get(self, msg: dict) -> dict:
+        """查询喊话器内现有音频文件名称和数量。"""
+        return self._speaker_reply(msg, self._speaker_adapter.query_audio_files())
+
+    def handle_speaker_current_audio_file_get(self, msg: dict) -> dict:
+        """查询当前播放文件名。"""
+        return self._speaker_reply(msg, self._speaker_adapter.query_current_audio_file())
 
     # ---- 喊话器接口别名 ----
 
@@ -682,3 +751,33 @@ class ThirdPartyController:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _as_float(value, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _fixed_text_loop_worker(self, text: str, interval_seconds: float, speed, volume, voice_type) -> None:
+        while not self._fixed_text_loop_stop.wait(interval_seconds):
+            result = self._speaker_adapter.play_tts(
+                text,
+                speed=speed,
+                volume=volume,
+                voice_type=voice_type,
+            )
+            if not result.ok:
+                logger.warning("Speaker fixed text loop failed: %s", result.message)
+                self._fixed_text_loop['last_error'] = result.message
+                self._fixed_text_loop['enabled'] = False
+                break
+
+    def _stop_fixed_text_loop(self) -> None:
+        self._fixed_text_loop_stop.set()
+        thread = self._fixed_text_loop_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._fixed_text_loop_thread = None
+        if self._fixed_text_loop:
+            self._fixed_text_loop['enabled'] = False

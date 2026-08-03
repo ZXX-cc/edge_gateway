@@ -218,6 +218,8 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'speaker_play_stop', 'speaker_audio_play_start', 'speaker_tts_play_start',
     'speaker_play_volume_set', 'speaker_realtime_start',
     'speaker_opus_frame_send', 'speaker_realtime_stop',
+    'speaker_fixed_text_loop_start', 'speaker_fixed_text_loop_stop',
+    'speaker_audio_file_list_get', 'speaker_current_audio_file_get',
     'file_list_get', 'file_download',
     'download_media', 'file_delete', 'adjust_upload_priority',
     'storage_config_get', 'live_start', 'live_start_push', 'live_stop',
@@ -1867,6 +1869,10 @@ class EdgeGateway:
             'speaker_realtime_start': self.third_party.handle_speaker_realtime_start,
             'speaker_opus_frame_send': self.third_party.handle_speaker_opus_frame_send,
             'speaker_realtime_stop': self.third_party.handle_speaker_realtime_stop,
+            'speaker_fixed_text_loop_start': self.third_party.handle_speaker_fixed_text_loop_start,
+            'speaker_fixed_text_loop_stop': self.third_party.handle_speaker_fixed_text_loop_stop,
+            'speaker_audio_file_list_get': self.third_party.handle_speaker_audio_file_list_get,
+            'speaker_current_audio_file_get': self.third_party.handle_speaker_current_audio_file_get,
         }, category='payload')
 
         # ---- 媒体管理API (Media Management) ----

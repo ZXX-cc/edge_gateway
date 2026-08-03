@@ -12,7 +12,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = mavutil
 
-from src.payload.jz_speaker import OPUS_FRAME_BYTES, JzSpeakerAdapter, build_frame, parse_frame
+from src.payload.jz_speaker import MAX_OPUS_FRAME_BYTES, JzSpeakerAdapter, build_frame, parse_audio_file_list_frames, parse_frame
 from src.payload.third_party import ThirdPartyController
 from src.payload.topology import PayloadTopology
 from src.utils.config import Config
@@ -73,13 +73,27 @@ class JzSpeakerAdapterTest(unittest.TestCase):
         self.assertEqual(status["host"], "192.168.10.71")
         self.assertEqual(status["tcp_port"], 71)
 
-    def test_rejects_non_80_byte_opus_realtime_frame(self):
+    def test_rejects_over_size_opus_realtime_frame(self):
         adapter = JzSpeakerAdapter({"enabled": False})
 
-        result = adapter.send_opus_frame(b"\x00" * (OPUS_FRAME_BYTES - 1))
+        result = adapter.send_opus_frame(b"\x00" * (MAX_OPUS_FRAME_BYTES + 1))
 
         self.assertFalse(result.ok)
         self.assertIn("opus frame", result.message)
+
+    def test_parses_audio_file_list_reply_frames(self):
+        frames = [
+            parse_frame(bytes.fromhex("5b 5b 77 00 0c 00 00 58 00 02 00 23")),
+            parse_frame(bytes.fromhex("5b 5b 77 00 11 00 00 58 02 30 31 2e 77 61 76 00 23")),
+            parse_frame(bytes.fromhex("5b 5b 77 00 11 00 00 58 02 30 32 2e 77 61 76 00 23")),
+            parse_frame(bytes.fromhex("5b 5b 77 00 0c 00 00 58 ff 00 00 23")),
+        ]
+
+        parsed = parse_audio_file_list_frames(frames)
+
+        self.assertEqual(parsed["count"], 2)
+        self.assertEqual(parsed["files"], ["01.wav", "02.wav"])
+        self.assertTrue(parsed["complete"])
 
     def test_unconfigured_speaker_tts_keeps_simulated_success(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
@@ -94,6 +108,36 @@ class JzSpeakerAdapterTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["status"], "ok")
         self.assertTrue(reply["data"]["output"]["simulated"])
         self.assertTrue(controller.handle_speaker_status_query(message("speaker_status_query"))["data"]["playing"])
+
+    def test_unconfigured_speaker_file_list_query_reports_empty_simulated_list(self):
+        topology = PayloadTopology(Config.get_payload_config()["devices"])
+        controller = ThirdPartyController()
+        controller.set_payload_topology(topology)
+
+        reply = controller.handle_speaker_audio_file_list_get(message("speaker_audio_file_list_get"))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertTrue(reply["data"]["output"]["simulated"])
+        self.assertEqual(reply["data"]["output"]["files"], [])
+        self.assertEqual(reply["data"]["output"]["count"], 0)
+
+    def test_fixed_text_loop_start_and_stop_can_update_text(self):
+        topology = PayloadTopology(Config.get_payload_config()["devices"])
+        controller = ThirdPartyController()
+        controller.set_payload_topology(topology)
+
+        start = controller.handle_speaker_fixed_text_loop_start(
+            message("speaker_fixed_text_loop_start", {"text": "固定文本A", "interval_seconds": 60, "volume": 30})
+        )
+        update = controller.handle_speaker_fixed_text_loop_start(
+            message("speaker_fixed_text_loop_start", {"text": "固定文本B", "interval_seconds": 60, "volume": 25})
+        )
+        stop = controller.handle_speaker_fixed_text_loop_stop(message("speaker_fixed_text_loop_stop"))
+
+        self.assertEqual(start["data"]["result"], 0)
+        self.assertEqual(update["data"]["result"], 0)
+        self.assertEqual(update["data"]["output"]["fixed_text_loop"]["text"], "固定文本B")
+        self.assertEqual(stop["data"]["result"], 0)
 
     def test_empty_tts_text_is_rejected(self):
         controller = ThirdPartyController()
