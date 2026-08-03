@@ -392,8 +392,8 @@ payload:
           endpoint: "" # 可选：tcp://192.168.10.71:71
           timing: "on_demand"
           tcp:
-            host: "" # 厂商助手默认：1号 192.168.10.71:71，2号 192.168.10.72:72 ... 6号 192.168.10.76:76
-            tcp_port: 0
+            host: "192.168.1.71" # 厂商助手默认：1号 192.168.10.71:71；当前现场喊话器为 192.168.1.71:8600
+            tcp_port: 8600
             timeout_seconds: 1.0
             write_timeout_seconds: 1.0
             wait_reply: false
