@@ -115,6 +115,30 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertEqual(device["sn"], "DRONE-A")
         self.assertEqual(device["camera_list"][0]["camera_index"], "52-0-0")
 
+    def test_live_capacity_state_filters_disconnected_payloads(self):
+        self.manager.set_payload_state_provider(lambda: {
+            "gimbal": {"connection_state": "disconnected"},
+            "mapping_camera": {"connection_state": "configured", "video": {"reachable": False}},
+        })
+
+        self.manager.publish_live_capacity_state("test")
+
+        capacity = self.live_capacity_states()[-1]
+        self.assertEqual(capacity["available_video_number"], 0)
+        self.assertEqual(capacity["device_list"], [])
+
+    def test_live_capacity_state_includes_connected_payloads(self):
+        self.manager.set_payload_state_provider(lambda: {
+            "gimbal": {"connection_state": "connected"},
+            "mapping_camera": {"connection_state": "configured", "video": {"reachable": False}},
+        })
+
+        self.manager.publish_live_capacity_state("test")
+
+        capacity = self.live_capacity_states()[-1]
+        self.assertEqual(capacity["available_video_number"], 1)
+        self.assertEqual(len(capacity["device_list"][0]["camera_list"]), 1)
+
     def test_already_bound_startup_reports_topology_without_service_trigger(self):
         self.manager._device_state = self.manager.STATE_BOUND
 

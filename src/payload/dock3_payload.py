@@ -119,6 +119,7 @@ def build_live_capacity_from_devices(
     gateway_sn: str,
     devices: Optional[Mapping[str, Any]] = None,
     default_device_sn: str = "",
+    payload_states: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build Dock3 live capacity from all configured realtime video payloads."""
     device_map: Dict[str, Dict[str, Any]] = {}
@@ -139,6 +140,8 @@ def build_live_capacity_from_devices(
 
         payload_config = _payload_cloud_config(device)
         if not payload_config:
+            continue
+        if payload_states is not None and not _payload_live_available(payload_states.get(device_id)):
             continue
 
         video_endpoint = str(video_channel.get("endpoint", "") or "")
@@ -170,6 +173,13 @@ def build_live_capacity_from_devices(
         total_available += available_number
         coexist_max += coexist_number
 
+    if not device_map and payload_states is not None:
+        return {
+            "available_video_number": 0,
+            "coexist_video_number_max": 0,
+            "device_list": [],
+        }
+
     if not device_map:
         return build_live_capacity(
             gateway_sn=gateway_sn,
@@ -182,6 +192,22 @@ def build_live_capacity_from_devices(
         "coexist_video_number_max": max(1, coexist_max),
         "device_list": list(device_map.values()),
     }
+
+
+def _payload_live_available(state: Any) -> bool:
+    if isinstance(state, str):
+        return state in {"connected", "online"}
+    if not isinstance(state, Mapping):
+        return False
+
+    video = state.get("video")
+    if isinstance(video, Mapping) and "reachable" in video:
+        return video.get("reachable") is True
+
+    connection_state = str(state.get("connection_state") or "").lower()
+    if connection_state in {"connected", "online"}:
+        return True
+    return False
 
 
 def with_dock3_payload_index(

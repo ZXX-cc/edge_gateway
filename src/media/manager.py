@@ -13,7 +13,7 @@ import asyncio
 import urllib.parse
 import requests
 from pathlib import Path
-from typing import Dict, Optional, Callable, List
+from typing import Any, Dict, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
@@ -126,6 +126,7 @@ class MediaManager:
         self._state_callback: Optional[Callable] = None
         self._request_sender: Optional[Callable] = None
         self._camera_controller = None
+        self._payload_state_provider: Optional[Callable] = None
 
         # 数据库相关
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -173,6 +174,10 @@ class MediaManager:
     def set_camera_controller(self, camera_controller):
         """注入相机控制器，用于直播切流后直接拍照。"""
         self._camera_controller = camera_controller
+
+    def set_payload_state_provider(self, provider: Callable):
+        """注入负载状态 provider，用于直播能力按实际连接状态过滤。"""
+        self._payload_state_provider = provider
 
     def set_event_loop(self, loop):
         """注入异步事件循环引用"""
@@ -1415,7 +1420,22 @@ class MediaManager:
         Request: { }
         """
         logger.info("Live capability query")
-        return MessageBuilder.build_reply(msg, result=0, data=live_capability_data())
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data=live_capability_data(self._payload_connection_state_snapshot()),
+        )
+
+    def _payload_connection_state_snapshot(self) -> Optional[Dict[str, Any]]:
+        provider = getattr(self, "_payload_state_provider", None)
+        if not provider:
+            return None
+        try:
+            states = provider() or {}
+        except Exception as exc:
+            logger.warning("Query live capability payload states failed: %s", exc)
+            return None
+        return states if isinstance(states, dict) else {}
 
     def handle_highest_priority_upload_flighttask_media(self, msg: dict) -> dict:
         """

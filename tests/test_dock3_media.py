@@ -454,6 +454,34 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(device["sn"], "DRONE-A")
         self.assertEqual(device["camera_list"][0]["camera_index"], "52-0-0")
 
+    def test_live_capability_filters_unavailable_payload_states(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_payload_state_provider(lambda: {
+            "gimbal": {"connection_state": "disconnected"},
+            "mapping_camera": {"connection_state": "configured", "video": {"reachable": False}},
+        })
+
+        reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+
+        capacity = reply["data"]["live_capacity"]
+        self.assertEqual(capacity["available_video_number"], 0)
+        self.assertEqual(capacity["device_list"], [])
+
+    def test_live_capability_includes_connected_payload_states(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_payload_state_provider(lambda: {
+            "gimbal": {"connection_state": "connected"},
+            "mapping_camera": {"connection_state": "configured", "video": {"reachable": False}},
+        })
+
+        reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+
+        capacity = reply["data"]["live_capacity"]
+        self.assertEqual(capacity["available_video_number"], 1)
+        self.assertEqual(len(capacity["device_list"][0]["camera_list"]), 1)
+
     def test_live_capability_includes_mapping_camera(self):
         original = deepcopy(Config.all())
         Config.merge({

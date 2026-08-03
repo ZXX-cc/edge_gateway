@@ -142,7 +142,7 @@ def live_status_event_data(
     return data
 
 
-def live_capability_data() -> Dict[str, Any]:
+def live_capability_data(payload_states: Dict[str, Any] | None = None) -> Dict[str, Any]:
     payload_config = Config.get_payload_config()
     devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
     default_device_sn = _default_live_device_sn()
@@ -158,6 +158,7 @@ def live_capability_data() -> Dict[str, Any]:
             gateway_sn=Config.get_gateway_sn(),
             devices=devices if isinstance(devices, dict) else {},
             default_device_sn=default_device_sn,
+            payload_states=payload_states,
         ),
     })
 

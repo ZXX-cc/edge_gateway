@@ -882,12 +882,24 @@ class DeviceManager:
             gateway_sn=getattr(self, "gateway_sn", Config.get_gateway_sn()),
             devices=devices if isinstance(devices, dict) else {},
             default_device_sn=self._default_live_capacity_device_sn(),
+            payload_states=self._payload_connection_state_snapshot(),
         )
 
     def _default_live_capacity_device_sn(self) -> str:
         sub_devices = getattr(self, "_sub_devices", {})
         selected = next((dev for dev in sub_devices.values() if dev.online), None)
         return selected.sn if selected else ""
+
+    def _payload_connection_state_snapshot(self) -> Optional[Dict[str, Any]]:
+        provider = getattr(self, "_payload_state_provider", None)
+        if not provider:
+            return None
+        try:
+            states = provider() or {}
+        except Exception as exc:
+            logger.warning("Refresh live capacity payload states failed: %s", exc)
+            return None
+        return states if isinstance(states, dict) else {}
 
     def _refresh_payload_properties(self, notify: bool = False) -> Dict[str, Any]:
         updates = {

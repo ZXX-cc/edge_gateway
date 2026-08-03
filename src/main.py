@@ -734,6 +734,8 @@ class EdgeGateway:
             )
         if self.device:
             self.device.set_payload_state_provider(self._payload_connection_states)
+        if self.media:
+            self.media.set_payload_state_provider(self._payload_connection_states)
 
         gimbal_config = self.payload_topology.get_device('gimbal')
         control = (gimbal_config.get('channels') or {}).get('control') or {}
