@@ -55,6 +55,7 @@ from src.mission.manager import MissionManager
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
 from src.payload.third_party import ThirdPartyController
+from src.payload.spectral_camera import SpectralCameraAdapter
 from src.payload.topology import PayloadTopology
 from src.media.manager import MediaManager
 from src.drc.controller import DrcController
@@ -299,6 +300,7 @@ class EdgeGateway:
         self.telemetry_module = None
         self.nest_module = None
         self.gimbal_control = None
+        self.spectral_camera = None
         self.payload_config = None
         self.payload_topology = None
 
@@ -762,6 +764,10 @@ class EdgeGateway:
             if bool(gimbal_config.get('auto_connect', True)):
                 self._auto_connect_gimbal_payload(control)
 
+        spectral_config = self.payload_topology.get_device('spectral_camera')
+        if bool(spectral_config.get('enabled', True)) and bool(spectral_config.get('direct_to_gateway')):
+            self.spectral_camera = SpectralCameraAdapter(spectral_config)
+
         if self.drc:
             self.drc.set_gimbal_control(self.gimbal_control)
             self.drc.set_camera_controller(self.camera)
@@ -806,6 +812,8 @@ class EdgeGateway:
             )
         if self.camera:
             states['mapping_camera'] = self.camera.build_mapping_camera_payload_state()
+        if self.spectral_camera:
+            states['spectral_camera'] = self.spectral_camera.build_payload_state()
         return states
 
     def _enable_payload_flight_controller_fallback(self, connection) -> bool:

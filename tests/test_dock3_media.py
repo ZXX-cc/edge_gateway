@@ -521,6 +521,45 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(mapping["video_list"][0]["source_key"], "mapping_camera")
         self.assertEqual(mapping["video_list"][0]["endpoint"], "rtsp://192.168.5.74:8554/LIVE")
 
+    def test_live_capability_includes_spectral_camera(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "payload": {
+                "devices": {
+                    "spectral_camera": {
+                        "cloud_api": {
+                            "type": 52,
+                            "subtype": 0,
+                            "gimbal_index": 2,
+                            "video_index": "spectral-0",
+                            "video_type": "normal",
+                            "source_key": "spectral_camera",
+                            "switchable_video_types": ["normal", "multispectral"],
+                        },
+                        "channels": {
+                            "video": {
+                                "transport": "rtp",
+                                "endpoint": "rtp://0.0.0.0:23008",
+                            }
+                        },
+                    }
+                }
+            }
+        })
+        try:
+            manager = MediaManager()
+            manager.gateway_sn = "EDGEGW001"
+            reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+        finally:
+            Config._data = original
+
+        cameras = reply["data"]["live_capacity"]["device_list"][0]["camera_list"]
+        spectral = next(item for item in cameras if item["camera_index"] == "52-0-2")
+        self.assertEqual(spectral["device_id"], "spectral_camera")
+        self.assertEqual(spectral["video_list"][0]["video_index"], "spectral-0")
+        self.assertEqual(spectral["video_list"][0]["source_key"], "spectral_camera")
+        self.assertEqual(spectral["video_list"][0]["endpoint"], "rtp://0.0.0.0:23008")
+
     def test_gimbal_live_source_builds_rtsp_to_rtmp_ffmpeg_command(self):
         original = deepcopy(Config.all())
         Config.merge({
@@ -547,6 +586,30 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("-f", command)
         self.assertIn("flv", command)
         self.assertEqual(command[-1], "rtmp://cloud.example/live/stream")
+
+    def test_spectral_camera_live_source_builds_rtp_to_rtmp_ffmpeg_command(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "media": {
+                "video_sources": {
+                    "spectral_camera": "rtp://0.0.0.0:23008",
+                }
+            },
+        })
+        try:
+            manager = MediaManager()
+            command = manager._build_ffmpeg_cmd(
+                "rtmp://cloud.example/live/spectral",
+                1,
+                3,
+                "spectral_camera",
+            )
+        finally:
+            Config._data = original
+
+        self.assertIn("-protocol_whitelist", command)
+        self.assertIn("rtp://0.0.0.0:23008", command)
+        self.assertEqual(command[-1], "rtmp://cloud.example/live/spectral")
 
     def test_mapping_camera_video_id_selects_mapping_rtsp_source(self):
         original = deepcopy(Config.all())
