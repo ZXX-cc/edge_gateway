@@ -160,6 +160,11 @@ class FakeRawProtocolPayload(FakeDirectPayload):
         return False
 
 
+class FakeDisconnectedDirectPayload(FakeDirectPayload):
+    def is_connected(self):
+        return False
+
+
 class FakeFlightControl:
     def __init__(self, armed=False):
         self.armed = armed
@@ -278,6 +283,79 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(direct_payload.calls, [("move", -200, 150)])
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
+
+    def test_camera_screen_drag_accepts_params_and_camel_case_speed(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_screen_drag(message("camera_screen_drag", {
+            "params": {
+                "pitchSpeed": -1.25,
+                "yawSpeed": 2.5,
+            },
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("move", 250, -125)])
+
+    def test_gimbal_rotate_speed_fields_use_viewlink_move(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {
+            "params": {
+                "pitchSpeed": 1.5,
+                "yawSpeed": -2.0,
+            },
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("move", -200, 150)])
+
+    def test_gimbal_rotate_zero_speed_stops_viewlink(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {
+            "pitch_speed": 0.0,
+            "yaw_speed": 0.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("stop",)])
+
+    def test_gimbal_rotate_speed_does_not_fallback_to_mavlink_when_viewlink_disconnected(self):
+        gimbal = GimbalController()
+        connection = FakeConnection()
+        direct_payload = FakeDisconnectedDirectPayload()
+        gimbal.set_mavlink_connection(connection)
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {
+            "pitch_speed": 1.0,
+            "yaw_speed": 1.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(direct_payload.calls, [])
+        self.assertEqual(connection.master.mav.commands, [])
+
+    def test_gimbal_rotate_angle_does_not_fallback_when_viewlink_config_disables_flight_controller(self):
+        Config.merge({"payload": {"flight_controller_fallback_enabled": False}})
+        gimbal = GimbalController()
+        connection = FakeConnection()
+        direct_payload = FakeDisconnectedDirectPayload()
+        gimbal.set_mavlink_connection(connection)
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_gimbal_rotate(message("gimbal_rotate", {"pitch": -30, "yaw": 45}))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(direct_payload.calls, [])
+        self.assertEqual(connection.master.mav.commands, [])
 
     def test_camera_aim_uses_viewlink_track_target_position(self):
         gimbal = GimbalController()

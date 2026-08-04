@@ -1344,6 +1344,8 @@ class DrcController:
         payload_index = str(data.get('payload_index', '52-0-0') or '52-0-0')
         action = data.get('action', '')
         params = data.get('params', {})
+        if not isinstance(params, dict):
+            params = {}
         camera_index = self._camera_index_from_payload_index(payload_index)
 
         if not self._drc_enabled:
@@ -1351,6 +1353,7 @@ class DrcController:
 
         logger.info(f"Payload control: index={payload_index}, action={action}, params={params}")
 
+        command_result = {"success": True, "message": ""}
         # 根据 action 分发到对应模块
         try:
             if action == 'photo_take':
@@ -1372,22 +1375,47 @@ class DrcController:
                 # 变焦
                 zoom_level = params.get('level', 1)
                 if self._gimbal_control:
-                    self._gimbal_control.set_zoom(zoom_level)
+                    command_result = self._gimbal_control.zoom_to(zoom_level)
+                else:
+                    command_result = {"success": False, "message": "云台控制未配置"}
 
             elif action == 'gimbal_rotate':
                 # 云台旋转
-                pitch = params.get('pitch')
-                yaw = params.get('yaw')
-                roll = params.get('roll')
                 if self._gimbal_control:
-                    self._gimbal_control.turn_to(yaw, pitch)
-                    logger.info(f"Payload gimbal rotate: pitch={pitch}, yaw={yaw}, roll={roll}")
+                    pitch_speed = self._float_or_none(self._first_present(params, "pitch_speed", "pitchSpeed"))
+                    yaw_speed = self._float_or_none(self._first_present(params, "yaw_speed", "yawSpeed"))
+                    pitch = self._float_or_none(self._first_present(params, "pitch", "gimbal_pitch", "gimbalPitch"))
+                    yaw = self._float_or_none(self._first_present(params, "yaw", "gimbal_yaw", "gimbalYaw"))
+                    if pitch_speed is not None or yaw_speed is not None:
+                        yaw_spd = int(float(yaw_speed or 0.0) * 100)
+                        pitch_spd = int(float(pitch_speed or 0.0) * 100)
+                        if yaw_spd == 0 and pitch_spd == 0 and hasattr(self._gimbal_control, "stop"):
+                            command_result = self._gimbal_control.stop()
+                        else:
+                            command_result = self._gimbal_control.move(yaw_spd, pitch_spd)
+                    else:
+                        command_result = self._gimbal_control.turn_to(yaw or 0.0, pitch or 0.0)
+                    logger.info(f"Payload gimbal rotate: params={params}, result={command_result}")
+                else:
+                    command_result = {"success": False, "message": "云台控制未配置"}
 
         except Exception as e:
             logger.error(f"Payload control dispatch error: {e}")
             return MessageBuilder.build_reply(msg, result=-1, msg_str=str(e))
 
-        return MessageBuilder.build_reply(msg, result=0)
+        if not command_result.get("success", True):
+            return MessageBuilder.build_reply(
+                msg,
+                result=-1,
+                msg_str=str(command_result.get("message", "payload_control failed")),
+                data={"output": {"status": "failed", "detail": command_result}},
+            )
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": "ok", "detail": command_result}},
+        )
 
     @staticmethod
     def _camera_index_from_payload_index(payload_index: str) -> int:
@@ -1396,6 +1424,24 @@ class DrcController:
             return int(str(payload_index).split("-")[-1])
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _first_present(data: dict, *names: str):
+        if not isinstance(data, dict):
+            return None
+        for name in names:
+            if name in data and data.get(name) is not None:
+                return data.get(name)
+        return None
+
+    @staticmethod
+    def _float_or_none(value):
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def handle_drc_gimbal_speed_push(self, msg: dict) -> dict:
         """

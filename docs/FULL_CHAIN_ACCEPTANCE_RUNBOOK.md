@@ -1,6 +1,6 @@
 # 全链路验收 Runbook
 
-更新时间：2026-07-22
+更新时间：2026-08-04
 
 本文档用于证明 Edge Gateway 按客户需求和 DJI Dock 3 口径完成全链路可用。它不是开发计划，而是验收执行手册。
 
@@ -247,6 +247,48 @@ python -m unittest -v tests.test_payload_state_consistency.PayloadStateConsisten
 `center_result.method=target_track`，`software_pipeline` 包含
 `gimbal_center_track -> camera_zoom_to`；画面不应在框选后丢失。若平台传入的是转码后
 播放器坐标，需要同时记录播放器分辨率、原始 RTSP 分辨率和请求中的 `frame_size`。
+
+2026-08-04 云台按钮转动修正：页面按钮和平台速度控制统一以 ViewLink SDK
+`move/stop` 为真实执行路径。`camera_screen_drag` 与 `gimbal_rotate` 均兼容
+`data.params`、`pitchSpeed/yawSpeed` 等驼峰字段；当请求包含速度字段时，不再回落到
+MAVLink 角度命令，避免服务回包 `result=0` 但真实 ViewLink 云台不动。DRC
+`payload_control action=gimbal_rotate/zoom` 也改为按 SDK 返回值决定成功或失败。
+
+Windows 真实 ViewLink 验收命令：
+
+```powershell
+cd D:\path\to\edge_gateway
+$EVIDENCE_DIR = "logs\acceptance_evidence\$(Get-Date -Format yyyyMMdd_HHmmss)_viewlink_button_windows"
+New-Item -ItemType Directory -Force $EVIDENCE_DIR | Out-Null
+
+python -m unittest -v tests.test_payload_state_consistency.PayloadStateConsistencyTest tests.test_dock3_drc.Dock3DrcTest `
+  *> "$EVIDENCE_DIR\unit.log"
+
+"d`nq" | python tools\mqtt_dock3_screen_drag_test.py --host 127.0.0.1 --port 1883 --timeout 20 --line-mode `
+  *> "$EVIDENCE_DIR\screen_drag_right.log"
+"stop`nq" | python tools\mqtt_dock3_screen_drag_test.py --host 127.0.0.1 --port 1883 --timeout 20 --line-mode `
+  *> "$EVIDENCE_DIR\screen_drag_stop.log"
+python tools\mqtt_viewlink_visible_test.py --host 127.0.0.1 --port 1883 --timeout 20 `
+  *> "$EVIDENCE_DIR\viewlink_visible.log"
+```
+
+Ubuntu 逻辑验收命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_viewlink_button_ubuntu
+mkdir -p "$EVIDENCE_DIR"
+
+python -m unittest -v tests.test_payload_state_consistency.PayloadStateConsistencyTest tests.test_dock3_drc.Dock3DrcTest \
+  > "$EVIDENCE_DIR/unit.log" 2>&1
+
+printf 'd\nq\n' | python tools/mqtt_dock3_screen_drag_test.py --host 127.0.0.1 --port 1883 --timeout 20 --line-mode \
+  > "$EVIDENCE_DIR/screen_drag_right.log" 2>&1
+printf 'stop\nq\n' | python tools/mqtt_dock3_screen_drag_test.py --host 127.0.0.1 --port 1883 --timeout 20 --line-mode \
+  > "$EVIDENCE_DIR/screen_drag_stop.log" 2>&1
+python tools/mqtt_viewlink_visible_test.py --host 127.0.0.1 --port 1883 --timeout 20 \
+  > "$EVIDENCE_DIR/viewlink_visible.log" 2>&1
+```
 
 2026-07-16 `20260716_130947_wayline_breakpoint_relaunch_retry` 已完成真实 SITL
 断点重执行专项：`/home/fenghuolun/zwz/HD.kml` 初次执行到航点 1 后下发
