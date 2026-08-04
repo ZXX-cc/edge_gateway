@@ -180,18 +180,19 @@ class MissionDB:
 
     @staticmethod
     async def get_pending_missions(session: AsyncSession) -> list:
+        pending_statuses = ["in_progress", "paused", "running"]
         if is_mongo_session(session):
             documents = await session.run(
                 lambda database: list(
                     database["missions"]
-                    .find({"status": {"$in": ["running", "paused"]}})
+                    .find({"status": {"$in": pending_statuses}})
                     .sort("created_at", -1)
                 )
             )
             return [mongo_model_from_document(Mission, item) for item in documents]
         result = await session.execute(
             select(Mission)
-            .where(Mission.status.in_(["running", "paused"]))
+            .where(Mission.status.in_(pending_statuses))
             .order_by(Mission.created_at.desc())
         )
         return result.scalars().all()

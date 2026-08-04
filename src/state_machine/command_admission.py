@@ -162,7 +162,6 @@ class CommandAdmissionEngine:
         "resume_wayline_task",
         "flighttask_undo",
         "flighttask_stop",
-        "flighttask_return",
         "return_home",
         "go_home",
         "one_key_return_home",
@@ -235,7 +234,7 @@ class CommandAdmissionEngine:
     })
 
     OTA_BUSY_STATES = frozenset({"checking", "downloading", "verifying", "upgrading"})
-    MISSION_BUSY_STATES = frozenset({"preparing", "running", "paused"})
+    MISSION_BUSY_STATES = frozenset({"sent", "in_progress", "paused", "preparing", "running"})
 
     def __init__(self, reducer):
         self.reducer = reducer
@@ -298,7 +297,7 @@ class CommandAdmissionEngine:
             )
 
         if method in self.OTA_METHODS:
-            if snapshot.mission in {"preparing", "running", "paused"}:
+            if snapshot.mission in self.MISSION_BUSY_STATES:
                 return self._reject(snapshot, "mission_busy", "航线任务占用中，不能执行 OTA/配置类命令", ["mission.idle"], GLOBAL_STATE_CONFLICT)
             if snapshot.drc == "active":
                 return self._reject(snapshot, "drc_active", "DRC 控制权占用中，不能执行 OTA/配置类命令", ["drc.idle"], GLOBAL_STATE_CONFLICT)
@@ -391,14 +390,14 @@ class CommandAdmissionEngine:
     def _check_mission_control(self, method: str, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
         if method in {"flighttask_resume", "resume_wayline", "resume_wayline_task", "wayline_task_resume"} and snapshot.mission != "paused":
             return self._reject(snapshot, "invalid_state_transition", "当前任务未暂停，不能执行恢复命令", ["mission.paused"], GLOBAL_INVALID_TRANSITION)
-        if method in {"flighttask_pause", "pause_wayline", "wayline_task_pause"} and snapshot.mission != "running":
-            return self._reject(snapshot, "invalid_state_transition", "当前任务未运行，不能执行暂停命令", ["mission.running"], GLOBAL_INVALID_TRANSITION)
+        if method in {"flighttask_pause", "pause_wayline", "wayline_task_pause"} and snapshot.mission not in {"in_progress", "running"}:
+            return self._reject(snapshot, "invalid_state_transition", "当前任务未运行，不能执行暂停命令", ["mission.in_progress"], GLOBAL_INVALID_TRANSITION)
         return self._accept(snapshot)
 
     def _check_drc_enter(self, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
         if snapshot.drc == "active":
             return self._reject(snapshot, "drc_active", "DRC 已激活，不能重复进入", ["drc.idle"], GLOBAL_STATE_CONFLICT)
-        if snapshot.mission == "running":
+        if snapshot.mission in {"in_progress", "running"}:
             return self._reject(snapshot, "mission_busy", "航线任务运行中，不能进入 DRC", ["mission.idle", "mission.paused"], GLOBAL_STATE_CONFLICT)
         if snapshot.ota in self.OTA_BUSY_STATES:
             return self._reject(snapshot, "ota_in_progress", "OTA/配置升级进行中，不能进入 DRC", ["ota.idle"], GLOBAL_STATE_CONFLICT)
@@ -407,7 +406,7 @@ class CommandAdmissionEngine:
         return self._accept(snapshot)
 
     def _check_dock_control(self, method: str, request: dict, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
-        if snapshot.mission == "running":
+        if snapshot.mission in {"in_progress", "running"}:
             return self._reject(snapshot, "mission_busy", "航线任务运行中，不能执行冲突的机巢控制", ["mission.idle", "mission.paused"], GLOBAL_STATE_CONFLICT)
         if snapshot.dock == "busy":
             return self._reject(snapshot, "dock_busy", "机巢正在执行动作，不能执行冲突命令", ["dock.ready", "dock.online"], GLOBAL_STATE_CONFLICT)

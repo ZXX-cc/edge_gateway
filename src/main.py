@@ -173,7 +173,7 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'wayline_mission_upload', 'wayline_mission_download',
     'wayline_mission_delete', 'wayline_mission_query', 'flighttask_prepare',
     'flighttask_execute', 'flighttask_undo', 'flighttask_stop',
-    'flighttask_return', 'flighttask_progress', 'flighttask_progress_get',
+    'flighttask_progress', 'flighttask_progress_get',
     'flighttask_pause', 'flighttask_resume', 'resume_wayline_task',
     'flight_setup_abort', 'flighttask_create', 'flighttask_recovery',
     'return_home_cancel', 'return_specific_home', 'flighttask_resource_get',
@@ -1743,7 +1743,6 @@ class EdgeGateway:
             'flighttask_execute': self.mission.handle_flighttask_execute,
             'flighttask_undo': self.mission.handle_flighttask_undo,
             'flighttask_stop': self.mission.handle_flighttask_stop,
-            'flighttask_return': self.mission.handle_flighttask_return,
             'flighttask_progress': self.mission.handle_flighttask_progress,  # 兼做查询
             'flighttask_progress_get': self.mission.handle_flighttask_progress_get,
             'flighttask_pause': self.mission.handle_flighttask_pause,

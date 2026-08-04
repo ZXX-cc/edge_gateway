@@ -110,6 +110,123 @@ class MissionProgressBoundsTest(unittest.TestCase):
         self.assertEqual(failure["category"], "hardware_or_rejected")
         self.assertFalse(failure["retryable"])
 
+    def test_low_battery_return_releases_as_partially_done_after_drone_in_dock(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_RUNNING
+        manager._current_task_id = "flight-low-battery"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._current_waypoint_idx = 1
+        manager._get_telemetry_snapshot = lambda: {
+            "batteryRemaining": 20,
+            "battery_available": True,
+        }
+        manager._get_nest_snapshot = lambda: {}
+        manager._flight_control = SimpleNamespace(
+            one_click_return=lambda: {"success": True, "message": "ok"}
+        )
+        manager.stop_mission_monitor = lambda: True
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        self.assertTrue(manager._handle_battery_safety())
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertTrue(manager.is_busy)
+
+        released = manager._maybe_finish_returned_task({
+            "cloud_properties": {"drone_in_dock": 1},
+            "landing_in_progress": False,
+            "takeoff_in_progress": False,
+        })
+
+        self.assertTrue(released)
+        self.assertEqual(manager._status, manager.MISSION_PARTIALLY_DONE)
+        self.assertFalse(manager.is_busy)
+        self.assertEqual(manager._wayline_mission_state, 9)
+        self.assertEqual(manager._current_step, 33)
+        final_events = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+            and event.get("data", {}).get("output", {}).get("status") == "partially_done"
+        ]
+        self.assertTrue(final_events)
+        self.assertEqual(
+            final_events[-1]["data"]["output"]["ext"]["break_point"]["break_reason"],
+            773,
+        )
+
+    def test_return_release_can_use_disarmed_grounded_aircraft_when_dock_state_missing(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_PAUSED
+        manager._current_task_id = "flight-disarmed-return"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._current_waypoint_idx = 1
+        manager._break_point = {"index": 1, "break_reason": 773}
+        manager._return_final_status = manager.MISSION_PARTIALLY_DONE
+        manager._get_nest_snapshot = lambda: {}
+        manager._get_telemetry_snapshot = lambda: {
+            "armed": False,
+            "altitudeRelative": 0.2,
+        }
+        manager.stop_mission_monitor = lambda: True
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        self.assertTrue(manager._maybe_finish_returned_task())
+        self.assertEqual(manager._status, manager.MISSION_PARTIALLY_DONE)
+        self.assertFalse(manager.is_busy)
+
+    def test_return_release_does_not_use_dock_hint_while_aircraft_still_armed(self):
+        manager = MissionManager()
+        manager._status = manager.MISSION_PAUSED
+        manager._current_task_id = "flight-still-flying"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._current_waypoint_idx = 1
+        manager._return_final_status = manager.MISSION_PARTIALLY_DONE
+        manager._get_telemetry_snapshot = lambda: {
+            "armed": True,
+            "altitudeRelative": 12.0,
+        }
+        manager.stop_mission_monitor = lambda: True
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        released = manager._maybe_finish_returned_task({
+            "cloud_properties": {"drone_in_dock": 1},
+            "charging_state": True,
+            "landing_in_progress": False,
+            "takeoff_in_progress": False,
+        })
+
+        self.assertFalse(released)
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertTrue(manager.is_busy)
+
+    def test_return_release_blocks_when_alternate_landing_is_active(self):
+        manager = MissionManager()
+        manager._status = manager.MISSION_PAUSED
+        manager._current_task_id = "flight-alternate-landing"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._current_waypoint_idx = 1
+        manager._return_final_status = manager.MISSION_PARTIALLY_DONE
+        manager._get_telemetry_snapshot = lambda: {
+            "armed": False,
+            "altitudeRelative": 0.0,
+        }
+        manager.stop_mission_monitor = lambda: True
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        released = manager._maybe_finish_returned_task({
+            "alternate_landing_state": True,
+            "emergency_landing": True,
+            "cloud_properties": {"drone_in_dock": 1},
+        })
+
+        self.assertFalse(released)
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertTrue(manager.is_busy)
+
     def test_mission_current_revision_advances_for_repeated_sequence(self):
         waypoint_manager = WaypointManager()
         _, initial_revision = waypoint_manager.get_current_waypoint_snapshot()

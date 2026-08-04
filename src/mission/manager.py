@@ -34,9 +34,11 @@ from src.cloud_api.dock3_wayline import (
     STATUS_FAILED,
     STATUS_IN_PROGRESS,
     STATUS_OK,
+    STATUS_PARTIALLY_DONE,
     STATUS_PAUSED,
     STATUS_REJECTED,
     STATUS_SENT,
+    STATUS_TIMEOUT,
     normalize_prepare_payload,
     normalize_in_flight_wayline_payload,
     normalize_return_payload,
@@ -90,14 +92,17 @@ class MissionManager:
     - 上报: task_ready_notify, flight_task_progress_notify, flight_setup_exception_notify
     """
 
-    # 任务状态
-    MISSION_IDLE = 0
-    MISSION_PREPARING = 1
-    MISSION_RUNNING = 2
-    MISSION_PAUSED = 3
-    MISSION_COMPLETED = 4
-    MISSION_FAILED = 5
-    MISSION_CANCELED = 6
+    # 任务状态：除 idle 外，内部状态与 Dock3 flighttask_progress.output.status 对齐。
+    MISSION_IDLE = "idle"
+    MISSION_PREPARING = STATUS_SENT
+    MISSION_RUNNING = STATUS_IN_PROGRESS
+    MISSION_PAUSED = STATUS_PAUSED
+    MISSION_COMPLETED = STATUS_OK
+    MISSION_FAILED = STATUS_FAILED
+    MISSION_CANCELED = STATUS_CANCELED
+    MISSION_TIMEOUT = STATUS_TIMEOUT
+    MISSION_REJECTED = STATUS_REJECTED
+    MISSION_PARTIALLY_DONE = STATUS_PARTIALLY_DONE
 
     # DJI Dock3 wayline_mission_state 枚举映射
     # 参考: https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html
@@ -309,6 +314,9 @@ class MissionManager:
         self._mission_monitor_stop_event = threading.Event()
         self._mission_monitor_generation = 0
         self._battery_safety_action: Optional[str] = None
+        self._return_final_status: Optional[str] = None
+        self._return_final_reason: str = ""
+        self._return_release_lock = threading.RLock()
         self._executed_waypoint_actions = set()
 
         # 数据库相关
@@ -348,6 +356,9 @@ class MissionManager:
     def set_nest_module(self, nest_module):
         """注入机巢模块"""
         self._nest_module = nest_module
+        add_callback = getattr(nest_module, "add_environment_callback", None)
+        if callable(add_callback):
+            add_callback(self._on_nest_environment_update)
 
     def set_gimbal_control(self, gimbal_control):
         """注入云台控制模块"""
@@ -397,7 +408,7 @@ class MissionManager:
                 mission_create = MissionCreate(
                     name=task_id,
                     device_id=self.gateway_sn,
-                    status="uploaded",
+                    status=STATUS_SENT,
                     execution_conditions={}
                 )
                 mission = await MissionDB.create_mission(session, mission_create)
@@ -491,7 +502,7 @@ class MissionManager:
         return restored_wayline
 
     async def _restore_mission_context_from_database(self, session, mission) -> bool:
-        if not mission or mission.status not in ('running', 'paused'):
+        if not mission or mission.status not in (STATUS_IN_PROGRESS, STATUS_PAUSED, 'running', 'paused'):
             return False
         logger.info(f"Recovering mission: {mission.name}, status: {mission.status}")
         waypoints = await WaypointDB.get_waypoints_by_mission(session, UUID(mission.id))
@@ -806,6 +817,8 @@ class MissionManager:
         self._break_point = {}
         self._simulate_mission = {}
         self._battery_safety_action = None
+        self._return_final_status = None
+        self._return_final_reason = ""
         self._executed_waypoint_actions.clear()
         self._clear_task_failure()
 
@@ -840,6 +853,9 @@ class MissionManager:
             self.MISSION_COMPLETED: STATUS_OK,
             self.MISSION_FAILED: STATUS_FAILED,
             self.MISSION_CANCELED: STATUS_CANCELED,
+            self.MISSION_TIMEOUT: STATUS_TIMEOUT,
+            self.MISSION_REJECTED: STATUS_REJECTED,
+            self.MISSION_PARTIALLY_DONE: STATUS_PARTIALLY_DONE,
         }
         return status_map.get(self._status, STATUS_OK)
 
@@ -1612,7 +1628,7 @@ class MissionManager:
         if flight_id:
             threading.Thread(
                 target=self._run_db_coroutine,
-                args=(self._update_mission_status(flight_id, 'failed'),),
+                args=(self._update_mission_status(flight_id, STATUS_FAILED),),
                 daemon=True,
             ).start()
 
@@ -1647,6 +1663,133 @@ class MissionManager:
         except Exception as exc:
             logger.warning("Get telemetry snapshot failed: %s", exc)
         return {}
+
+    @staticmethod
+    def _mission_state_from_api_status(status: str) -> str:
+        status = str(status or "")
+        api_to_state = {
+            STATUS_SENT: MissionManager.MISSION_PREPARING,
+            STATUS_IN_PROGRESS: MissionManager.MISSION_RUNNING,
+            STATUS_PAUSED: MissionManager.MISSION_PAUSED,
+            STATUS_OK: MissionManager.MISSION_COMPLETED,
+            STATUS_FAILED: MissionManager.MISSION_FAILED,
+            STATUS_CANCELED: MissionManager.MISSION_CANCELED,
+            STATUS_TIMEOUT: MissionManager.MISSION_TIMEOUT,
+            STATUS_REJECTED: MissionManager.MISSION_REJECTED,
+            STATUS_PARTIALLY_DONE: MissionManager.MISSION_PARTIALLY_DONE,
+        }
+        return api_to_state.get(status, MissionManager.MISSION_FAILED)
+
+    def _drone_in_dock_from_nest(self, nest_data: Dict[str, Any] = None) -> bool:
+        """Use Dock3 dock properties as the source of truth for in-dock release."""
+        nest_data = dict(nest_data or self._get_nest_snapshot() or {})
+        cloud_properties = nest_data.get("cloud_properties")
+        if isinstance(cloud_properties, dict):
+            try:
+                if int(cloud_properties.get("drone_in_dock")) == 1:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        try:
+            if int(nest_data.get("drone_in_dock")) == 1:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+        # Some real adapters expose only normalized nest state.  Charging is a
+        # conservative fallback because it is only expected after the aircraft
+        # is back in the dock workflow.
+        return (
+            nest_data.get("charging_state") is True
+            and nest_data.get("landing_in_progress") is False
+            and nest_data.get("takeoff_in_progress") is False
+        )
+
+    def _nest_alternate_landing_active(self, nest_data: Dict[str, Any] = None) -> bool:
+        nest_data = dict(nest_data or self._get_nest_snapshot() or {})
+        return (
+            nest_data.get("alternate_landing_state") is True
+            or nest_data.get("emergency_landing") is True
+        )
+
+    def _aircraft_disarmed_ground_state(self) -> Optional[bool]:
+        telemetry = self._get_telemetry_snapshot()
+        if not telemetry or "armed" not in telemetry:
+            return None
+        if telemetry.get("armed") is not False:
+            return False
+        altitude_candidates = (
+            telemetry.get("altitudeAGL"),
+            telemetry.get("altitudeRelative"),
+            telemetry.get("height"),
+            telemetry.get("rel_alt"),
+        )
+        for value in altitude_candidates:
+            try:
+                return abs(float(value)) <= 1.0
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _aircraft_disarmed_on_ground(self) -> bool:
+        return self._aircraft_disarmed_ground_state() is True
+
+    def _mark_return_pending(self, final_status: str, reason: str):
+        if final_status not in self._STATUS_ENUM:
+            final_status = STATUS_FAILED
+        with self._return_release_lock:
+            self._return_final_status = final_status
+            self._return_final_reason = reason
+        self._maybe_finish_returned_task()
+
+    def _on_nest_environment_update(self, nest_data: Dict[str, Any]):
+        self._maybe_finish_returned_task(nest_data)
+
+    def _maybe_finish_returned_task(self, nest_data: Dict[str, Any] = None) -> bool:
+        with self._return_release_lock:
+            final_status = self._return_final_status
+            reason = self._return_final_reason
+        if not final_status or not self._current_task_id:
+            return False
+        if self._status not in (self.MISSION_PAUSED, self.MISSION_FAILED):
+            return False
+        if self._nest_alternate_landing_active(nest_data):
+            return False
+        aircraft_ground_state = self._aircraft_disarmed_ground_state()
+        if aircraft_ground_state is False:
+            return False
+        if aircraft_ground_state is not True and not self._drone_in_dock_from_nest(nest_data):
+            return False
+
+        flight_id = self._current_task_id
+        self.stop_mission_monitor()
+        self._status = self._mission_state_from_api_status(final_status)
+        self._wayline_mission_state = 9  # 航线停止
+        self._current_step = 33  # 通知任务结果
+        self._battery_safety_action = None
+        with self._return_release_lock:
+            self._return_final_status = None
+            self._return_final_reason = ""
+
+        percent = self._current_progress_percent()
+        self._emit_wayline_progress(
+            final_status,
+            current_step=self._current_step,
+            percent=percent,
+            flight_id=flight_id,
+        )
+        threading.Thread(
+            target=self._run_db_coroutine,
+            args=(self._update_mission_status(flight_id, final_status),),
+            daemon=True,
+        ).start()
+        logger.info(
+            "Returned mission released from active occupancy: flight_id=%s status=%s reason=%s",
+            flight_id,
+            final_status,
+            reason,
+        )
+        return True
 
     def _mode_change_protection_reason(self, mode_name: str) -> str:
         if str(mode_name or "").upper() not in LOITER_GUIDED_PROTECTED_MODES:
@@ -2666,6 +2809,7 @@ class MissionManager:
                 if not result.get("success"):
                     logger.warning("Critical battery land failed: %s", result.get("message"))
             self._report_mission_progress(status='failed')
+            self._mark_return_pending(STATUS_FAILED, reason)
             return True
 
         if battery <= rtl_threshold and self._battery_safety_action is None:
@@ -2694,6 +2838,7 @@ class MissionManager:
                 last_point_type=0,
                 flight_id=self._current_task_id,
             )
+            self._mark_return_pending(STATUS_PARTIALLY_DONE, reason)
             return True
 
         return False
@@ -2965,7 +3110,7 @@ class MissionManager:
         # 更新数据库状态
         threading.Thread(
             target=self._run_db_coroutine,
-            args=(self._update_mission_status(self._current_task_id, 'running'),),
+            args=(self._update_mission_status(self._current_task_id, STATUS_IN_PROGRESS),),
             daemon=True
         ).start()
 
@@ -3015,7 +3160,7 @@ class MissionManager:
         if self._current_task_id:
             threading.Thread(
                 target=self._run_db_coroutine,
-                args=(self._update_mission_status(self._current_task_id, 'canceled'),),
+                args=(self._update_mission_status(self._current_task_id, STATUS_CANCELED),),
                 daemon=True
             ).start()
 
@@ -3137,7 +3282,7 @@ class MissionManager:
         if self._current_task_id:
             threading.Thread(
                 target=self._run_db_coroutine,
-                args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                args=(self._update_mission_status(self._current_task_id, STATUS_PAUSED),),
                 daemon=True
             ).start()
 
@@ -3247,7 +3392,7 @@ class MissionManager:
         if self._current_task_id:
             threading.Thread(
                 target=self._run_db_coroutine,
-                args=(self._update_mission_status(self._current_task_id, 'running'),),
+                args=(self._update_mission_status(self._current_task_id, STATUS_IN_PROGRESS),),
                 daemon=True
             ).start()
 
@@ -3760,7 +3905,7 @@ class MissionManager:
         if flight_id:
             threading.Thread(
                 target=self._run_db_coroutine,
-                args=(self._update_mission_status(flight_id, 'failed'),),
+                args=(self._update_mission_status(flight_id, STATUS_FAILED),),
                 daemon=True,
             ).start()
         return MessageBuilder.build_reply(
@@ -4109,7 +4254,7 @@ class MissionManager:
             if self._current_task_id:
                 threading.Thread(
                     target=self._run_db_coroutine,
-                    args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                    args=(self._update_mission_status(self._current_task_id, STATUS_PAUSED),),
                     daemon=True
                 ).start()
 
@@ -4119,6 +4264,8 @@ class MissionManager:
             result = self._flight_control.one_click_return()
             if not result.get("success"):
                 logger.warning(f"返航失败: {result.get('message')}")
+        if self._current_task_id and self._status == self.MISSION_PAUSED:
+            self._mark_return_pending(STATUS_PARTIALLY_DONE, "一键返航后回巢释放任务占用")
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_landing(self, msg: dict) -> dict:
@@ -4322,7 +4469,7 @@ class MissionManager:
             if flight_id:
                 threading.Thread(
                     target=self._run_db_coroutine,
-                    args=(self._update_mission_status(flight_id, 'completed'),),
+                    args=(self._update_mission_status(flight_id, STATUS_OK),),
                     daemon=True
                 ).start()
 
@@ -4403,17 +4550,31 @@ class MissionManager:
         """上报航线任务进度 (flighttask_progress)"""
         total = len(self._current_wayline)
         current = self._current_waypoint_idx
-        percent = 100 if status == 'completed' else progress_percent(current, total)
 
         # 状态映射到DJI标准status枚举
         status_map = {
-            'executing': 'in_progress',
-            'completed': 'ok',
-            'failed': 'failed',
-            'paused': 'paused',
-            'canceled': 'canceled',
+            'executing': STATUS_IN_PROGRESS,
+            'running': STATUS_IN_PROGRESS,
+            'completed': STATUS_OK,
+            'failed': STATUS_FAILED,
+            'paused': STATUS_PAUSED,
+            'canceled': STATUS_CANCELED,
+            'partial': STATUS_PARTIALLY_DONE,
+            'partially_done': STATUS_PARTIALLY_DONE,
+            'timeout': STATUS_TIMEOUT,
+            'rejected': STATUS_REJECTED,
+            STATUS_SENT: STATUS_SENT,
+            STATUS_IN_PROGRESS: STATUS_IN_PROGRESS,
+            STATUS_OK: STATUS_OK,
+            STATUS_FAILED: STATUS_FAILED,
+            STATUS_PAUSED: STATUS_PAUSED,
+            STATUS_CANCELED: STATUS_CANCELED,
+            STATUS_PARTIALLY_DONE: STATUS_PARTIALLY_DONE,
+            STATUS_TIMEOUT: STATUS_TIMEOUT,
+            STATUS_REJECTED: STATUS_REJECTED,
         }
-        dji_status = status_map.get(status, 'in_progress')
+        dji_status = status_map.get(status, STATUS_IN_PROGRESS)
+        percent = 100 if dji_status == STATUS_OK else progress_percent(current, total)
 
         # 使用精确的 wayline_mission_state (0-9)
         wayline_state = self._wayline_mission_state
@@ -4438,7 +4599,7 @@ class MissionManager:
         }
 
         # 断点信息（暂停或失败时上报）
-        if status in ('paused', 'failed') and self._break_point:
+        if dji_status in (STATUS_PAUSED, STATUS_FAILED, STATUS_PARTIALLY_DONE) and self._break_point:
             bp = self._break_point.copy()
             # break_reason 映射
             break_reason = bp.get('break_reason')
@@ -4692,6 +4853,8 @@ class MissionManager:
         self._out_of_control_action = out_of_control_action
         self._exit_wayline_when_rc_lost = exit_wayline_when_rc_lost
         self._simulate_mission = {}
+        self._return_final_status = None
+        self._return_final_reason = ""
 
         self._status = self.MISSION_PREPARING
         self._wayline_mission_state = 2  # 航线准备状态
@@ -4998,7 +5161,7 @@ class MissionManager:
         # 旧任务恢复回来，再次阻塞新的 flighttask_prepare。
         threading.Thread(
             target=self._run_db_coroutine,
-            args=(self._update_mission_status(canceled_task_id, 'canceled'),),
+            args=(self._update_mission_status(canceled_task_id, STATUS_CANCELED),),
             daemon=True,
         ).start()
 
@@ -5093,7 +5256,7 @@ class MissionManager:
             if self._current_task_id:
                 threading.Thread(
                     target=self._run_db_coroutine,
-                    args=(self._update_mission_status(self._current_task_id, 'paused'),),
+                    args=(self._update_mission_status(self._current_task_id, STATUS_PAUSED),),
                     daemon=True
                 ).start()
 
@@ -5139,6 +5302,7 @@ class MissionManager:
             last_point_type=0,
             flight_id=task_id,
         )
+        self._mark_return_pending(STATUS_PARTIALLY_DONE, "航线返航后回巢释放任务占用")
         return MessageBuilder.build_reply(
             msg,
             result=0,
@@ -5169,7 +5333,19 @@ class MissionManager:
             logger.warning(f"Return home validation failed: data 应为 null 或空对象")
             return MessageBuilder.build_reply(msg, result=INVALID_COMMAND_FORMAT, msg_str="data 应为 null 或空对象")
 
-        self._wayline_mission_state = 9  # 航线停止
+        active_mission = self._status in (self.MISSION_RUNNING, self.MISSION_PAUSED)
+        if active_mission:
+            self.stop_mission_monitor()
+            self._status = self.MISSION_PAUSED
+            self._record_breakpoint("一键返航前保存断点", break_reason=1283)
+            if self._current_task_id:
+                threading.Thread(
+                    target=self._run_db_coroutine,
+                    args=(self._update_mission_status(self._current_task_id, STATUS_PAUSED),),
+                    daemon=True
+                ).start()
+
+        self._wayline_mission_state = 7 if active_mission else 9
         self._current_step = 24  # 进入返航的检查准备工作
         if not self._flight_control:
             reason = "FlightControl not available"
@@ -5182,6 +5358,8 @@ class MissionManager:
             return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent())
+        if active_mission and self._current_task_id:
+            self._mark_return_pending(STATUS_PARTIALLY_DONE, "一键返航后回巢释放任务占用")
         return MessageBuilder.build_reply(
             msg,
             result=0,
@@ -5599,12 +5777,15 @@ class MissionManager:
         """获取任务状态名称"""
         status_map = {
             self.MISSION_IDLE: 'idle',
-            self.MISSION_PREPARING: 'preparing',
-            self.MISSION_RUNNING: 'running',
-            self.MISSION_PAUSED: 'paused',
-            self.MISSION_COMPLETED: 'completed',
-            self.MISSION_FAILED: 'failed',
-            self.MISSION_CANCELED: 'canceled'
+            self.MISSION_PREPARING: STATUS_SENT,
+            self.MISSION_RUNNING: STATUS_IN_PROGRESS,
+            self.MISSION_PAUSED: STATUS_PAUSED,
+            self.MISSION_COMPLETED: STATUS_OK,
+            self.MISSION_FAILED: STATUS_FAILED,
+            self.MISSION_CANCELED: STATUS_CANCELED,
+            self.MISSION_TIMEOUT: STATUS_TIMEOUT,
+            self.MISSION_REJECTED: STATUS_REJECTED,
+            self.MISSION_PARTIALLY_DONE: STATUS_PARTIALLY_DONE,
         }
         return status_map.get(self._status, 'unknown')
 

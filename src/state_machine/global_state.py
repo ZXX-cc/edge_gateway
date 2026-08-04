@@ -85,12 +85,15 @@ class GatewayStateProvider:
 
     _MISSION_NAMES = {
         "MISSION_IDLE": "idle",
-        "MISSION_PREPARING": "preparing",
-        "MISSION_RUNNING": "running",
+        "MISSION_PREPARING": "sent",
+        "MISSION_RUNNING": "in_progress",
         "MISSION_PAUSED": "paused",
-        "MISSION_COMPLETED": "completed",
+        "MISSION_COMPLETED": "ok",
         "MISSION_FAILED": "failed",
         "MISSION_CANCELED": "canceled",
+        "MISSION_TIMEOUT": "timeout",
+        "MISSION_REJECTED": "rejected",
+        "MISSION_PARTIALLY_DONE": "partially_done",
     }
 
     _OTA_BUSY_STATES = {"checking", "downloading", "verifying", "upgrading"}
@@ -295,7 +298,7 @@ class GatewayStateProvider:
             return GatewayPhase.BUSY_OTA.value
         if drc == "active":
             return GatewayPhase.BUSY_DRC.value
-        if mission in {"preparing", "running", "paused"}:
+        if mission in {"sent", "in_progress", "paused", "preparing", "running"}:
             return GatewayPhase.BUSY_MISSION.value
         if device in {"bound", "offline"} and (dock == "offline" or aircraft == "offline"):
             return GatewayPhase.DEVICE_BOUND_OFFLINE.value
