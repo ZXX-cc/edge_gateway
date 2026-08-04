@@ -15,11 +15,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from web.mavlink.telemetry.mapping import (  # noqa: E402
-    aircraft_mode_code,
     apply_mavlink_message,
     build_osd_data,
-    derive_aircraft_mode_code_from_real_state,
     new_telemetry_state,
+)
+from web.mavlink.telemetry.mode_code import (  # noqa: E402
+    aircraft_mode_code,
+    derive_aircraft_mode_code_from_real_state,
 )
 from web.mavlink.properties.mapping import build_properties_from_osd  # noqa: E402
 
@@ -112,37 +114,76 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         }))
         self.assertEqual(aircraft_mode_code({"aircraft_mode_code": 5}), 5)
         self.assertEqual(aircraft_mode_code({"mode_code": "3"}), 3)
+        self.assertEqual(aircraft_mode_code({"mode_code": "14"}), 14)
+        self.assertEqual(aircraft_mode_code({"mode_code": 17}), 17)
         self.assertIsNone(aircraft_mode_code({"mode_code": 99}))
 
     def test_derive_aircraft_mode_code_from_real_runtime_state(self):
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "disconnected",
-        }), 0)
+        }), 14)
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "connected",
             "gps_fixed": 0,
             "armed": False,
-        }), 1)
+        }), 0)
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "connected",
             "gps_fixed": 1,
             "armed": False,
-        }), 2)
+        }), 0)
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "connected",
             "gps_fixed": 1,
             "armed": True,
-        }), 3)
+        }), 0)
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "connected",
             "gps_fixed": 1,
             "armed": True,
-        }, auto_takeoff_state="EXECUTING"), 4)
+        }, takeoff_flow_steps=[
+            {"step": "flighttask_execute_precheck"},
+        ]), 1)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, takeoff_flow_steps=[
+            {"step": "flighttask_execute_precheck"},
+            {"step": "self_check", "status": "ok", "result": 0},
+        ]), 2)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, takeoff_flow_steps=[
+            {"step": "flighttask_execute_precheck"},
+            {"step": "self_check", "status": "ok", "result": 0},
+            {"step": "flight_arm", "status": "ok", "result": 0},
+        ]), 4)
         self.assertEqual(derive_aircraft_mode_code_from_real_state({
             "connection_status": "connected",
             "gps_fixed": 1,
             "armed": True,
         }, mission_status="running", wayline_mission_state=6), 5)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, drc_status={"enabled": True, "last_speed_cmd": {"vx": 1}}), 3)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "gps_fixed": 1,
+            "armed": True,
+        }, drc_status={"enabled": True, "active_fly_to_point": {"fly_to_id": "fly-1"}}), 17)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "flight_mode": "RTL",
+        }), 9)
+        self.assertEqual(derive_aircraft_mode_code_from_real_state({
+            "connection_status": "connected",
+            "flight_mode": "QRTL",
+        }), 10)
 
     def test_gps_quality_falls_back_to_satellite_count(self):
         telemetry = new_telemetry_state()

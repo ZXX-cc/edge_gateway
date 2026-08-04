@@ -80,7 +80,7 @@ from src.database.connection import (
     init_database,
 )
 from src.database.telemetry_db import TelemetryDB
-from web.mavlink.telemetry.mapping import derive_aircraft_mode_code_from_real_state
+from web.mavlink.telemetry.mode_code import derive_aircraft_mode_code_from_gateway_modules
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from src.state_machine import CommandAdmissionEngine, GatewayEventReducer, GatewayStateProvider
 
@@ -1142,33 +1142,13 @@ class EdgeGateway:
         if not isinstance(osd_data, dict):
             return
         telemetry = self.telemetry.get_current_data() if self.telemetry else {}
-        mission_status = None
-        wayline_state = None
-        if self.mission:
-            try:
-                mission_status = self.mission._get_task_status_name()
-                wayline_state = getattr(self.mission, "_wayline_mission_state", None)
-            except Exception as exc:
-                logger.warning("Read mission mode_code context failed: %s", exc)
-        auto_takeoff_state = None
-        if self.flight_control:
-            try:
-                auto_takeoff_state = self.flight_control.get_status().get("auto_takeoff_state")
-            except Exception as exc:
-                logger.warning("Read flight control mode_code context failed: %s", exc)
-        nest_status = {}
-        if self.nest_module:
-            try:
-                nest_status = self.nest_module.get_uav_nest_status()
-            except Exception as exc:
-                logger.warning("Read nest mode_code context failed: %s", exc)
-
-        osd_data["mode_code"] = derive_aircraft_mode_code_from_real_state(
+        osd_data["mode_code"] = derive_aircraft_mode_code_from_gateway_modules(
             telemetry,
-            mission_status=mission_status,
-            wayline_mission_state=wayline_state,
-            auto_takeoff_state=auto_takeoff_state,
-            nest_status=nest_status,
+            mission=self.mission,
+            flight_control=self.flight_control,
+            drc=self.drc,
+            nest_module=self.nest_module,
+            logger=logger,
         )
 
     def _apply_aircraft_limit_fields(self, osd_data: dict) -> None:

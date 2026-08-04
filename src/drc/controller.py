@@ -1282,6 +1282,11 @@ class DrcController:
             vz,
             yaw_rate,
         )
+        self._last_speed_cmd = {
+            'vx': vx, 'vy': vy, 'vz': vz, 'yaw_rate': yaw_rate,
+            'timestamp': time.time(),
+            'source': 'drone_control',
+        }
 
         sent, simulated, error = self._send_body_velocity(vx, vy, vz, yaw_rate)
         if error and not simulated:
