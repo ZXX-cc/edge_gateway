@@ -2734,7 +2734,11 @@ class MissionManager:
             try:
                 if action_type in {'photo', 'takephoto', 'take_photo', '1'}:
                     if self._camera_controller and hasattr(self._camera_controller, 'handle_camera_photo_take'):
-                        self._camera_controller.handle_camera_photo_take({'data': {'camera_index': 0}})
+                        photo_data = {'camera_index': action.get('camera_index', 0)}
+                        for key in ('payload_index', 'camera_type', 'payload_id'):
+                            if action.get(key) is not None:
+                                photo_data[key] = action.get(key)
+                        self._camera_controller.handle_camera_photo_take({'data': photo_data})
                         logger.info("Waypoint %s photo action executed", waypoint_index)
                     elif self._gimbal_control and hasattr(self._gimbal_control, 'take_photo'):
                         self._gimbal_control.take_photo()

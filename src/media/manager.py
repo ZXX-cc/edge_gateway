@@ -783,6 +783,7 @@ class MediaManager:
         支持多种输入源：
         - V4L2: /dev/video0, /dev/video1
         - RTSP: rtsp://xxx
+        - RTP/UDP: rtp://xxx, udp://xxx
         - 本地视频设备: /dev/video0, /dev/video1
         """
         # 从配置读取视频源映射
@@ -849,6 +850,9 @@ class MediaManager:
         elif source.startswith('http://') or source.startswith('https://'):
             # HTTP 流
             cmd.extend(['-i', source])
+        elif source.startswith('rtp://') or source.startswith('udp://'):
+            # Vendor push streams, e.g. YCamSDK realtime video on RTP 23008.
+            cmd.extend(['-protocol_whitelist', 'file,udp,rtp,tcp', '-i', source])
         else:
             raise ValueError(f"Unsupported live video source for real chain: {source}")
 

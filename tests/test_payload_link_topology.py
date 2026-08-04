@@ -49,7 +49,7 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         )
         self.assertEqual(
             set(topology.get_device("spectral_camera")["channels"]),
-            {"video", "post_landing_raw_data"},
+            {"control", "video", "post_landing_raw_data"},
         )
         self.assertEqual(
             set(topology.get_device("speaker")["channels"]),
@@ -68,6 +68,9 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(
             spectral_channels["video"]["timing"], "realtime"
         )
+        self.assertEqual(spectral_channels["control"]["remote_host"], "192.168.1.115")
+        self.assertEqual(spectral_channels["control"]["command_port"], 23001)
+        self.assertEqual(spectral_channels["post_landing_raw_data"]["listen_port"], 23002)
         self.assertEqual(
             speaker_channels["control_audio"]["direction"],
             "gateway_to_payload",
@@ -153,6 +156,28 @@ class PayloadLinkTopologyTest(unittest.TestCase):
                     },
                     "last_photo_cache": {"file_path": "/data/media/Riebo000001.jpg"},
                 },
+                "spectral_camera": {
+                    "connection_state": "configured",
+                    "payload_type": "spectral_camera",
+                    "payload_model_key": "yusense-ycam",
+                    "payload_index": "52-0-2",
+                    "host": "192.168.1.115",
+                    "control": {
+                        "transport": "ycam_tcp_server",
+                        "command_port": 23001,
+                        "file_port": 23002,
+                    },
+                    "video": {
+                        "transport": "rtp",
+                        "endpoint": "rtp://0.0.0.0:23008",
+                        "video_id": "EDGEGW001/52-0-2/spectral-0",
+                        "reachable": True,
+                    },
+                    "data_link": {
+                        "transport": "ycam_tcp_file",
+                        "endpoint": "tcp://0.0.0.0:23002",
+                    },
+                },
             },
         )
 
@@ -174,6 +199,12 @@ class PayloadLinkTopologyTest(unittest.TestCase):
         self.assertEqual(mapping["video"]["video_id"], "EDGEGW001/52-0-1/mapping-0")
         self.assertEqual(mapping["data_link"]["transport"], "ftp")
         self.assertEqual(mapping["last_photo_cache"]["file_path"], "/data/media/Riebo000001.jpg")
+        spectral = next(item for item in payloads if item["id"] == "spectral_camera")
+        self.assertEqual(spectral["payload_type"], "spectral_camera")
+        self.assertEqual(spectral["payload_index"], "52-0-2")
+        self.assertEqual(spectral["host"], "192.168.1.115")
+        self.assertEqual(spectral["control"]["command_port"], 23001)
+        self.assertEqual(spectral["video"]["video_id"], "EDGEGW001/52-0-2/spectral-0")
         self.assertTrue(all(item["direct_to_gateway"] for item in payloads))
         self.assertFalse(reply["data"]["flight_controller_fallback"])
 

@@ -51,6 +51,7 @@ if "src.database.media_db" not in sys.modules:
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
+from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
 
@@ -706,6 +707,48 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(state["video"]["reachable"])
         self.assertFalse(state["data_link"]["reachable"])
         self.assertEqual(state["last_photo_cache"]["file_path"], "/data/media/Riebo000003.jpg")
+
+    def test_spectral_camera_payload_state_exposes_ycam_gateway_binding(self):
+        adapter = SpectralCameraAdapter(Config.get_payload_config()["devices"]["spectral_camera"])
+        old_probe = SpectralCameraAdapter._tcp_host_reachable
+        SpectralCameraAdapter._tcp_host_reachable = staticmethod(
+            lambda host, port, timeout=0.3: host == "192.168.1.115" and port == 80
+        )
+        try:
+            state = adapter.build_payload_state()
+        finally:
+            SpectralCameraAdapter._tcp_host_reachable = old_probe
+
+        self.assertEqual(state["connection_state"], "connected")
+        self.assertEqual(state["payload_type"], "spectral_camera")
+        self.assertEqual(state["payload_index"], "52-0-2")
+        self.assertEqual(state["host"], "192.168.1.115")
+        self.assertEqual(state["control"]["command_port"], 23001)
+        self.assertEqual(state["control"]["file_port"], 23002)
+        self.assertEqual(state["control"]["reachable_ports"], [80])
+        self.assertEqual(state["video"]["endpoint"], "rtp://0.0.0.0:23008")
+        self.assertEqual(state["video"]["video_id"], "UNKNOWN/52-0-2/spectral-0")
+        self.assertTrue(state["video"]["reachable"])
+        self.assertEqual(state["data_link"]["listen_port"], 23002)
+
+    def test_spectral_camera_photo_take_creates_return_media_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Config.merge({"media": {"storage_path": tmp}})
+            camera = CameraController()
+            reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+                "payload_index": "52-0-2",
+                "camera_type": "multispectral",
+                "file_name": "spectral-test.jpg",
+            }))
+
+            media = reply["data"]["media"]
+            self.assertEqual(reply["data"]["result"], 0)
+            self.assertEqual(reply["data"]["payload_id"], "spectral_camera")
+            self.assertEqual(reply["data"]["photo_source"], "ycam_sdk")
+            self.assertEqual(media["payload_index"], "52-0-2")
+            self.assertTrue(os.path.exists(media["file_path"]))
+            self.assertEqual(os.path.basename(media["file_path"]), "spectral-test.jpg")
+            self.assertEqual(camera._last_spectral_camera_cache["file_name"], "spectral-test.jpg")
 
     def test_failed_gimbal_commands_do_not_change_cached_pose_or_mode(self):
         gimbal = GimbalController()

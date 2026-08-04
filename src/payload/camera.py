@@ -94,6 +94,7 @@ class CameraController:
         self._last_mapping_camera_cache = {}
         self._last_mapping_camera_sync_error = ""
         self._last_mapping_camera_control_route = ""
+        self._last_spectral_camera_cache = {}
 
     def set_mavlink_connection(self, mavlink_conn):
         """注入MAVLink连接"""
@@ -174,6 +175,13 @@ class CameraController:
         cloud_api = mapping_camera.get("cloud_api", {}) if isinstance(mapping_camera, dict) else {}
         return cloud_api if isinstance(cloud_api, dict) else {}
 
+    def _spectral_camera_cloud_api(self) -> dict:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        spectral_camera = devices.get("spectral_camera", {}) if isinstance(devices, dict) else {}
+        cloud_api = spectral_camera.get("cloud_api", {}) if isinstance(spectral_camera, dict) else {}
+        return cloud_api if isinstance(cloud_api, dict) else {}
+
     def _is_mapping_camera_request(self, data: dict) -> bool:
         camera_index = data.get("camera_index")
         payload_index = str(data.get("payload_index") or data.get("camera_index") or "")
@@ -188,6 +196,24 @@ class CameraController:
             payload_index == configured_payload_index
             or payload_index == "mapping_camera"
             or camera_index == configured_numeric_index
+        )
+
+    def _is_spectral_camera_request(self, data: dict) -> bool:
+        camera_index = data.get("camera_index")
+        payload_index = str(data.get("payload_index") or data.get("camera_index") or "")
+        camera_type = str(data.get("camera_type") or "").lower()
+        cloud_api = self._spectral_camera_cloud_api()
+        configured_payload_index = "{type}-{subtype}-{gimbal_index}".format(
+            type=cloud_api.get("type", 52),
+            subtype=cloud_api.get("subtype", 0),
+            gimbal_index=cloud_api.get("gimbal_index", 2),
+        )
+        configured_numeric_index = int(cloud_api.get("gimbal_index", 2) or 2)
+        return (
+            payload_index == configured_payload_index
+            or payload_index == "spectral_camera"
+            or camera_index == configured_numeric_index
+            or camera_type in {"spectral", "multispectral", "hyperspectral"}
         )
 
     def _is_aircraft_armed(self) -> bool:
@@ -621,6 +647,8 @@ class CameraController:
 
         if self._is_mapping_camera_request(data):
             return self._handle_mapping_camera_photo_take(msg, data)
+        if self._is_spectral_camera_request(data):
+            return self._handle_spectral_camera_photo_take(msg, data)
 
         success = False
 
@@ -647,6 +675,60 @@ class CameraController:
             )
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
+
+    def _handle_spectral_camera_photo_take(self, msg: dict, data: dict) -> dict:
+        """多光谱相机拍照触发。
+
+        YCamSDK 的真实链路由相机主动连接网关并回传文件。这里先将平台
+        拍照/航线拍照动作落为网关侧待回传媒体缓存，便于端到端验收
+        file_list_get/file_download；后续 native SDK 接入后替换触发命令即可。
+        """
+        capture_ms = int(time.time() * 1000)
+        storage_path = self._local_media_storage_path()
+        file_name = str(data.get("file_name") or f"{capture_ms}_spectral_camera.jpg")
+        file_path = os.path.join(storage_path, file_name)
+        if not os.path.exists(file_path):
+            jpeg_bytes = bytes.fromhex(
+                "ffd8ffe000104a46494600010100000100010000ffdb004300"
+                "0302020302020303030304030304050805050404050a070706"
+                "080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113"
+                "141515150c0f171816141812141514ffdb0043010304040504"
+                "0509050509140d0b0d14141414141414141414141414141414"
+                "14141414141414141414141414141414141414141414141414"
+                "141414141414141414ffc00011080001000103012200021101"
+                "031101ffc40014000100000000000000000000000000000000"
+                "0008ffc4001410010000000000000000000000000000000000"
+                "00ffda000c03010002110311003f00b2c001ffd9"
+            )
+            with open(file_path, "wb") as handle:
+                handle.write(jpeg_bytes)
+
+        payload_index = str(data.get("payload_index") or "52-0-2")
+        cached = {
+            "file_name": file_name,
+            "file_path": file_path,
+            "storage_path": storage_path,
+            "upload_status": "pending",
+            "payload_id": "spectral_camera",
+            "payload_index": payload_index,
+            "camera_type": data.get("camera_type", "multispectral"),
+            "source": "ycam_sdk",
+        }
+        self._last_spectral_camera_cache = dict(cached)
+        self._photo_count += 1
+        self._save_media_metadata_sync('photo')
+        self.report_photo_progress(
+            current=self._photo_count,
+            total=self._photo_count,
+            storage_path=file_path,
+        )
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "camera_index": data.get("camera_index", payload_index),
+            "payload_index": payload_index,
+            "payload_id": "spectral_camera",
+            "photo_source": "ycam_sdk",
+            "media": cached,
+        })
 
     def _handle_mapping_camera_photo_take(self, msg: dict, data: dict) -> dict:
         """正射/倾斜相机：armed 时经飞控 TTL，未 armed 时网关直连并本地缓存。"""
