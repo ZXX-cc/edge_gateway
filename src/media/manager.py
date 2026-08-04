@@ -576,9 +576,9 @@ class MediaManager:
         # 同步等待响应
         result = {}
 
-        def callback(response):
+        def callback(*args):
             nonlocal result
-            result = response
+            result = args[-1] if args else {}
 
         request_id = self._request_sender('storage_config_get', request_data, callback)
 
