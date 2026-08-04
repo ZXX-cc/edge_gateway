@@ -13,6 +13,7 @@ from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
 from src.modules.gimbal_control import VLKFocusMode, VLKRecordMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
@@ -836,7 +837,7 @@ class CameraController:
                 running = thread.is_alive()
                 if not running:
                     self._photo_session_thread = None
-                return MessageBuilder.build_reply(msg, result=0 if not running else -1, data={
+                return MessageBuilder.build_reply(msg, result=0 if not running else DOCK_SYSTEM_ERROR, data={
                     "photo_source": "viewlink_sdk",
                     "stopped": not running,
                     "running": running,
@@ -857,12 +858,12 @@ class CameraController:
         """
         data = msg.get('data', {})
         camera_idx = data.get('camera_index', 0)
-        resolution = data.get('resolution', '1080p')
+        resolution = data.get('resolution')
 
         if self._is_recording:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Already recording")
 
-        logger.info(f"Start record: camera={camera_idx}, resolution={resolution}")
+        logger.info(f"Start record: camera={camera_idx}, resolution={resolution or 'device_default'}")
 
         success = False
 
@@ -881,7 +882,7 @@ class CameraController:
         if success:
             self._is_recording = True
             self._recording_start_time = time.time()
-            self._resolution = resolution
+            self._resolution = str(resolution) if resolution else None
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -1211,9 +1212,18 @@ class CameraController:
         y = pixel_box["y"]
         width = pixel_box["width"]
         height = pixel_box["height"]
-        zoom_ratio = float(data.get("zoom_ratio", self._zoom_level) or self._zoom_level)
+        requested_zoom_ratio = data.get("zoom_ratio")
         center_offset_x = (normalized_box["x"] + normalized_box["width"] / 2.0) - 0.5
         center_offset_y = (normalized_box["y"] + normalized_box["height"] / 2.0) - 0.5
+        if requested_zoom_ratio is None:
+            box_zoom = min(
+                1.0 / max(0.001, normalized_box["width"]),
+                1.0 / max(0.001, normalized_box["height"]),
+            )
+            max_ratio = float(Config.get("payload.frame_zoom_max_ratio", 30.0) or 30.0)
+            zoom_ratio = min(max_ratio, max(float(self._zoom_level or 1.0), box_zoom))
+        else:
+            zoom_ratio = float(requested_zoom_ratio or self._zoom_level)
         center_speed = self._frame_zoom_centering_speed(center_offset_x, center_offset_y)
         logger.info(
             "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s) normalized=%s center_offset=(%.4f,%.4f) zoom_ratio=%s",
@@ -1233,6 +1243,23 @@ class CameraController:
         result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
         center_result = {"success": True, "message": "frame center already aligned", "skipped": True}
         stop_result = None
+        pipeline = [
+            {
+                "step": "normalize_selection",
+                "status": "ok",
+                "normalized": normalized_box,
+                "pixel_box": pixel_box,
+                "frame_size": frame_size,
+            },
+            {
+                "step": "compute_center_offset",
+                "status": "ok",
+                "center_offset": {"x": center_offset_x, "y": center_offset_y},
+                "center_speed": center_speed,
+                "zoom_ratio": zoom_ratio,
+                "zoom_ratio_source": "request" if requested_zoom_ratio is not None else "selection_box",
+            },
+        ]
         if self._gimbal_control and self._gimbal_control.is_connected():
             if center_speed["yaw_speed"] or center_speed["pitch_speed"]:
                 move_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
@@ -1244,20 +1271,53 @@ class CameraController:
                     "viewlink_result": move_result,
                 }
                 logger.info("ViewLink frame zoom/center move: %s", move_result)
+                pipeline.append({
+                    "step": "gimbal_center_move",
+                    "status": "ok" if center_result["success"] else "failed",
+                    "yaw_speed": center_speed["yaw_speed"],
+                    "pitch_speed": center_speed["pitch_speed"],
+                    "viewlink_result": move_result,
+                })
                 if center_result["success"] and hasattr(self._gimbal_control, "stop"):
                     settle_seconds = self._frame_zoom_number(
                         data,
                         "center_duration",
                         float(Config.get("payload.frame_zoom_centering_duration", 0.15) or 0.15),
                     )
-                    time.sleep(max(0.05, min(1.0, settle_seconds)))
+                    settle_seconds = max(0.05, min(1.0, settle_seconds))
+                    time.sleep(settle_seconds)
                     stop_result = self._gimbal_control.stop()
                     center_result["stop_result"] = stop_result
                     center_result["success"] = bool(stop_result.get("success", False))
                     logger.info("ViewLink frame zoom/center stop: %s", stop_result)
+                    pipeline.append({
+                        "step": "gimbal_center_stop",
+                        "status": "ok" if center_result["success"] else "failed",
+                        "settle_seconds": settle_seconds,
+                        "viewlink_result": stop_result,
+                    })
+            else:
+                pipeline.append({
+                    "step": "gimbal_center_move",
+                    "status": "skipped",
+                    "reason": "selection center already aligned",
+                })
             if center_result.get("success", False):
                 result = self._gimbal_control.zoom_to(zoom_ratio)
+                pipeline.append({
+                    "step": "camera_zoom_to",
+                    "status": "ok" if bool(result.get("success", False)) else "failed",
+                    "zoom_ratio": zoom_ratio,
+                    "viewlink_result": result,
+                })
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
+        else:
+            pipeline.append({
+                "step": "camera_zoom_to",
+                "status": "simulated",
+                "zoom_ratio": zoom_ratio,
+                "reason": "ViewLink control is not connected",
+            })
 
         success = bool(
             center_result.get("success", False)
@@ -1281,6 +1341,7 @@ class CameraController:
             "center_speed": center_speed,
             "center_result": center_result,
             "stop_result": stop_result,
+            "software_pipeline": pipeline,
             "viewlink_result": result,
         })
 
@@ -1470,9 +1531,9 @@ class CameraController:
     def handle_set_resolution(self, msg: dict) -> dict:
         """设置分辨率"""
         data = msg.get('data', {})
-        resolution = data.get('resolution', '1080p')
+        resolution = data.get('resolution')
         self._log_camera_setting_mapping('set_resolution', data)
-        logger.info(f"Resolution: {resolution}")
+        logger.info(f"Resolution: {resolution or 'unchanged'}")
         self._resolution = str(resolution) if resolution else None
         return MessageBuilder.build_reply(msg, result=0)
 

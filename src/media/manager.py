@@ -112,6 +112,7 @@ class MediaManager:
         self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
         self._live_source_key = self._live_video_type
         self._live_camera_position = 0
+        self._live_pipeline: List[Dict[str, Any]] = []
 
         # ffmpeg 推流进程
         self._ffmpeg_process: Optional[subprocess.Popen] = None
@@ -896,8 +897,18 @@ class MediaManager:
         except ValueError as exc:
             logger.error(str(exc))
             self._live_streaming = False
+            self._live_pipeline.append({
+                "step": "build_ffmpeg_command",
+                "status": "failed",
+                "reason": str(exc),
+            })
             return False
         logger.info(f"Starting ffmpeg: {' '.join(cmd)}")
+        self._live_pipeline.append({
+            "step": "build_ffmpeg_command",
+            "status": "ok",
+            "command": cmd,
+        })
 
         try:
             process = subprocess.Popen(
@@ -908,6 +919,11 @@ class MediaManager:
             )
             self._ffmpeg_process = process
             logger.info(f"FFmpeg started, pid={process.pid}")
+            self._live_pipeline.append({
+                "step": "start_ffmpeg_process",
+                "status": "ok",
+                "pid": process.pid,
+            })
 
             # 启动监控线程
             self._ffmpeg_monitor_thread = threading.Thread(
@@ -919,10 +935,20 @@ class MediaManager:
         except FileNotFoundError:
             logger.error("ffmpeg not found. Please install ffmpeg first.")
             self._live_streaming = False
+            self._live_pipeline.append({
+                "step": "start_ffmpeg_process",
+                "status": "failed",
+                "reason": "ffmpeg not found",
+            })
             return False
         except Exception as e:
             logger.error(f"Failed to start ffmpeg: {e}")
             self._live_streaming = False
+            self._live_pipeline.append({
+                "step": "start_ffmpeg_process",
+                "status": "failed",
+                "reason": str(e),
+            })
             return False
 
     def _stop_ffmpeg(self):
@@ -1037,6 +1063,23 @@ class MediaManager:
         elif requested_video_type:
             self._live_video_type = requested_video_type
             self._live_source_key = requested_video_type
+        selected_source = self._get_video_source(self._live_source_key)
+        self._live_pipeline = [
+            {
+                "step": "validate_live_start",
+                "status": "ok",
+                "url_type": url_type,
+                "video_id": video_id,
+                "video_quality": video_quality,
+            },
+            {
+                "step": "select_video_source",
+                "status": "ok",
+                "video_type": self._live_video_type,
+                "source_key": self._live_source_key,
+                "source": selected_source,
+            },
+        ]
 
         if self._live_streaming:
             return MessageBuilder.build_reply(
@@ -1067,6 +1110,11 @@ class MediaManager:
 
         if is_mock_live_url(url):
             logger.info("Live mock stream enabled: video_id=%s, url=%s", video_id, url)
+            self._live_pipeline.append({
+                "step": "start_mock_stream",
+                "status": "ok",
+                "url": url,
+            })
         else:
             if not self._start_ffmpeg(url, url_type, video_quality, self._live_source_key):
                 self._live_session_id = ""
@@ -1075,18 +1123,27 @@ class MediaManager:
                 return MessageBuilder.build_reply(
                     msg,
                     result=INVALID_COMMAND_FORMAT,
-                    data=live_task_output(TASK_STATUS_REJECTED, {"reason": "live video source unavailable"}),
+                    data=live_task_output(TASK_STATUS_REJECTED, {
+                        "reason": "live video source unavailable",
+                        "software_pipeline": list(self._live_pipeline),
+                    }),
                     msg_str="Live video source unavailable",
                 )
 
         self._publish_live_status_event(TASK_STATUS_IN_PROGRESS, live_status=1)
+        self._live_pipeline.append({
+            "step": "publish_live_status",
+            "status": "ok",
+            "live_status": 1,
+        })
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_IN_PROGRESS, {
             'session_id': self._live_session_id,
             'video_id': self._live_video_id,
             'url_type': self._live_protocol,
             'video_quality': self._live_quality,
             'video_type': self._live_video_type,
-            'source': self._get_video_source(self._live_source_key),
+            'source': selected_source,
+            'software_pipeline': list(self._live_pipeline),
         }))
 
     def handle_live_start_push(self, msg: dict) -> dict:

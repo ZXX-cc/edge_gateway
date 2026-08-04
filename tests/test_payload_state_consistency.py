@@ -306,6 +306,16 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["center_result"]["yaw_speed"], -320)
         self.assertEqual(reply["data"]["center_result"]["pitch_speed"], 320)
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
+        self.assertEqual(
+            [step["step"] for step in reply["data"]["software_pipeline"]],
+            [
+                "normalize_selection",
+                "compute_center_offset",
+                "gimbal_center_move",
+                "gimbal_center_stop",
+                "camera_zoom_to",
+            ],
+        )
 
     def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()
@@ -328,6 +338,24 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("zoom_to", 2.0),
         ])
         self.assertEqual(reply["data"]["center_result"]["message"], "frame center already aligned")
+
+    def test_camera_frame_zoom_infers_zoom_ratio_from_selection_size(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "x": 0.35,
+            "y": 0.35,
+            "width": 0.25,
+            "height": 0.25,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["zoom_ratio"], 4.0)
+        self.assertEqual(direct_payload.calls[-1], ("zoom_to", 4.0))
+        self.assertEqual(reply["data"]["software_pipeline"][1]["zoom_ratio_source"], "selection_box")
 
     def test_media_metadata_uses_real_file_size_and_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:

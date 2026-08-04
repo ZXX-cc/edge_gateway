@@ -345,6 +345,15 @@ class Dock3MediaManagerTest(unittest.TestCase):
         }))
         self.assertEqual(start["data"]["result"], 0)
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
+        self.assertEqual(
+            [step["step"] for step in start["data"]["software_pipeline"]],
+            [
+                "validate_live_start",
+                "select_video_source",
+                "start_mock_stream",
+                "publish_live_status",
+            ],
+        )
         self.assertTrue(manager._live_streaming)
         live_status = states[-1]["property"]["live_status"]
         self.assertEqual(live_status[0]["video_id"], video_id)
