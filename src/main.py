@@ -52,6 +52,7 @@ from src.modules.waypoint_manager import WaypointManager
 from src.mavlink.telemetry import TelemetryProcessor
 from src.device.manager import DeviceManager
 from src.mission.manager import MissionManager
+from src.mission.point_flight import PointFlightController
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
 from src.payload.third_party import ThirdPartyController
@@ -237,10 +238,10 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'photo_storage_set', 'video_storage_set', 'payload_authority_grab',
     'ir_metering_mode_set', 'ir_metering_point_set', 'ir_metering_area_set',
 
-    # services -> services_reply: DRC mode / point-flight methods confirmed as
-    # service calls. Realtime drc/down stick/speed methods are intentionally not
+    # services -> services_reply: DRC session services and point-flight mission
+    # services. Realtime drc/down stick/speed methods are intentionally not
     # listed here and continue to follow need_reply.
-    'drc_mode_enter', 'drc_mode_exit', 'takeoff_to_point',
+    'drc_mode_enter', 'drc_mode_exit', 'flight_authority_grab', 'takeoff_to_point',
     'fly_to_point', 'fly_to_point_stop', 'fly_to_point_update',
 
     # services -> services_reply: log / flysafe / flight area / custom data
@@ -313,6 +314,7 @@ class EdgeGateway:
         self.third_party: ThirdPartyController = None
         self.media: MediaManager = None
         self.drc: DrcController = None
+        self.point_flight: PointFlightController = None
         self.dock: DockManager = None
         self.cloud_conn: CloudConnectionManager = None
         self.telemetry_reporter: TelemetryReporter = None
@@ -384,6 +386,8 @@ class EdgeGateway:
             self.media = MediaManager()
             self.media.set_camera_controller(self.camera)
             self.drc = DrcController()
+            self.point_flight = PointFlightController(self.drc)
+            self.drc.set_point_flight_controller(self.point_flight)
             self.dock = DockManager()
             self.log_mgr = LogManager()
             self.flysafe = FlySafeManager()
@@ -1532,6 +1536,7 @@ class EdgeGateway:
             # 同步 mission 状态到 DeviceManager
             self.device.update_from_mission(event)
         self.mission.set_event_callback(mission_event_cb)
+        self.point_flight.set_event_callback(mission_event_cb)
 
         # 媒体管理回调
         def media_event_cb(event):
@@ -1704,6 +1709,12 @@ class EdgeGateway:
             'landing': self.mission.handle_landing,
             'emergency_stop': self.mission.handle_emergency_stop,
             'start_takeoff_to_point': self.mission.handle_start_takeoff_to_point,
+            # Dock3 DRC page documents these, but their Topic is services.
+            # Keep them categorized with mission/point-flight, not DRC realtime.
+            'takeoff_to_point': self.point_flight.handle_takeoff_to_point,
+            'fly_to_point': self.point_flight.handle_fly_to_point,
+            'fly_to_point_stop': self.point_flight.handle_fly_to_point_stop,
+            'fly_to_point_update': self.point_flight.handle_fly_to_point_update,
             'return_home': self.mission.handle_return_home,
             'go_to_altitude': self.mission.handle_go_to_altitude,
         }, category='mission')
@@ -1905,10 +1916,20 @@ class EdgeGateway:
             'live_set_quality': self.media.handle_live_set_quality,
         }, category='media')
 
-        # ---- DRC实时控制API (Direct Remote Control) ----
+        # ---- Services-topic DRC session methods ----
+        # These methods manage DRC state, but the Cloud API topic is services,
+        # so they are intentionally kept out of the DRC realtime category.
         self.router.register_batch({
             'drc_mode_enter': self.drc.handle_drc_mode_enter,
             'drc_mode_exit': self.drc.handle_drc_mode_exit,
+            'flight_authority_grab': self.drc.handle_flight_authority_grab,
+        }, category='services')
+
+        # ---- DRC实时控制API (Direct Remote Control) ----
+        # Only drc/down realtime methods belong in this category. Methods from
+        # the Dock3 DRC page that use services/services_reply are registered in
+        # their service-domain category above.
+        self.router.register_batch({
             'heart_beat': self.drc.handle_drc_heart_beat,
             'drc_heartbeat': self.drc.handle_drc_heartbeat,
             'drc_speed_push': self.drc.handle_drc_speed_push,
@@ -1918,16 +1939,11 @@ class EdgeGateway:
             'stick_control': self.drc.handle_stick_control,
             'drone_control': self.drc.handle_drone_control,
             'payload_control': self.drc.handle_payload_control,
-            'flight_authority_grab': self.drc.handle_flight_authority_grab,
             'drc_gimbal_speed_push': self.drc.handle_drc_gimbal_speed_push,
-            'fly_to_point': self.drc.handle_fly_to_point,
-            'fly_to_point_stop': self.drc.handle_fly_to_point_stop,
-            'fly_to_point_update': self.drc.handle_fly_to_point_update,
             'poi_mode_enter': self.drc.handle_poi_mode_enter,
             'poi_mode_exit': self.drc.handle_poi_mode_exit,
             'poi_circle_speed_set': self.drc.handle_poi_circle_speed_set,
             'drone_emergency_stop': self.drc.handle_drone_emergency_stop,
-            'takeoff_to_point': self.drc.handle_takeoff_to_point,
         }, category='drc')
 
         # Dock3 文档的 DRC 页面同时列出了一批 services 负载控制接口。

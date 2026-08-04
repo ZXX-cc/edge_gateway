@@ -19,13 +19,15 @@ from src.utils.dji_error_codes import (
     INVALID_COMMAND_FORMAT,
 )
 from src.cloud_api.dock3_drc import (
-    normalize_fly_to_point_update,
     normalize_drone_control,
     normalize_stick_control,
-    normalize_takeoff_to_point,
     validate_drc_heartbeat,
     validate_drc_mode_enter,
     validate_gimbal_speed_push,
+)
+from src.cloud_api.dock3_point_flight import (
+    normalize_fly_to_point_update,
+    normalize_takeoff_to_point,
 )
 
 logger = get_logger("drc")
@@ -71,6 +73,7 @@ class DrcController:
         self._telemetry_module = None  # 遥测模块引用
         self._gimbal_control = None  # 云台控制引用
         self._camera_controller = None  # 相机控制器引用
+        self._point_flight_controller = None  # services 指点飞行业务控制器
 
         # 回调
         self._event_callback: Optional[Callable] = None
@@ -122,6 +125,10 @@ class DrcController:
     def set_camera_controller(self, camera_controller):
         """注入相机控制器"""
         self._camera_controller = camera_controller
+
+    def set_point_flight_controller(self, point_flight_controller):
+        """注入 services-topic 指点飞行业务控制器。"""
+        self._point_flight_controller = point_flight_controller
 
     def _get_mavlink_connection(self):
         """获取MAVLink连接对象"""
@@ -226,7 +233,74 @@ class DrcController:
             last_message = result.get("message", f"{mode} failed")
         return False, False, last_message
 
-    def _send_guided_loiter_target(self, latitude: float, longitude: float, height: float) -> dict:
+    def _normalize_loiter_radius(self, radius) -> Optional[float]:
+        try:
+            if radius is None or isinstance(radius, bool):
+                return None
+            radius = float(radius)
+        except (TypeError, ValueError):
+            return None
+        if radius == 0.0 or math.isnan(radius) or math.isinf(radius):
+            return None
+        return radius
+
+    def _request_aircraft_parameter(self, param_name: str, timeout: float = 0.8) -> Optional[float]:
+        """Read one MAVLink parameter from the aircraft with a short timeout."""
+        mav, master = self._get_mav_sender()
+        if not mav or not hasattr(mav, "param_request_read_send"):
+            return None
+
+        try:
+            mav.param_request_read_send(
+                getattr(master, "target_system", 1),
+                getattr(master, "target_component", 1),
+                param_name.encode("ascii"),
+                -1,
+            )
+        except Exception as exc:
+            logger.debug("MAVLink param request failed for %s: %s", param_name, exc)
+            return None
+
+        receiver = master if hasattr(master, "recv_match") else self._get_mavlink_connection()
+        if not receiver or not hasattr(receiver, "recv_match"):
+            return None
+
+        deadline = time.time() + max(0.05, timeout)
+        while time.time() < deadline:
+            try:
+                msg = receiver.recv_match(
+                    type="PARAM_VALUE",
+                    blocking=True,
+                    timeout=max(0.05, min(0.2, deadline - time.time())),
+                )
+            except Exception as exc:
+                logger.debug("MAVLink param receive failed for %s: %s", param_name, exc)
+                return None
+            if not msg:
+                continue
+            msg_param_id = getattr(msg, "param_id", "")
+            if isinstance(msg_param_id, bytes):
+                msg_param_id = msg_param_id.decode("ascii", errors="ignore")
+            msg_param_id = str(msg_param_id).strip("\x00")
+            if msg_param_id != param_name:
+                continue
+            return self._normalize_loiter_radius(getattr(msg, "param_value", None))
+        return None
+
+    def _resolve_guided_loiter_radius(self) -> float:
+        aircraft_radius = self._request_aircraft_parameter("WP_LOITER_RAD")
+        if aircraft_radius is not None:
+            return aircraft_radius
+
+        configured = self._normalize_loiter_radius(self._guided_loiter_radius)
+        return configured if configured is not None else 80.0
+
+    def _send_guided_loiter_target(
+        self,
+        latitude: float,
+        longitude: float,
+        height: float,
+    ) -> dict:
         """固定翼指点飞行：切 GUIDED 后发送到点盘旋目标。"""
         if not self._mode_control:
             return {"success": False, "message": "mode_control not available"}
@@ -240,12 +314,14 @@ class DrcController:
                 }
 
         if hasattr(self._mode_control, "guided_loiter_at_point"):
-            return self._mode_control.guided_loiter_at_point(
+            radius = self._resolve_guided_loiter_radius()
+            result = self._mode_control.guided_loiter_at_point(
                 latitude,
                 longitude,
                 height,
-                radius=self._guided_loiter_radius,
+                radius=radius,
             )
+            return result
         if hasattr(self._mode_control, "guided_goto"):
             return self._mode_control.guided_goto(latitude, longitude, height)
         return {"success": False, "message": "guided flight adapter not available"}
@@ -304,6 +380,9 @@ class DrcController:
         Returns:
             (handled, ok, message, output)
         """
+        if self._point_flight_controller and hasattr(self._point_flight_controller, "point_flight_emergency_hold"):
+            return self._point_flight_controller.point_flight_emergency_hold()
+
         flight_kind, active_flight, target_point = self._active_point_flight_target()
         if not active_flight or not target_point:
             return False, False, "", {}
@@ -677,6 +756,8 @@ class DrcController:
         self._original_mode = None
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
+        if self._point_flight_controller and hasattr(self._point_flight_controller, "clear_active"):
+            self._point_flight_controller.clear_active()
         self._flight_authority_grabbed = False
         self._last_cloud_heartbeat_seq = None
 
@@ -802,6 +883,8 @@ class DrcController:
         self._original_mode = None
         self._active_fly_to_point = None
         self._active_takeoff_to_point = None
+        if self._point_flight_controller and hasattr(self._point_flight_controller, "clear_active"):
+            self._point_flight_controller.clear_active()
         self._flight_authority_grabbed = False
         self._last_cloud_heartbeat_seq = None
         logger.info("DRC mode exited")
@@ -1739,17 +1822,24 @@ class DrcController:
 
         hold_handled, hold_ok, hold_message, hold_output = self._point_flight_emergency_hold()
         if hold_handled:
-            if self._active_fly_to_point:
+            point_flight = self._point_flight_controller
+            if point_flight and getattr(point_flight, "_active_fly_to_point", None):
+                fly_to_id = point_flight._active_fly_to_point.get("fly_to_id", "")
+                point_flight.report_flyto_progress(fly_to_id, "wayline_cancel", result=0 if hold_ok else DOCK_COMMUNICATION_ERROR)
+            elif self._active_fly_to_point:
                 fly_to_id = self._active_fly_to_point.get("fly_to_id", "")
                 self.report_flyto_progress(fly_to_id, "wayline_cancel", result=0 if hold_ok else DOCK_COMMUNICATION_ERROR)
-            if self._active_takeoff_to_point:
+            if point_flight and getattr(point_flight, "_active_takeoff_to_point", None):
+                flight_id = point_flight._active_takeoff_to_point.get("flight_id", "")
+                track_id = point_flight._active_takeoff_to_point.get("track_id", "")
+                point_flight.report_takeoff_to_point_progress(
+                    flight_id, "wayline_cancel", result=0 if hold_ok else DOCK_COMMUNICATION_ERROR, track_id=track_id
+                )
+            elif self._active_takeoff_to_point:
                 flight_id = self._active_takeoff_to_point.get("flight_id", "")
                 track_id = self._active_takeoff_to_point.get("track_id", "")
                 self.report_takeoff_to_point_progress(
-                    flight_id,
-                    "wayline_cancel",
-                    result=0 if hold_ok else DOCK_COMMUNICATION_ERROR,
-                    track_id=track_id,
+                    flight_id, "wayline_cancel", result=0 if hold_ok else DOCK_COMMUNICATION_ERROR, track_id=track_id
                 )
 
             if self._drc_enabled:
@@ -1759,6 +1849,8 @@ class DrcController:
                 self.report_drc_status_notify(drc_state=0, result=0 if hold_ok else DOCK_COMMUNICATION_ERROR)
             self._active_fly_to_point = None
             self._active_takeoff_to_point = None
+            if point_flight and hasattr(point_flight, "clear_active"):
+                point_flight.clear_active()
             self._write_audit_log("emergency_stop_hold_current_position", hold_message)
             return MessageBuilder.build_reply(
                 msg,
@@ -1784,6 +1876,8 @@ class DrcController:
             self._session_id = ""
             self._active_fly_to_point = None
             self._active_takeoff_to_point = None
+            if self._point_flight_controller and hasattr(self._point_flight_controller, "clear_active"):
+                self._point_flight_controller.clear_active()
             self._last_cloud_heartbeat_seq = None
             self.report_drc_status_notify(drc_state=0, result=0)
             self._write_audit_log("emergency_stop", land_message)
@@ -1951,15 +2045,20 @@ class DrcController:
 
     def get_drc_status(self) -> dict:
         """获取DRC状态"""
+        point_flight_status = (
+            self._point_flight_controller.get_status()
+            if self._point_flight_controller and hasattr(self._point_flight_controller, "get_status")
+            else {}
+        )
         return {
             "enabled": self._drc_enabled,
             "session_id": self._session_id,
             "last_speed_cmd": self._last_speed_cmd,
             "last_heading_cmd": self._last_heading_cmd,
             "last_altitude_cmd": self._last_altitude_cmd,
-            "last_flyto_cmd": self._last_flyto_cmd,
-            "active_fly_to_point": self._active_fly_to_point,
-            "active_takeoff_to_point": self._active_takeoff_to_point,
+            "last_flyto_cmd": point_flight_status.get("last_flyto_cmd", self._last_flyto_cmd),
+            "active_fly_to_point": point_flight_status.get("active_fly_to_point", self._active_fly_to_point),
+            "active_takeoff_to_point": point_flight_status.get("active_takeoff_to_point", self._active_takeoff_to_point),
             "heartbeat_timeout": self._heartbeat_timeout,
             "last_cloud_heartbeat_age": (
                 time.time() - self._last_cloud_heartbeat

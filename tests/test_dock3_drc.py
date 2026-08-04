@@ -12,12 +12,15 @@ if PROJECT_ROOT not in sys.path:
 from src.cloud_api.dock3_drc import (
     OFFICIAL_DOCK3_DRC_METHODS,
     STICK_CENTER,
-    normalize_fly_to_point_update,
     normalize_drone_control,
     normalize_stick_control,
-    normalize_takeoff_to_point,
     validate_drc_heartbeat,
     validate_drc_mode_enter,
+)
+from src.cloud_api.dock3_point_flight import (
+    DOCK3_POINT_FLIGHT_SERVICE_METHODS,
+    normalize_fly_to_point_update,
+    normalize_takeoff_to_point,
 )
 
 if "pymavlink" not in sys.modules:
@@ -33,6 +36,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink.mavutil"] = fake_mavutil
 
 from src.drc.controller import DrcController
+from src.mission.point_flight import PointFlightController
 from src.utils.config import Config
 from src.utils.dji_error_codes import (
     DEVICE_COMMAND_TIMEOUT,
@@ -85,26 +89,55 @@ class FakeTelemetry:
         return dict(self.data)
 
 
+class FakeParamMav:
+    def __init__(self):
+        self.param_requests = []
+
+    def param_request_read_send(self, target_system, target_component, param_id, param_index):
+        self.param_requests.append((target_system, target_component, param_id, param_index))
+
+
+class FakeParamMaster:
+    target_system = 1
+    target_component = 1
+
+    def __init__(self, param_name="WP_LOITER_RAD", param_value=120.0):
+        self.mav = FakeParamMav()
+        self._param_name = param_name
+        self._param_value = param_value
+        self.recv_match_calls = []
+
+    def recv_match(self, **kwargs):
+        self.recv_match_calls.append(kwargs)
+        if self._param_value is None:
+            return None
+        msg = types.SimpleNamespace(param_id=self._param_name, param_value=self._param_value)
+        self._param_value = None
+        return msg
+
+
 class Dock3DrcTest(unittest.TestCase):
     def tearDown(self):
         Config._data = {}
 
     def test_official_dock3_drc_scope_contains_core_methods(self):
         for method in [
-            "drc_mode_enter",
-            "drc_mode_exit",
-            "takeoff_to_point",
-            "fly_to_point",
-            "fly_to_point_update",
             "stick_control",
             "drone_control",
             "drone_emergency_stop",
             "heart_beat",
-            "payload_authority_grab",
-            "camera_photo_take",
             "osd_info_push",
         ]:
             self.assertIn(method, OFFICIAL_DOCK3_DRC_METHODS)
+
+        for method in [
+            "takeoff_to_point",
+            "fly_to_point",
+            "fly_to_point_update",
+            "fly_to_point_stop",
+        ]:
+            self.assertIn(method, DOCK3_POINT_FLIGHT_SERVICE_METHODS)
+            self.assertNotIn(method, OFFICIAL_DOCK3_DRC_METHODS)
 
     def test_drc_mode_enter_accepts_official_broker_payload(self):
         ok, errors = validate_drc_mode_enter({
@@ -404,6 +437,56 @@ class Dock3DrcTest(unittest.TestCase):
         self.assertEqual(reply["data"]["output"]["simulated"], False)
         self.assertIn(("set_mode", "GUIDED"), mode.calls)
         self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 50.0, 80.0), mode.calls)
+
+    def test_controller_takeoff_to_point_reads_wp_loiter_rad_when_missing(self):
+        controller = DrcController()
+        mode = FakeModeControl()
+        master = FakeParamMaster(param_value=120.0)
+        mode.dispatcher = types.SimpleNamespace(connection=types.SimpleNamespace(master=master))
+        controller.set_mode_control(mode)
+
+        reply = controller.handle_takeoff_to_point({
+            "method": "takeoff_to_point",
+            "tid": "tid-takeoff",
+            "gateway": "EDGEGW001",
+            "data": {
+                "flight_id": "flight-001",
+                "target_latitude": -35.3632622,
+                "target_longitude": 149.1652375,
+                "target_height": 50,
+                "max_speed": 12,
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(master.mav.param_requests[0][2], b"WP_LOITER_RAD")
+        self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 50.0, 120.0), mode.calls)
+
+    def test_point_flight_services_controller_reads_wp_loiter_rad(self):
+        runtime = DrcController()
+        mode = FakeModeControl()
+        master = FakeParamMaster(param_value=120.0)
+        mode.dispatcher = types.SimpleNamespace(connection=types.SimpleNamespace(master=master))
+        runtime.set_mode_control(mode)
+        point_flight = PointFlightController(runtime)
+        runtime.set_point_flight_controller(point_flight)
+
+        reply = point_flight.handle_takeoff_to_point({
+            "method": "takeoff_to_point",
+            "tid": "tid-takeoff",
+            "gateway": "EDGEGW001",
+            "data": {
+                "flight_id": "flight-001",
+                "target_latitude": -35.3632622,
+                "target_longitude": 149.1652375,
+                "target_height": 50,
+                "max_speed": 12,
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(master.mav.param_requests[0][2], b"WP_LOITER_RAD")
+        self.assertIn(("guided_loiter_at_point", -35.3632622, 149.1652375, 50.0, 120.0), mode.calls)
 
     def test_controller_takeoff_to_point_fails_without_guided_adapter(self):
         controller = DrcController()

@@ -41,6 +41,7 @@ class TopicRouter:
             'flysafe': {},     # FlySafe
             'flight_area': {}, # 飞行区域
             'custom_data': {}, # 自定义数据透传
+            'services': {},    # services topic methods that do not belong to a narrower domain
         }
 
     def register(self, method: str, handler: Callable, category: str = None):

@@ -375,11 +375,15 @@ class MQTTClient:
 
     @staticmethod
     def _is_service_reply_method(method: str) -> bool:
-        """Dock3 中这些 DRC 方法仍走 services/services_reply。"""
+        """Dock3 methods from services must always reply on services_reply."""
         return method in {
             "drc_mode_enter",
             "drc_mode_exit",
+            "flight_authority_grab",
             "takeoff_to_point",
+            "fly_to_point",
+            "fly_to_point_stop",
+            "fly_to_point_update",
         }
 
     def _should_reply_to_downstream(self, source_topic: str, payload: dict) -> bool:

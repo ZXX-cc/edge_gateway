@@ -1,14 +1,4 @@
-"""
-DJI Dock 3 DRC metadata and validation helpers.
-
-The DRC official page keeps the control channel under:
-
-    thing/product/{gateway_sn}/drc/down
-
-This module keeps field validation and compatibility mapping in one place.
-Runtime handlers must not report simulated success for methods that need a
-real aircraft, payload, or DRC adapter.
-"""
+"""DJI Dock 3 DRC metadata and validation helpers for drc/down/up topics."""
 import math
 import time
 from typing import Any, Dict, List, Tuple
@@ -30,49 +20,13 @@ DRONE_UP_SPEED_MAX = 5.0
 DRONE_YAW_SPEED_MIN = -90.0
 DRONE_YAW_SPEED_MAX = 90.0
 
-TAKEOFF_POINT_MIN_HEIGHT = 5.0
-TAKEOFF_POINT_MAX_HEIGHT = 500.0
-TAKEOFF_POINT_MAX_SPEED = 17.0
 EPOCH_SECONDS_THRESHOLD = 1_000_000_000
 EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000
 
 OFFICIAL_DOCK3_DRC_METHODS = frozenset({
     "obstacle_avoidance_notify",
-    "fly_to_point_progress",
-    "takeoff_to_point_progress",
     "drc_status_notify",
     "joystick_invalid_notify",
-    "camera_photo_take_progress",
-    "flight_authority_grab",
-    "payload_authority_grab",
-    "drc_mode_enter",
-    "drc_mode_exit",
-    "takeoff_to_point",
-    "fly_to_point",
-    "fly_to_point_stop",
-    "fly_to_point_update",
-    "camera_frame_zoom",
-    "camera_mode_switch",
-    "camera_photo_take",
-    "camera_photo_stop",
-    "camera_recording_start",
-    "camera_recording_stop",
-    "camera_screen_drag",
-    "camera_aim",
-    "camera_focal_length_set",
-    "gimbal_reset",
-    "camera_look_at",
-    "camera_screen_split",
-    "photo_storage_set",
-    "video_storage_set",
-    "camera_exposure_mode_set",
-    "camera_exposure_set",
-    "camera_focus_mode_set",
-    "camera_focus_value_set",
-    "camera_point_focus_action",
-    "ir_metering_mode_set",
-    "ir_metering_point_set",
-    "ir_metering_area_set",
     "stick_control",
     "drone_control",
     "drone_emergency_stop",
@@ -309,136 +263,4 @@ def validate_drc_heartbeat(data: Any) -> Tuple[bool, Dict[str, Any], List[str]]:
     }
     if seq is not None and not isinstance(seq, bool):
         normalized["seq"] = int(seq)
-    return not errors, normalized, errors
-
-
-def normalize_takeoff_to_point(data: Any, default_flight_id: str = "") -> Tuple[bool, Dict[str, Any], List[str]]:
-    """Validate and normalize Dock3 takeoff_to_point payload."""
-    if not isinstance(data, dict):
-        return False, {}, ["takeoff_to_point data must be object"]
-
-    errors: List[str] = []
-
-    def get_first(*names: str):
-        for name in names:
-            if name in data:
-                return data.get(name)
-        return None
-
-    latitude = get_first("target_latitude", "latitude")
-    longitude = get_first("target_longitude", "longitude")
-    height = get_first("target_height", "height", "altitude")
-    takeoff_height = get_first("security_takeoff_height", "takeoff_height")
-    rth_altitude = data.get("rth_altitude")
-    commander_height = data.get("commander_flight_height")
-    max_speed = data.get("max_speed", 12)
-    flight_id = data.get("flight_id", default_flight_id)
-
-    missing = []
-    if latitude is None:
-        missing.append("target_latitude")
-    if longitude is None:
-        missing.append("target_longitude")
-    if height is None:
-        missing.append("target_height")
-    if missing:
-        errors.append(f"missing takeoff_to_point keys: {', '.join(missing)}")
-
-    if latitude is not None and not _in_range(latitude, -90.0, 90.0):
-        errors.append("target_latitude must be in range -90..90")
-    if longitude is not None and not _in_range(longitude, -180.0, 180.0):
-        errors.append("target_longitude must be in range -180..180")
-    if height is not None and not _in_range(height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
-        errors.append("target_height must be in range 5..500 m")
-    if takeoff_height is not None and not _in_range(takeoff_height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
-        errors.append("security_takeoff_height must be in range 5..500 m")
-    if rth_altitude is not None and not _in_range(rth_altitude, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
-        errors.append("rth_altitude must be in range 5..500 m")
-    if commander_height is not None and not _in_range(commander_height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
-        errors.append("commander_flight_height must be in range 5..500 m")
-    if not _in_range(max_speed, 0.1, TAKEOFF_POINT_MAX_SPEED):
-        errors.append("max_speed must be in range 0.1..17 m/s")
-    if flight_id is not None and not isinstance(flight_id, str):
-        errors.append("flight_id must be string")
-
-    for action_name in ("rc_lost_action", "commander_mode_lost_action"):
-        value = data.get(action_name)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
-            errors.append(f"{action_name} must be non-negative int")
-
-    normalized = {
-        "target_latitude": _to_float(latitude),
-        "target_longitude": _to_float(longitude),
-        "target_height": _to_float(height, TAKEOFF_POINT_MIN_HEIGHT),
-        "security_takeoff_height": _to_float(takeoff_height, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
-        "rth_altitude": _to_float(rth_altitude, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
-        "commander_flight_height": _to_float(commander_height, _to_float(height, TAKEOFF_POINT_MIN_HEIGHT)),
-        "max_speed": _to_float(max_speed, 12.0),
-        "flight_id": flight_id or default_flight_id,
-        "rc_lost_action": _to_int(data.get("rc_lost_action", 0), 0),
-        "commander_mode_lost_action": _to_int(data.get("commander_mode_lost_action", 0), 0),
-    }
-    return not errors, normalized, errors
-
-
-def normalize_fly_to_point_update(data: Any, default_fly_to_id: str = "") -> Tuple[bool, Dict[str, Any], List[str]]:
-    """Validate and normalize Dock3 fly_to_point_update style payload."""
-    if not isinstance(data, dict):
-        return False, {}, ["fly_to_point_update data must be object"]
-
-    errors: List[str] = []
-    max_speed = data.get("max_speed", data.get("speed", 12))
-    fly_to_id = data.get("fly_to_id", data.get("flight_id", default_fly_to_id))
-    points = data.get("points")
-    if points is None:
-        single_point = {
-            "latitude": data.get("latitude"),
-            "longitude": data.get("longitude"),
-            "height": data.get("height", data.get("altitude")),
-        }
-        points = [single_point]
-
-    if not isinstance(points, list) or not points:
-        errors.append("points must be non-empty list")
-        points = []
-
-    if not _in_range(max_speed, 0.1, TAKEOFF_POINT_MAX_SPEED):
-        errors.append("max_speed must be in range 0.1..17 m/s")
-    if fly_to_id is not None and not isinstance(fly_to_id, str):
-        errors.append("fly_to_id must be string")
-
-    normalized_points: List[Dict[str, float]] = []
-    for index, point in enumerate(points):
-        if not isinstance(point, dict):
-            errors.append(f"points[{index}] must be object")
-            continue
-        latitude = point.get("latitude")
-        longitude = point.get("longitude")
-        height = point.get("height", point.get("altitude"))
-        missing = []
-        if latitude is None:
-            missing.append("latitude")
-        if longitude is None:
-            missing.append("longitude")
-        if height is None:
-            missing.append("height")
-        if missing:
-            errors.append(f"points[{index}] missing keys: {', '.join(missing)}")
-        if latitude is not None and not _in_range(latitude, -90.0, 90.0):
-            errors.append(f"points[{index}].latitude must be in range -90..90")
-        if longitude is not None and not _in_range(longitude, -180.0, 180.0):
-            errors.append(f"points[{index}].longitude must be in range -180..180")
-        if height is not None and not _in_range(height, TAKEOFF_POINT_MIN_HEIGHT, TAKEOFF_POINT_MAX_HEIGHT):
-            errors.append(f"points[{index}].height must be in range 5..500 m")
-        normalized_points.append({
-            "latitude": _to_float(latitude),
-            "longitude": _to_float(longitude),
-            "height": _to_float(height, TAKEOFF_POINT_MIN_HEIGHT),
-        })
-
-    normalized = {
-        "fly_to_id": fly_to_id or default_fly_to_id,
-        "max_speed": _to_float(max_speed, 12.0),
-        "points": normalized_points,
-    }
     return not errors, normalized, errors

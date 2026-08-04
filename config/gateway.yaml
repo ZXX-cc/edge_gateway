@@ -169,6 +169,9 @@ device:
     obstacle_avoidance: true
     airsense_enabled: false
 
+  drc:
+    guided_loiter_radius: 80.0 # Guided 一键起飞/指点飞行盘旋半径兜底值；优先读飞控 WP_LOITER_RAD
+
 # --- 航线任务真实闭环配置 ---
 mission:
   completion:
