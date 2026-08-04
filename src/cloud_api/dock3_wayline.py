@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 from xml.etree import ElementTree
 
 
@@ -111,7 +112,16 @@ def _action_from_func(func: str, action_elem: ElementTree.Element) -> Optional[d
         return None
 
     if action_lower in {"takephoto", "take_photo", "photo"}:
-        return {"action_type": "photo", "func": action}
+        photo_action = {"action_type": "photo", "func": action}
+        for output_key, names in {
+            "payload_index": {"payloadIndex", "payloadPositionIndex", "payload_index", "cameraIndex"},
+            "camera_index": {"camera_index", "cameraIndex"},
+            "camera_type": {"cameraType", "camera_type", "payloadType"},
+        }.items():
+            value = _child_text(action_elem, names)
+            if value != "":
+                photo_action[output_key] = value
+        return photo_action
     if action_lower in {"hover", "wait", "delay"}:
         hover_time = _child_text(action_elem, {"hoverTime", "duration", "delayTime", "waitTime"})
         return {"action_type": "hover", "func": action, "param": hover_time or 0}
@@ -152,9 +162,14 @@ def _local_wayline_path(file_info: Dict[str, Any]) -> str:
         value = file_info.get(key)
         if not isinstance(value, str) or not value:
             continue
+        if os.path.exists(os.path.expanduser(value)):
+            return value
         parsed = urlparse(value)
         if parsed.scheme == "file":
-            return unquote(parsed.path)
+            path = url2pathname(unquote(parsed.path))
+            if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+                path = path[1:]
+            return path
         if parsed.scheme in ("http", "https", "oss", "s3"):
             continue
         if parsed.scheme:

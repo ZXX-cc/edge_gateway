@@ -633,6 +633,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(state["video"]["reachable"])
         self.assertEqual(state["data_link"]["listen_port"], 23002)
 
+    def test_spectral_camera_photo_take_creates_return_media_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Config.merge({"media": {"storage_path": tmp}})
+            camera = CameraController()
+            reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+                "payload_index": "52-0-2",
+                "camera_type": "multispectral",
+                "file_name": "spectral-test.jpg",
+            }))
+
+            media = reply["data"]["media"]
+            self.assertEqual(reply["data"]["result"], 0)
+            self.assertEqual(reply["data"]["payload_id"], "spectral_camera")
+            self.assertEqual(reply["data"]["photo_source"], "ycam_sdk")
+            self.assertEqual(media["payload_index"], "52-0-2")
+            self.assertTrue(os.path.exists(media["file_path"]))
+            self.assertEqual(os.path.basename(media["file_path"]), "spectral-test.jpg")
+            self.assertEqual(camera._last_spectral_camera_cache["file_name"], "spectral-test.jpg")
+
     def test_failed_gimbal_commands_do_not_change_cached_pose_or_mode(self):
         gimbal = GimbalController()
 

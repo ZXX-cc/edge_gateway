@@ -221,9 +221,11 @@ class NonConfirmingWaypointManager(RecordingWaypointManager):
 class RecordingCamera:
     def __init__(self):
         self.photos = 0
+        self.messages = []
 
     def handle_camera_photo_take(self, msg):
         self.photos += 1
+        self.messages.append(msg)
         return {"data": {"result": 0}}
 
 
@@ -438,6 +440,39 @@ class Dock3WaylineTest(unittest.TestCase):
             ["photo", "gimbal", "speed"],
         )
 
+    def test_parse_wpml_preserves_spectral_photo_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wpml_path = Path(tmp) / "spectral.wpml"
+            wpml_path.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
+  <Document>
+    <Placemark>
+      <Point><coordinates>149.165237,-35.363262,120</coordinates></Point>
+      <wpml:actionGroup>
+        <wpml:action>
+          <wpml:actionActuatorFunc>takePhoto</wpml:actionActuatorFunc>
+          <wpml:actionActuatorFuncParam>
+            <wpml:payloadIndex>52-0-2</wpml:payloadIndex>
+            <wpml:cameraType>multispectral</wpml:cameraType>
+          </wpml:actionActuatorFuncParam>
+        </wpml:action>
+      </wpml:actionGroup>
+    </Placemark>
+  </Document>
+</kml>
+""",
+                encoding="utf-8",
+            )
+
+            summary, waypoints = parse_wayline_file({"path": str(wpml_path)})
+
+        self.assertTrue(summary["parsed"])
+        action = waypoints[0]["actions"][0]
+        self.assertEqual(action["action_type"], "photo")
+        self.assertEqual(action["payload_index"], "52-0-2")
+        self.assertEqual(action["camera_type"], "multispectral")
+
     def test_parse_qgc_wpl_waypoints_preserves_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             wpl_path = Path(tmp) / "HD.waypoints"
@@ -536,6 +571,28 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(gimbal.turns, [(90.0, -35.0)])
         self.assertEqual(len(flight_control.commands), 1)
         self.assertEqual(flight_control.commands[0][1]["param2"], 6.0)
+
+    def test_mission_manager_passes_spectral_payload_to_waypoint_photo(self):
+        manager = MissionManager()
+        camera = RecordingCamera()
+        manager.set_camera_controller(camera)
+        manager._current_wayline = [{
+            "seq": 0,
+            "actions": [
+                {
+                    "action_type": "photo",
+                    "payload_index": "52-0-2",
+                    "camera_type": "multispectral",
+                },
+            ],
+        }]
+
+        manager._execute_waypoint_actions(0)
+
+        self.assertEqual(camera.photos, 1)
+        data = camera.messages[0]["data"]
+        self.assertEqual(data["payload_index"], "52-0-2")
+        self.assertEqual(data["camera_type"], "multispectral")
 
     def test_breakpoint_saved_loaded_and_cleared(self):
         with tempfile.TemporaryDirectory() as tmp:
