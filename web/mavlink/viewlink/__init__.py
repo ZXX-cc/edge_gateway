@@ -6,11 +6,41 @@ from .mapping import (
     VIEWLINK_METHOD_MAP,
     build_viewlink_call,
 )
+from .protocol import (
+    build_a1_absolute_720,
+    build_a1_speed,
+    build_c1,
+    build_c2,
+    build_frame,
+    build_ir_metering_area_frames,
+    build_ir_metering_point_frames,
+    build_protocol_frame_for_method,
+    build_s1_look_at,
+    build_screen_split_frame,
+    build_temperature_output_interval_frame,
+    build_temperature_output_once_frame,
+    build_temperature_output_stop_frame,
+    frame_hex,
+)
 
 
 __all__ = [
     "RECORD_MODE_MAP",
     "SENSOR_MAP",
     "VIEWLINK_METHOD_MAP",
+    "build_a1_absolute_720",
+    "build_a1_speed",
+    "build_c1",
+    "build_c2",
+    "build_frame",
+    "build_ir_metering_area_frames",
+    "build_ir_metering_point_frames",
+    "build_protocol_frame_for_method",
+    "build_s1_look_at",
+    "build_screen_split_frame",
+    "build_temperature_output_interval_frame",
+    "build_temperature_output_once_frame",
+    "build_temperature_output_stop_frame",
     "build_viewlink_call",
+    "frame_hex",
 ]

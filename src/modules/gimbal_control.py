@@ -13,6 +13,7 @@ import ctypes
 from ctypes import c_char, c_int, c_void_p, c_char_p, CFUNCTYPE, Structure, Union, POINTER
 import os
 import shutil
+import socket
 import time
 import threading
 from typing import Optional, Callable
@@ -563,6 +564,41 @@ class GimbalControl:
         if self._lib:
             return self._lib.VLK_IsConnected() == 1
         return False
+
+    def send_protocol_frame(self, frame: bytes, timeout: float = 1.0) -> dict:
+        """通过 TCP 直接发送 ViewLink V3.4.9 原始协议帧。
+
+        SDK 没有覆盖的控制项（例如测温触发、E2 坐标帧）可以走这个
+        旁路。它不依赖 ViewLink.dll 初始化，只依赖云台 TCP 地址。
+        """
+        result = {"success": False, "message": "", "bytes_sent": 0, "frame_hex": ""}
+        if not isinstance(frame, (bytes, bytearray)) or not frame:
+            result["message"] = "协议帧为空"
+            return result
+
+        payload = bytes(frame)
+        result["frame_hex"] = payload.hex(" ").upper()
+        try:
+            with socket.create_connection((self.gimbal_ip, int(self.gimbal_port)), timeout=timeout) as sock:
+                sock.sendall(payload)
+            result["success"] = True
+            result["bytes_sent"] = len(payload)
+            result["message"] = f"协议帧已发送: {len(payload)} bytes"
+            self.log(result["message"])
+        except Exception as exc:
+            result["message"] = f"协议帧发送失败: {exc}"
+            self.log(result["message"], "ERROR")
+        return result
+
+    def send_protocol_frames(self, frames: list[bytes], timeout: float = 1.0) -> dict:
+        """按顺序发送多帧 ViewLink 原始协议。"""
+        results = [self.send_protocol_frame(frame, timeout=timeout) for frame in frames]
+        success = all(item.get("success", False) for item in results)
+        return {
+            "success": success,
+            "message": "协议帧全部发送" if success else "部分协议帧发送失败",
+            "frames": results,
+        }
 
     # ==================== 云台控制 ====================
 

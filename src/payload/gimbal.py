@@ -19,7 +19,16 @@ from src.modules.gimbal_control import (
 )
 from src.payload.dock3_payload import with_dock3_payload_index
 from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
-from web.mavlink.viewlink import build_viewlink_call
+from web.mavlink.viewlink import (
+    build_ir_metering_area_frames,
+    build_ir_metering_point_frames,
+    build_screen_split_frame,
+    build_temperature_output_interval_frame,
+    build_temperature_output_once_frame,
+    build_temperature_output_stop_frame,
+    build_viewlink_call,
+    frame_hex,
+)
 
 logger = get_logger("gimbal")
 
@@ -295,6 +304,42 @@ class GimbalController:
             logger.error(f"ViewLink call failed: {method}, error={exc}")
             return {"success": False, "message": str(exc)}
 
+    def _send_viewlink_protocol_frames(self, frames: list[bytes], timeout: float = 1.0) -> dict:
+        """通过 ViewLink 原始协议发送 SDK 未覆盖的功能帧。"""
+        frame_list = [bytes(frame) for frame in frames if frame]
+        payload = {
+            "protocol": "viewlink",
+            "version": "3.4.9",
+            "frame_hex": [frame_hex(frame) for frame in frame_list],
+        }
+        if not frame_list:
+            return {**payload, "success": False, "message": "no protocol frames"}
+        if self._gimbal_control and hasattr(self._gimbal_control, "send_protocol_frames"):
+            result = self._gimbal_control.send_protocol_frames(frame_list, timeout=timeout)
+            return {**payload, **result}
+        if self._gimbal_control and hasattr(self._gimbal_control, "send_protocol_frame"):
+            results = [self._gimbal_control.send_protocol_frame(frame, timeout=timeout) for frame in frame_list]
+            success = all(item.get("success", False) for item in results)
+            return {
+                **payload,
+                "success": success,
+                "message": "协议帧全部发送" if success else "部分协议帧发送失败",
+                "frames": results,
+            }
+        return {
+            **payload,
+            "success": True,
+            "message": "ViewLink raw protocol adapter is not configured; frame built only",
+            "simulated": True,
+        }
+
+    @classmethod
+    def _protocol_point(cls, data: dict, x_value: float, y_value: float) -> tuple[int, int, dict]:
+        x_px, y_px, frame_size = cls._frame_point_pixels(data, x_value, y_value)
+        x = int(round((x_px / max(1, frame_size["width"]) - 0.5) * 1920))
+        y = int(round((y_px / max(1, frame_size["height"]) - 0.5) * 1080))
+        return max(-960, min(960, x)), max(-540, min(540, y)), frame_size
+
     # ---- API处理器 ----
 
     def handle_gimbal_rotate(self, msg: dict) -> dict:
@@ -480,10 +525,44 @@ class GimbalController:
         """分屏控制 (camera_screen_split)，属于 services 负载控制。"""
         data = msg.get('data', {})
         enabled = bool(data.get("enable", data.get("enabled", False)))
-        logger.info("Camera screen split: payload_index=%s enabled=%s", data.get("payload_index", ""), enabled)
-        return MessageBuilder.build_reply(msg, result=0, data={
+        mode = data.get("mode") or data.get("display_mode") or ("visible_ir" if enabled else "visible")
+        mode_key = str(mode).lower()
+        logger.info(
+            "Camera screen split: payload_index=%s enabled=%s mode=%s",
+            data.get("payload_index", ""),
+            enabled,
+            mode_key,
+        )
+
+        result = {"success": True, "message": "screen split accepted locally", "simulated": True}
+        image_type = None
+        enable_pip = False
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            image_type, enable_pip = IR_DISPLAY_MODE_MAP.get(
+                mode_key,
+                IR_DISPLAY_MODE_MAP["visible_ir" if enabled else "visible"],
+            )
+            result = self._gimbal_control.set_image_color(image_type, enable_pip, VLKIrColor.WHITEHOT)
+        else:
+            result = self._send_viewlink_protocol_frames([build_screen_split_frame(mode_key)])
+
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "camera_screen_split"),
+                "payload_index": data.get("payload_index", ""),
+                "enable": enabled,
+                "mode": mode_key,
+            }
+            self._notify_payload_state("camera_screen_split")
+
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "payload_index": data.get("payload_index", ""),
             "enable": enabled,
+            "mode": mode_key,
+            "image_type": int(image_type) if image_type is not None else None,
+            "enable_pip": enable_pip,
+            "viewlink_result": result,
         })
 
     def handle_camera_look_at(self, msg: dict) -> dict:
@@ -612,37 +691,94 @@ class GimbalController:
     def handle_ir_metering_mode_set(self, msg: dict) -> dict:
         """IR测温模式设置"""
         data = msg.get('data', {})
-        mode = data.get('mode', 0)
-        logger.info(f"IR metering mode: {mode}")
-        return MessageBuilder.build_reply(msg, result=0)
+        mode = str(data.get('mode', data.get("metering_mode", 0))).lower()
+        interval = data.get("interval_frames", data.get("interval"))
+        logger.info("IR metering mode: %s interval=%s", mode, interval)
+        if mode in {"off", "stop", "0"}:
+            frames = [build_temperature_output_stop_frame()]
+        elif mode in {"periodic", "interval", "continuous", "2"}:
+            frames = [build_temperature_output_interval_frame(int(interval or 2))]
+        else:
+            frames = [build_temperature_output_once_frame()]
+        result = self._send_viewlink_protocol_frames(frames)
+        return MessageBuilder.build_reply(msg, result=0 if result.get("success") else -1, data={
+            "mode": mode,
+            "interval_frames": int(interval or 0) if interval is not None else None,
+            "viewlink_result": result,
+        })
 
     def handle_ir_metering_point_set(self, msg: dict) -> dict:
         """IR 点测温设置 (ir_metering_point_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
-        x = data.get("x", 0.5)
-        y = data.get("y", 0.5)
-        logger.info("IR metering point: payload_index=%s point=(%s,%s)", data.get("payload_index", ""), x, y)
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "x": x,
-            "y": y,
+        raw_x = data.get("x", 0.5)
+        raw_y = data.get("y", 0.5)
+        protocol_x, protocol_y, frame_size = self._protocol_point(data, raw_x, raw_y)
+        logger.info(
+            "IR metering point: payload_index=%s point=(%s,%s) protocol=(%s,%s)",
+            data.get("payload_index", ""),
+            raw_x,
+            raw_y,
+            protocol_x,
+            protocol_y,
+        )
+        result = self._send_viewlink_protocol_frames(build_ir_metering_point_frames(protocol_x, protocol_y))
+        if result.get("success"):
+            self._last_control = {
+                "method": msg.get("method", "ir_metering_point_set"),
+                "x": raw_x,
+                "y": raw_y,
+                "protocol_x": protocol_x,
+                "protocol_y": protocol_y,
+            }
+            self._notify_payload_state("ir_metering_point_set")
+        return MessageBuilder.build_reply(msg, result=0 if result.get("success") else -1, data={
+            "x": raw_x,
+            "y": raw_y,
+            "protocol_point": {"x": protocol_x, "y": protocol_y},
+            "frame_size": frame_size,
+            "viewlink_result": result,
         })
 
     def handle_ir_metering_area_set(self, msg: dict) -> dict:
         """IR 区域测温设置 (ir_metering_area_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
+        x = self._frame_number(data, "x", 0.0)
+        y = self._frame_number(data, "y", 0.0)
+        width = self._frame_number(data, "width", 1.0)
+        height = self._frame_number(data, "height", 1.0)
+        left, top, frame_size = self._protocol_point(data, x, y)
+        right, bottom, _ = self._protocol_point(data, x + width, y + height)
         logger.info(
-            "IR metering area: payload_index=%s area=(%s,%s,%s,%s)",
+            "IR metering area: payload_index=%s area=(%s,%s,%s,%s) protocol=(%s,%s,%s,%s)",
             data.get("payload_index", ""),
-            data.get("x", 0.0),
-            data.get("y", 0.0),
-            data.get("width", 0.0),
-            data.get("height", 0.0),
+            x,
+            y,
+            width,
+            height,
+            left,
+            top,
+            right,
+            bottom,
         )
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "x": data.get("x", 0.0),
-            "y": data.get("y", 0.0),
-            "width": data.get("width", 0.0),
-            "height": data.get("height", 0.0),
+        result = self._send_viewlink_protocol_frames(build_ir_metering_area_frames(left, top, right, bottom))
+        if result.get("success"):
+            self._last_control = {
+                "method": msg.get("method", "ir_metering_area_set"),
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "protocol_area": {"left": left, "top": top, "right": right, "bottom": bottom},
+            }
+            self._notify_payload_state("ir_metering_area_set")
+        return MessageBuilder.build_reply(msg, result=0 if result.get("success") else -1, data={
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "protocol_area": {"left": left, "top": top, "right": right, "bottom": bottom},
+            "frame_size": frame_size,
+            "viewlink_result": result,
         })
 
     def handle_ir_color_palette_set(self, msg: dict) -> dict:

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from .protocol import build_protocol_frame_for_method, frame_hex
+
 
 CONN_TYPE_MAP = {
     "serial": 0,
@@ -115,12 +117,19 @@ def build_viewlink_call(method: str, payload: Optional[Dict[str, Any]] = None) -
     data = payload or {}
     spec = VIEWLINK_METHOD_MAP[method]
     args = {name: _normalize_value(name, data.get(name)) for name in spec["params"]}
-
-    return {
+    call = {
         "method": method,
         "sdk_method": spec["sdk_method"],
         "args": args,
     }
+    protocol_frame = build_protocol_frame_for_method(spec["sdk_method"], args)
+    if protocol_frame is not None:
+        call["protocol"] = {
+            "name": "viewlink",
+            "version": "3.4.9",
+            "frame_hex": frame_hex(protocol_frame),
+        }
+    return call
 
 
 def _normalize_value(name: str, value: Any) -> Any:

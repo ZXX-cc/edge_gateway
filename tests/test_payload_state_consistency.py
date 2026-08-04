@@ -145,6 +145,20 @@ class FakeDirectPayload:
         self.calls.append(("stop_track",))
         return {"success": True}
 
+    def send_protocol_frames(self, frames, timeout=1.0):
+        hex_frames = [bytes(frame).hex(" ").upper() for frame in frames]
+        self.calls.append(("send_protocol_frames", hex_frames, timeout))
+        return {
+            "success": True,
+            "message": "协议帧全部发送",
+            "frames": [{"success": True, "frame_hex": item} for item in hex_frames],
+        }
+
+
+class FakeRawProtocolPayload(FakeDirectPayload):
+    def is_connected(self):
+        return False
+
 
 class FakeFlightControl:
     def __init__(self, armed=False):
@@ -472,6 +486,85 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["ir_color"], 1)
         self.assertEqual(direct_payload.calls, [("set_image_color", 2, True, 1)])
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "ir_display_mode_set")
+
+    def test_screen_split_uses_sdk_when_connected(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_screen_split(message("camera_screen_split", {
+            "payload_index": "52-0-0",
+            "enable": True,
+            "mode": "visible_ir",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "visible_ir")
+        self.assertEqual(reply["data"]["image_type"], 0)
+        self.assertEqual(reply["data"]["enable_pip"], True)
+        self.assertEqual(direct_payload.calls, [("set_image_color", 0, True, 0)])
+
+    def test_screen_split_falls_back_to_raw_viewlink_protocol(self):
+        gimbal = GimbalController()
+        raw_payload = FakeRawProtocolPayload()
+        gimbal.set_gimbal_control(raw_payload)
+
+        reply = gimbal.handle_camera_screen_split(message("camera_screen_split", {
+            "payload_index": "52-0-0",
+            "enable": True,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["viewlink_result"]["version"], "3.4.9")
+        self.assertEqual(raw_payload.calls[0][0], "send_protocol_frames")
+        self.assertEqual(raw_payload.calls[0][1][0], reply["data"]["viewlink_result"]["frame_hex"][0])
+
+    def test_ir_metering_point_and_area_send_raw_protocol_frames(self):
+        gimbal = GimbalController()
+        raw_payload = FakeRawProtocolPayload()
+        gimbal.set_gimbal_control(raw_payload)
+
+        point = gimbal.handle_ir_metering_point_set(message("ir_metering_point_set", {
+            "payload_index": "52-0-0",
+            "x": 0.75,
+            "y": 0.25,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+        area = gimbal.handle_ir_metering_area_set(message("ir_metering_area_set", {
+            "payload_index": "52-0-0",
+            "x": 0.25,
+            "y": 0.25,
+            "width": 0.5,
+            "height": 0.5,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+
+        self.assertEqual(point["data"]["result"], 0)
+        self.assertEqual(point["data"]["protocol_point"], {"x": 480, "y": -270})
+        self.assertEqual(len(point["data"]["viewlink_result"]["frame_hex"]), 2)
+        self.assertEqual(area["data"]["result"], 0)
+        self.assertEqual(area["data"]["protocol_area"], {
+            "left": -480,
+            "top": -270,
+            "right": 480,
+            "bottom": 270,
+        })
+        self.assertEqual(len(area["data"]["viewlink_result"]["frame_hex"]), 3)
+        self.assertEqual([call[0] for call in raw_payload.calls], ["send_protocol_frames", "send_protocol_frames"])
+
+    def test_ir_metering_mode_builds_temperature_protocol_frame(self):
+        gimbal = GimbalController()
+        raw_payload = FakeRawProtocolPayload()
+        gimbal.set_gimbal_control(raw_payload)
+
+        reply = gimbal.handle_ir_metering_mode_set(message("ir_metering_mode_set", {
+            "mode": "periodic",
+            "interval_frames": 4,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["interval_frames"], 4)
+        self.assertIn("2C 1E 00 04", reply["data"]["viewlink_result"]["frame_hex"][0])
 
     def test_failed_camera_record_start_does_not_set_recording(self):
         camera = CameraController()
