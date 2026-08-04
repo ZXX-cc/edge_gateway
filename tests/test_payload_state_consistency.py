@@ -312,22 +312,19 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [
-            ("move", -320, 320),
-            ("stop",),
+            ("start_track", 703, 396, 1920, 1080),
             ("zoom_to", 4.0),
         ])
         self.assertEqual(reply["data"]["zoom_ratio"], 4.0)
-        self.assertEqual(reply["data"]["center_result"]["method"], "move_to_center")
-        self.assertEqual(reply["data"]["center_result"]["yaw_speed"], -320)
-        self.assertEqual(reply["data"]["center_result"]["pitch_speed"], 320)
+        self.assertEqual(reply["data"]["center_result"]["method"], "target_track")
+        self.assertEqual(reply["data"]["center_result"]["target"], {"x": 703, "y": 396})
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
         self.assertEqual(
             [step["step"] for step in reply["data"]["software_pipeline"]],
             [
                 "normalize_selection",
                 "compute_center_offset",
-                "gimbal_center_move",
-                "gimbal_center_stop",
+                "gimbal_center_track",
                 "camera_zoom_to",
             ],
         )
@@ -378,8 +375,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["width"], 384)
         self.assertEqual(reply["data"]["height"], 216)
         self.assertEqual(direct_payload.calls, [
-            ("move", -120, 240),
-            ("stop",),
+            ("start_track", 864, 432, 1920, 1080),
             ("zoom_to", 4.0),
         ])
 

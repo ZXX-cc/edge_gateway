@@ -1221,6 +1221,173 @@ class CameraController:
         pitch_speed = max(-max_speed, min(max_speed, int(round(-offset_y * scale))))
         return {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed}
 
+    @staticmethod
+    def _frame_zoom_bool(data: dict, key: str, default: bool) -> bool:
+        value = data.get(key)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _frame_zoom_config_text(key: str, default: str) -> str:
+        return str(Config.get(key, default) or default).strip().lower()
+
+    def _center_frame_zoom_target(
+        self,
+        data: dict,
+        normalized_box: dict,
+        pixel_box: dict,
+        frame_size: dict,
+        center_offset_x: float,
+        center_offset_y: float,
+        center_speed: dict,
+    ) -> tuple[dict, list, Optional[dict]]:
+        """优先使用目标跟踪锁定框选中心，避免盲目转动云台导致画面丢失。"""
+        pipeline = []
+        stop_result = None
+        already_centered = abs(center_offset_x) < 0.01 and abs(center_offset_y) < 0.01
+        center_result = {
+            "success": True,
+            "message": "frame center already aligned",
+            "skipped": True,
+            "method": "already_centered",
+        }
+        if already_centered:
+            pipeline.append({
+                "step": "gimbal_center",
+                "status": "skipped",
+                "method": "already_centered",
+                "reason": "selection center already aligned",
+            })
+            return center_result, pipeline, stop_result
+
+        if not self._viewlink_connected():
+            center_result = {
+                "success": False,
+                "message": "ViewLink control is not connected",
+                "skipped": True,
+                "method": "unavailable",
+            }
+            pipeline.append({
+                "step": "gimbal_center",
+                "status": "skipped",
+                "method": "unavailable",
+                "reason": "ViewLink control is not connected",
+            })
+            return center_result, pipeline, stop_result
+
+        mode = str(data.get("center_mode") or data.get("centering_mode") or "").strip().lower()
+        if not mode:
+            mode = self._frame_zoom_config_text("payload.frame_zoom_centering_mode", "track")
+        fallback_mode = self._frame_zoom_config_text(
+            "payload.frame_zoom_centering_fallback_mode",
+            "zoom_only",
+        )
+        target_x = pixel_box["x"] + pixel_box["width"] // 2
+        target_y = pixel_box["y"] + pixel_box["height"] // 2
+
+        if mode in {"track", "target_track", "tracking", "closed_loop"} and hasattr(self._gimbal_control, "start_track"):
+            track_result = self._gimbal_control.start_track(
+                target_x,
+                target_y,
+                frame_size["width"],
+                frame_size["height"],
+            )
+            track_success = bool(track_result.get("success", False))
+            center_result = {
+                "success": track_success,
+                "method": "target_track",
+                "target": {"x": target_x, "y": target_y},
+                "viewlink_result": track_result,
+            }
+            pipeline.append({
+                "step": "gimbal_center_track",
+                "status": "ok" if track_success else "failed",
+                "target": {"x": target_x, "y": target_y},
+                "frame_size": frame_size,
+                "viewlink_result": track_result,
+            })
+            if track_success:
+                settle_seconds = self._frame_zoom_number(
+                    data,
+                    "track_settle_seconds",
+                    float(Config.get("payload.frame_zoom_track_settle_seconds", 0.25) or 0.25),
+                )
+                settle_seconds = max(0.0, min(2.0, settle_seconds))
+                if settle_seconds > 0:
+                    time.sleep(settle_seconds)
+                center_result["settle_seconds"] = settle_seconds
+                pipeline[-1]["settle_seconds"] = settle_seconds
+                return center_result, pipeline, stop_result
+
+        if mode in {"track", "target_track", "tracking", "closed_loop"} and fallback_mode != "single_step":
+            center_result = {
+                "success": False,
+                "message": "target tracking failed; skip blind gimbal move",
+                "method": "target_track",
+                "fallback": "zoom_only",
+            }
+            pipeline.append({
+                "step": "gimbal_center_fallback",
+                "status": "skipped",
+                "method": "zoom_only",
+                "reason": "target tracking unavailable or failed",
+            })
+            return center_result, pipeline, stop_result
+
+        if mode not in {"single_step", "move"} and fallback_mode != "single_step":
+            center_result = {
+                "success": False,
+                "message": f"unsupported centering mode: {mode}",
+                "method": mode,
+                "fallback": "zoom_only",
+            }
+            pipeline.append({
+                "step": "gimbal_center_fallback",
+                "status": "skipped",
+                "method": "zoom_only",
+                "reason": center_result["message"],
+            })
+            return center_result, pipeline, stop_result
+
+        move_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
+        center_result = {
+            "success": bool(move_result.get("success", False)),
+            "method": "single_step_move",
+            "yaw_speed": center_speed["yaw_speed"],
+            "pitch_speed": center_speed["pitch_speed"],
+            "viewlink_result": move_result,
+        }
+        logger.info("ViewLink frame zoom/center move: %s", move_result)
+        pipeline.append({
+            "step": "gimbal_center_move",
+            "status": "ok" if center_result["success"] else "failed",
+            "yaw_speed": center_speed["yaw_speed"],
+            "pitch_speed": center_speed["pitch_speed"],
+            "viewlink_result": move_result,
+        })
+        if center_result["success"] and hasattr(self._gimbal_control, "stop"):
+            settle_seconds = self._frame_zoom_number(
+                data,
+                "center_duration",
+                float(Config.get("payload.frame_zoom_centering_duration", 0.08) or 0.08),
+            )
+            settle_seconds = max(0.03, min(0.3, settle_seconds))
+            time.sleep(settle_seconds)
+            stop_result = self._gimbal_control.stop()
+            center_result["stop_result"] = stop_result
+            center_result["success"] = bool(stop_result.get("success", False))
+            logger.info("ViewLink frame zoom/center stop: %s", stop_result)
+            pipeline.append({
+                "step": "gimbal_center_stop",
+                "status": "ok" if center_result["success"] else "failed",
+                "settle_seconds": settle_seconds,
+                "viewlink_result": stop_result,
+            })
+        return center_result, pipeline, stop_result
+
     def handle_camera_frame_zoom(self, msg: dict) -> dict:
         """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
         data = msg.get('data', {})
@@ -1242,11 +1409,17 @@ class CameraController:
         else:
             zoom_ratio = float(requested_zoom_ratio or self._zoom_level)
         center_speed = self._frame_zoom_centering_speed(center_offset_x, center_offset_y)
+        centering_enabled = self._frame_zoom_bool(
+            data,
+            "centering_enabled",
+            bool(Config.get("payload.frame_zoom_centering_enabled", True)),
+        )
         logger.info(
-            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s) normalized=%s center_offset=(%.4f,%.4f) zoom_ratio=%s",
+            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s centering_enabled=%s box=(%s,%s,%s,%s) normalized=%s center_offset=(%.4f,%.4f) zoom_ratio=%s",
             data.get("payload_index", ""),
             data.get("camera_type", ""),
             data.get("locked", False),
+            centering_enabled,
             x,
             y,
             width,
@@ -1277,55 +1450,57 @@ class CameraController:
                 "zoom_ratio_source": "request" if requested_zoom_ratio is not None else "selection_box",
             },
         ]
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            if center_speed["yaw_speed"] or center_speed["pitch_speed"]:
-                move_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
-                center_result = {
-                    "success": bool(move_result.get("success", False)),
-                    "method": "move_to_center",
-                    "yaw_speed": center_speed["yaw_speed"],
-                    "pitch_speed": center_speed["pitch_speed"],
-                    "viewlink_result": move_result,
-                }
-                logger.info("ViewLink frame zoom/center move: %s", move_result)
-                pipeline.append({
-                    "step": "gimbal_center_move",
-                    "status": "ok" if center_result["success"] else "failed",
-                    "yaw_speed": center_speed["yaw_speed"],
-                    "pitch_speed": center_speed["pitch_speed"],
-                    "viewlink_result": move_result,
-                })
-                if center_result["success"] and hasattr(self._gimbal_control, "stop"):
-                    settle_seconds = self._frame_zoom_number(
-                        data,
-                        "center_duration",
-                        float(Config.get("payload.frame_zoom_centering_duration", 0.15) or 0.15),
-                    )
-                    settle_seconds = max(0.05, min(1.0, settle_seconds))
-                    time.sleep(settle_seconds)
-                    stop_result = self._gimbal_control.stop()
-                    center_result["stop_result"] = stop_result
-                    center_result["success"] = bool(stop_result.get("success", False))
-                    logger.info("ViewLink frame zoom/center stop: %s", stop_result)
-                    pipeline.append({
-                        "step": "gimbal_center_stop",
-                        "status": "ok" if center_result["success"] else "failed",
-                        "settle_seconds": settle_seconds,
-                        "viewlink_result": stop_result,
-                    })
+        if self._viewlink_connected():
+            if centering_enabled:
+                center_result, center_steps, stop_result = self._center_frame_zoom_target(
+                    data,
+                    normalized_box,
+                    pixel_box,
+                    frame_size,
+                    center_offset_x,
+                    center_offset_y,
+                    center_speed,
+                )
+                pipeline.extend(center_steps)
             else:
+                center_result = {
+                    "success": True,
+                    "message": "frame zoom centering disabled",
+                    "skipped": True,
+                    "method": "disabled",
+                }
                 pipeline.append({
-                    "step": "gimbal_center_move",
+                    "step": "gimbal_center",
                     "status": "skipped",
-                    "reason": "selection center already aligned",
+                    "method": "disabled",
+                    "reason": "frame zoom centering disabled",
                 })
-            if center_result.get("success", False):
+
+            allow_zoom_without_center = self._frame_zoom_bool(
+                data,
+                "allow_zoom_without_center",
+                bool(Config.get("payload.frame_zoom_allow_zoom_without_center", True)),
+            )
+            if center_result.get("success", False) or allow_zoom_without_center:
                 result = self._gimbal_control.zoom_to(zoom_ratio)
                 pipeline.append({
                     "step": "camera_zoom_to",
                     "status": "ok" if bool(result.get("success", False)) else "failed",
                     "zoom_ratio": zoom_ratio,
+                    "center_confirmed": bool(center_result.get("success", False)),
                     "viewlink_result": result,
+                })
+            else:
+                result = {
+                    "success": False,
+                    "message": "target was not centered; zoom skipped",
+                    "center_required": True,
+                }
+                pipeline.append({
+                    "step": "camera_zoom_to",
+                    "status": "skipped",
+                    "zoom_ratio": zoom_ratio,
+                    "reason": result["message"],
                 })
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
         else:

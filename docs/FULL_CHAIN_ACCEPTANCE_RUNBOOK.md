@@ -221,6 +221,33 @@ python -m unittest -v tests.test_mission_platform_snapshot \
 通过标准：日志中 `Ran 2 tests` 且 `OK`；第一条用例证明断链快照只保留最新一条，
 第二条用例证明发布失败会入库、重连补推成功后清库，并追加一次当前实时航线状态。
 
+2026-08-04 云台框选变焦修正：`camera_frame_zoom` 不再默认使用一次性
+`move -> sleep -> stop -> zoom_to` 的盲目开环居中方式。当前默认策略为
+`payload.frame_zoom_centering_mode=track`：优先调用 ViewLink `start_track`
+锁定框选中心点，等待短暂稳定后再执行 `zoom_to`。如果跟踪不可用或失败，默认
+`payload.frame_zoom_centering_fallback_mode=zoom_only`，即不再继续盲目转动云台，
+只保留变焦能力并在回包 `center_result/software_pipeline` 中标记居中未完成，避免
+转码、裁剪、播放器坐标与原始 RTSP 坐标不一致时把画面转丢。
+
+Ubuntu 逻辑验收命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_viewlink_frame_zoom
+mkdir -p "$EVIDENCE_DIR"
+
+python -m py_compile src/payload/camera.py src/modules/gimbal_control.py src/payload/gimbal.py \
+  > "$EVIDENCE_DIR/py_compile.log" 2>&1
+
+python -m unittest -v tests.test_payload_state_consistency.PayloadStateConsistencyTest \
+  > "$EVIDENCE_DIR/payload_state_consistency.log" 2>&1
+```
+
+真实视频验收建议：用同一 RTSP 画面框选目标中心，观察 `camera_frame_zoom` 回包中
+`center_result.method=target_track`，`software_pipeline` 包含
+`gimbal_center_track -> camera_zoom_to`；画面不应在框选后丢失。若平台传入的是转码后
+播放器坐标，需要同时记录播放器分辨率、原始 RTSP 分辨率和请求中的 `frame_size`。
+
 2026-07-16 `20260716_130947_wayline_breakpoint_relaunch_retry` 已完成真实 SITL
 断点重执行专项：`/home/fenghuolun/zwz/HD.kml` 初次执行到航点 1 后下发
 `flighttask_return`，回包保存 `break_point.index=1` 并进入 `paused`；再次执行时由网关
