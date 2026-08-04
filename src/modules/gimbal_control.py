@@ -216,9 +216,9 @@ class GimbalControl:
             result["success"] = True
             return result
 
+        original_dir = os.getcwd()
         try:
             # 切换到 SDK 目录
-            original_dir = os.getcwd()
             os.chdir(self.sdk_dir)
             self.log(f"切换到 SDK 目录: {self.sdk_dir}")
 
@@ -259,6 +259,11 @@ class GimbalControl:
             self._sdk_available = False
             self.log(result["message"], "ERROR")
             self.log("SDK 不可用，将使用 MAVLink 作为降级方案", "WARN")
+        finally:
+            try:
+                os.chdir(original_dir)
+            except Exception as exc:
+                self.log(f"恢复工作目录失败: {exc}", "WARN")
 
         return result
 
@@ -561,9 +566,24 @@ class GimbalControl:
 
     def is_connected(self) -> bool:
         """检查是否已连接"""
-        if self._lib:
-            return self._lib.VLK_IsConnected() == 1
+        if not self._lib:
+            return False
+        if self._connected:
+            return True
+        try:
+            connected = self._lib.VLK_IsConnected() != 0
+            if connected:
+                self._connected = True
+            return connected
+        except Exception as exc:
+            self.log(f"查询连接状态异常: {exc}", "WARN")
         return False
+
+    def _require_connected(self) -> dict:
+        """统一刷新 SDK 连接态，避免回调和主动查询状态短暂不同步。"""
+        if self.is_connected():
+            return {"success": True, "message": ""}
+        return {"success": False, "message": "未连接到设备"}
 
     def send_protocol_frame(self, frame: bytes, timeout: float = 1.0) -> dict:
         """通过 TCP 直接发送 ViewLink V3.4.9 原始协议帧。
@@ -615,13 +635,14 @@ class GimbalControl:
         """
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         # 限制速度范围
-        yaw_speed = max(-16383, min(16383, yaw_speed))
-        pitch_speed = max(-16383, min(16383, pitch_speed))
+        yaw_speed = max(-16383, min(16383, int(yaw_speed or 0)))
+        pitch_speed = max(-16383, min(16383, int(pitch_speed or 0)))
 
         self._lib.VLK_Move(yaw_speed, pitch_speed)
         result["success"] = True
@@ -634,8 +655,9 @@ class GimbalControl:
         """停止云台移动"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         self._lib.VLK_Stop()
@@ -649,8 +671,9 @@ class GimbalControl:
         """云台归位（回到初始位置）"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         self._lib.VLK_Home()
@@ -673,10 +696,13 @@ class GimbalControl:
         """
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
+        yaw = float(yaw or 0.0)
+        pitch = float(pitch or 0.0)
         self._lib.VLK_TurnTo(ctypes.c_double(yaw), ctypes.c_double(pitch))
         result["success"] = True
         result["message"] = f"云台转向: yaw={yaw}°, pitch={pitch}°"
@@ -698,11 +724,12 @@ class GimbalControl:
         """
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
-        speed = max(1, min(8, speed))
+        speed = max(1, min(8, int(speed or 5)))
         self._lib.VLK_ZoomIn(speed)
         result["success"] = True
         result["message"] = f"放大中，速度: {speed}"
@@ -722,11 +749,12 @@ class GimbalControl:
         """
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
-        speed = max(1, min(8, speed))
+        speed = max(1, min(8, int(speed or 5)))
         self._lib.VLK_ZoomOut(speed)
         result["success"] = True
         result["message"] = f"缩小中，速度: {speed}"
@@ -738,8 +766,9 @@ class GimbalControl:
         """停止变焦"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         self._lib.VLK_StopZoom()
@@ -753,8 +782,9 @@ class GimbalControl:
         """变焦到指定倍率"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         magnification = max(1.0, float(magnification))

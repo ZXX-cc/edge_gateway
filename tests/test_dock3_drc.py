@@ -41,6 +41,7 @@ from src.utils.config import Config
 from src.utils.dji_error_codes import (
     DEVICE_COMMAND_TIMEOUT,
     DOCK_COMMUNICATION_ERROR,
+    DOCK_SYSTEM_ERROR,
     INVALID_COMMAND_FORMAT,
 )
 
@@ -79,6 +80,28 @@ class FakeCameraController:
     def handle_camera_recording_stop(self, msg):
         self.calls.append(("record_stop", msg["data"]["camera_index"]))
         return {"data": {"result": 0}}
+
+
+class FakeGimbalControl:
+    def __init__(self, *, success=True):
+        self.success = success
+        self.calls = []
+
+    def move(self, yaw_speed, pitch_speed):
+        self.calls.append(("move", yaw_speed, pitch_speed))
+        return {"success": self.success, "message": "move"}
+
+    def stop(self):
+        self.calls.append(("stop",))
+        return {"success": self.success, "message": "stop"}
+
+    def turn_to(self, yaw, pitch):
+        self.calls.append(("turn_to", yaw, pitch))
+        return {"success": self.success, "message": "turn_to"}
+
+    def zoom_to(self, magnification):
+        self.calls.append(("zoom_to", magnification))
+        return {"success": self.success, "message": "zoom_to"}
 
 
 class FakeTelemetry:
@@ -741,6 +764,66 @@ class Dock3DrcTest(unittest.TestCase):
             self.assertEqual(reply["data"]["result"], 0)
 
         self.assertEqual(camera.calls, [("record_start", 0), ("record_stop", 0)])
+
+    def test_payload_control_gimbal_rotate_speed_uses_viewlink_move(self):
+        controller = DrcController()
+        gimbal = FakeGimbalControl()
+        controller.set_gimbal_control(gimbal)
+        controller._drc_enabled = True
+
+        reply = controller.handle_payload_control({
+            "method": "payload_control",
+            "tid": "tid-payload-gimbal-speed",
+            "gateway": "EDGEGW001",
+            "data": {
+                "payload_index": "52-0-0",
+                "action": "gimbal_rotate",
+                "params": {"pitchSpeed": 1.5, "yawSpeed": -2.0},
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(gimbal.calls, [("move", -200, 150)])
+
+    def test_payload_control_zoom_uses_zoom_to(self):
+        controller = DrcController()
+        gimbal = FakeGimbalControl()
+        controller.set_gimbal_control(gimbal)
+        controller._drc_enabled = True
+
+        reply = controller.handle_payload_control({
+            "method": "payload_control",
+            "tid": "tid-payload-zoom",
+            "gateway": "EDGEGW001",
+            "data": {
+                "payload_index": "52-0-0",
+                "action": "zoom",
+                "params": {"level": 4},
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(gimbal.calls, [("zoom_to", 4)])
+
+    def test_payload_control_returns_error_when_gimbal_call_fails(self):
+        controller = DrcController()
+        gimbal = FakeGimbalControl(success=False)
+        controller.set_gimbal_control(gimbal)
+        controller._drc_enabled = True
+
+        reply = controller.handle_payload_control({
+            "method": "payload_control",
+            "tid": "tid-payload-gimbal-fail",
+            "gateway": "EDGEGW001",
+            "data": {
+                "payload_index": "52-0-0",
+                "action": "gimbal_rotate",
+                "params": {"pitch_speed": 1.0, "yaw_speed": 0.0},
+            },
+        })
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
 
     def test_payload_todo_methods_fail_without_real_adapter(self):
         controller = DrcController()

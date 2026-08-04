@@ -123,6 +123,15 @@ request_trace:
 payload:
   control_path: "direct_gateway"
   flight_controller_fallback_enabled: false
+  frame_zoom_centering_enabled: true
+  frame_zoom_centering_mode: "track"
+  frame_zoom_centering_fallback_mode: "zoom_only"
+  frame_zoom_allow_zoom_without_center: true
+  frame_zoom_track_settle_seconds: 0.25
+  frame_zoom_centering_duration: 0.08
+  frame_zoom_centering_speed_scale: 1200
+  frame_zoom_centering_max_speed: 400
+  frame_zoom_max_ratio: 30.0
   devices:
     gimbal:
       name: "吊舱"

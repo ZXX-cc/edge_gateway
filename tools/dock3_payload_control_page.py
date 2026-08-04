@@ -660,26 +660,17 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             }
             screen_rc, screen_reply = request_services("camera_screen_drag", payload)
 
-            gimbal_reply = None
-            gimbal_rc = 0
             if payload["pitch_speed"] or payload["yaw_speed"]:
                 state["gimbal_pitch"] = max(
                     -90.0,
                     min(30.0, state["gimbal_pitch"] + payload["pitch_speed"] * args.gimbal_step_seconds),
                 )
                 state["gimbal_yaw"] = ((state["gimbal_yaw"] + payload["yaw_speed"] * args.gimbal_step_seconds + 180.0) % 360.0) - 180.0
-                gimbal_payload = {
-                    "payload_index": args.payload_index,
-                    "pitch": state["gimbal_pitch"],
-                    "yaw": state["gimbal_yaw"],
-                }
-                gimbal_rc, gimbal_reply = request_services("gimbal_rotate", gimbal_payload)
             return {
-                "ok": screen_rc == 0 and gimbal_rc == 0,
+                "ok": screen_rc == 0,
                 "request": payload,
                 "gimbal_pose": {"pitch": state["gimbal_pitch"], "yaw": state["gimbal_yaw"]},
                 "screen_drag_reply": screen_reply,
-                "gimbal_rotate_reply": gimbal_reply,
             }
 
         if path.startswith("/api/zoom/"):

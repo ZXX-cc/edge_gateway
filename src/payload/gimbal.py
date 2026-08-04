@@ -112,6 +112,65 @@ class GimbalController:
         self._event_callback = callback
 
     @staticmethod
+    def _payload_data(data: dict) -> dict:
+        """兼容 data.params 包裹和驼峰字段，便于不同前端直接复用云台接口。"""
+        if not isinstance(data, dict):
+            return {}
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        merged = dict(params)
+        merged.update({k: v for k, v in data.items() if k != "params"})
+        return merged
+
+    @staticmethod
+    def _first_present(data: dict, *names: str):
+        for name in names:
+            if name in data and data.get(name) is not None:
+                return data.get(name)
+        return None
+
+    @staticmethod
+    def _float_or_none(value):
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _float_or_default(value, default: float = 0.0) -> float:
+        parsed = GimbalController._float_or_none(value)
+        return default if parsed is None else parsed
+
+    @staticmethod
+    def _bool_value(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    @staticmethod
+    def _viewlink_speed(value: float) -> int:
+        # ViewLink SDK 使用 0.01 degree/s 为单位，Dock3/页面侧使用 degree/s。
+        return max(-16383, min(16383, int(float(value or 0.0) * 100)))
+
+    @staticmethod
+    def _move_result_success(result: dict) -> bool:
+        return bool(result.get("success", False)) if isinstance(result, dict) else False
+
+    def _viewlink_connected(self) -> bool:
+        if not self._gimbal_control:
+            return False
+        try:
+            return bool(self._gimbal_control.is_connected())
+        except Exception as exc:
+            logger.warning("Query ViewLink connection failed: %s", exc)
+            return False
+
+    @staticmethod
     def _frame_number(data: dict, key: str, default: float) -> float:
         try:
             value = data.get(key, default)
@@ -349,17 +408,22 @@ class GimbalController:
         Request: { pitch, roll, yaw, pitch_speed, roll_speed, yaw_speed }
         支持绝对角度控制和角速度控制
         """
-        data = msg.get('data', {})
+        data = self._payload_data(msg.get('data', {}))
 
         # 绝对角度
-        pitch = data.get('pitch')
-        roll = data.get('roll')
-        yaw = data.get('yaw')
+        pitch = self._float_or_none(self._first_present(data, 'pitch', 'gimbal_pitch', 'gimbalPitch'))
+        roll = self._float_or_none(self._first_present(data, 'roll', 'gimbal_roll', 'gimbalRoll'))
+        yaw = self._float_or_none(self._first_present(data, 'yaw', 'gimbal_yaw', 'gimbalYaw'))
 
         # 角速度
-        pitch_speed = data.get('pitch_speed')
-        roll_speed = data.get('roll_speed')
-        yaw_speed = data.get('yaw_speed')
+        pitch_speed = self._float_or_none(self._first_present(
+            data, 'pitch_speed', 'pitchSpeed', 'vertical_speed', 'verticalSpeed'
+        ))
+        roll_speed = self._float_or_none(self._first_present(data, 'roll_speed', 'rollSpeed'))
+        yaw_speed = self._float_or_none(self._first_present(
+            data, 'yaw_speed', 'yawSpeed', 'horizontal_speed', 'horizontalSpeed'
+        ))
+        has_speed = pitch_speed is not None or yaw_speed is not None or roll_speed is not None
 
         target_pitch = self._pitch if pitch is None else max(-90, min(30, pitch))
         target_roll = self._roll if roll is None else roll
@@ -370,35 +434,47 @@ class GimbalController:
             logger.info(f"Gimbal speed: p={pitch_speed}, r={roll_speed}, y={yaw_speed}")
 
         success = False
+        result = {"success": False, "message": "ViewLink control is not connected"}
 
         # 优先使用 ViewLink SDK 云台控制
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            if pitch is not None or yaw is not None:
+        if self._viewlink_connected():
+            if has_speed:
+                yaw_spd = self._viewlink_speed(yaw_speed or 0.0)
+                pitch_spd = self._viewlink_speed(pitch_speed or 0.0)
+                logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
+                    "yaw_speed": yaw_spd,
+                    "pitch_speed": pitch_spd,
+                }))
+                if yaw_spd == 0 and pitch_spd == 0:
+                    result = self._gimbal_control.stop()
+                else:
+                    result = self._gimbal_control.move(yaw_spd, pitch_spd)
+                success = self._move_result_success(result)
+                logger.info(f"ViewLink move: {result}")
+            elif pitch is not None or yaw is not None:
                 logger.info("ViewLink mapped: %s", build_viewlink_call("turn_to", {
                     "yaw": target_yaw,
                     "pitch": target_pitch,
                 }))
                 result = self._gimbal_control.turn_to(target_yaw, target_pitch)
-                success = result.get('success', False)
+                success = self._move_result_success(result)
                 logger.info(f"ViewLink turn_to: {result}")
-            elif pitch_speed is not None or yaw_speed is not None:
-                yaw_spd = int((yaw_speed or 0) * 100)
-                pitch_spd = int((pitch_speed or 0) * 100)
-                logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
-                    "yaw_speed": yaw_spd,
-                    "pitch_speed": pitch_spd,
-                }))
-                result = self._gimbal_control.move(yaw_spd, pitch_spd)
-                success = result.get('success', False)
-                logger.info(f"ViewLink move: {result}")
 
-        # 如果 ViewLink 不可用，回退到 MAVLink
-        if not success and (pitch is not None or yaw is not None or roll is not None):
+        fallback_allowed = (
+            not self._gimbal_control
+            or bool(Config.get_payload_config().get('flight_controller_fallback_enabled', False))
+        )
+        # 角度类指令仅在未配置 ViewLink 或显式允许飞控降级时回落 MAVLink；速度类必须真实命中 ViewLink。
+        if fallback_allowed and not success and not has_speed and (pitch is not None or yaw is not None or roll is not None):
             mapped_data = dict(data)
             mapped_data["pitch"] = target_pitch
             mapped_data["roll"] = target_roll
             mapped_data["yaw"] = target_yaw
             success, _ = self._send_mapped_gimbal_command('gimbalRotate', mapped_data)
+            if success:
+                result = {"success": True, "message": "MAVLink gimbalRotate command sent"}
+        elif not success and self._gimbal_control and not has_speed:
+            result = {"success": False, "message": "ViewLink control is not connected; MAVLink fallback is disabled"}
 
         if success:
             self._pitch = target_pitch
@@ -406,14 +482,19 @@ class GimbalController:
             self._yaw = target_yaw
             self._last_control = {
                 "method": msg.get("method", "gimbal_rotate"),
-                "type": "angle" if (pitch is not None or yaw is not None or roll is not None) else "speed",
+                "type": "speed" if has_speed else "angle",
                 "pitch_speed": pitch_speed,
                 "roll_speed": roll_speed,
                 "yaw_speed": yaw_speed,
             }
             self._notify_payload_state("gimbal_rotate")
 
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "gimbal_rotate failed")),
+            data={"viewlink_result": result},
+        )
 
     def handle_camera_screen_drag(self, msg: dict) -> dict:
         """
@@ -422,11 +503,15 @@ class GimbalController:
         官方上云接口属于 services 负载控制。对 ViewLink 云台来说，
         画面拖动等价于按 pitch/yaw 角速度移动云台。
         """
-        data = msg.get('data', {})
+        data = self._payload_data(msg.get('data', {}))
         payload_index = data.get('payload_index', '')
-        locked = bool(data.get('locked', False))
-        pitch_speed = float(data.get('pitch_speed', 0.0) or 0.0)
-        yaw_speed = float(data.get('yaw_speed', 0.0) or 0.0)
+        locked = self._bool_value(data.get('locked'), False)
+        pitch_speed = self._float_or_default(self._first_present(
+            data, 'pitch_speed', 'pitchSpeed', 'vertical_speed', 'verticalSpeed'
+        ))
+        yaw_speed = self._float_or_default(self._first_present(
+            data, 'yaw_speed', 'yawSpeed', 'horizontal_speed', 'horizontalSpeed'
+        ))
 
         logger.info(
             "Camera screen drag: payload_index=%s locked=%s pitch_speed=%s yaw_speed=%s",
@@ -438,16 +523,18 @@ class GimbalController:
 
         success = False
         result = {"success": False, "message": "ViewLink control is not connected"}
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            # ViewLink SDK 使用 0.01 degree/s 为单位，Dock3 文档字段是 degree/s。
-            yaw_spd = int(yaw_speed * 100)
-            pitch_spd = int(pitch_speed * 100)
+        if self._viewlink_connected():
+            yaw_spd = self._viewlink_speed(yaw_speed)
+            pitch_spd = self._viewlink_speed(pitch_speed)
             logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
                 "yaw_speed": yaw_spd,
                 "pitch_speed": pitch_spd,
             }))
-            result = self._gimbal_control.move(yaw_spd, pitch_spd)
-            success = bool(result.get('success', False))
+            if yaw_spd == 0 and pitch_spd == 0:
+                result = self._gimbal_control.stop()
+            else:
+                result = self._gimbal_control.move(yaw_spd, pitch_spd)
+            success = self._move_result_success(result)
             logger.info("ViewLink screen drag move: %s", result)
 
         if success:
