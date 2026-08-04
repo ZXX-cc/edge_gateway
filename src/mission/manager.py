@@ -62,6 +62,7 @@ DB_WRITE_RETRY_COUNT = 10
 DB_WRITE_RETRY_INTERVAL_SECONDS = 0.2
 HOME_TRANSITION_ALTITUDE_OFFSET_METERS = 40.0
 LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
+VTOL_TAKEOFF_COMMAND = 84
 
 
 def serialize_flighttask(handler):
@@ -285,6 +286,8 @@ class MissionManager:
         self._out_of_control_action = 0
         self._exit_wayline_when_rc_lost = 0
         self._simulate_mission = {}
+        self._loiter_guided_release_altitude = None
+        self._loiter_guided_release_waypoint_seq = None
 
         # DJI航线任务状态 (wayline_mission_state)
         self._wayline_mission_state = 2  # 默认: 2=航线准备状态
@@ -1655,32 +1658,52 @@ class MissionManager:
             except Exception as exc:
                 logger.warning("Read armed status for mode protection failed: %s", exc)
 
+        configured_release_altitude = Config.get(
+            "mission.safety.safe_takeoff_altitude",
+            MIN_WAYPOINT_ALTITUDE_METERS,
+        )
+        release_altitude = getattr(self, "_loiter_guided_release_altitude", None)
+        if release_altitude is None and self._flight_control:
+            release_altitude = getattr(self._flight_control, "loiter_guided_release_altitude", None)
+        release_altitude = self._as_float(
+            release_altitude if release_altitude is not None else configured_release_altitude,
+            MIN_WAYPOINT_ALTITUDE_METERS,
+        )
+        protected_radius = self._as_float(
+            Config.get("mission.safety.vertical_takeoff_protection_radius", release_altitude),
+            release_altitude,
+        )
+
+        missing_fields = []
         home = self._aircraft_home_lat_lon(wait_seconds=0.0)
         telemetry = self._get_telemetry_snapshot()
         position = self._extract_lat_lon(telemetry)
-        if not home or not position:
-            return ""
+        if not home:
+            missing_fields.append("Home点经纬度")
+        if not position:
+            missing_fields.append("当前经纬度")
 
         rel_alt = telemetry.get("altitudeRelative", telemetry.get("relative_altitude"))
         if rel_alt is None:
             rel_alt = telemetry.get("relativeAltitude", telemetry.get("alt_rel"))
         if rel_alt is None:
-            return ""
+            missing_fields.append("当前相对高度")
+
+        if missing_fields:
+            if self._has_reached_loiter_guided_release_waypoint():
+                return ""
+            return (
+                f"{mode_name} 模式切换信息不足，缺少 {', '.join(missing_fields)}；"
+                "当前仍在原始首航点前，禁止切换"
+            )
+
         rel_altitude = self._as_float(rel_alt, 0.0)
-        safe_altitude = self._as_float(
-            Config.get("mission.safety.safe_takeoff_altitude", MIN_WAYPOINT_ALTITUDE_METERS),
-            MIN_WAYPOINT_ALTITUDE_METERS,
-        )
-        protected_radius = self._as_float(
-            Config.get("mission.safety.vertical_takeoff_protection_radius", safe_altitude),
-            safe_altitude,
-        )
         distance = self._distance_meters(home[0], home[1], position[0], position[1])
-        if distance <= protected_radius and rel_altitude < safe_altitude:
+        if distance <= protected_radius and rel_altitude < release_altitude:
             return (
                 f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
                 f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
-                f"{protected_radius:.1f}m/{safe_altitude:.1f}m 内"
+                f"{protected_radius:.1f}m/{release_altitude:.1f}m 内"
             )
         return ""
 
@@ -1948,14 +1971,110 @@ class MissionManager:
         lon = MissionManager._as_float(waypoint.get("longitude"), 0.0)
         return -90 <= lat <= 90 and -180 <= lon <= 180 and not (lat == 0.0 and lon == 0.0)
 
+    @staticmethod
+    def _waypoint_command(waypoint: Dict[str, Any]) -> int:
+        try:
+            return int(waypoint.get("command", 16) or 0)
+        except (TypeError, ValueError):
+            return 16
+
+    @staticmethod
+    def _is_gateway_inserted_waypoint(waypoint: Dict[str, Any]) -> bool:
+        return bool(waypoint.get("inserted_by_gateway") or waypoint.get("adjusted_by_gateway"))
+
+    def _original_position_indices(self, waypoints: List[dict], position_indices: List[int]) -> List[int]:
+        original_indices = [
+            index for index in position_indices
+            if not self._is_gateway_inserted_waypoint(waypoints[index])
+        ]
+        if (
+            len(original_indices) > 1
+            and original_indices[0] == 0
+            and self._waypoint_command(waypoints[original_indices[0]]) == VTOL_TAKEOFF_COMMAND
+        ):
+            return original_indices[1:]
+        return original_indices
+
+    def _loiter_guided_release_waypoint_seq_value(self) -> Optional[int]:
+        value = getattr(self, "_loiter_guided_release_waypoint_seq", None)
+        if value is None and self._flight_control is not None:
+            value = getattr(self._flight_control, "loiter_guided_release_waypoint_seq", None)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _has_reached_loiter_guided_release_waypoint(self) -> bool:
+        release_seq = self._loiter_guided_release_waypoint_seq_value()
+        if release_seq is None:
+            return True
+
+        candidates = [self._current_waypoint_idx]
+        if self._waypoint_manager is not None:
+            try:
+                if hasattr(self._waypoint_manager, "get_current_waypoint_snapshot"):
+                    waypoint_index, _revision = self._waypoint_manager.get_current_waypoint_snapshot()
+                    candidates.append(waypoint_index)
+                else:
+                    candidates.append(getattr(self._waypoint_manager, "current_waypoint", None))
+            except Exception as exc:
+                logger.warning("Read waypoint manager progress for mode protection failed: %s", exc)
+        if self._flight_control is not None:
+            candidates.append(getattr(self._flight_control, "current_waypoint", None))
+
+        for candidate in candidates:
+            try:
+                if int(candidate) >= release_seq:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _set_loiter_guided_release_altitude(
+        self,
+        altitude: Optional[float],
+        waypoint_seq: Optional[int] = None,
+    ) -> None:
+        if altitude is None:
+            self._loiter_guided_release_altitude = None
+            self._loiter_guided_release_waypoint_seq = None
+            if self._flight_control is not None:
+                try:
+                    setattr(self._flight_control, "loiter_guided_release_altitude", None)
+                    setattr(self._flight_control, "loiter_guided_release_waypoint_seq", None)
+                except Exception as exc:
+                    logger.warning("Clear flight control mode release altitude failed: %s", exc)
+            return
+        release_altitude = self._as_float(altitude, MIN_WAYPOINT_ALTITUDE_METERS)
+        self._loiter_guided_release_altitude = release_altitude
+        try:
+            self._loiter_guided_release_waypoint_seq = int(waypoint_seq) if waypoint_seq is not None else None
+        except (TypeError, ValueError):
+            self._loiter_guided_release_waypoint_seq = None
+        if self._flight_control is not None:
+            try:
+                setattr(self._flight_control, "loiter_guided_release_altitude", release_altitude)
+                setattr(
+                    self._flight_control,
+                    "loiter_guided_release_waypoint_seq",
+                    self._loiter_guided_release_waypoint_seq,
+                )
+            except Exception as exc:
+                logger.warning("Set flight control mode release altitude failed: %s", exc)
+
     def _validate_min_wayline_altitude(self, waypoints: List[dict]) -> Tuple[bool, str]:
         minimum = self._as_float(
             Config.get("mission.wayline.min_waypoint_altitude", MIN_WAYPOINT_ALTITUDE_METERS),
             MIN_WAYPOINT_ALTITUDE_METERS,
         )
         violations = []
+        position_indices = [
+            index for index, waypoint in enumerate(waypoints)
+            if self._is_position_waypoint(waypoint)
+        ]
+        original_indices = set(self._original_position_indices(waypoints, position_indices))
         for index, waypoint in enumerate(waypoints):
-            if waypoint.get("inserted_by_gateway") or not self._is_position_waypoint(waypoint):
+            if index not in original_indices:
                 continue
             altitude = self._as_float(waypoint.get("altitude"), 0.0)
             if altitude < minimum:
@@ -2037,6 +2156,10 @@ class MissionManager:
         if not position_indices:
             return True, normalized, "", {"inserted_home_transition": False}
 
+        original_position_indices = self._original_position_indices(normalized, position_indices)
+        if not original_position_indices:
+            return True, normalized, "", {"inserted_home_transition": False}
+
         wait_seconds = self._as_float(
             Config.get("mission.wayline.home_position_wait_seconds", 1.0),
             1.0,
@@ -2046,16 +2169,18 @@ class MissionManager:
             return False, [], "Home position not available; cannot insert takeoff transition waypoint", {}
 
         home_lat, home_lon = home
-        takeoff_index = position_indices[0]
+        takeoff_index = original_position_indices[0]
         takeoff = normalized[takeoff_index]
+        release_altitude = self._as_float(takeoff.get("altitude"), MIN_WAYPOINT_ALTITUDE_METERS)
 
         takeoff_lat = self._as_float(takeoff.get("latitude"), 0.0)
         takeoff_lon = self._as_float(takeoff.get("longitude"), 0.0)
         if self._distance_meters(home_lat, home_lon, takeoff_lat, takeoff_lon) <= 1.0:
-            next_index = position_indices[1] if len(position_indices) > 1 else takeoff_index
+            next_index = original_position_indices[1] if len(original_position_indices) > 1 else takeoff_index
             next_waypoint = normalized[next_index]
             next_alt = self._as_float(next_waypoint.get("altitude"), MIN_WAYPOINT_ALTITUDE_METERS)
             transition_altitude = max(0.0, next_alt - HOME_TRANSITION_ALTITUDE_OFFSET_METERS)
+            release_altitude = transition_altitude
             takeoff.update({
                 "latitude": home_lat,
                 "longitude": home_lon,
@@ -2065,6 +2190,7 @@ class MissionManager:
             })
             for index, waypoint in enumerate(normalized):
                 waypoint["seq"] = index
+            self._set_loiter_guided_release_altitude(release_altitude, takeoff_index)
             return True, normalized, "", {
                 "inserted_home_transition": False,
                 "adjusted_home_transition": True,
@@ -2072,6 +2198,8 @@ class MissionManager:
                 "home_transition_next_seq": next_index,
                 "home_transition_altitude": transition_altitude,
                 "home_transition_offset": HOME_TRANSITION_ALTITUDE_OFFSET_METERS,
+                "mode_switch_release_altitude": release_altitude,
+                "mode_switch_release_waypoint_seq": takeoff_index,
             }
 
         next_waypoint = takeoff
@@ -2096,12 +2224,16 @@ class MissionManager:
         normalized.insert(takeoff_index, transition)
         for index, waypoint in enumerate(normalized):
             waypoint["seq"] = index
+        release_waypoint_seq = takeoff_index + 1
+        self._set_loiter_guided_release_altitude(release_altitude, release_waypoint_seq)
         return True, normalized, "", {
             "inserted_home_transition": True,
             "home_transition_waypoint_seq": takeoff_index,
-            "home_transition_next_seq": takeoff_index + 1,
+            "home_transition_next_seq": release_waypoint_seq,
             "home_transition_altitude": transition_altitude,
             "home_transition_offset": HOME_TRANSITION_ALTITUDE_OFFSET_METERS,
+            "mode_switch_release_altitude": release_altitude,
+            "mode_switch_release_waypoint_seq": release_waypoint_seq,
         }
 
     def _upload_wayline_to_flight_controller(self, waypoints: List[dict]) -> Tuple[bool, str]:
@@ -2692,6 +2824,7 @@ class MissionManager:
             except Exception as e:
                 logger.warning(f"Waypoint {i} parse failed: {e}")
 
+        self._set_loiter_guided_release_altitude(None)
         normalize_ok, normalized_wayline, normalize_reason, normalize_details = self._normalize_wayline_for_flight(parsed_waypoints)
         if not normalize_ok:
             logger.warning("Wayline normalization failed: %s", normalize_reason)
@@ -4547,6 +4680,7 @@ class MissionManager:
         self._task_file = file_info
         self._current_waypoint_idx = 0
         self._breakpoint_waypoint_idx = 0
+        self._set_loiter_guided_release_altitude(None)
         self._ready_conditions = ready_conditions
         self._executable_conditions = executable_conditions
         self._break_point = break_point

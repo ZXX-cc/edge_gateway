@@ -98,7 +98,7 @@ VIEWLINK_METHOD_MAP: Dict[str, Dict[str, Any]] = {
     "laser_stop_zoom": {"sdk_method": "laser_stop_zoom", "params": ()},
     "set_laser_zoom_mode": {"sdk_method": "set_laser_zoom_mode", "params": ("mode",)},
     "set_image_color": {"sdk_method": "set_image_color", "params": ("image_type", "enable_pip", "ir_color")},
-    "start_track": {"sdk_method": "start_track", "params": ("x", "y", "width", "height", "template_size", "sensor")},
+    "start_track": {"sdk_method": "start_track", "params": ("x", "y", "video_width", "video_height", "width", "height", "template_size", "sensor")},
     "stop_track": {"sdk_method": "stop_track", "params": ()},
     "is_tracking": {"sdk_method": "is_tracking", "params": ()},
     "take_photo": {"sdk_method": "take_photo", "params": ()},
@@ -157,7 +157,7 @@ def _normalize_value(name: str, value: Any) -> Any:
         return IR_COLOR_MAP.get(key, int(value or 0) if str(value or "").isdigit() else 0)
     if name == "magnification":
         return max(1.0, float(value or 1.0))
-    if name in ("x", "y", "width", "height", "template_size", "port"):
+    if name in ("x", "y", "width", "height", "video_width", "video_height", "template_size", "port"):
         return int(value or 0)
     if name in ("yaw", "pitch"):
         return float(value or 0.0)

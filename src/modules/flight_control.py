@@ -80,6 +80,8 @@ class FlightControl(BaseModule):
         self._last_arm_status_text_time = 0.0
         self.home_position = None
         self.current_position = {}
+        self.loiter_guided_release_altitude = None
+        self.loiter_guided_release_waypoint_seq = None
 
         # 任务信息
         self.mission_count = 0
@@ -725,46 +727,93 @@ class FlightControl(BaseModule):
         except (TypeError, ValueError):
             return default
 
+    def _has_reached_loiter_guided_release_waypoint(self) -> bool:
+        try:
+            release_seq = int(self.loiter_guided_release_waypoint_seq)
+        except (TypeError, ValueError):
+            return True
+        try:
+            return int(self.current_waypoint) >= release_seq
+        except (TypeError, ValueError):
+            return False
+
     def _loiter_guided_gate(self, mode_name: str) -> Dict:
         if str(mode_name or "").upper() not in LOITER_GUIDED_PROTECTED_MODES:
             return {"success": True}
         if not self.is_armed_status():
             return {"success": True}
-        if not isinstance(self.home_position, dict) or not isinstance(self.current_position, dict):
-            return {"success": True}
+
+        missing_fields = []
+        if not isinstance(self.home_position, dict):
+            missing_fields.append("Home点经纬度")
+        if not isinstance(self.current_position, dict):
+            missing_fields.append("当前经纬度")
 
         try:
             home_lat = float(self.home_position.get("lat"))
             home_lon = float(self.home_position.get("lon"))
+        except (AttributeError, TypeError, ValueError):
+            home_lat = home_lon = None
+            if "Home点经纬度" not in missing_fields:
+                missing_fields.append("Home点经纬度")
+
+        try:
             current_lat = float(self.current_position.get("lat"))
             current_lon = float(self.current_position.get("lon"))
-        except (TypeError, ValueError):
-            return {"success": True}
+        except (AttributeError, TypeError, ValueError):
+            current_lat = current_lon = None
+            if "当前经纬度" not in missing_fields:
+                missing_fields.append("当前经纬度")
 
-        rel_altitude = self.current_position.get("relative_altitude")
+        rel_altitude = (
+            self.current_position.get("relative_altitude")
+            if isinstance(self.current_position, dict)
+            else None
+        )
         if rel_altitude is None:
-            return {"success": True}
-        rel_altitude = self._as_float(rel_altitude, 0.0)
-        safe_altitude = self._as_float(
-            Config.get("mission.safety.safe_takeoff_altitude", MIN_SAFE_TAKEOFF_ALTITUDE_METERS),
+            missing_fields.append("当前相对高度")
+
+        configured_release_altitude = Config.get(
+            "mission.safety.safe_takeoff_altitude",
+            MIN_SAFE_TAKEOFF_ALTITUDE_METERS,
+        )
+        release_altitude = self._as_float(
+            self.loiter_guided_release_altitude
+            if self.loiter_guided_release_altitude is not None
+            else configured_release_altitude,
             MIN_SAFE_TAKEOFF_ALTITUDE_METERS,
         )
         protected_radius = self._as_float(
-            Config.get("mission.safety.vertical_takeoff_protection_radius", safe_altitude),
-            safe_altitude,
+            Config.get("mission.safety.vertical_takeoff_protection_radius", release_altitude),
+            release_altitude,
         )
+
+        if missing_fields:
+            if self._has_reached_loiter_guided_release_waypoint():
+                return {"success": True}
+            return {
+                "success": False,
+                "message": (
+                    f"{mode_name} 模式切换信息不足，缺少 {', '.join(missing_fields)}；"
+                    "当前仍在原始首航点前，禁止切换"
+                ),
+                "mode_switch_release_altitude": release_altitude,
+                "release_waypoint_seq": self.loiter_guided_release_waypoint_seq,
+            }
+
+        rel_altitude = self._as_float(rel_altitude, 0.0)
         distance = self._distance_meters(home_lat, home_lon, current_lat, current_lon)
-        if distance <= protected_radius and rel_altitude < safe_altitude:
+        if distance <= protected_radius and rel_altitude < release_altitude:
             return {
                 "success": False,
                 "message": (
                     f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
                     f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
-                    f"{protected_radius:.1f}m/{safe_altitude:.1f}m 内"
+                    f"{protected_radius:.1f}m/{release_altitude:.1f}m 内"
                 ),
                 "distance_from_home": distance,
                 "relative_altitude": rel_altitude,
-                "safe_takeoff_altitude": safe_altitude,
+                "mode_switch_release_altitude": release_altitude,
                 "protected_radius": protected_radius,
             }
         return {"success": True}

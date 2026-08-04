@@ -224,6 +224,7 @@ class FlightModeMappingTest(unittest.TestCase):
         flight_control = RecordingFlightControl()
         flight_control.armed = True
         manager.set_flight_control(flight_control)
+        manager._set_loiter_guided_release_altitude(100.0)
         manager.set_waypoint_manager(types.SimpleNamespace(
             home_position={"lat": 44.0474824, "lon": 125.3614503}
         ))
@@ -240,6 +241,73 @@ class FlightModeMappingTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertIn("安全起飞保护区", reply["msg"])
         self.assertEqual(flight_control.calls, [])
+
+    def test_set_flight_mode_allows_guided_after_original_first_waypoint_altitude(self):
+        manager = MissionManager()
+        flight_control = RecordingFlightControl()
+        flight_control.armed = True
+        manager.set_flight_control(flight_control)
+        manager._set_loiter_guided_release_altitude(80.0)
+        manager.set_waypoint_manager(types.SimpleNamespace(
+            home_position={"lat": 44.0474824, "lon": 125.3614503}
+        ))
+        manager.set_telemetry_module(types.SimpleNamespace(
+            get_telemetry_data=lambda: {
+                "latitude": 44.0475000,
+                "longitude": 125.3614600,
+                "altitudeRelative": 80.0,
+            }
+        ))
+
+        reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(flight_control.calls, ["GUIDED"])
+
+    def test_set_flight_mode_rejects_missing_altitude_before_original_first_waypoint(self):
+        manager = MissionManager()
+        flight_control = RecordingFlightControl()
+        flight_control.armed = True
+        manager.set_flight_control(flight_control)
+        manager._set_loiter_guided_release_altitude(100.0, waypoint_seq=1)
+        manager._current_waypoint_idx = 0
+        manager.set_waypoint_manager(types.SimpleNamespace(
+            home_position={"lat": 44.0474824, "lon": 125.3614503}
+        ))
+        manager.set_telemetry_module(types.SimpleNamespace(
+            get_telemetry_data=lambda: {
+                "latitude": 44.0475000,
+                "longitude": 125.3614600,
+            }
+        ))
+
+        reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("信息不足", reply["msg"])
+        self.assertEqual(flight_control.calls, [])
+
+    def test_set_flight_mode_allows_missing_altitude_after_original_first_waypoint(self):
+        manager = MissionManager()
+        flight_control = RecordingFlightControl()
+        flight_control.armed = True
+        manager.set_flight_control(flight_control)
+        manager._set_loiter_guided_release_altitude(100.0, waypoint_seq=1)
+        manager._current_waypoint_idx = 1
+        manager.set_waypoint_manager(types.SimpleNamespace(
+            home_position={"lat": 44.0474824, "lon": 125.3614503}
+        ))
+        manager.set_telemetry_module(types.SimpleNamespace(
+            get_telemetry_data=lambda: {
+                "latitude": 44.0475000,
+                "longitude": 125.3614600,
+            }
+        ))
+
+        reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(flight_control.calls, ["GUIDED"])
 
     def test_set_flight_mode_arm_avoids_non_armable_qland(self):
         for payload in ({"mode": "QLAN", "arm": True}, {"flight_mode": "QLAND", "arm": True}, {"mode_code": 7, "arm": True}):

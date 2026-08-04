@@ -135,6 +135,7 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         control = SendingFlightControl()
         control._set_mode_profile("plane")
         control.is_armed = True
+        control.loiter_guided_release_altitude = 100.0
         control.home_position = {"lat": 44.0474824, "lon": 125.3614503}
         control.current_position = {
             "lat": 44.0475000,
@@ -147,6 +148,68 @@ class FlightControlP0ModeSelectionTest(unittest.TestCase):
         self.assertFalse(result["success"], result)
         self.assertIn("安全起飞保护区", result["message"])
         self.assertEqual(control.sent_messages, [])
+
+    def test_guided_allowed_after_original_first_waypoint_altitude(self):
+        control = SendingFlightControl()
+        control._set_mode_profile("plane")
+        control.is_armed = True
+        control.loiter_guided_release_altitude = 80.0
+        control.home_position = {"lat": 44.0474824, "lon": 125.3614503}
+        control.current_position = {
+            "lat": 44.0475000,
+            "lon": 125.3614600,
+            "relative_altitude": 80.0,
+        }
+        control._wait_for_mode = lambda target_mode, timeout: {
+            "success": True,
+            "message": "confirmed",
+        }
+
+        result = control.set_mode("GUIDED")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(control.sent_messages), 1)
+
+    def test_guided_rejects_missing_altitude_before_original_first_waypoint(self):
+        control = SendingFlightControl()
+        control._set_mode_profile("plane")
+        control.is_armed = True
+        control.loiter_guided_release_altitude = 100.0
+        control.loiter_guided_release_waypoint_seq = 1
+        control.current_waypoint = 0
+        control.home_position = {"lat": 44.0474824, "lon": 125.3614503}
+        control.current_position = {
+            "lat": 44.0475000,
+            "lon": 125.3614600,
+        }
+
+        result = control.set_mode("GUIDED")
+
+        self.assertFalse(result["success"], result)
+        self.assertIn("信息不足", result["message"])
+        self.assertEqual(control.sent_messages, [])
+
+    def test_guided_allows_missing_altitude_after_original_first_waypoint(self):
+        control = SendingFlightControl()
+        control._set_mode_profile("plane")
+        control.is_armed = True
+        control.loiter_guided_release_altitude = 100.0
+        control.loiter_guided_release_waypoint_seq = 1
+        control.current_waypoint = 1
+        control.home_position = {"lat": 44.0474824, "lon": 125.3614503}
+        control.current_position = {
+            "lat": 44.0475000,
+            "lon": 125.3614600,
+        }
+        control._wait_for_mode = lambda target_mode, timeout: {
+            "success": True,
+            "message": "confirmed",
+        }
+
+        result = control.set_mode("GUIDED")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(control.sent_messages), 1)
 
     def test_copter_land_uses_guided_mode(self):
         control = RecordingFlightControl()

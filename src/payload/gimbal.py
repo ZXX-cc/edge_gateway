@@ -102,6 +102,50 @@ class GimbalController:
         """设置事件回调"""
         self._event_callback = callback
 
+    @staticmethod
+    def _frame_number(data: dict, key: str, default: float) -> float:
+        try:
+            value = data.get(key, default)
+            return float(default if value is None else value)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _frame_size(cls, data: dict) -> dict:
+        frame_size = data.get("frame_size") if isinstance(data.get("frame_size"), dict) else {}
+        resolution = data.get("resolution") if isinstance(data.get("resolution"), dict) else {}
+        width = (
+            frame_size.get("width")
+            or resolution.get("width")
+            or data.get("frame_width")
+            or data.get("video_width")
+            or data.get("screen_width")
+            or 1920
+        )
+        height = (
+            frame_size.get("height")
+            or resolution.get("height")
+            or data.get("frame_height")
+            or data.get("video_height")
+            or data.get("screen_height")
+            or 1080
+        )
+        return {
+            "width": max(1, int(cls._frame_number({"value": width}, "value", 1920))),
+            "height": max(1, int(cls._frame_number({"value": height}, "value", 1080))),
+        }
+
+    @classmethod
+    def _frame_point_pixels(cls, data: dict, x_value: float, y_value: float) -> tuple[int, int, dict]:
+        frame_size = cls._frame_size(data)
+        x = float(x_value or 0.0)
+        y = float(y_value or 0.0)
+        x_px = int(round(x * frame_size["width"])) if 0.0 <= x <= 1.0 else int(round(x))
+        y_px = int(round(y * frame_size["height"])) if 0.0 <= y <= 1.0 else int(round(y))
+        x_px = max(0, min(frame_size["width"], x_px))
+        y_px = max(0, min(frame_size["height"], y_px))
+        return x_px, y_px, frame_size
+
     def _mode_text(self) -> str:
         return {
             self.MODE_FOLLOW: "FOLLOW",
@@ -227,8 +271,8 @@ class GimbalController:
                 return self._gimbal_control.start_track(
                     args.get("x", 0),
                     args.get("y", 0),
-                    args.get("width", 0),
-                    args.get("height", 0),
+                    args.get("video_width") or args.get("width", 0),
+                    args.get("video_height") or args.get("height", 0),
                     VLKTrackTemplateSize(args.get("template_size", VLKTrackTemplateSize.AUTO)),
                     VLKSensor(args.get("sensor", VLKSensor.VISIBLE1)),
                 )
@@ -402,11 +446,14 @@ class GimbalController:
 
         result = {"success": True, "message": "aim accepted locally"}
         if locked and self._gimbal_control and self._gimbal_control.is_connected():
+            x_px, y_px, frame_size = self._frame_point_pixels(data, x, y)
             mapping = build_viewlink_call("start_track", {
-                "x": x,
-                "y": y,
-                "width": float(data.get("width", 0.1) or 0.1),
-                "height": float(data.get("height", 0.1) or 0.1),
+                "x": x_px,
+                "y": y_px,
+                "video_width": frame_size["width"],
+                "video_height": frame_size["height"],
+                "template_size": data.get("template_size"),
+                "sensor": data.get("sensor"),
             })
             logger.info("ViewLink mapped: %s", mapping)
             result = self._execute_viewlink_call(mapping)

@@ -510,7 +510,52 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertFalse(details["inserted_home_transition"])
         self.assertTrue(details["adjusted_home_transition"])
         self.assertEqual(details["home_transition_next_seq"], 1)
+        self.assertAlmostEqual(details["mode_switch_release_altitude"], 110.0)
+        self.assertEqual(details["mode_switch_release_waypoint_seq"], 0)
+        self.assertAlmostEqual(manager._loiter_guided_release_altitude, 110.0)
+        self.assertEqual(manager._loiter_guided_release_waypoint_seq, 0)
         self.assertAlmostEqual(normalized[0]["altitude"], 110.0)
+
+    def test_leading_gateway_vtol_takeoff_does_not_replace_original_first_waypoint(self):
+        manager = MissionManager()
+        waypoint_manager = RecordingWaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+
+        ok, normalized, reason, details = manager._normalize_wayline_for_flight([
+            {
+                "seq": 0,
+                "latitude": waypoint_manager.home_position["lat"],
+                "longitude": waypoint_manager.home_position["lon"],
+                "altitude": 30,
+                "command": 84,
+                "frame": 3,
+            },
+            {
+                "seq": 1,
+                "latitude": waypoint_manager.home_position["lat"],
+                "longitude": waypoint_manager.home_position["lon"],
+                "altitude": 130,
+                "command": 16,
+                "frame": 3,
+            },
+            {
+                "seq": 2,
+                "latitude": waypoint_manager.home_position["lat"] + 0.001,
+                "longitude": waypoint_manager.home_position["lon"] + 0.001,
+                "altitude": 150,
+                "command": 16,
+                "frame": 3,
+            },
+        ])
+
+        self.assertTrue(ok, reason)
+        self.assertEqual(len(normalized), 3)
+        self.assertEqual(normalized[0]["command"], 84)
+        self.assertEqual(details["home_transition_waypoint_seq"], 1)
+        self.assertEqual(details["home_transition_next_seq"], 2)
+        self.assertAlmostEqual(normalized[1]["altitude"], 110.0)
+        self.assertAlmostEqual(details["mode_switch_release_altitude"], 110.0)
+        self.assertEqual(details["mode_switch_release_waypoint_seq"], 1)
 
     def test_mission_manager_executes_waypoint_actions_once(self):
         manager = MissionManager()

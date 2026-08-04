@@ -62,6 +62,7 @@ class CameraController:
         self._photo_session_stop = threading.Event()
         self._photo_session_lock = threading.Lock()
         self._zoom_level = 1.0
+        self._resolution = None
         self._exposure_mode = 'auto'
         self._focus_mode = 'auto_focus'
         self._focus_value = 0.0
@@ -223,6 +224,117 @@ class CameraController:
         os.makedirs(fallback, exist_ok=True)
         return fallback
 
+    @staticmethod
+    def _probe_image_resolution(file_path: str) -> Optional[str]:
+        """Return WIDTHxHEIGHT for common image files without adding heavy deps."""
+        try:
+            with open(file_path, "rb") as handle:
+                header = handle.read(32)
+                if header.startswith(b"\x89PNG\r\n\x1a\n") and len(header) >= 24:
+                    width = int.from_bytes(header[16:20], "big")
+                    height = int.from_bytes(header[20:24], "big")
+                    return f"{width}x{height}" if width and height else None
+
+                if not header.startswith(b"\xff\xd8"):
+                    return None
+                handle.seek(2)
+                while True:
+                    marker_start = handle.read(1)
+                    if not marker_start:
+                        return None
+                    if marker_start != b"\xff":
+                        continue
+                    marker = handle.read(1)
+                    while marker == b"\xff":
+                        marker = handle.read(1)
+                    if marker in (b"\xd8", b"\xd9") or not marker:
+                        continue
+                    length_bytes = handle.read(2)
+                    if len(length_bytes) != 2:
+                        return None
+                    length = int.from_bytes(length_bytes, "big")
+                    if length < 2:
+                        return None
+                    if marker in (
+                        b"\xc0", b"\xc1", b"\xc2", b"\xc3",
+                        b"\xc5", b"\xc6", b"\xc7",
+                        b"\xc9", b"\xca", b"\xcb",
+                        b"\xcd", b"\xce", b"\xcf",
+                    ):
+                        segment = handle.read(5)
+                        if len(segment) != 5:
+                            return None
+                        height = int.from_bytes(segment[1:3], "big")
+                        width = int.from_bytes(segment[3:5], "big")
+                        return f"{width}x{height}" if width and height else None
+                    handle.seek(length - 2, os.SEEK_CUR)
+        except Exception as exc:
+            logger.debug("Probe media resolution failed: path=%s error=%s", file_path, exc)
+        return None
+
+    def _build_media_metadata_record(
+        self,
+        file_type: str,
+        duration: float = None,
+        file_path: str = None,
+        file_name: str = None,
+        file_size: int = None,
+        resolution: str = None,
+        capture_time: int = None,
+    ) -> tuple[dict, dict]:
+        telemetry = {}
+        if self._telemetry_module and hasattr(self._telemetry_module, 'get_gps'):
+            gps = self._telemetry_module.get_gps()
+            if gps:
+                telemetry = gps
+
+        capture_time = int(capture_time or time.time())
+        extension = "jpg" if file_type == "photo" else "mp4"
+        resolved_file_name = file_name or (os.path.basename(file_path) if file_path else None)
+        if not resolved_file_name:
+            resolved_file_name = f"{capture_time}_{file_type}.{extension}"
+
+        metadata = build_media_metadata(
+            file_type,
+            telemetry=telemetry,
+            context={
+                "mission_id": self._current_mission_id,
+                "device_sn": self.gateway_sn,
+                "capture_time": capture_time,
+                "file_name": resolved_file_name,
+            },
+            duration=duration,
+        )
+
+        resolved_file_path = file_path or os.path.join(self._local_media_storage_path(), metadata["file_name"])
+        actual_file_size = file_size
+        if actual_file_size is None and os.path.exists(resolved_file_path):
+            actual_file_size = os.path.getsize(resolved_file_path)
+        if actual_file_size is None:
+            actual_file_size = 0
+
+        actual_resolution = resolution or self._probe_image_resolution(resolved_file_path) or self._resolution
+
+        media_data = {
+            'mission_id': metadata["mission_id"],
+            'device_sn': metadata["device_sn"],
+            'file_name': metadata["file_name"],
+            'file_path': resolved_file_path,
+            'file_size': int(actual_file_size),
+            'file_type': metadata["file_type"],
+            'resolution': actual_resolution,
+            'duration': metadata.get("duration"),
+            'capture_time': metadata["capture_time"],
+            'latitude': metadata["latitude"],
+            'longitude': metadata["longitude"],
+            'altitude': metadata["altitude"],
+            'upload_status': metadata["upload_status"],
+        }
+        metadata["file_size"] = media_data["file_size"]
+        metadata["file_path"] = media_data["file_path"]
+        metadata["resolution"] = media_data["resolution"]
+        return metadata, media_data
+
     def _mapping_camera_data_endpoint(self) -> str:
         payload_config = Config.get_payload_config()
         devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
@@ -363,6 +475,7 @@ class CameraController:
         downloaded = self._download_mapping_camera_photo(storage_path, remote_hint)
         if downloaded:
             downloaded["control_route"] = route
+            downloaded["resolution"] = self._probe_image_resolution(downloaded["file_path"])
             self._last_mapping_camera_cache = dict(downloaded)
             self._last_mapping_camera_sync_error = ""
             self._last_mapping_camera_control_route = route
@@ -406,6 +519,8 @@ class CameraController:
             "storage_path": storage_path,
             "upload_status": "pending",
             "control_route": route,
+            "file_size": os.path.getsize(file_path),
+            "resolution": self._probe_image_resolution(file_path),
         }
         self._last_mapping_camera_cache = dict(cached)
         self._last_mapping_camera_control_route = route
@@ -523,7 +638,13 @@ class CameraController:
         # 异步写入媒体文件元数据到数据库
         if success:
             self._photo_count += 1
-            self._save_media_metadata_sync('photo')
+            self._save_media_metadata_sync(
+                'photo',
+                file_path=data.get("file_path"),
+                file_name=data.get("file_name"),
+                file_size=data.get("file_size"),
+                resolution=data.get("resolution"),
+            )
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -547,7 +668,13 @@ class CameraController:
         if success:
             self._photo_count += 1
             cached = self._cache_photo_locally(data, route)
-            self._save_media_metadata_sync('photo')
+            self._save_media_metadata_sync(
+                'photo',
+                file_path=cached.get("file_path"),
+                file_name=cached.get("file_name"),
+                file_size=cached.get("file_size"),
+                resolution=cached.get("resolution"),
+            )
             self.report_photo_progress(
                 current=self._photo_count,
                 total=self._photo_count,
@@ -624,11 +751,15 @@ class CameraController:
             if thread and thread.is_alive():
                 self._photo_session_stop.set()
                 thread.join(timeout=2.0)
-                return MessageBuilder.build_reply(msg, result=0, data={
+                running = thread.is_alive()
+                if not running:
+                    self._photo_session_thread = None
+                return MessageBuilder.build_reply(msg, result=0 if not running else -1, data={
                     "photo_source": "viewlink_sdk",
-                    "stopped": True,
-                    "running": thread.is_alive(),
-                })
+                    "stopped": not running,
+                    "running": running,
+                    "timeout_seconds": 2.0,
+                }, msg_str="" if not running else "Photo session stop timed out")
 
         success, _ = self._send_mapped_camera_command('stop_photo', msg.get('data', {}))
 
@@ -668,6 +799,7 @@ class CameraController:
         if success:
             self._is_recording = True
             self._recording_start_time = time.time()
+            self._resolution = resolution
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -697,7 +829,14 @@ class CameraController:
         if success:
             self._is_recording = False
             self._recording_time = recording_time
-            self._save_media_metadata_sync('video', duration=recording_time)
+            self._save_media_metadata_sync(
+                'video',
+                duration=recording_time,
+                file_path=data.get("file_path"),
+                file_name=data.get("file_name"),
+                file_size=data.get("file_size"),
+                resolution=data.get("resolution"),
+            )
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             'record_time': recording_time,
@@ -899,16 +1038,103 @@ class CameraController:
             "video_storage_settings": settings,
         })
 
+    @staticmethod
+    def _frame_zoom_number(data: dict, key: str, default: float) -> float:
+        try:
+            return float(data.get(key, default) if data.get(key, default) is not None else default)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _frame_zoom_frame_size(cls, data: dict) -> dict:
+        frame_size = data.get("frame_size") if isinstance(data.get("frame_size"), dict) else {}
+        resolution = data.get("resolution") if isinstance(data.get("resolution"), dict) else {}
+        width = (
+            frame_size.get("width")
+            or resolution.get("width")
+            or data.get("frame_width")
+            or data.get("video_width")
+            or data.get("screen_width")
+            or 1920
+        )
+        height = (
+            frame_size.get("height")
+            or resolution.get("height")
+            or data.get("frame_height")
+            or data.get("video_height")
+            or data.get("screen_height")
+            or 1080
+        )
+        return {
+            "width": max(1, int(cls._frame_zoom_number({"value": width}, "value", 1920))),
+            "height": max(1, int(cls._frame_zoom_number({"value": height}, "value", 1080))),
+        }
+
+    @classmethod
+    def _normalize_frame_zoom_box(cls, data: dict) -> tuple[dict, dict, dict]:
+        frame_size = cls._frame_zoom_frame_size(data)
+        normalized = data.get("normalized") if isinstance(data.get("normalized"), dict) else {}
+        if normalized:
+            norm_x = cls._frame_zoom_number(normalized, "x", 0.0)
+            norm_y = cls._frame_zoom_number(normalized, "y", 0.0)
+            norm_width = cls._frame_zoom_number(normalized, "width", 1.0)
+            norm_height = cls._frame_zoom_number(normalized, "height", 1.0)
+        else:
+            raw_x = cls._frame_zoom_number(data, "x", 0.0)
+            raw_y = cls._frame_zoom_number(data, "y", 0.0)
+            raw_width = cls._frame_zoom_number(data, "width", 1.0)
+            raw_height = cls._frame_zoom_number(data, "height", 1.0)
+            looks_normalized = all(0.0 <= value <= 1.0 for value in (raw_x, raw_y, raw_width, raw_height))
+            if looks_normalized:
+                norm_x, norm_y, norm_width, norm_height = raw_x, raw_y, raw_width, raw_height
+            else:
+                norm_x = raw_x / frame_size["width"]
+                norm_y = raw_y / frame_size["height"]
+                norm_width = raw_width / frame_size["width"]
+                norm_height = raw_height / frame_size["height"]
+
+        norm_x = max(0.0, min(1.0, norm_x))
+        norm_y = max(0.0, min(1.0, norm_y))
+        norm_width = max(0.001, min(1.0 - norm_x, norm_width))
+        norm_height = max(0.001, min(1.0 - norm_y, norm_height))
+        normalized_box = {
+            "x": norm_x,
+            "y": norm_y,
+            "width": norm_width,
+            "height": norm_height,
+        }
+        pixel_box = {
+            "x": int(round(norm_x * frame_size["width"])),
+            "y": int(round(norm_y * frame_size["height"])),
+            "width": max(1, int(round(norm_width * frame_size["width"]))),
+            "height": max(1, int(round(norm_height * frame_size["height"]))),
+        }
+        return normalized_box, pixel_box, frame_size
+
+    @staticmethod
+    def _frame_zoom_centering_speed(offset_x: float, offset_y: float) -> dict:
+        if abs(offset_x) < 0.01 and abs(offset_y) < 0.01:
+            return {"yaw_speed": 0, "pitch_speed": 0}
+        scale = int(Config.get("payload.frame_zoom_centering_speed_scale", 2400) or 2400)
+        max_speed = int(Config.get("payload.frame_zoom_centering_max_speed", 1200) or 1200)
+        yaw_speed = max(-max_speed, min(max_speed, int(round(offset_x * scale))))
+        pitch_speed = max(-max_speed, min(max_speed, int(round(-offset_y * scale))))
+        return {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed}
+
     def handle_camera_frame_zoom(self, msg: dict) -> dict:
         """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
         data = msg.get('data', {})
-        x = int(float(data.get("x", 0) or 0))
-        y = int(float(data.get("y", 0) or 0))
-        width = max(1, int(float(data.get("width", 1) or 1)))
-        height = max(1, int(float(data.get("height", 1) or 1)))
+        normalized_box, pixel_box, frame_size = self._normalize_frame_zoom_box(data)
+        x = pixel_box["x"]
+        y = pixel_box["y"]
+        width = pixel_box["width"]
+        height = pixel_box["height"]
         zoom_ratio = float(data.get("zoom_ratio", self._zoom_level) or self._zoom_level)
+        center_offset_x = (normalized_box["x"] + normalized_box["width"] / 2.0) - 0.5
+        center_offset_y = (normalized_box["y"] + normalized_box["height"] / 2.0) - 0.5
+        center_speed = self._frame_zoom_centering_speed(center_offset_x, center_offset_y)
         logger.info(
-            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s) zoom_ratio=%s",
+            "Camera frame zoom: payload_index=%s camera_type=%s locked=%s box=(%s,%s,%s,%s) normalized=%s center_offset=(%.4f,%.4f) zoom_ratio=%s",
             data.get("payload_index", ""),
             data.get("camera_type", ""),
             data.get("locked", False),
@@ -916,16 +1142,59 @@ class CameraController:
             y,
             width,
             height,
+            normalized_box,
+            center_offset_x,
+            center_offset_y,
             zoom_ratio,
         )
 
         result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
+        center_result = {"success": True, "message": "frame center already aligned", "skipped": True}
+        track_result = {"success": True, "message": "ViewLink target positioning skipped", "skipped": True}
+        stop_track_result = None
         if self._gimbal_control and self._gimbal_control.is_connected():
-            # 框选变焦只设置镜头倍率；AIM 锁定才会进入 ViewLink 目标跟踪，避免云台本体联动。
-            result = self._gimbal_control.zoom_to(zoom_ratio)
+            center_x = int(round(x + width / 2.0))
+            center_y = int(round(y + height / 2.0))
+            if hasattr(self._gimbal_control, "start_track"):
+                track_result = self._gimbal_control.start_track(
+                    center_x,
+                    center_y,
+                    frame_size["width"],
+                    frame_size["height"],
+                )
+                center_result = {
+                    "success": bool(track_result.get("success", False)),
+                    "method": "track_target_position",
+                    "x": center_x,
+                    "y": center_y,
+                    "video_width": frame_size["width"],
+                    "video_height": frame_size["height"],
+                    "viewlink_result": track_result,
+                }
+                logger.info("ViewLink frame zoom/track target: %s", track_result)
+            elif center_speed["yaw_speed"] or center_speed["pitch_speed"]:
+                center_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
+                logger.info("ViewLink frame zoom/center move: %s", center_result)
+                if center_result.get("success") and hasattr(self._gimbal_control, "stop"):
+                    time.sleep(0.15)
+                    stop_result = self._gimbal_control.stop()
+                    center_result = {
+                        **center_result,
+                        "stop_result": stop_result,
+                    }
+            if center_result.get("success", False):
+                result = self._gimbal_control.zoom_to(zoom_ratio)
+                if hasattr(self._gimbal_control, "start_track") and not bool(data.get("locked", False)):
+                    if hasattr(self._gimbal_control, "stop_track"):
+                        stop_track_result = self._gimbal_control.stop_track()
+                        logger.info("ViewLink frame zoom/stop track: %s", stop_track_result)
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
 
-        success = bool(result.get("success", False))
+        success = bool(
+            center_result.get("success", False)
+            and result.get("success", False)
+            and (stop_track_result is None or stop_track_result.get("success", False))
+        )
         if success:
             self._zoom_level = zoom_ratio
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
@@ -935,7 +1204,16 @@ class CameraController:
             "y": y,
             "width": width,
             "height": height,
-            "normalized": data.get("normalized", {}),
+            "normalized": normalized_box,
+            "frame_size": frame_size,
+            "center_offset": {
+                "x": center_offset_x,
+                "y": center_offset_y,
+            },
+            "center_speed": center_speed,
+            "center_result": center_result,
+            "track_result": track_result,
+            "stop_track_result": stop_track_result,
             "viewlink_result": result,
         })
 
@@ -995,48 +1273,31 @@ class CameraController:
         self._db_initialized = True
         logger.info("CameraController database initialized")
 
-    async def _save_media_metadata(self, file_type: str, duration: float = None):
+    async def _save_media_metadata(
+        self,
+        file_type: str,
+        duration: float = None,
+        file_path: str = None,
+        file_name: str = None,
+        file_size: int = None,
+        resolution: str = None,
+    ):
         """保存媒体文件元数据到数据库"""
         try:
             await self._init_database()
             AsyncSessionLocal = get_async_session_local()
 
-            # 获取当前遥测数据（位置信息）
-            telemetry = {}
-            if self._telemetry_module and hasattr(self._telemetry_module, 'get_gps'):
-                gps = self._telemetry_module.get_gps()
-                if gps:
-                    telemetry = gps
-
-            capture_time = int(time.time())
-            metadata = build_media_metadata(
+            metadata, media_data = self._build_media_metadata_record(
                 file_type,
-                telemetry=telemetry,
-                context={
-                    "mission_id": self._current_mission_id,
-                    "device_sn": self.gateway_sn,
-                    "capture_time": capture_time,
-                },
                 duration=duration,
+                file_path=file_path,
+                file_name=file_name,
+                file_size=file_size,
+                resolution=resolution,
             )
             file_name = metadata["file_name"]
 
             async with AsyncSessionLocal() as session:
-                media_data = {
-                    'mission_id': metadata["mission_id"],
-                    'device_sn': metadata["device_sn"],
-                    'file_name': metadata["file_name"],
-                    'file_path': f"/data/media/{file_name}",
-                    'file_size': 0,
-                    'file_type': metadata["file_type"],
-                    'resolution': '1080p',
-                    'duration': metadata.get("duration"),
-                    'capture_time': metadata["capture_time"],
-                    'latitude': metadata["latitude"],
-                    'longitude': metadata["longitude"],
-                    'altitude': metadata["altitude"],
-                    'upload_status': metadata["upload_status"],
-                }
                 await MediaDB.create_media_file(session, media_data)
                 await session.commit()
 
@@ -1049,7 +1310,7 @@ class CameraController:
                     {
                         'current': self._photo_count,
                         'total': self._photo_count,
-                        'storage_path': f"/data/media/{file_name}",
+                        'storage_path': media_data["file_path"],
                         'metadata': metadata
                     },
                     self.gateway_sn
@@ -1059,13 +1320,28 @@ class CameraController:
         except Exception as e:
             logger.error(f"Save media metadata failed: {e}")
 
-    def _save_media_metadata_sync(self, file_type: str, duration: float = None):
+    def _save_media_metadata_sync(
+        self,
+        file_type: str,
+        duration: float = None,
+        file_path: str = None,
+        file_name: str = None,
+        file_size: int = None,
+        resolution: str = None,
+    ):
         """异步保存媒体文件元数据（非阻塞）"""
         self._ensure_event_loop()
         if self._main_loop:
             try:
                 asyncio.run_coroutine_threadsafe(
-                    self._save_media_metadata(file_type, duration),
+                    self._save_media_metadata(
+                        file_type,
+                        duration,
+                        file_path=file_path,
+                        file_name=file_name,
+                        file_size=file_size,
+                        resolution=resolution,
+                    ),
                     self._main_loop
                 )
             except Exception as e:
@@ -1130,6 +1406,7 @@ class CameraController:
         resolution = data.get('resolution', '1080p')
         self._log_camera_setting_mapping('set_resolution', data)
         logger.info(f"Resolution: {resolution}")
+        self._resolution = str(resolution) if resolution else None
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_set_frame_rate(self, msg: dict) -> dict:

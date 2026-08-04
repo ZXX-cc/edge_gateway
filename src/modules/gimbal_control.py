@@ -958,8 +958,8 @@ class GimbalControl:
         self,
         x: int,
         y: int,
-        width: int,
-        height: int,
+        video_width: int,
+        video_height: int,
         template_size: VLKTrackTemplateSize = VLKTrackTemplateSize.AUTO,
         sensor: VLKSensor = VLKSensor.VISIBLE1
     ) -> dict:
@@ -967,10 +967,10 @@ class GimbalControl:
         开始跟踪目标
 
         Args:
-            x: 目标框左上角 X 坐标
-            y: 目标框左上角 Y 坐标
-            width: 目标框宽度
-            height: 目标框高度
+            x: 目标中心 X 像素坐标
+            y: 目标中心 Y 像素坐标
+            video_width: 视频画面宽度
+            video_height: 视频画面高度
             template_size: 跟踪模板尺寸
             sensor: 使用的传感器
 
@@ -988,11 +988,11 @@ class GimbalControl:
         param.emTrackSensor = int(sensor)
 
         self._lib.VLK_TrackTargetPositionEx(
-            ctypes.byref(param), x, y, width, height
+            ctypes.byref(param), x, y, video_width, video_height
         )
 
         result["success"] = True
-        result["message"] = f"开始跟踪: 位置({x},{y}), 尺寸({width}x{height})"
+        result["message"] = f"开始跟踪: 位置({x},{y}), 视频({video_width}x{video_height})"
         self.log(result["message"])
 
         return result

@@ -107,6 +107,10 @@ class FakeDirectPayload:
         self.calls.append(("move", yaw_speed, pitch_speed))
         return {"success": True}
 
+    def stop(self):
+        self.calls.append(("stop",))
+        return {"success": True}
+
     def zoom_to(self, magnification):
         self.calls.append(("zoom_to", magnification))
         return {"success": True}
@@ -131,7 +135,7 @@ class FakeDirectPayload:
         self.calls.append(("stop_focus",))
         return {"success": True}
 
-    def start_track(self, x, y, width, height):
+    def start_track(self, x, y, width, height, template_size=None, sensor=None):
         self.calls.append(("start_track", x, y, width, height))
         return {"success": True}
 
@@ -259,7 +263,23 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
 
-    def test_camera_frame_zoom_uses_viewlink_zoom_without_tracking(self):
+    def test_camera_aim_uses_viewlink_track_target_position(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_aim(message("camera_aim", {
+            "payload_index": "52-0-0",
+            "locked": True,
+            "x": 0.25,
+            "y": 0.75,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("start_track", 320, 540, 1280, 720)])
+
+    def test_camera_frame_zoom_targets_selection_before_viewlink_zoom(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -275,9 +295,87 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         }))
 
         self.assertEqual(reply["data"]["result"], 0)
-        self.assertEqual(direct_payload.calls, [("zoom_to", 4.0)])
+        self.assertEqual(direct_payload.calls, [
+            ("start_track", 704, 396, 1920, 1080),
+            ("zoom_to", 4.0),
+            ("stop_track",),
+        ])
         self.assertEqual(reply["data"]["zoom_ratio"], 4.0)
+        self.assertEqual(reply["data"]["center_result"]["method"], "track_target_position")
+        self.assertEqual(reply["data"]["center_result"]["x"], 704)
+        self.assertEqual(reply["data"]["center_result"]["video_width"], 1920)
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
+
+    def test_camera_frame_zoom_keeps_tracking_when_locked(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "locked": True,
+            "x": 0.4,
+            "y": 0.4,
+            "width": 0.2,
+            "height": 0.2,
+            "frame_size": {"width": 1280, "height": 720},
+            "zoom_ratio": 2.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("start_track", 640, 360, 1280, 720),
+            ("zoom_to", 2.0),
+        ])
+        self.assertIsNone(reply["data"]["stop_track_result"])
+
+    def test_media_metadata_uses_real_file_size_and_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = os.path.join(tmp, "capture.png")
+            with open(file_path, "wb") as handle:
+                handle.write(
+                    b"\x89PNG\r\n\x1a\n"
+                    b"\x00\x00\x00\rIHDR"
+                    + (640).to_bytes(4, "big")
+                    + (480).to_bytes(4, "big")
+                    + b"\x08\x02\x00\x00\x00"
+                )
+
+            camera = CameraController()
+            metadata, media_data = camera._build_media_metadata_record("photo", file_path=file_path)
+            expected_size = os.path.getsize(file_path)
+
+            self.assertEqual(media_data["file_name"], "capture.png")
+            self.assertEqual(media_data["file_path"], file_path)
+            self.assertEqual(media_data["file_size"], metadata["file_size"])
+            self.assertEqual(media_data["file_size"], expected_size)
+            self.assertEqual(media_data["resolution"], "640x480")
+            self.assertEqual(metadata["resolution"], "640x480")
+
+    def test_camera_photo_stop_returns_failure_when_viewlink_thread_stays_alive(self):
+        class StuckThread:
+            def __init__(self):
+                self.join_timeout = None
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                self.join_timeout = timeout
+
+        camera = CameraController()
+        thread = StuckThread()
+        camera._photo_session_thread = thread
+
+        reply = camera.handle_camera_photo_stop(message("camera_photo_stop", {
+            "payload_index": "52-0-0",
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertTrue(camera._photo_session_stop.is_set())
+        self.assertEqual(thread.join_timeout, 2.0)
+        self.assertTrue(reply["data"]["running"])
+        self.assertFalse(reply["data"]["stopped"])
 
     def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):
         camera = CameraController()
