@@ -85,7 +85,13 @@ def _adapter(args: argparse.Namespace) -> JzSpeakerAdapter:
 
 
 def _print_result(label: str, result) -> None:
-    print(f"{label}: {json.dumps(result.as_output(), ensure_ascii=False)}")
+    print(f"{label}: {json.dumps(result.as_output(), ensure_ascii=False, default=_json_default)}")
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).hex(" ")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
@@ -301,6 +307,24 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    speaker = _adapter(args)
+    try:
+        print(json.dumps(speaker.query_status(), ensure_ascii=False))
+    finally:
+        speaker.close()
+    return 0
+
+
+def cmd_current_file(args: argparse.Namespace) -> int:
+    speaker = _adapter(args)
+    try:
+        _print_result("current_file", speaker.query_current_audio_file())
+    finally:
+        speaker.close()
+    return 0
+
+
 def cmd_list_audio_devices(args: argparse.Namespace) -> int:
     input_type = args.input_type or "dshow"
     command = ["ffmpeg", "-list_devices", "true", "-f", input_type, "-i", "dummy"]
@@ -427,6 +451,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     stop = subparsers.add_parser("stop", help="Stop current playback")
     stop.set_defaults(func=cmd_stop)
+
+    status = subparsers.add_parser("status", help="Query speaker status")
+    status.set_defaults(func=cmd_status)
+
+    current_file = subparsers.add_parser("current-file", help="Query current stored audio file")
+    current_file.set_defaults(func=cmd_current_file)
 
     list_devices = subparsers.add_parser("list-audio-devices", help="List local ffmpeg audio input devices")
     list_devices.add_argument("--input-type", default="dshow")
