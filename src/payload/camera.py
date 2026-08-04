@@ -616,7 +616,13 @@ class CameraController:
                     if result.get("success"):
                         self._photo_count += 1
                         taken += 1
-                        self._save_media_metadata_sync("photo")
+                        self._save_media_metadata_sync(
+                            "photo",
+                            file_path=result.get("file_path") or result.get("path"),
+                            file_name=result.get("file_name") or result.get("name"),
+                            file_size=result.get("file_size") or result.get("size"),
+                            resolution=result.get("resolution"),
+                        )
                         self.report_photo_progress(self._photo_count, self._photo_count)
                     else:
                         logger.warning("ViewLink photo session command failed: %s", result)
@@ -669,10 +675,10 @@ class CameraController:
             self._photo_count += 1
             self._save_media_metadata_sync(
                 'photo',
-                file_path=data.get("file_path"),
-                file_name=data.get("file_name"),
-                file_size=data.get("file_size"),
-                resolution=data.get("resolution"),
+                file_path=data.get("file_path") or result.get("file_path") or result.get("path"),
+                file_name=data.get("file_name") or result.get("file_name") or result.get("name"),
+                file_size=data.get("file_size") or result.get("file_size") or result.get("size"),
+                resolution=data.get("resolution") or result.get("resolution"),
             )
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
@@ -1156,12 +1162,23 @@ class CameraController:
     @classmethod
     def _normalize_frame_zoom_box(cls, data: dict) -> tuple[dict, dict, dict]:
         frame_size = cls._frame_zoom_frame_size(data)
-        normalized = data.get("normalized") if isinstance(data.get("normalized"), dict) else {}
+        normalized = {}
+        for key in ("normalized", "normalized_box", "selection", "selection_box", "box"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                normalized = value
+                break
         if normalized:
             norm_x = cls._frame_zoom_number(normalized, "x", 0.0)
             norm_y = cls._frame_zoom_number(normalized, "y", 0.0)
             norm_width = cls._frame_zoom_number(normalized, "width", 1.0)
             norm_height = cls._frame_zoom_number(normalized, "height", 1.0)
+            looks_normalized = all(0.0 <= value <= 1.0 for value in (norm_x, norm_y, norm_width, norm_height))
+            if not looks_normalized:
+                norm_x = norm_x / frame_size["width"]
+                norm_y = norm_y / frame_size["height"]
+                norm_width = norm_width / frame_size["width"]
+                norm_height = norm_height / frame_size["height"]
         else:
             raw_x = cls._frame_zoom_number(data, "x", 0.0)
             raw_y = cls._frame_zoom_number(data, "y", 0.0)
@@ -1429,7 +1446,15 @@ class CameraController:
                 await MediaDB.create_media_file(session, media_data)
                 await session.commit()
 
-            logger.info(f"Media metadata saved: {file_name}, type={file_type}")
+            logger.info(
+                "Media metadata saved: name=%s type=%s path=%s file_size=%s resolution=%s file_exists=%s",
+                file_name,
+                file_type,
+                media_data.get("file_path", ""),
+                media_data.get("file_size"),
+                media_data.get("resolution"),
+                os.path.exists(media_data.get("file_path", "")),
+            )
 
             # 上报拍照结果事件
             if self._event_callback:

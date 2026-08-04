@@ -354,6 +354,35 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         ])
         self.assertEqual(reply["data"]["center_result"]["message"], "frame center already aligned")
 
+    def test_camera_frame_zoom_accepts_normalized_box_payload(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "camera_type": "zoom",
+            "normalized_box": {"x": 0.35, "y": 0.30, "width": 0.20, "height": 0.20},
+            "zoom_ratio": 4.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["normalized"], {
+            "x": 0.35,
+            "y": 0.30,
+            "width": 0.20,
+            "height": 0.20,
+        })
+        self.assertEqual(reply["data"]["x"], 672)
+        self.assertEqual(reply["data"]["y"], 324)
+        self.assertEqual(reply["data"]["width"], 384)
+        self.assertEqual(reply["data"]["height"], 216)
+        self.assertEqual(direct_payload.calls, [
+            ("move", -120, 240),
+            ("stop",),
+            ("zoom_to", 4.0),
+        ])
+
     def test_camera_frame_zoom_infers_zoom_ratio_from_selection_size(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()

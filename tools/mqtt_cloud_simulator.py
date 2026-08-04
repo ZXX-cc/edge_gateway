@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.cloud_api.dock3_device import validate_update_topo_payload as validate_dock3_update_topo_payload
-from tool_config import add_config_argument, resolve_mqtt_settings
+from tool_config import add_config_argument, resolve_mqtt_credentials, resolve_mqtt_settings
 
 mqtt = None
 
@@ -39,6 +39,8 @@ def parse_args():
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
+    parser.add_argument("--username", default=None)
+    parser.add_argument("--password", default=None)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--once", action="store_true", help="Reply to one request and exit.")
     parser.add_argument(
@@ -96,6 +98,7 @@ def parse_args():
     )
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    args.username, args.password = resolve_mqtt_credentials(args)
     return args
 
 
@@ -258,6 +261,8 @@ def main():
     exit_code = {"value": 0}
 
     client = build_client(f"edge_gateway_cloud_sim_{uuid.uuid4().hex[:8]}")
+    if args.username:
+        client.username_pw_set(args.username, args.password)
 
     def on_connect(client, userdata, flags, rc):
         if rc != 0:

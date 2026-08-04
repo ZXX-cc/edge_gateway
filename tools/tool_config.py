@@ -98,3 +98,23 @@ def resolve_mqtt_settings(args):
     host, port = _normalize_broker_address(host, raw_port)
 
     return host, port, str(sn)
+
+
+def resolve_mqtt_credentials(args):
+    data = load_config(getattr(args, "config", DEFAULT_CONFIG))
+    mqtt_config = _nested(data, "nanomq", default={}) or {}
+    cloud_config = _nested(data, "cloud", default={}) or {}
+
+    username = (
+        getattr(args, "username", None)
+        or mqtt_config.get("username")
+        or cloud_config.get("username")
+        or ""
+    )
+    password = (
+        getattr(args, "password", None)
+        or mqtt_config.get("password")
+        or cloud_config.get("password")
+        or ""
+    )
+    return str(username), str(password)
