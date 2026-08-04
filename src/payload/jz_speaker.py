@@ -153,6 +153,7 @@ class JzSpeakerAdapter:
         self.timeout = float(self.config.get("timeout_seconds") or 1.0)
         self.write_timeout = float(self.config.get("write_timeout_seconds") or self.timeout)
         self.wait_reply = bool(self.config.get("wait_reply", False))
+        self.connect_probe = bool(self.config.get("connect_probe", self.wait_reply))
         self.auto_connect = bool(self.config.get("auto_connect", False))
         self.text_encoding = str(self.config.get("text_encoding") or "utf-8")
         self.transport = str(self.config.get("transport") or "").lower()
@@ -222,6 +223,8 @@ class JzSpeakerAdapter:
             except Exception as exc:
                 logger.error("JZ speaker serial open failed: %s", exc)
                 return JzSpeakerResult(False, message=str(exc))
+        if not self.connect_probe:
+            return JzSpeakerResult(True, output={"connection_state": self.connection_state()})
         result = self.send_command(0x50, 0x51, b"\x00", ack=True)
         if result.ok and result.output and "model_code" in result.output:
             result.output["model"] = MODEL_NAMES.get(result.output["model_code"], "unknown")
