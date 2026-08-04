@@ -280,7 +280,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("start_track", 320, 540, 1280, 720)])
 
-    def test_camera_frame_zoom_targets_selection_before_viewlink_zoom(self):
+    def test_camera_frame_zoom_centers_selection_before_viewlink_zoom(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -297,17 +297,17 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [
-            ("start_track", 704, 396, 1920, 1080),
+            ("move", -320, 320),
+            ("stop",),
             ("zoom_to", 4.0),
-            ("stop_track",),
         ])
         self.assertEqual(reply["data"]["zoom_ratio"], 4.0)
-        self.assertEqual(reply["data"]["center_result"]["method"], "track_target_position")
-        self.assertEqual(reply["data"]["center_result"]["x"], 704)
-        self.assertEqual(reply["data"]["center_result"]["video_width"], 1920)
+        self.assertEqual(reply["data"]["center_result"]["method"], "move_to_center")
+        self.assertEqual(reply["data"]["center_result"]["yaw_speed"], -320)
+        self.assertEqual(reply["data"]["center_result"]["pitch_speed"], 320)
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
 
-    def test_camera_frame_zoom_keeps_tracking_when_locked(self):
+    def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -325,10 +325,9 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [
-            ("start_track", 640, 360, 1280, 720),
             ("zoom_to", 2.0),
         ])
-        self.assertIsNone(reply["data"]["stop_track_result"])
+        self.assertEqual(reply["data"]["center_result"]["message"], "frame center already aligned")
 
     def test_media_metadata_uses_real_file_size_and_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:

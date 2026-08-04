@@ -1232,50 +1232,36 @@ class CameraController:
 
         result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
         center_result = {"success": True, "message": "frame center already aligned", "skipped": True}
-        track_result = {"success": True, "message": "ViewLink target positioning skipped", "skipped": True}
-        stop_track_result = None
+        stop_result = None
         if self._gimbal_control and self._gimbal_control.is_connected():
-            center_x = int(round(x + width / 2.0))
-            center_y = int(round(y + height / 2.0))
-            if hasattr(self._gimbal_control, "start_track"):
-                track_result = self._gimbal_control.start_track(
-                    center_x,
-                    center_y,
-                    frame_size["width"],
-                    frame_size["height"],
-                )
+            if center_speed["yaw_speed"] or center_speed["pitch_speed"]:
+                move_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
                 center_result = {
-                    "success": bool(track_result.get("success", False)),
-                    "method": "track_target_position",
-                    "x": center_x,
-                    "y": center_y,
-                    "video_width": frame_size["width"],
-                    "video_height": frame_size["height"],
-                    "viewlink_result": track_result,
+                    "success": bool(move_result.get("success", False)),
+                    "method": "move_to_center",
+                    "yaw_speed": center_speed["yaw_speed"],
+                    "pitch_speed": center_speed["pitch_speed"],
+                    "viewlink_result": move_result,
                 }
-                logger.info("ViewLink frame zoom/track target: %s", track_result)
-            elif center_speed["yaw_speed"] or center_speed["pitch_speed"]:
-                center_result = self._gimbal_control.move(center_speed["yaw_speed"], center_speed["pitch_speed"])
-                logger.info("ViewLink frame zoom/center move: %s", center_result)
-                if center_result.get("success") and hasattr(self._gimbal_control, "stop"):
-                    time.sleep(0.15)
+                logger.info("ViewLink frame zoom/center move: %s", move_result)
+                if center_result["success"] and hasattr(self._gimbal_control, "stop"):
+                    settle_seconds = self._frame_zoom_number(
+                        data,
+                        "center_duration",
+                        float(Config.get("payload.frame_zoom_centering_duration", 0.15) or 0.15),
+                    )
+                    time.sleep(max(0.05, min(1.0, settle_seconds)))
                     stop_result = self._gimbal_control.stop()
-                    center_result = {
-                        **center_result,
-                        "stop_result": stop_result,
-                    }
+                    center_result["stop_result"] = stop_result
+                    center_result["success"] = bool(stop_result.get("success", False))
+                    logger.info("ViewLink frame zoom/center stop: %s", stop_result)
             if center_result.get("success", False):
                 result = self._gimbal_control.zoom_to(zoom_ratio)
-                if hasattr(self._gimbal_control, "start_track") and not bool(data.get("locked", False)):
-                    if hasattr(self._gimbal_control, "stop_track"):
-                        stop_track_result = self._gimbal_control.stop_track()
-                        logger.info("ViewLink frame zoom/stop track: %s", stop_track_result)
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
 
         success = bool(
             center_result.get("success", False)
             and result.get("success", False)
-            and (stop_track_result is None or stop_track_result.get("success", False))
         )
         if success:
             self._zoom_level = zoom_ratio
@@ -1294,8 +1280,7 @@ class CameraController:
             },
             "center_speed": center_speed,
             "center_result": center_result,
-            "track_result": track_result,
-            "stop_track_result": stop_track_result,
+            "stop_result": stop_result,
             "viewlink_result": result,
         })
 
