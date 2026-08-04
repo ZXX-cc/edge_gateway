@@ -54,6 +54,7 @@ from src.payload.gimbal import GimbalController
 from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
+from web.mavlink.camera.mapping import build_camera_setting
 
 
 def message(method, data=None):
@@ -410,7 +411,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
 
-        zoom = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {"zoom_ratio": 3.5}))
+        zoom = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {"zoom_factor": 3.5}))
         focus_mode = camera.handle_camera_focus_mode_set(message("camera_focus_mode_set", {"mode": "manual_focus"}))
         focus_value = camera.handle_camera_focus_value_set(message("camera_focus_value_set", {
             "focus_distance": -1,
@@ -427,6 +428,30 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("focus_in", 2),
             ("stop_focus",),
         ])
+
+    def test_camera_focal_length_set_keeps_legacy_zoom_ratio_compatibility(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        zoom = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {"zoom_ratio": 2.5}))
+
+        self.assertEqual(zoom["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("zoom_to", 2.5)])
+
+    def test_camera_focal_length_set_mapping_uses_cloud_zoom_factor(self):
+        mapping = build_camera_setting("camera_focal_length_set", {
+            "payload_index": "39-0-7",
+            "camera_type": "zoom",
+            "zoom_factor": 5,
+        })
+
+        self.assertEqual(mapping["canonical_method"], "zoom")
+        self.assertEqual(mapping["setting"], {
+            "payload_index": "39-0-7",
+            "camera_type": "zoom",
+            "zoom_factor": 5,
+        })
 
     def test_ir_display_mode_set_uses_viewlink_image_color(self):
         gimbal = GimbalController()

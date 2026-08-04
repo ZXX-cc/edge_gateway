@@ -693,7 +693,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "payload_index": args.payload_index,
                 "camera_index": 0,
                 "camera_type": "zoom",
-                "zoom_ratio": state["zoom_ratio"],
+                "zoom_factor": state["zoom_ratio"],
             }
             rc, reply = request_services("camera_focal_length_set", payload)
             return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "reply": reply}

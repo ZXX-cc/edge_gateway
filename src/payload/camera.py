@@ -973,10 +973,10 @@ class CameraController:
         """
         变焦控制
 
-        Request: { zoom_ratio } 或 { zoom_direction, zoom_speed }
+        Request: { zoom_factor/zoom_ratio } 或 { zoom_direction, zoom_speed }
         """
         data = msg.get('data', {})
-        ratio = data.get('zoom_ratio')
+        ratio = data.get('zoom_factor', data.get('zoom_ratio'))
         self._log_camera_setting_mapping('zoom', data)
 
         success = False
@@ -1594,7 +1594,7 @@ class CameraController:
         """
         设置焦距 (camera_focal_length_set)
 
-        别名，调用 zoom
+        上云字段为 zoom_factor；兼容旧内部字段 zoom_ratio。
         """
         return self.handle_zoom(msg)
 
