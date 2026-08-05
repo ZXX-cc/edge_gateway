@@ -81,11 +81,11 @@ def assert_gimbal_payload_state(message: dict, *, pitch=None, roll=None, yaw=Non
 
 
 def run_payload_checks(client: Dock3PayloadClient, args) -> int:
-    rc, camera_capability = client.request("camera_capability_query", {}, args.timeout, [0])
+    rc, camera_capability = client.request("payload_capability_query", {}, args.timeout, [0])
     if rc != 0:
         return rc
-    if "max_zoom_ratio" not in camera_capability.get("data", {}):
-        print(f"camera capability missing max_zoom_ratio: {camera_capability}", file=sys.stderr)
+    if "supported_payloads" not in camera_capability.get("data", {}):
+        print(f"payload capability missing supported_payloads: {camera_capability}", file=sys.stderr)
         return 10
 
     rc, gimbal_capability = client.request("gimbal_capability_query", {}, args.timeout, [0])

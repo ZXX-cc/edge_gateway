@@ -1,10 +1,10 @@
 # MQTT Method 覆盖台账
 
-更新时间：2026-07-09
+更新时间：2026-08-05
 
 本文档把 `src/main.py` 中实际注册的 MQTT method 归入客户需求、Dock3 迁移优先级和 30 天验收范围。它用于补足章节级需求矩阵之后的 method 级覆盖口径。当前策略是客户需求优先：客户需求涉及的 method 必须优先可用，客户暂未提及/当前业务未使用的 Dock3 能力可以延期迁移。
 
-统计来源：静态解析 `src/main.py` 的 `self.router.register_batch(...)`。当前唯一 method 数为 **243**。
+统计来源：静态解析 `src/main.py` 的 `self.router.register_batch(...)`。当前唯一 method 数为 **267**。2026-08-05 已移除未被当前业务使用且不兼容 Dock3 上云 API 的旧 `dock_*` services 入口和旧相机 services 入口。
 
 ## 1. 使用规则
 
@@ -12,7 +12,7 @@
 |---|---|
 | 最终协议 | 客户需求涉及的上云能力必须以 DJI Dock 3 Cloud API 作为 topic、method、payload、reply、字段、枚举和错误码标准 |
 | 旧 method | 旧 Dock/Dock1/Dock2 风格 method 可以作为兼容入口，但必须标明 adapter/legacy，不作为最终验收字段 |
-| 未覆盖 method | 243 个 method 都必须有处置状态：Customer Required、Integration Support、Dock3 Official、Legacy Compat、Adapter/P2、Deferred、弃用候选 |
+| 未覆盖 method | 267 个 method 都必须有处置状态：Customer Required、Integration Support、Dock3 Official、Legacy Compat、Adapter/P2、Deferred、弃用候选 |
 | P0/P1 method | 不能只“已路由”，必须有专项脚本、E2E 或明确验收证据 |
 | P2 method | 可以有限可用，但必须有入口、错误码、日志、限制说明和不影响 P0/P1 的证明 |
 | Deferred method | 客户暂未提及、当前业务未用到的 Dock3 能力可以暂缓字段级迁移，但必须记录原因、不得影响客户主链路 |
@@ -33,24 +33,25 @@
 
 | Router category | Method 数 | 30 天优先级 | 客户能力域 | 当前判定 |
 |---|---:|---|---|---|
-| device | 51 | P0/P1/P2 | 设备管理、属性、绑定、机巢控制、HMS、日志、配置、OTA、AirSense | P0/P1 混合，需拆分验收 |
-| mission | 42 | P0/P1 | 航线、飞控、返航、降落、一键启航、作业 | Wayline 基础已验证，一键启航本地闭环已补；KMZ/SITL/Ubuntu 实证待补 |
-| payload | 93 | P1/P2 | 相机、云台、ViewLink、红外、喊话器、探照灯、PSDK、第三方负载 | 大部分需 P1/P2 adapter 和专项脚本 |
-| media | 13 | P1/P2 | 媒体文件、上传、直播、镜头、质量 | P1 必补专项 |
-| drc | 24 | P0/P1/P2 | DRC 建链、杆量、指点飞行、负载控制、POI | 基础已验证，心跳/超时/指点飞行待补 |
-| dock | 8 | P0/P1 legacy | 机场状态、控制、告警、调度、天气 | 旧 Dock 风格，必须迁移为 Dock3 properties/cmd/HMS |
+| device | 59 | P0/P1/P2 | 设备管理、属性、绑定、机巢控制、HMS、日志、配置、OTA、AirSense | P0/P1 混合，需拆分验收 |
+| mission | 54 | P0/P1 | 航线、飞控、返航、降落、一键启航、作业 | Wayline 基础已验证，一键启航本地闭环已补；KMZ/SITL/Ubuntu 实证待补 |
+| payload | 107 | P1/P2 | 相机、云台、ViewLink、红外、喊话器、探照灯、PSDK、第三方负载 | 大部分需 P1/P2 adapter 和专项脚本；旧相机 services 入口已清理 |
+| media | 18 | P1/P2 | 媒体文件、上传、直播、镜头、质量 | P1 必补专项 |
+| services | 3 | P0/P1 | DRC services 控制权 | Dock3 services topic 下的跨域入口 |
+| drc | 14 | P0/P1/P2 | DRC 建链后杆量、控制数据、POI | 基础已验证，心跳/超时/指点飞行待补 |
+| dock | 0 | Removed legacy | 机场状态、控制、告警、调度、天气 | 旧 Dock/Dock1 services 入口已移除；改走 Dock3 properties/CMD/HMS |
 | log | 3 | P1 | 远程日志 | P1 必补专项 |
 | flysafe | 3 | P2 | 远程解禁 | P2 adapter |
 | flight_area | 2 | P2 | 自定义飞行区 | P2/P1 边界，基础缓存和回包需补 |
 | custom_data | 4 | P2 | PSDK/ESDK 透传 | P2 adapter |
-| 合计 | 244 | 全部处置 | 客户文档相关功能和当前代码入口 | 不能按旧 224 口径验收；不代表 244 个 method 都必须在 30 天内完成 Dock3 字段级迁移 |
+| 合计 | 267 | 全部处置 | 客户文档相关功能和当前代码入口 | 不能按旧 224/243/288 口径验收；不代表 267 个 method 都必须在 30 天内完成 Dock3 字段级迁移 |
 
 ## 3. 30 天验收分组
 
 | 验收域 | 关联 method | Backlog | 必须证据 |
 |---|---|---|---|
 | P0 MQTT/属性/拓扑 | `property_set`, `property_get`, `airport_bind_status`, `workspace_bind_status`, `workspace_get`, `update_topo`, `device_binding`, `device_unbinding` | P0-01 到 P0-05、P1-14 | P0 批量、properties、device、organization 专项 |
-| P0/P1 机巢和 CMD | `cover_open`, `cover_close`, `cover_force_close`, `charge_open`, `charge_close`, `putter_open`, `putter_close`, `drone_open`, `drone_close`, `debug_mode_open`, `debug_mode_close`, `battery_maintenance_switch`, `air_conditioner_mode_switch`, `alarm_state_switch`, `battery_store_mode_switch`, `dock_control`, `dock_emergency_stop`, `dock_reset` | P0-11 到 P0-13、P1-02、P1-15 | CMD 专项、机巢 v1.3 专项 |
+| P0/P1 机巢和 CMD | `cover_open`, `cover_close`, `cover_force_close`, `charge_open`, `charge_close`, `putter_open`, `putter_close`, `drone_open`, `drone_close`, `debug_mode_open`, `debug_mode_close`, `battery_maintenance_switch`, `air_conditioner_mode_switch`, `alarm_state_switch`, `battery_store_mode_switch` | P0-11 到 P0-13、P1-02、P1-15 | CMD 专项、机巢 v1.3 专项 |
 | P0/P1 飞控和航线 | `flighttask_prepare`, `flighttask_execute`, `flighttask_undo`, `flighttask_return`, `flighttask_progress`, `flighttask_pause`, `flighttask_resume`, `resume_wayline_task`, `return_home_cancel`, `take_off`, `landing`, `go_home`, `return_home`, `set_flight_mode`, `start_takeoff_to_point`, `takeoff_to_point` | P0-08、P0-10、P1-01、P1-04 到 P1-06 | Wayline、DRC、SITL、起飞流程 E2E |
 | P0/P1 DRC | `drc_mode_enter`, `drc_mode_exit`, `stick_control`, `drone_control`, `payload_control`, `drc_gimbal_speed_push`, `drc_speed_push`, `drc_heading_push`, `drc_altitude_push`, `drc_flyto_point_push`, `fly_to_point`, `fly_to_point_stop`, `fly_to_point_update` | P0-09、P1-03、P1-04 | DRC 专项、超时恢复、SITL |
 | P1 媒体和直播 | `file_list_get`, `file_delete`, `adjust_upload_priority`, `storage_config_get`, `live_start`, `live_stop`, `set_livestream_lens`, `set_livestream_quality`, `highest_priority_upload_flighttask_media`, `upload_flighttask_media_prioritize`, `live_lens_change`, `live_set_quality` | P1-07、P1-08 | media/live 专项 |
@@ -101,41 +102,49 @@ flight_setup_abort, flighttask_create, flighttask_recovery,
 return_home_cancel, job_create, job_delete, job_query
 ```
 
-### 4.3 payload：93
+### 4.3 payload：107
 
 ```text
-camera_photo_take, start_photo, stop_photo, start_record, stop_record,
-set_camera_mode, set_exposure_mode, zoom, set_focus_mode,
-set_focus_value, spot_focus, photo_storage_set, camera_recover,
-camera_reset, set_shutter_speed, set_iso, set_white_balance,
-set_aperture, set_metering_mode, set_resolution, set_frame_rate,
-set_video_encoding, camera_capability_query, camera_photo_stop,
-camera_recording_start, camera_recording_stop,
-camera_focal_length_set, camera_point_focus_action,
-camera_exposure_mode_set, camera_focus_mode_set,
-camera_focus_value_set, gimbalRotate, gimbal_rotate, camera_look_at,
-set_gimbal_mode, gimbal_reset, gimbal_capability_query,
-gimbal_status_query, viewlink_initialize, viewlink_connect,
-viewlink_disconnect, viewlink_is_connected, viewlink_move,
-viewlink_stop, viewlink_home, viewlink_turn_to, viewlink_zoom_in,
-viewlink_zoom_out, viewlink_stop_zoom, viewlink_start_track,
-viewlink_stop_track, viewlink_take_photo, viewlink_start_recording,
+gimbalRotate, gimbal_rotate, set_gimbal_mode, gimbal_capability_query,
+gimbal_status_query, camera_screen_drag, viewlink_initialize,
+viewlink_connect, viewlink_disconnect, viewlink_is_connected,
+viewlink_move, viewlink_stop, viewlink_home, viewlink_turn_to,
+viewlink_zoom_in, viewlink_zoom_out, viewlink_stop_zoom,
+viewlink_zoom_to, viewlink_focus_in, viewlink_focus_out,
+viewlink_stop_focus, viewlink_set_focus_mode, viewlink_get_focus_mode,
+viewlink_switch_eo_digital_zoom, viewlink_ir_digital_zoom_in,
+viewlink_ir_digital_zoom_out, viewlink_switch_defog,
+viewlink_is_defog_on, viewlink_switch_laser, viewlink_laser_single,
+viewlink_laser_zoom_in, viewlink_laser_zoom_out,
+viewlink_laser_stop_zoom, viewlink_set_laser_zoom_mode,
+viewlink_start_track, viewlink_stop_track, viewlink_is_tracking,
+viewlink_take_photo, viewlink_start_recording,
 viewlink_stop_recording, viewlink_is_recording,
-viewlink_set_record_mode, ir_metering_mode_set,
+viewlink_set_record_mode, viewlink_get_record_mode,
 ir_color_palette_set, ir_display_mode_set, ir_isotherm_set,
 ir_zoom_set, drc_light_control_set, drc_light_calibration,
 drc_light_fine_tuning_set, drc_speaker_tts_set,
 drc_speaker_play_volume_set, drc_speaker_audio_play,
 drc_speaker_audio_pause, drc_speaker_audio_stop, psdk_function_set,
-set_thermal_mode, set_palette, payload_authority_grab,
-payload_authority_release, payload_status_query, parachute_open,
-parachute_status_query, night_vision_mode_set, gas_detector_data_get,
-radar_status_query, searchlight_status_query, speaker_status_query,
-payload_capability_query, psdk_ui_resource_upload_result,
-psdk_floating_window_text, psdk_widget_value_set,
-psdk_input_box_text_set, speaker_replay, speaker_play_mode_set,
-speaker_play_stop, speaker_audio_play_start, speaker_tts_play_start,
-speaker_play_volume_set
+set_thermal_mode, set_palette, payload_authority_release,
+payload_status_query, parachute_open, parachute_status_query,
+night_vision_mode_set, gas_detector_data_get, radar_status_query,
+searchlight_status_query, speaker_status_query, payload_capability_query,
+psdk_ui_resource_upload_result, psdk_floating_window_text,
+psdk_widget_value_set, psdk_input_box_text_set, speaker_replay,
+speaker_play_mode_set, speaker_play_stop, speaker_audio_play_start,
+speaker_tts_play_start, speaker_play_volume_set,
+speaker_realtime_start, speaker_opus_frame_send,
+speaker_realtime_stop, speaker_fixed_text_loop_start,
+speaker_fixed_text_loop_stop, speaker_audio_file_list_get,
+speaker_current_audio_file_get, camera_frame_zoom, camera_mode_switch,
+camera_photo_take, camera_photo_stop, camera_recording_start,
+camera_recording_stop, camera_focal_length_set, camera_exposure_set,
+camera_focus_mode_set, camera_focus_value_set,
+camera_point_focus_action, camera_exposure_mode_set, camera_aim,
+camera_screen_split, gimbal_reset, camera_look_at,
+photo_storage_set, video_storage_set, payload_authority_grab,
+ir_metering_mode_set, ir_metering_point_set, ir_metering_area_set
 ```
 
 ### 4.4 media：13
@@ -160,12 +169,14 @@ poi_mode_enter, poi_mode_exit, poi_circle_speed_set,
 drone_emergency_stop, takeoff_to_point
 ```
 
-### 4.6 dock：8
+### 4.6 dock：0
 
 ```text
+2026-08-05 已移除旧 Dock/Dock1 风格 services 入口：
 dock_status_query, dock_control, dock_alarm_query,
 dock_task_schedule_query, dock_task_schedule_set, dock_emergency_stop,
-dock_reset, dock_weather_query
+dock_reset, dock_weather_query。
+当前云端验收应使用 Dock3 properties、CMD、HMS、gateway_state_query。
 ```
 
 ### 4.7 log：3

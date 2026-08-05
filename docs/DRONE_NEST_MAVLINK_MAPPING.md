@@ -124,7 +124,7 @@
 |---|---|
 | `src/device/nest_property_mapper.py` | 统一将 `DroneNestModule` 输出转换为当前上云属性/状态字段 |
 | `DeviceManager.update_from_nest()` | 更新设备物模型属性，供 `state/osd/property` 链路使用 |
-| `DockManager.update_dock_status()` | 更新 `dock_status_query` 使用的机场状态快照 |
+| `DockManager.update_dock_status()` | 更新内部机巢状态缓存，供 Dock3 properties/state/osd 映射使用 |
 
 字段映射：
 

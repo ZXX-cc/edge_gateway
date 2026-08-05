@@ -158,9 +158,7 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'debug_mode_close', 'battery_maintenance_switch',
     'air_conditioner_mode_switch', 'alarm_state_switch',
     'battery_store_mode_switch', 'config',
-    'airsense_warning', 'dock_status_query', 'dock_control',
-    'dock_alarm_query', 'dock_task_schedule_query', 'dock_task_schedule_set',
-    'dock_emergency_stop', 'dock_reset', 'dock_weather_query',
+    'airsense_warning',
 
     # services -> services_reply: mission / wayline / job
     'load_wayline', 'upload_wayline', 'execute_task', 'cancel_task',
@@ -182,12 +180,7 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'job_create', 'job_delete', 'job_query',
 
     # services -> services_reply: payload / media / live
-    'start_photo', 'stop_photo', 'start_record', 'stop_record',
-    'set_camera_mode', 'set_exposure_mode', 'zoom', 'set_focus_mode',
-    'set_focus_value', 'spot_focus', 'camera_recover', 'camera_reset',
-    'set_shutter_speed', 'set_iso', 'set_white_balance', 'set_aperture',
-    'set_metering_mode', 'set_resolution', 'set_frame_rate',
-    'set_video_encoding', 'camera_capability_query', 'gimbalRotate',
+    'gimbalRotate',
     'gimbal_rotate', 'set_gimbal_mode', 'gimbal_capability_query',
     'gimbal_status_query', 'camera_screen_drag', 'viewlink_initialize',
     'viewlink_connect', 'viewlink_disconnect', 'viewlink_is_connected',
@@ -997,7 +990,6 @@ class EdgeGateway:
                 self.drc.set_flight_control(self.flight_control)
                 self.drc.set_mode_control(self.mode_control)
                 self._enable_payload_flight_controller_fallback(self.mavlink_conn)
-                self.dock.set_nest_module(self.nest_module)
                 self.nest_module.set_flight_control(self.flight_control)
 
                 self.camera.set_flight_control(self.flight_control)
@@ -1077,8 +1069,6 @@ class EdgeGateway:
 
         if self.device:
             self.device.set_nest_module(self.nest_module)
-        if self.dock:
-            self.dock.set_nest_module(self.nest_module)
         if self.mission:
             self.mission.set_nest_module(self.nest_module)
 
@@ -1545,8 +1535,6 @@ class EdgeGateway:
                 self.history_logger.record_device_state_change(gateway_sn, state, source='dock_manager')
             self.telemetry_reporter.report_state(gateway_sn, state)
         self.dock.set_callbacks(dock_event_cb, dock_state_cb)
-        self.dock.set_telemetry_reporter(self.telemetry_reporter)
-        self.dock.set_telemetry_processor(self.telemetry)
 
         # 云端连接状态回调
         def cloud_status_cb(connected: bool):
@@ -1747,31 +1735,6 @@ class EdgeGateway:
             'job_query': self.mission.handle_job_query,
         }, category='mission')
 
-        # ---- 相机控制API (Camera Control) ----
-        self.router.register_batch({
-            'start_photo': self.camera.handle_start_photo,
-            'stop_photo': self.camera.handle_stop_photo,
-            'start_record': self.camera.handle_start_record,
-            'stop_record': self.camera.handle_stop_record,
-            'set_camera_mode': self.camera.handle_set_camera_mode,
-            'set_exposure_mode': self.camera.handle_set_exposure_mode,
-            'zoom': self.camera.handle_zoom,
-            'set_focus_mode': self.camera.handle_set_focus_mode,
-            'set_focus_value': self.camera.handle_set_focus_value,
-            'spot_focus': self.camera.handle_spot_focus,
-            'camera_recover': self.camera.handle_camera_recover,
-            'camera_reset': self.camera.handle_camera_reset,
-            'set_shutter_speed': self.camera.handle_set_shutter_speed,
-            'set_iso': self.camera.handle_set_iso,
-            'set_white_balance': self.camera.handle_set_white_balance,
-            'set_aperture': self.camera.handle_set_aperture,
-            'set_metering_mode': self.camera.handle_set_metering_mode,
-            'set_resolution': self.camera.handle_set_resolution,
-            'set_frame_rate': self.camera.handle_set_frame_rate,
-            'set_video_encoding': self.camera.handle_set_video_encoding,
-            'camera_capability_query': self.camera.handle_camera_capability_query,
-        }, category='payload')
-
         # ---- 云台控制API (Gimbal Control) ----
         self.router.register_batch({
             'gimbalRotate': self.gimbal.handle_gimbal_rotate,
@@ -1952,18 +1915,6 @@ class EdgeGateway:
             'ir_metering_point_set': self.gimbal.handle_ir_metering_point_set,
             'ir_metering_area_set': self.gimbal.handle_ir_metering_area_set,
         }, category='payload')
-
-        # ---- 机场管理API (DJI Dock) ----
-        self.router.register_batch({
-            'dock_status_query': self.dock.handle_dock_status_query,
-            'dock_control': self.dock.handle_dock_control,
-            'dock_alarm_query': self.dock.handle_dock_alarm_query,
-            'dock_task_schedule_query': self.dock.handle_dock_task_schedule_query,
-            'dock_task_schedule_set': self.dock.handle_dock_task_schedule_set,
-            'dock_emergency_stop': self.dock.handle_dock_emergency_stop,
-            'dock_reset': self.dock.handle_dock_reset,
-            'dock_weather_query': self.dock.handle_dock_weather_query,
-        }, category='dock')
 
         # ---- 日志管理API ----
         self.router.register_batch({

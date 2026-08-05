@@ -63,7 +63,7 @@ def run_property_checks(client, args):
 
 
 def run_status_checks(client, args):
-    rc, _ = client.request("dock_status_query", {}, args.timeout, channel="services", allowed_results={0})
+    rc, _ = client.request("gateway_state_query", {"compact": True}, args.timeout, channel="services", allowed_results={0})
     if rc != 0:
         return rc
 

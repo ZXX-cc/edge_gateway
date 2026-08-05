@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
     parser.add_argument("--channel", choices=["auto", *sorted(CHANNELS)], default="auto")
-    parser.add_argument("--method", default="dock_status_query")
+    parser.add_argument("--method", default="gateway_state_query")
     parser.add_argument("--payload", type=parse_payload, default={})
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)

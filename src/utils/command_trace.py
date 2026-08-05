@@ -57,7 +57,6 @@ _METHOD_ACTIONS = {
     "workspace_get": "工作空间查询",
     "workspace_bind_status": "工作空间绑定状态查询",
     "device_capability_query": "设备能力查询",
-    "dock_status_query": "机场状态查询",
     # Dock3 command/debug
     "cover_open": "舱盖打开",
     "cover_close": "舱盖关闭",

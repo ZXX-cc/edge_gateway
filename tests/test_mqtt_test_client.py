@@ -74,12 +74,12 @@ class MqttTestClientHelpersTest(unittest.TestCase):
         self.assertEqual(resolve_channel("stick_control"), "drc")
         self.assertEqual(resolve_channel("heart_beat"), "drc")
         self.assertEqual(resolve_channel("fly_to_point_update"), "services")
-        self.assertEqual(resolve_channel("dock_status_query"), "services")
-        self.assertEqual(resolve_channel("dock_status_query", "property"), "property")
+        self.assertEqual(resolve_channel("gateway_state_query"), "services")
+        self.assertEqual(resolve_channel("gateway_state_query", "property"), "property")
 
     def test_resolve_channel_rejects_unknown_explicit_channel(self):
         with self.assertRaises(ValueError):
-            resolve_channel("dock_status_query", "unknown")
+            resolve_channel("gateway_state_query", "unknown")
 
     def test_result_helpers_extract_top_level_and_property_results(self):
         reply = {
@@ -227,14 +227,14 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             "event": Event(),
             "topic": "",
             "payload": None,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "expected_topic": self.reply_topic,
         }
 
     def test_exact_tid_method_and_topic_reply_is_accepted(self):
         payload = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "msg": "",
             "data": {"result": 0},
@@ -248,7 +248,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.assertEqual(self.client.stats["accepted"], 1)
 
     def test_wrong_topic_is_ignored_even_when_tid_matches(self):
-        payload = {"tid": self.tid, "method": "dock_status_query", "data": {"result": 0}}
+        payload = {"tid": self.tid, "method": "gateway_state_query", "data": {"result": 0}}
 
         self.client._on_message(None, None, mqtt_message("thing/product/EDGEGW001/property/set_reply", payload))
 
@@ -259,7 +259,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
             {
                 "category": "wrong_topic",
                 "topic": "thing/product/EDGEGW001/property/set_reply",
-                "method": "dock_status_query",
+                "method": "gateway_state_query",
                 "tid": self.tid,
                 "result": 0,
                 "expected_topic": self.reply_topic,
@@ -281,12 +281,12 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
                 "method": "property_get",
                 "tid": self.tid,
                 "result": 0,
-                "expected_method": "dock_status_query",
+                "expected_method": "gateway_state_query",
             },
         )
 
     def test_legacy_negative_reply_is_ignored(self):
-        payload = {"tid": self.tid, "method": "dock_status_query", "data": {"result": -2}}
+        payload = {"tid": self.tid, "method": "gateway_state_query", "data": {"result": -2}}
 
         self.client._on_message(None, None, mqtt_message(self.reply_topic, payload))
 
@@ -300,7 +300,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client._mark_completed_tid(self.tid)
         payload = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "data": {"result": 0},
         }
@@ -319,7 +319,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client._mark_completed_tid(self.tid)
         payload = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "data": {"result": 0},
         }
         message = mqtt_message(self.reply_topic, payload)
@@ -339,7 +339,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client.pending.clear()
         payload = {
             "tid": "unknown-tid",
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "data": {"result": 0},
         }
@@ -358,7 +358,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client.pending[self.tid]["event"].set()
         payload = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "data": {"result": 0},
         }
@@ -374,14 +374,14 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
         self.client.pending[self.tid]["expected_status"] = "ok"
         legacy = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "msg": "",
             "data": {"result": 0},
         }
         current = {
             "tid": self.tid,
-            "method": "dock_status_query",
+            "method": "gateway_state_query",
             "gateway": "EDGEGW001",
             "msg": "",
             "data": {"result": 0, "output": {"status": "ok"}},
@@ -408,7 +408,7 @@ class MqttRequestClientMatchingTest(unittest.TestCase):
                     self.reply_topic,
                     {
                         "tid": f"unknown-{index}",
-                        "method": "dock_status_query",
+                        "method": "gateway_state_query",
                         "gateway": "EDGEGW001",
                         "data": {"result": 0},
                     },

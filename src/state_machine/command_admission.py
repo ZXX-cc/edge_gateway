@@ -57,9 +57,6 @@ class CommandAdmissionEngine:
         "property_get",
         "gateway_state_query",
         "hms_get",
-        "dock_status_query",
-        "dock_alarm_query",
-        "dock_weather_query",
         "device_log_list_get",
         "device_capability_query",
         "workspace_bind_status",
@@ -79,7 +76,6 @@ class CommandAdmissionEngine:
         "payload_capability_query",
         "gimbal_status_query",
         "gimbal_capability_query",
-        "camera_capability_query",
         "parachute_status_query",
         "radar_status_query",
         "searchlight_status_query",
@@ -98,8 +94,6 @@ class CommandAdmissionEngine:
     SAFETY_METHODS = frozenset({
         "emergency_stop",
         "drone_emergency_stop",
-        "dock_emergency_stop",
-        "dock_reset",
         "hms_clear",
         "flighttask_undo",
         "flighttask_stop",
@@ -110,14 +104,11 @@ class CommandAdmissionEngine:
         "in_flight_wayline_stop",
         "drc_mode_exit",
         "fault_recover",
-        "dock_control",
     })
 
     SAFETY_RECOVERY_METHODS = frozenset({
         "emergency_stop",
         "drone_emergency_stop",
-        "dock_emergency_stop",
-        "dock_reset",
         "hms_clear",
         "flighttask_undo",
         "flighttask_stop",
@@ -222,7 +213,6 @@ class CommandAdmissionEngine:
         "charge_close",
         "putter_open",
         "putter_close",
-        "dock_control",
         "drone_open",
         "drone_close",
         "supplement_light_open",
@@ -325,7 +315,7 @@ class CommandAdmissionEngine:
                 return self._reject(snapshot, "invalid_state_transition", "DRC 未激活，不能执行 DRC 控制命令", ["drc.active"], GLOBAL_INVALID_TRANSITION)
 
         if method in self.DOCK_CONTROL_METHODS:
-            return self._check_dock_control(method, request, snapshot)
+            return self._check_nest_control(method, request, snapshot)
 
         return self._accept(snapshot)
 
@@ -405,7 +395,7 @@ class CommandAdmissionEngine:
             return self._reject(snapshot, "aircraft_offline", "飞控未在线，不能进入 DRC", ["aircraft.online"], GLOBAL_ADMISSION_REJECTED)
         return self._accept(snapshot)
 
-    def _check_dock_control(self, method: str, request: dict, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
+    def _check_nest_control(self, method: str, request: dict, snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:
         if snapshot.mission in {"in_progress", "running"}:
             return self._reject(snapshot, "mission_busy", "航线任务运行中，不能执行冲突的机巢控制", ["mission.idle", "mission.paused"], GLOBAL_STATE_CONFLICT)
         if snapshot.dock == "busy":
@@ -415,11 +405,7 @@ class CommandAdmissionEngine:
         return self._accept(snapshot)
 
     def _is_safety_recovery_action(self, method: str, request: dict) -> bool:
-        if method != "dock_control":
-            return method in self.SAFETY_RECOVERY_METHODS
-        data = request.get("data", {}) if isinstance(request, dict) else {}
-        action = str(data.get("action", "")).lower()
-        return action in {"fault_recovery", "reset", "estop_off", "emergency_stop_off"}
+        return method in self.SAFETY_RECOVERY_METHODS
 
     @staticmethod
     def _accept(snapshot: GatewayStateSnapshot) -> CommandAdmissionDecision:

@@ -66,7 +66,7 @@
 | `src/cloud_api/connection_manager.py` | 设备上线、心跳、绑定、requests/requests_reply 请求匹配和超时清理 |
 | `src/cloud_api/telemetry_reporter.py` | OSD、state、events 上报和 MQTT 断线缓存 |
 | `src/cloud_api/capability_reporter.py` | 能力集上报 |
-| `src/cloud_api/dock_manager.py` | 上云 API 机场业务层，处理 `dock_status_query`、`dock_control` 等旧 Dock/Dock1 风格接口 |
+| `src/cloud_api/dock_manager.py` | 机巢状态缓存和 HMS 告警桥接；旧 `dock_status_query`、`dock_control` 等 Dock/Dock1 风格 services 入口已移除 |
 
 易混点：
 

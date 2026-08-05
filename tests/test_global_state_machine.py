@@ -66,7 +66,7 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
     def test_aircraft_offline_rejects_drc_enter(self):
         self.check("drc_mode_enter", snapshot(aircraft="offline"), False, "aircraft_offline")
 
-    def test_emergency_stop_blocks_normal_dock_control_but_allows_hms_clear(self):
+    def test_emergency_stop_blocks_normal_nest_control_but_allows_hms_clear(self):
         estop = snapshot(dock="emergency_stop", safety="emergency_stop")
         self.check("cover_open", estop, False, "emergency_stop_active")
         self.check("hms_clear", estop, True)

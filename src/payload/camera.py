@@ -57,10 +57,12 @@ class CameraController:
     5. 媒体文件元数据管理
 
     API方法:
-    - camera_photo_take, start_photo, stop_photo
-    - start_record, stop_record
-    - set_camera_mode, set_exposure_mode, zoom, set_focus_mode
-    - photo_storage_set
+    - camera_photo_take, camera_photo_stop
+    - camera_recording_start, camera_recording_stop
+    - camera_mode_switch, camera_focal_length_set, camera_exposure_set
+    - camera_exposure_mode_set, camera_focus_mode_set, camera_focus_value_set
+    - camera_point_focus_action, camera_frame_zoom
+    - photo_storage_set, video_storage_set
     """
 
     # 相机模式
@@ -877,7 +879,7 @@ class CameraController:
             msg_str="Mapping camera photo command failed",
         )
 
-    def handle_start_photo(self, msg: dict) -> dict:
+    def _start_photo(self, msg: dict) -> dict:
         """
         开始连续拍照
 
@@ -918,7 +920,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
-    def handle_stop_photo(self, msg: dict) -> dict:
+    def _stop_photo(self, msg: dict) -> dict:
         """停止连续拍照"""
         logger.info("Stop photo")
 
@@ -943,7 +945,7 @@ class CameraController:
 
     # ---- 录像API ----
 
-    def handle_start_record(self, msg: dict) -> dict:
+    def _start_record(self, msg: dict) -> dict:
         """
         开始录像
 
@@ -979,7 +981,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
-    def handle_stop_record(self, msg: dict) -> dict:
+    def _stop_record(self, msg: dict) -> dict:
         """停止录像"""
         if not self._is_recording:
             return MessageBuilder.build_reply(msg, result=-1, msg_str="Not recording")
@@ -1021,7 +1023,7 @@ class CameraController:
 
     # ---- 参数设置API ----
 
-    def handle_set_camera_mode(self, msg: dict) -> dict:
+    def _set_camera_mode(self, msg: dict) -> dict:
         """
         切换相机模式
 
@@ -1046,7 +1048,7 @@ class CameraController:
             "viewlink_result": viewlink_result,
         })
 
-    def handle_set_exposure_mode(self, msg: dict) -> dict:
+    def _set_exposure_mode(self, msg: dict) -> dict:
         """
         设置曝光模式
 
@@ -1062,7 +1064,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0)
 
-    def handle_zoom(self, msg: dict) -> dict:
+    def _zoom(self, msg: dict) -> dict:
         """
         变焦控制
 
@@ -1104,7 +1106,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
-    def handle_set_focus_mode(self, msg: dict) -> dict:
+    def _set_focus_mode(self, msg: dict) -> dict:
         """
         设置对焦模式
 
@@ -1129,7 +1131,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
-    def handle_set_focus_value(self, msg: dict) -> dict:
+    def _set_focus_value(self, msg: dict) -> dict:
         """
         手动对焦值
 
@@ -1169,7 +1171,7 @@ class CameraController:
 
         return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
 
-    def handle_spot_focus(self, msg: dict) -> dict:
+    def _spot_focus(self, msg: dict) -> dict:
         """
         点对焦
 
@@ -1633,7 +1635,7 @@ class CameraController:
             mode = "photo" if camera_mode == 0 else "video"
             msg = dict(msg)
             msg["data"] = {**data, "mode": mode}
-        return self.handle_set_camera_mode(msg)
+        return self._set_camera_mode(msg)
 
     def handle_camera_exposure_set(self, msg: dict) -> dict:
         """相机曝光值调节 (camera_exposure_set)，属于 services 负载控制。"""
@@ -1764,93 +1766,6 @@ class CameraController:
         else:
             logger.warning("Cannot save media metadata: no event loop")
 
-    # ---- 大疆标准相机接口扩展 ----
-
-    def handle_camera_recover(self, msg: dict) -> dict:
-        """相机恢复"""
-        logger.info("Camera recover")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_camera_reset(self, msg: dict) -> dict:
-        """相机重置"""
-        logger.info("Camera reset")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_shutter_speed(self, msg: dict) -> dict:
-        """设置快门速度"""
-        data = msg.get('data', {})
-        shutter = data.get('shutter_speed', 'auto')
-        self._log_camera_setting_mapping('set_shutter_speed', data)
-        logger.info(f"Shutter speed: {shutter}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_iso(self, msg: dict) -> dict:
-        """设置ISO"""
-        data = msg.get('data', {})
-        iso = data.get('iso', 'auto')
-        self._log_camera_setting_mapping('set_iso', data)
-        logger.info(f"ISO: {iso}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_white_balance(self, msg: dict) -> dict:
-        """设置白平衡"""
-        data = msg.get('data', {})
-        wb = data.get('white_balance', 'auto')
-        self._log_camera_setting_mapping('set_white_balance', data)
-        logger.info(f"White balance: {wb}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_aperture(self, msg: dict) -> dict:
-        """设置光圈"""
-        data = msg.get('data', {})
-        aperture = data.get('aperture', 'auto')
-        self._log_camera_setting_mapping('set_aperture', data)
-        logger.info(f"Aperture: {aperture}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_metering_mode(self, msg: dict) -> dict:
-        """设置测光模式"""
-        data = msg.get('data', {})
-        mode = data.get('metering_mode', 'center')
-        logger.info(f"Metering mode: {mode}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_resolution(self, msg: dict) -> dict:
-        """设置分辨率"""
-        data = msg.get('data', {})
-        resolution = data.get('resolution')
-        self._log_camera_setting_mapping('set_resolution', data)
-        logger.info(f"Resolution: {resolution or 'unchanged'}")
-        self._resolution = str(resolution) if resolution else None
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_frame_rate(self, msg: dict) -> dict:
-        """设置帧率"""
-        data = msg.get('data', {})
-        fps = data.get('frame_rate', 30)
-        self._log_camera_setting_mapping('set_frame_rate', data)
-        logger.info(f"Frame rate: {fps}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_video_encoding(self, msg: dict) -> dict:
-        """设置视频编码"""
-        data = msg.get('data', {})
-        encoding = data.get('encoding', 'h264')
-        self._log_camera_setting_mapping('set_video_encoding', data)
-        logger.info(f"Video encoding: {encoding}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_camera_capability_query(self, msg: dict) -> dict:
-        """相机能力查询"""
-        logger.info("Camera capability query")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'supported_modes': ['photo', 'video', 'playback'],
-            'supported_exposure_modes': ['auto', 'manual', 'shutter_priority', 'aperture_priority'],
-            'supported_resolutions': ['720p', '1080p', '4k'],
-            'max_zoom_ratio': 30.0,
-            'has_thermal': False
-        })
-
     # ---- 大疆标准相机接口别名 ----
 
     def handle_camera_photo_stop(self, msg: dict) -> dict:
@@ -1859,7 +1774,7 @@ class CameraController:
 
         别名，调用 stop_photo
         """
-        return self.handle_stop_photo(msg)
+        return self._stop_photo(msg)
 
     def handle_camera_recording_start(self, msg: dict) -> dict:
         """
@@ -1867,7 +1782,7 @@ class CameraController:
 
         别名，调用 start_record
         """
-        return self.handle_start_record(msg)
+        return self._start_record(msg)
 
     def handle_camera_recording_stop(self, msg: dict) -> dict:
         """
@@ -1875,7 +1790,7 @@ class CameraController:
 
         别名，调用 stop_record
         """
-        return self.handle_stop_record(msg)
+        return self._stop_record(msg)
 
     def handle_camera_focal_length_set(self, msg: dict) -> dict:
         """
@@ -1883,7 +1798,7 @@ class CameraController:
 
         上云字段为 zoom_factor；兼容旧内部字段 zoom_ratio。
         """
-        return self.handle_zoom(msg)
+        return self._zoom(msg)
 
     def handle_camera_point_focus_action(self, msg: dict) -> dict:
         """
@@ -1891,16 +1806,16 @@ class CameraController:
 
         别名，调用 spot_focus
         """
-        return self.handle_spot_focus(msg)
+        return self._spot_focus(msg)
 
     def handle_camera_exposure_mode_set(self, msg: dict) -> dict:
         """Camera exposure mode set (camera_exposure_mode_set) - alias of set_exposure_mode"""
-        return self.handle_set_exposure_mode(msg)
+        return self._set_exposure_mode(msg)
 
     def handle_camera_focus_mode_set(self, msg: dict) -> dict:
         """Camera focus mode set (camera_focus_mode_set) - alias of set_focus_mode"""
-        return self.handle_set_focus_mode(msg)
+        return self._set_focus_mode(msg)
 
     def handle_camera_focus_value_set(self, msg: dict) -> dict:
         """Camera focus value set (camera_focus_value_set) - alias of set_focus_value"""
-        return self.handle_set_focus_value(msg)
+        return self._set_focus_value(msg)

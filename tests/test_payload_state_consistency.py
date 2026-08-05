@@ -245,8 +245,8 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         camera.set_mavlink_connection(connection)
         camera.set_gimbal_control(direct_payload)
 
-        started = camera.handle_start_record(message("camera_recording_start"))
-        stopped = camera.handle_stop_record(message("camera_recording_stop"))
+        started = camera.handle_camera_recording_start(message("camera_recording_start"))
+        stopped = camera.handle_camera_recording_stop(message("camera_recording_stop"))
 
         self.assertEqual(started["data"]["result"], 0)
         self.assertEqual(stopped["data"]["result"], 0)
@@ -265,12 +265,12 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
         self.assertEqual(direct_payload.calls, [("set_record_mode", 1)])
 
-    def test_start_photo_uses_viewlink_photograph_not_live_frame_capture(self):
+    def test_camera_photo_session_uses_viewlink_photograph_not_live_frame_capture(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
 
-        reply = camera.handle_start_photo(message("start_photo", {"count": 1, "interval": 0.1}))
+        reply = camera._start_photo(message("camera_photo_take", {"count": 1, "interval": 0.1}))
         thread = camera._photo_session_thread
         if thread:
             thread.join(timeout=2.0)
@@ -755,7 +755,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
     def test_failed_camera_record_start_does_not_set_recording(self):
         camera = CameraController()
 
-        reply = camera.handle_start_record(message("camera_recording_start"))
+        reply = camera.handle_camera_recording_start(message("camera_recording_start"))
 
         self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
         self.assertFalse(camera._is_recording)
@@ -765,8 +765,8 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         connection = FakeConnection()
         camera.set_mavlink_connection(connection)
 
-        started = camera.handle_start_record(message("camera_recording_start"))
-        stopped = camera.handle_stop_record(message("camera_recording_stop"))
+        started = camera.handle_camera_recording_start(message("camera_recording_start"))
+        stopped = camera.handle_camera_recording_stop(message("camera_recording_stop"))
 
         self.assertEqual(started["data"]["result"], 0)
         self.assertEqual(stopped["data"]["result"], 0)

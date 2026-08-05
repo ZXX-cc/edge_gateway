@@ -30,7 +30,7 @@ def require_property_result(reply: dict, name: str, expected: int) -> bool:
 
 
 def run_arch_checks(client: MqttRequestClient, args) -> int:
-    rc, _ = client.request("dock_status_query", {}, args.timeout, allowed_results={0})
+    rc, _ = client.request("gateway_state_query", {"compact": True}, args.timeout, allowed_results={0})
     if rc != 0:
         return rc
 

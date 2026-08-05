@@ -75,12 +75,12 @@
 
 | 编号 | 测试项 | 下行 topic | 期望监听 topic | 实际观测 | 当前结论 | 后续处理 |
 |---|---|---|---|---|---|---|
-| P1-CLOUD-001 | `dock_status_query` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 收到 `services_reply`，`data.result=0` | services 链路闭环成功 | 继续 Dock3 字段校验 |
+| P1-CLOUD-001 | `dock_status_query` | `thing/product/EDGE-GW-001/services` | `thing/product/EDGE-GW-001/services_reply` | 历史 smoke 曾收到 `services_reply`，`data.result=0` | 2026-08-05 已移除旧 Dock/Dock1 services 入口；不再作为 Dock3 验收项 | 使用 `gateway_state_query`、Dock3 properties、CMD、HMS 专项替代 |
 | P1-CLOUD-002 | `airport_bind_status` | `thing/product/EDGE-GW-001/requests` | `thing/product/EDGE-GW-001/requests_reply` | 2026-07-06 Ubuntu 复测通过：云端模拟器收到 `requests` 并回 `requests_reply`，网关处理 `Bind status reply processed: 1 devices` | Dock3 官方最终口径已验证；services 只作为兼容 smoke | 继续补失败/超时分支 |
 | P1-CLOUD-007 | `airport_organization_get` | `thing/product/EDGE-GW-001/requests` | `thing/product/EDGE-GW-001/requests_reply` | 2026-07-06 Ubuntu 复测通过：成功路径 `tid=9a738feb-97a8-4851-a797-02d17ab06343`；失败分支 `tid=b3816e96-c8f9-4b8e-b1be-c2f235f80d03 result=327000`；超时分支 `tid=8e21e5fc-3e64-4a30-8268-4763cc7f751f` | Dock3 官方 organization 上行请求成功/失败/超时路径已验证 | 继续字段精校 |
 | P1-CLOUD-008 | `airport_organization_bind` | `thing/product/EDGE-GW-001/requests` | `thing/product/EDGE-GW-001/requests_reply` | 2026-07-06 Ubuntu 复测通过：成功路径 `tid=8a0b1414-9853-4632-a172-913a207eff3f`；部分失败 `tid=d2bdf5d1-402f-45d1-82eb-da316c82e09e`；绑定后事件/DB 校验 `bind tid=9e38069d-5c64-4dfe-ba99-fe4808b90cf2`，捕获 `device_binding/update_topo`，SQLite `is_bound=true` | Dock3 官方 organization 绑定成功、`err_infos`、事件、内存状态、SQLite 持久化均已验证 | 继续字段精校、真实云端差异、多设备场景 |
 | P1-CLOUD-009 | `update_topo` | `sys/product/EDGE-GW-001/status` | `sys/product/EDGE-GW-001/status_reply` | 2026-07-06 Ubuntu 复测通过：基础拓扑 `tid=f0845cda-bf5b-40b2-a0f7-d2e4cbb65c6b`；多子设备拓扑 `tid=f318713c-767a-43d9-a4b2-13ade3a969b2`，`sub_devices[0].sn=DRONE-SIM-001`，均收到 `status_reply result=0` | device topology 基础 topic/reply 和 `sub_devices[]` 非空链路已验证 | 精校 `domain/type/sub_type/sub_devices` 官方字段 |
-| P1-CLOUD-010 | Dock3 P0 总批量 | `services`、`property/set`、`drc/down` | `services_reply`、`property/set_reply`、`drc/up` | 2026-07-06 Ubuntu 复测通过：`tools/mqtt_dock3_p0_batch_test.py --timeout 12` 输出 `dock3 p0 batch test ok`，覆盖状态查询、properties、只读属性拒绝、DRC enter/control/exit、错误 topic | P0 主链路已可作为后续客户需求相关迁移基线 | 后续日常使用 `--quiet-stale`，清理旧回包来源后用 `--fail-on-stale` 严格验证 |
+| P1-CLOUD-010 | Dock3 P0 总批量 | `services`、`property/set`、`drc/down` | `services_reply`、`property/set_reply`、`drc/up` | 2026-08-05 脚本入口已改为 `gateway_state_query`，覆盖状态查询、properties、只读属性拒绝、DRC enter/control/exit、错误 topic | P0 主链路已可作为后续客户需求相关迁移基线；不再依赖旧 `dock_status_query` | 后续日常使用 `--quiet-stale`，清理旧回包来源后用 `--fail-on-stale` 严格验证 |
 | P1-CLOUD-011 | properties 大类专项 | `thing/product/EDGE-GW-001/property/set`、`services` | `property/set_reply`、`services_reply` | `tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok (accepted=10, ignored_total=10)` | 已通过 Ubuntu 专项复测 | 继续 `osd/state` 客户需求相关字段精校 |
 | P1-CLOUD-012 | device/topology 大类专项 | `services` 测试触发、`sys/product/EDGE-GW-001/status` | `services_reply`、`sys/product/EDGE-GW-001/status_reply` | Ubuntu 复测通过：`tools/mqtt_dock3_device_test.py --timeout 12` 输出 `dock3 device topology test ok (status_messages=2, sub_device_sn=DRONE-SIM-001, accepted=3, ignored_legacy=3)` | 已按 Dock3 device `update_topo` 官方必填字段收敛，在线拓扑、离线拓扑、无效拓扑拒绝和 `status_reply` 已通过 | 继续官方 `domain/type/sub_type` 产品枚举精校 |
 | P1-CLOUD-013 | DRC 大类专项 | `services`、`drc/down` | `services_reply`、`drc/up` | Ubuntu 复测通过：`tools/mqtt_dock3_drc_test.py --timeout 12 --quiet-stale` 输出 `dock3 drc test ok (accepted=9, ignored_total=5)`，覆盖官方 `drc_mode_enter`、`stick_control`、`drone_control`、`drc_gimbal_speed_push` 和错误分支 | 已按 Dock3 DRC 官方字段收敛并通过专项复测 | 继续 DRC 心跳、`takeoff_to_point` 和超时恢复 |
@@ -95,7 +95,7 @@
 
 | 编号 | 问题 | 证据 | 影响 | 负责人 |
 |---|---|---|---|---|
-| P1-ISSUE-001 | `dock_status_query` 的 `drone_status` 未同步实时 OSD | OSD 中已有 `latitude=-35.363262`、`longitude=149.1652373`、`altitude=584.09`、`battery=100`，但修复前 `dock_status_query` 返回 `drone_status.online=false` 且经纬度/高度为 `0.0` | 已改为查询时从 `TelemetryProcessor` 快照构造实时 `drone_status`，不在 OSD 热路径频繁写状态 | Ubuntu 复测通过：`online=true`，经纬度、高度、电量、模式、GPS 已同步 |
+| P1-ISSUE-001 | 旧 `dock_status_query` 的 `drone_status` 不符合 Dock3 官方状态表达 | OSD 中已有实时遥测，但旧 services 回包使用 `dock_status/drone_status` 包装 | 2026-08-05 已移除旧 `dock_status_query` 路由；实时状态统一通过 Dock3 OSD/state/properties 和 `gateway_state_query` 验收 | 不再作为开放 method |
 | P1-ISSUE-002 | `property_set` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `property/set` 后修复前实际回 `services_reply`，工具等待 `property/set_reply` 导致超时 | 已改为按下行来源 topic 分流回包 | Ubuntu 复测通过：收到 `property/set_reply` |
 | P1-ISSUE-003 | `drc_mode_enter` 回包 topic 与 `tools/mqtt_smoke_test.py` 预期不一致 | 下行 `drc/down` 后修复前实际回 `events:drc_status_notify` 和 `services_reply:drc_mode_enter`，工具等待 `drc/up` 导致超时 | 历史测试已证明网关能处理 DRC 请求；Dock3 官方对照后确认 enter/exit 应改回 services 路径 | 已由 P1-ISSUE-006 修正最终口径 |
 | P1-ISSUE-004 | 网关可能处理自己发布的 `services_reply/events_reply` | 网关订阅了 reply topic，发布回包后可能再次进入 method 路由，造成重复业务日志 | 已加保护：`services_reply/events_reply` 只记录，不再路由到业务 handler | 待继续观察网关日志 |
@@ -122,7 +122,7 @@
 | `drc/up` 标准上行 | 已用于 `stick_control`、`drone_control`、`payload_control`、`drc_speed_push`、`drc_gimbal_speed_push`，P0 批量复测均返回 `result=0`；`drc_mode_enter/exit` 已改回 services |
 | `events` 上报 | 已通 |
 | `osd` 上报 | 已通 |
-| `dock_status_query` 实时状态 | 已修复并通过 Ubuntu 服务器复测 |
+| `gateway_state_query` / OSD / state 实时状态 | 使用当前 Dock3 状态链路；旧 `dock_status_query` 已移除 |
 | Dock3 字段合规 | 未完成 |
 | Dock3 客户需求迁移台账 | 已建立，见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md` |
 | properties Batch 1 | 已通过 Ubuntu 专项复测：`tools/mqtt_dock3_properties_test.py --timeout 12 --quiet-stale` 输出 `dock3 properties test ok` |
@@ -156,11 +156,11 @@
 - 旧 `load_wayline/execute_task/wayline_task_*` 仍作为兼容入口保留，迁移时以 Dock3 `wayline.html` 和 `drc.html` 为准。
 - `set_flight_mode` 当前存在 ArduCopter 模式表适配问题，是人员2优先修复项。
 
-### 5.3 Payload：93 个
+### 5.3 Payload：107 个
 
 | 子类 | 状态 | Method |
 |---|---|---|
-| Camera | 已路由，待 Dock3 校验 | `camera_photo_take`, `start_photo`, `stop_photo`, `start_record`, `stop_record`, `set_camera_mode`, `set_exposure_mode`, `zoom`, `set_focus_mode`, `set_focus_value`, `spot_focus`, `photo_storage_set`, `camera_recover`, `camera_reset`, `set_shutter_speed`, `set_iso`, `set_white_balance`, `set_aperture`, `set_metering_mode`, `set_resolution`, `set_frame_rate`, `set_video_encoding`, `camera_capability_query`, `camera_photo_stop`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_point_focus_action`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set` |
+| Camera | 已路由，待 Dock3 校验；2026-08-05 已清理旧相机 services 入口 | `camera_photo_take`, `camera_photo_stop`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_exposure_set`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set`, `camera_point_focus_action`, `camera_frame_zoom`, `camera_mode_switch`, `photo_storage_set`, `video_storage_set` |
 | Gimbal | 已路由，待 Dock3 校验 | `gimbalRotate`, `gimbal_rotate`, `camera_look_at`, `set_gimbal_mode`, `gimbal_reset`, `gimbal_capability_query`, `gimbal_status_query` |
 | ViewLink | 已路由，设备侧 adapter/调试入口 | `viewlink_initialize`, `viewlink_connect`, `viewlink_disconnect`, `viewlink_is_connected`, `viewlink_move`, `viewlink_stop`, `viewlink_home`, `viewlink_turn_to`, `viewlink_zoom_in`, `viewlink_zoom_out`, `viewlink_stop_zoom`, `viewlink_start_track`, `viewlink_stop_track`, `viewlink_take_photo`, `viewlink_start_recording`, `viewlink_stop_recording`, `viewlink_is_recording`, `viewlink_set_record_mode` |
 | IR | 已路由，待 Dock3 校验 | `ir_metering_mode_set`, `ir_color_palette_set`, `ir_display_mode_set`, `ir_isotherm_set`, `ir_zoom_set` |
@@ -195,16 +195,16 @@
 - Dock3 中 `drc/down/drc/up` 用于 DRC 建链后的控制数据，例如 `stick_control`、`drone_control`、`payload_control`。当前 `stick_control` 已支持官方 `roll/pitch/throttle/yaw/gimbal_pitch` 杆量字段；`drone_control` 已支持官方 `seq/x/y/h/w` 字段；`payload_control` 和更多 DRC method 仍待继续精校。
 - 当前不得在 DRC 热路径里阻塞等待长时间 ACK。
 
-### 5.6 Dock：8 个
+### 5.6 Dock：0 个
 
 | 状态 | Method |
 |---|---|
-| 已路由，旧 Dock1 风格，待 Dock3 迁移，模拟器可测 | `dock_status_query`, `dock_control`, `dock_alarm_query`, `dock_task_schedule_query`, `dock_task_schedule_set`, `dock_emergency_stop`, `dock_reset`, `dock_weather_query` |
+| 2026-08-05 已移除旧 Dock/Dock1 services 入口 | `dock_status_query`, `dock_control`, `dock_alarm_query`, `dock_task_schedule_query`, `dock_task_schedule_set`, `dock_emergency_stop`, `dock_reset`, `dock_weather_query` |
 
 说明：
 
-- `dock_status_query` 当前只能证明旧机场查询链路可用，不代表符合 DJI Dock 3。
-- Dock3 迁移时应优先重构机场状态模型、属性输出、命令回包和事件。
+- 机场状态、控制、告警和远程调试改走 Dock3 properties、CMD、HMS、OSD/state 和 `gateway_state_query`。
+- 旧 `dock_*` method 后续如需恢复，必须先给出 Dock3 官方 method 对照和客户需求触发条件。
 
 ### 5.7 Log：3 个
 

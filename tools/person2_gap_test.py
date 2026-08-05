@@ -318,10 +318,10 @@ def phase_payload(args) -> int:
     failures = 0
     try:
         steps = [
-            ("相机能力查询", "camera_capability_query", {}),
+            ("负载能力查询", "payload_capability_query", {}),
             ("拍照", "camera_photo_take", {"camera_index": 0}),
-            ("开始录像", "start_record", {"camera_index": 0, "resolution": "1080p", "framerate": 30}),
-            ("停止录像", "stop_record", {"camera_index": 0}),
+            ("开始录像", "camera_recording_start", {"camera_index": 0, "resolution": "1080p", "framerate": 30}),
+            ("停止录像", "camera_recording_stop", {"camera_index": 0}),
             ("云台状态查询", "gimbal_status_query", {}),
             ("云台转动", "gimbal_rotate", {"pitch": -10, "roll": 0, "yaw": 0, "duration": 1}),
         ]
