@@ -299,7 +299,7 @@ payload:
     gimbal:
       name: "吊舱"
       enabled: true
-      auto_connect: false # 临时关闭启动时自动连接 ViewLink，隔离 SDK 回调导致的进程退出
+      auto_connect: true # 启动时后台预连接 ViewLink，避免首个云台控制命令只触发连接
       direct_to_gateway: true
       cloud_api:
         type: 52
