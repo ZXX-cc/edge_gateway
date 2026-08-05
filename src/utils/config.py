@@ -10,8 +10,8 @@ from copy import deepcopy
 DEFAULT_PAYLOAD_DEVICES = {
     'gimbal': {
         'name': '吊舱',
-        'enabled': True,
-        'auto_connect': True,
+        'enabled': False,
+        'auto_connect': False,
         'direct_to_gateway': True,
         'cloud_api': {
             'type': 52,
@@ -26,8 +26,8 @@ DEFAULT_PAYLOAD_DEVICES = {
                 'direction': 'bidirectional',
                 'transport': 'viewlink_tcp',
                 'adapter': 'viewlink',
-                'host': '192.168.2.119',
-                'port': 2000,
+                'host': '',
+                'port': 0,
                 'sdk_dir': '',
             },
             'video': {
@@ -330,21 +330,6 @@ class Config:
 
         if isinstance(configured_devices, dict):
             deep_merge(devices, configured_devices)
-
-        legacy_viewlink_enabled = cls.get('payload.direct_viewlink_sdk_enabled', None)
-        if legacy_viewlink_enabled is not None:
-            devices['gimbal']['enabled'] = bool(legacy_viewlink_enabled)
-
-        gimbal_control = devices['gimbal'].setdefault('channels', {}).setdefault('control', {})
-        legacy_sdk_dir = cls.get('payload.viewlink_sdk_dir', None)
-        legacy_gimbal_ip = cls.get('payload.viewlink_gimbal_ip', None)
-        legacy_gimbal_port = cls.get('payload.viewlink_gimbal_port', None)
-        if legacy_sdk_dir is not None:
-            gimbal_control['sdk_dir'] = legacy_sdk_dir
-        if legacy_gimbal_ip is not None:
-            gimbal_control['host'] = legacy_gimbal_ip
-        if legacy_gimbal_port is not None:
-            gimbal_control['port'] = legacy_gimbal_port
 
         return {
             'control_path': cls.get('payload.control_path', 'direct_gateway'),

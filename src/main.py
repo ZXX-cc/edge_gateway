@@ -748,14 +748,28 @@ class EdgeGateway:
             and control.get('adapter') == 'viewlink'
         )
         if direct_gimbal_enabled:
-            kwargs = {}
-            if control.get('sdk_dir'):
-                kwargs['sdk_dir'] = control['sdk_dir']
-            if control.get('host'):
-                kwargs['gimbal_ip'] = control['host']
-            if control.get('port') is not None:
-                kwargs['gimbal_port'] = int(control['port'])
-            self.gimbal_control = GimbalControl(**kwargs)
+            sdk_dir = control.get('sdk_dir')
+            host = control.get('host')
+            port = control.get('port')
+            missing = [
+                key for key, value in (
+                    ('sdk_dir', sdk_dir),
+                    ('host', host),
+                    ('port', port),
+                )
+                if value in (None, '')
+            ]
+            if missing:
+                logger.error(
+                    "ViewLink gimbal config incomplete in YAML: missing %s",
+                    ','.join(missing),
+                )
+                return
+            self.gimbal_control = GimbalControl(
+                sdk_dir=sdk_dir,
+                gimbal_ip=host,
+                gimbal_port=int(port),
+            )
             self.camera.set_gimbal_control(self.gimbal_control)
             self.gimbal.set_gimbal_control(self.gimbal_control)
             if bool(gimbal_config.get('auto_connect', True)):

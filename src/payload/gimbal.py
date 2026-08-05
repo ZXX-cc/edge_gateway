@@ -326,17 +326,9 @@ class GimbalController:
 
         try:
             if method == "initialize":
-                sdk_dir = args.get("sdk_dir")
-                if sdk_dir:
-                    self._gimbal_control.sdk_dir = sdk_dir
                 return self._gimbal_control.initialize()
             if method == "connect":
-                conn_type = VLKConnType(args.get("conn_type", VLKConnType.TCP))
-                return self._gimbal_control.connect(
-                    ip=args.get("ip"),
-                    port=args.get("port"),
-                    conn_type=conn_type,
-                )
+                return self._gimbal_control.connect(conn_type=VLKConnType.TCP)
             if method == "is_connected":
                 connected = self._gimbal_control.is_connected()
                 return {"success": True, "connected": connected}
