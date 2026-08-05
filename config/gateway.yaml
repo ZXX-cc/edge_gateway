@@ -299,7 +299,7 @@ payload:
     gimbal:
       name: "吊舱"
       enabled: true
-      auto_connect: true
+      auto_connect: false # 临时关闭启动时自动连接 ViewLink，隔离 SDK 回调导致的进程退出
       direct_to_gateway: true
       cloud_api:
         type: 52
@@ -316,7 +316,7 @@ payload:
           host: "192.168.1.119"
           port: 2000
           connect_timeout: 5
-          sdk_dir: "D:/微信记录/xwechat_files/wxid_zq3zem1bx87c12_c623/msg/attach/9e20f478899dc29eb19741386f9343c8/2026-08/Rec/8c2443a975e091b0/F/2/ViewLink-SDK-2025/bin/win64" # ViewLink SDK 目录；留空时使用 adapter 默认值
+          sdk_dir: "D:/ViewLink/bin/win64" # ViewLink SDK 目录；留空时使用 adapter 默认值
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"

@@ -134,8 +134,12 @@ class VLK_TRACK_MODE_PARAM(Structure):
 
 
 # ===== 回调函数类型 =====
-ConnStatusCallback = CFUNCTYPE(c_int, c_int, c_char_p, c_int, c_void_p)
-DevStatusCallback = CFUNCTYPE(c_int, c_int, c_char_p, c_int, c_void_p)
+# ViewLink.h defines VLK_CALL as __stdcall on Windows. ctypes callbacks and DLL
+# loading must use the same calling convention or the native SDK can terminate
+# the process without a Python traceback.
+CallbackFactory = ctypes.WINFUNCTYPE if os.name == "nt" else CFUNCTYPE
+ConnStatusCallback = CallbackFactory(c_int, c_int, c_char_p, c_int, c_void_p)
+DevStatusCallback = CallbackFactory(c_int, c_int, c_char_p, c_int, c_void_p)
 
 
 class GimbalControl:
@@ -231,7 +235,7 @@ class GimbalControl:
                 self.log("清理 VLKLog 目录")
 
             # 加载库
-            self._lib = ctypes.CDLL("./ViewLink.dll")
+            self._lib = ctypes.WinDLL("./ViewLink.dll") if os.name == "nt" else ctypes.CDLL("./ViewLink.dll")
             self.log("加载 ViewLink.dll 成功")
 
             # 定义函数签名
