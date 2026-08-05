@@ -146,7 +146,7 @@ payload:
           host: "192.168.1.119"
           port: 2000
           connect_timeout: 5
-          sdk_dir: "D:/ViewLink/bin/win64"
+          sdk_dir: "./"
           register_dev_status_callback: true
         video:
           direction: "payload_to_gateway"

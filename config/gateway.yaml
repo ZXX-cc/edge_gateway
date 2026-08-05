@@ -316,7 +316,7 @@ payload:
           host: "192.168.1.119"
           port: 2000
           connect_timeout: 5
-          sdk_dir: "D:/ViewLink/bin/win64" # ViewLink SDK 目录；留空时使用 adapter 默认值
+          sdk_dir: "./" # ViewLink SDK 目录；"./" 表示项目根目录，需放置 ViewLink.dll 及依赖 DLL
           register_dev_status_callback: true # 连接成功后后台注册设备状态回调，避免阻塞网关主链路
         video:
           direction: "payload_to_gateway"

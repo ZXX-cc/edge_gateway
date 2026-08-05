@@ -16,6 +16,7 @@ import shutil
 import socket
 import time
 import threading
+from pathlib import Path
 from typing import Optional, Callable
 from enum import IntEnum
 from src.utils.logger import get_logger
@@ -179,7 +180,7 @@ class GimbalControl:
         if not gimbal_port:
             raise ValueError("ViewLink port must be configured in payload.devices.gimbal.channels.control.port")
 
-        self.sdk_dir = sdk_dir
+        self.sdk_dir = self._resolve_sdk_dir(sdk_dir)
         self.gimbal_ip = gimbal_ip
         self.gimbal_port = int(gimbal_port)
         self.register_dev_status_callback = self._bool_config(register_dev_status_callback)
@@ -230,6 +231,22 @@ class GimbalControl:
         if isinstance(value, (int, float)):
             return bool(value)
         return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    @staticmethod
+    def _resolve_sdk_dir(sdk_dir: str) -> str:
+        """解析项目相对 SDK 目录，使 sdk_dir='./' 指向项目根目录。"""
+        raw = str(sdk_dir or "").strip()
+        if not raw:
+            return raw
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        # 在 POSIX 测试环境中也保留 Windows 绝对路径。
+        if len(expanded) >= 2 and expanded[1] == ":":
+            return expanded
+        path = Path(expanded)
+        if path.is_absolute():
+            return str(path)
+        project_root = Path(__file__).resolve().parents[2]
+        return str((project_root / path).resolve())
 
     def log(self, message: str, level: str = "INFO"):
         """日志输出"""
