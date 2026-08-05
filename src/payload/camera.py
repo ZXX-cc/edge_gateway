@@ -1483,6 +1483,27 @@ class CameraController:
     def _frame_zoom_config_text(key: str, default: str) -> str:
         return str(Config.get(key, default) or default).strip().lower()
 
+    @staticmethod
+    def _frame_zoom_locked_value(data: dict) -> Optional[bool]:
+        if "locked" not in data:
+            return None
+        value = data.get("locked")
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return None
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _enable_viewlink_eo_digital_zoom(self, data: dict) -> Optional[dict]:
+        camera_type = str(data.get("camera_type", "") or "").strip().lower()
+        if camera_type in {"ir", "infrared", "thermal"}:
+            return None
+        if not hasattr(self._gimbal_control, "switch_eo_digital_zoom"):
+            return None
+        result = self._gimbal_control.switch_eo_digital_zoom(True)
+        logger.info("ViewLink EO digital zoom enable before frame zoom: %s", result)
+        return result
+
     def _center_frame_zoom_target(
         self,
         data: dict,
@@ -1658,16 +1679,19 @@ class CameraController:
         else:
             zoom_ratio = float(requested_zoom_ratio or self._zoom_level)
         center_speed = self._frame_zoom_centering_speed(center_offset_x, center_offset_y)
+        locked = self._frame_zoom_locked_value(data)
         centering_enabled = self._frame_zoom_bool(
             data,
             "centering_enabled",
             bool(Config.get("payload.frame_zoom_centering_enabled", True)),
         )
+        if locked is False and "centering_enabled" not in data:
+            centering_enabled = False
         logger.info(
             "Camera frame zoom: payload_index=%s camera_type=%s locked=%s centering_enabled=%s box=(%s,%s,%s,%s) normalized=%s center_offset=(%.4f,%.4f) zoom_ratio=%s",
             data.get("payload_index", ""),
             data.get("camera_type", ""),
-            data.get("locked", False),
+            bool(locked) if locked is not None else False,
             centering_enabled,
             x,
             y,
@@ -1731,6 +1755,13 @@ class CameraController:
                 bool(Config.get("payload.frame_zoom_allow_zoom_without_center", True)),
             )
             if center_result.get("success", False) or allow_zoom_without_center:
+                eo_digital_zoom_result = self._enable_viewlink_eo_digital_zoom(data)
+                if eo_digital_zoom_result is not None:
+                    pipeline.append({
+                        "step": "eo_digital_zoom_enable",
+                        "status": "ok" if bool(eo_digital_zoom_result.get("success", False)) else "failed",
+                        "viewlink_result": eo_digital_zoom_result,
+                    })
                 result = self._gimbal_control.zoom_to(zoom_ratio)
                 if result.get("success", False):
                     self._last_real_zoom_factor = float(zoom_ratio)

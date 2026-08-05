@@ -175,6 +175,12 @@ class FakeRawProtocolPayload(FakeDirectPayload):
         return False
 
 
+class FakeDirectPayloadWithEODigitalZoom(FakeDirectPayload):
+    def switch_eo_digital_zoom(self, on):
+        self.calls.append(("switch_eo_digital_zoom", bool(on)))
+        return {"success": True}
+
+
 class FakeDisconnectedDirectPayload(FakeDirectPayload):
     def is_connected(self):
         return False
@@ -720,6 +726,30 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("start_track", 864, 432, 1920, 1080),
             ("zoom_to", 4.0),
         ])
+
+    def test_camera_frame_zoom_locked_false_skips_tracking_and_enables_eo_digital_zoom(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "camera_type": "zoom",
+            "locked": False,
+            "normalized": {"x": 0.20, "y": 0.20, "width": 0.25, "height": 0.25},
+            "zoom_ratio": 4.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("switch_eo_digital_zoom", True),
+            ("zoom_to", 4.0),
+        ])
+        self.assertEqual(reply["data"]["center_result"]["method"], "disabled")
+        self.assertIn(
+            "eo_digital_zoom_enable",
+            [step["step"] for step in reply["data"]["software_pipeline"]],
+        )
 
     def test_camera_frame_zoom_infers_zoom_ratio_from_selection_size(self):
         camera = CameraController()
