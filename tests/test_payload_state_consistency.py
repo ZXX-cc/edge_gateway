@@ -205,6 +205,22 @@ class FakeSlowGimbalControl(GimbalControl):
         return {"success": True, "message": "成功连接到 127.0.0.1:37260"}
 
 
+class FakeViewLinkLib:
+    def __init__(self):
+        self.register_dev_status_calls = 0
+        self.connect_calls = 0
+
+    def VLK_RegisterDevStatusCB(self, callback, user_param):
+        self.register_dev_status_calls += 1
+
+    def VLK_Connect(self, param, callback, user_param):
+        self.connect_calls += 1
+        return 0
+
+    def VLK_IsConnected(self):
+        return 1
+
+
 class FakeFlightControl:
     def __init__(self, armed=False):
         self.armed = armed
@@ -530,6 +546,35 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(second["stage"], "connecting")
         self.assertEqual(direct_payload.connect_calls, 1)
         self.assertTrue(direct_payload.is_connected())
+
+    def test_viewlink_connect_skips_device_status_callback_by_default(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib()
+        direct_payload._initialized = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.connect(timeout=0.1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(fake_lib.connect_calls, 1)
+        self.assertEqual(fake_lib.register_dev_status_calls, 0)
+
+    def test_viewlink_connect_can_enable_device_status_callback_explicitly(self):
+        direct_payload = GimbalControl(
+            "/tmp",
+            "127.0.0.1",
+            37260,
+            register_dev_status_callback=True,
+        )
+        fake_lib = FakeViewLinkLib()
+        direct_payload._initialized = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.connect(timeout=0.1)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(fake_lib.connect_calls, 1)
+        self.assertEqual(fake_lib.register_dev_status_calls, 1)
 
     def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()

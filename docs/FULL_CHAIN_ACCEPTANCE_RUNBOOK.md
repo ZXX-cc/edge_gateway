@@ -255,12 +255,13 @@ MAVLink 角度命令，避免服务回包 `result=0` 但真实 ViewLink 云台�
 `payload_control action=gimbal_rotate/zoom` 也改为按 SDK 返回值决定成功或失败。
 2026-08-05 Windows 日志排查确认：按钮消息已进入网关。早期日志中回包为
 `result=319999`、`viewlink_result.message=ViewLink control is not connected`，说明
-ViewLink 未连接；后续拖拽日志停在 `SDK 初始化成功` 后，未打印
-`连接到 <云台IP>:<端口>` 和服务回包，判断同步懒连接在 ViewLink SDK 注册回调或连接
-阶段阻塞了 MQTT 回调线程。当前已改为后台连接：按钮转动或框选变焦命令到达时，如果
-ViewLink 已配置但未连接，网关只启动后台连接并快速返回 `stage=connecting`；日志应出现
-`ViewLink 后台连接已启动`、`按需连接 ViewLink 云台`、`连接到 <IP>:<端口>` 和连接成功/失败
-原因。连接成功后再次点击按钮或拖拽，才会实际执行 `move/stop`。
+ViewLink 未连接；后续拖拽日志停在 `debug:[ViewLink.cpp][277][VLK_RegisterDevStatusCB]`，
+判断 ViewLink 3.5.3 在注册设备状态回调时会导致进程停止。当前已改为后台连接，并默认
+跳过 `VLK_RegisterDevStatusCB`：按钮转动或框选变焦命令到达时，如果 ViewLink 已配置但未连接，
+网关只启动后台连接并快速返回 `stage=connecting`；日志应出现 `ViewLink 后台连接已启动`、
+`按需连接 ViewLink 云台`、`跳过 ViewLink 设备状态回调注册`、`连接到 <IP>:<端口>` 和连接成功/失败
+原因。连接成功后再次点击按钮或拖拽，才会实际执行 `move/stop`。如确需设备状态回调，需在
+`payload.devices.gimbal.channels.control.register_dev_status_callback` 显式配置 `true` 并单独隔离验证。
 
 Windows 真实 ViewLink 验收命令：
 
@@ -292,7 +293,7 @@ python tools\mqtt_viewlink_visible_test.py --host 127.0.0.1 --port 1883 --timeou
 验收重点：
 
 - 第一次按钮/拖拽如返回 `stage=connecting` 属于正常后台连接过程，网关进程不能停止。
-- `gateway.log` 后续应出现 `ViewLink 后台连接已启动`、`连接到 <IP>:<端口>`、`成功连接到` 或明确失败原因。
+- `gateway.log` 后续应出现 `ViewLink 后台连接已启动`、`跳过 ViewLink 设备状态回调注册`、`连接到 <IP>:<端口>`、`成功连接到` 或明确失败原因。
 - 后台连接成功后再次点击上下左右/停止，`screen_drag_*.log` 应返回 `result=0`，画面应有对应变化。
 
 Ubuntu 适配复测命令：

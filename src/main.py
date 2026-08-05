@@ -769,6 +769,7 @@ class EdgeGateway:
                 sdk_dir=sdk_dir,
                 gimbal_ip=host,
                 gimbal_port=int(port),
+                register_dev_status_callback=control.get('register_dev_status_callback', False),
             )
             self.camera.set_gimbal_control(self.gimbal_control)
             self.gimbal.set_gimbal_control(self.gimbal_control)

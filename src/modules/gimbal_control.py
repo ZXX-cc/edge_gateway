@@ -158,7 +158,8 @@ class GimbalControl:
         self,
         sdk_dir: str,
         gimbal_ip: str,
-        gimbal_port: int
+        gimbal_port: int,
+        register_dev_status_callback: bool = False
     ):
         """
         初始化云台控制模块
@@ -167,6 +168,7 @@ class GimbalControl:
             sdk_dir: SDK 库文件所在目录
             gimbal_ip: 云台 IP 地址
             gimbal_port: 云台端口
+            register_dev_status_callback: 是否注册设备状态回调，默认关闭以避开部分 ViewLink SDK 崩溃点
         """
         if not sdk_dir:
             raise ValueError("ViewLink sdk_dir must be configured in payload.devices.gimbal.channels.control.sdk_dir")
@@ -178,6 +180,7 @@ class GimbalControl:
         self.sdk_dir = sdk_dir
         self.gimbal_ip = gimbal_ip
         self.gimbal_port = int(gimbal_port)
+        self.register_dev_status_callback = self._bool_config(register_dev_status_callback)
 
         # 状态
         self._initialized = False
@@ -205,6 +208,16 @@ class GimbalControl:
 
         # 线程锁
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _bool_config(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
 
     def log(self, message: str, level: str = "INFO"):
         """日志输出"""
@@ -517,12 +530,16 @@ class GimbalControl:
         port = port or self.gimbal_port
 
         try:
-            # 创建回调（保持引用）
+            # 创建连接回调（保持引用）
             self._conn_callback = self._create_conn_callback()
-            self._dev_callback = self._create_dev_callback()
 
-            # 注册设备状态回调
-            self._lib.VLK_RegisterDevStatusCB(self._dev_callback, None)
+            if self.register_dev_status_callback:
+                # 部分 Windows ViewLink SDK 在注册设备状态回调时会直接导致进程停止。
+                # 该回调不影响连接和 move/stop 主控制链路，默认关闭，仅在明确需要状态回调时开启。
+                self._dev_callback = self._create_dev_callback()
+                self._lib.VLK_RegisterDevStatusCB(self._dev_callback, None)
+            else:
+                self.log("跳过 ViewLink 设备状态回调注册")
 
             # 准备连接参数
             param = VLK_CONN_PARAM()
@@ -1346,7 +1363,8 @@ class GimbalControl:
             "tracking": self.is_tracking().get("tracking", False) if self._connected else False,
             "gimbal_ip": self.gimbal_ip,
             "gimbal_port": self.gimbal_port,
-            "sdk_dir": self.sdk_dir
+            "sdk_dir": self.sdk_dir,
+            "register_dev_status_callback": self.register_dev_status_callback
         }
 
     # ==================== 回调设置 ====================

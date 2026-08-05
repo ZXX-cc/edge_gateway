@@ -147,6 +147,7 @@ payload:
           port: 2000
           connect_timeout: 5
           sdk_dir: "D:/ViewLink/bin/win64"
+          register_dev_status_callback: false
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"

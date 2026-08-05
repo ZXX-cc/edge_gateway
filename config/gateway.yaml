@@ -317,6 +317,7 @@ payload:
           port: 2000
           connect_timeout: 5
           sdk_dir: "D:/ViewLink/bin/win64" # ViewLink SDK 目录；留空时使用 adapter 默认值
+          register_dev_status_callback: false # Windows ViewLink 3.5.3 注册设备状态回调可能导致进程停止；转动控制不依赖该回调
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"
