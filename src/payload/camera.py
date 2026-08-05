@@ -14,7 +14,7 @@ from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
-from src.modules.gimbal_control import VLKFocusMode, VLKRecordMode
+from src.modules.gimbal_control import VLKFocusMode, VLKImageType, VLKIrColor, VLKRecordMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
 from web.mavlink.camera import (
@@ -26,6 +26,23 @@ from web.mavlink.viewlink import build_viewlink_call
 from src.payload.mapping_camera_ftp import MappingCameraFtpDownloader
 
 logger = get_logger("camera")
+
+
+CAMERA_TYPE_IMAGE_MAP = {
+    "wide": (VLKImageType.VISIBLE1, False),
+    "zoom": (VLKImageType.VISIBLE1, False),
+    "visible": (VLKImageType.VISIBLE1, False),
+    "normal": (VLKImageType.VISIBLE1, False),
+    "eo": (VLKImageType.VISIBLE1, False),
+    "ir": (VLKImageType.IR1, False),
+    "infrared": (VLKImageType.IR1, False),
+    "thermal": (VLKImageType.IR1, False),
+    "fusion": (VLKImageType.FUSION, False),
+    "visible_ir": (VLKImageType.VISIBLE1, True),
+    "eo_ir": (VLKImageType.VISIBLE1, True),
+    "ir_visible": (VLKImageType.IR1, True),
+    "ir_eo": (VLKImageType.IR1, True),
+}
 
 
 class CameraController:
@@ -611,6 +628,41 @@ class CameraController:
         logger.info("ViewLink camera mode mapped to record mode: mode=%s result=%s", mode_name, result)
         return True, result
 
+    def _set_viewlink_camera_type(self, data: dict) -> Optional[dict]:
+        camera_type = str(data.get("camera_type") or "").strip().lower()
+        if not camera_type:
+            return None
+        display = CAMERA_TYPE_IMAGE_MAP.get(camera_type)
+        if not display:
+            return {
+                "success": False,
+                "message": f"Unsupported ViewLink camera_type: {camera_type}",
+                "camera_type": camera_type,
+            }
+        image_type, enable_pip = display
+        if "image_type" in data:
+            image_type = VLKImageType(int(data.get("image_type")))
+        if "enable_pip" in data:
+            enable_pip = bool(data.get("enable_pip"))
+        if not hasattr(self._gimbal_control, "set_image_color"):
+            return {
+                "success": True,
+                "message": "ViewLink camera type switch is not exposed by this adapter",
+                "skipped": True,
+                "camera_type": camera_type,
+                "image_type": int(image_type),
+                "enable_pip": enable_pip,
+            }
+        result = self._gimbal_control.set_image_color(image_type, enable_pip, VLKIrColor.WHITEHOT)
+        result = dict(result or {})
+        result.update({
+            "camera_type": camera_type,
+            "image_type": int(image_type),
+            "enable_pip": enable_pip,
+        })
+        logger.info("ViewLink camera type mapped: %s", result)
+        return result
+
     def _start_viewlink_photo_session(self, count: int, interval: float) -> dict:
         if not self._viewlink_connected():
             return {"success": False, "message": "ViewLink control is not connected"}
@@ -661,8 +713,9 @@ class CameraController:
         """
         data = msg.get('data', {})
         camera_idx = data.get('camera_index', 0)
+        camera_type = str(data.get("camera_type") or "")
 
-        logger.info(f"Photo take: camera={camera_idx}")
+        logger.info("Photo take: camera=%s camera_type=%s", camera_idx, camera_type)
 
         if self._is_mapping_camera_request(data):
             return self._handle_mapping_camera_photo_take(msg, data)
@@ -670,17 +723,33 @@ class CameraController:
             return self._handle_spectral_camera_photo_take(msg, data)
 
         success = False
+        result = {"success": False, "message": "Photo command was not sent"}
+        camera_type_result = None
+        viewlink_attempted = False
+        photo_source = ""
 
         # 优先使用 ViewLink SDK 拍照
-        if self._gimbal_control and self._gimbal_control.is_connected():
+        if self._viewlink_connected():
+            viewlink_attempted = True
+            camera_type_result = self._set_viewlink_camera_type(data)
+            if camera_type_result and not camera_type_result.get("success", False):
+                return MessageBuilder.build_reply(msg, result=-1, data={
+                    "camera_index": camera_idx,
+                    "camera_type": camera_type,
+                    "camera_type_result": camera_type_result,
+                }, msg_str=camera_type_result.get("message", "Camera type switch failed"))
             logger.info("ViewLink mapped: %s", build_viewlink_call("take_photo", data))
             result = self._gimbal_control.take_photo()
             success = result.get('success', False)
+            if success:
+                photo_source = "viewlink_sdk"
             logger.info(f"ViewLink photo: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
         if not success:
             success, _ = self._send_mapped_camera_command('camera_photo_take', data)
+            if success:
+                photo_source = "mavlink"
 
         # 异步写入媒体文件元数据到数据库
         if success:
@@ -693,7 +762,13 @@ class CameraController:
                 resolution=data.get("resolution") or result.get("resolution"),
             )
 
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+            "camera_index": camera_idx,
+            "camera_type": camera_type,
+            "photo_source": photo_source,
+            "viewlink_result": result if viewlink_attempted else None,
+            "camera_type_result": camera_type_result,
+        })
 
     def _handle_spectral_camera_photo_take(self, msg: dict, data: dict) -> dict:
         """多光谱相机拍照触发。

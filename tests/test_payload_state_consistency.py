@@ -207,6 +207,37 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(direct_payload.calls, [("take_photo",)])
         self.assertEqual(connection.master.mav.commands, [])
 
+    def test_camera_photo_take_applies_viewlink_camera_type_before_capture(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+            "camera_index": 0,
+            "camera_type": "ir",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["camera_type"], "ir")
+        self.assertEqual(reply["data"]["camera_type_result"]["image_type"], 2)
+        self.assertEqual(direct_payload.calls, [
+            ("set_image_color", 2, False, 0),
+            ("take_photo",),
+        ])
+
+    def test_camera_photo_take_mavlink_fallback_does_not_require_viewlink_result(self):
+        camera = CameraController()
+        connection = FakeConnection()
+        camera.set_mavlink_connection(connection)
+
+        reply = camera.handle_camera_photo_take(message("camera_photo_take", {
+            "camera_index": 0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["photo_source"], "mavlink")
+        self.assertEqual(len(connection.master.mav.commands), 1)
+
     def test_camera_recording_prefers_direct_payload_sdk_when_connected(self):
         camera = CameraController()
         connection = FakeConnection()
