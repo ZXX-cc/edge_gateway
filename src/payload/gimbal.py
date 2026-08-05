@@ -165,12 +165,22 @@ class GimbalController:
         if not self._gimbal_control:
             return False, {"success": False, "message": "ViewLink control is not configured"}
         try:
+            if (
+                hasattr(self._gimbal_control, "connect_in_progress")
+                and self._gimbal_control.connect_in_progress()
+                and hasattr(self._gimbal_control, "ensure_connected_async")
+            ):
+                result = self._gimbal_control.ensure_connected_async(timeout=2.0, retry_interval=2.0)
+                return False, result
             if self._gimbal_control.is_connected():
                 return True, {"success": True, "message": "ViewLink control is connected"}
-            if hasattr(self._gimbal_control, "ensure_connected"):
-                result = self._gimbal_control.ensure_connected(timeout=2.0, retry_interval=2.0)
+            if hasattr(self._gimbal_control, "ensure_connected_async"):
+                result = self._gimbal_control.ensure_connected_async(timeout=2.0, retry_interval=2.0)
                 return bool(result.get("success", False)), result
-            return False, {"success": False, "message": "ViewLink control is not connected"}
+            return False, {
+                "success": False,
+                "message": "ViewLink control is not connected; background connect is not supported",
+            }
         except Exception as exc:
             logger.warning("Query ViewLink connection failed: %s", exc)
             return False, {"success": False, "message": str(exc)}

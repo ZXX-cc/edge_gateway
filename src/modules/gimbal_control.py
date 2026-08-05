@@ -192,6 +192,8 @@ class GimbalControl:
         self._conn_message = ""
         self._last_ensure_connect_time = 0.0
         self._last_ensure_connect_result = {"success": False, "message": "尚未尝试连接"}
+        self._connect_thread: Optional[threading.Thread] = None
+        self._connect_in_progress = False
 
         # 回调引用（防止被GC回收）
         self._conn_callback = None
@@ -598,8 +600,44 @@ class GimbalControl:
             return {"success": True, "message": ""}
         return {"success": False, "message": "未连接到设备"}
 
+    def _connecting_result(self) -> dict:
+        return {
+            "success": False,
+            "message": "ViewLink 正在后台连接，请稍后重试",
+            "stage": "connecting",
+            "connecting": True,
+        }
+
+    def connect_in_progress(self) -> bool:
+        """返回当前是否已有后台连接正在执行。"""
+        return bool(self._connect_in_progress)
+
+    def _connect_once(self, timeout: float) -> dict:
+        """执行一次 SDK 初始化和连接，调用方负责设置连接中状态。"""
+        if self.is_connected():
+            return {"success": True, "message": "已连接到设备", "connected": True}
+
+        self.log("按需连接 ViewLink 云台")
+        if not self._initialized:
+            init_result = self.initialize()
+            if not init_result.get("success"):
+                return {
+                    "success": False,
+                    "message": init_result.get("message", "SDK 初始化失败"),
+                    "stage": "initialize",
+                }
+
+        connect_result = self.connect(timeout=timeout)
+        return {
+            "success": bool(connect_result.get("success", False)),
+            "message": connect_result.get("message", ""),
+            "stage": "connect",
+        }
+
     def ensure_connected(self, timeout: float = 2.0, retry_interval: float = 2.0) -> dict:
         """按需初始化并连接云台，用于按钮控制前的懒连接兜底。"""
+        if self.connect_in_progress():
+            return self._connecting_result()
         if self.is_connected():
             return {"success": True, "message": "已连接到设备", "connected": True}
 
@@ -613,34 +651,82 @@ class GimbalControl:
             return dict(self._last_ensure_connect_result)
 
         with self._lock:
-            if self.is_connected():
-                result = {"success": True, "message": "已连接到设备", "connected": True}
-                self._last_ensure_connect_result = result
-                self._last_ensure_connect_time = time.time()
-                return dict(result)
+            if self._connect_in_progress:
+                return self._connecting_result()
 
-            self.log("按需连接 ViewLink 云台")
-            if not self._initialized:
-                init_result = self.initialize()
-                if not init_result.get("success"):
-                    result = {
-                        "success": False,
-                        "message": init_result.get("message", "SDK 初始化失败"),
-                        "stage": "initialize",
-                    }
-                    self._last_ensure_connect_result = result
-                    self._last_ensure_connect_time = time.time()
-                    return dict(result)
+            self._connect_in_progress = True
 
-            connect_result = self.connect(timeout=timeout)
+        try:
+            result = self._connect_once(timeout)
+        except Exception as exc:
             result = {
-                "success": bool(connect_result.get("success", False)),
-                "message": connect_result.get("message", ""),
+                "success": False,
+                "message": f"连接异常: {exc}",
                 "stage": "connect",
             }
+            self.log(result["message"], "ERROR")
+        finally:
+            with self._lock:
+                self._connect_in_progress = False
+                self._last_ensure_connect_result = result
+                self._last_ensure_connect_time = time.time()
+        return dict(result)
+
+    def ensure_connected_async(self, timeout: float = 2.0, retry_interval: float = 2.0) -> dict:
+        """后台初始化并连接云台，避免 MQTT 回调线程被 ViewLink SDK 阻塞。"""
+        if self.connect_in_progress():
+            return self._connecting_result()
+        if self.is_connected():
+            result = {"success": True, "message": "已连接到设备", "connected": True}
             self._last_ensure_connect_result = result
             self._last_ensure_connect_time = time.time()
             return dict(result)
+
+        now = time.time()
+        with self._lock:
+            if self._connect_in_progress:
+                return self._connecting_result()
+
+            if (
+                retry_interval > 0
+                and self._last_ensure_connect_time
+                and now - self._last_ensure_connect_time < retry_interval
+                and not self._last_ensure_connect_result.get("success", False)
+                and not self._last_ensure_connect_result.get("connecting", False)
+            ):
+                return dict(self._last_ensure_connect_result)
+
+            self._connect_in_progress = True
+            connecting = self._connecting_result()
+            self._last_ensure_connect_result = connecting
+            self._last_ensure_connect_time = now
+            self._connect_thread = threading.Thread(
+                target=self._ensure_connected_background,
+                args=(timeout,),
+                name="viewlink-connect",
+                daemon=True,
+            )
+            self._connect_thread.start()
+            self.log("ViewLink 后台连接已启动")
+            return dict(connecting)
+
+    def _ensure_connected_background(self, timeout: float):
+        result = None
+        try:
+            result = self._connect_once(timeout)
+        except Exception as exc:
+            result = {
+                "success": False,
+                "message": f"后台连接异常: {exc}",
+                "stage": "connect",
+            }
+            self.log(result["message"], "ERROR")
+        finally:
+            with self._lock:
+                if result is not None:
+                    self._last_ensure_connect_result = result
+                    self._last_ensure_connect_time = time.time()
+                self._connect_in_progress = False
 
     def send_protocol_frame(self, frame: bytes, timeout: float = 1.0) -> dict:
         """通过 TCP 直接发送 ViewLink V3.4.9 原始协议帧。

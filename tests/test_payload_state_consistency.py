@@ -3,6 +3,7 @@ import sys
 import types
 import os
 import tempfile
+import threading
 from copy import deepcopy
 
 
@@ -51,6 +52,7 @@ if "src.database.media_db" not in sys.modules:
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
+from src.modules.gimbal_control import GimbalControl
 from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
@@ -173,10 +175,34 @@ class FakeLazyConnectPayload(FakeDirectPayload):
     def is_connected(self):
         return self.connected
 
-    def ensure_connected(self, timeout=2.0, retry_interval=2.0):
-        self.calls.append(("ensure_connected", timeout, retry_interval))
-        self.connected = True
-        return {"success": True, "message": "lazy connected"}
+    def ensure_connected_async(self, timeout=2.0, retry_interval=2.0):
+        self.calls.append(("ensure_connected_async", timeout, retry_interval))
+        return {
+            "success": False,
+            "message": "ViewLink 正在后台连接，请稍后重试",
+            "stage": "connecting",
+            "connecting": True,
+        }
+
+
+class FakeSlowGimbalControl(GimbalControl):
+    def __init__(self):
+        super().__init__(sdk_dir="/tmp", gimbal_ip="127.0.0.1", gimbal_port=37260)
+        self.connect_started = threading.Event()
+        self.connect_release = threading.Event()
+        self.connect_calls = 0
+
+    def initialize(self):
+        self._initialized = True
+        self._sdk_available = True
+        return {"success": True, "message": "SDK 初始化成功"}
+
+    def connect(self, timeout=2.0, **kwargs):
+        self.connect_calls += 1
+        self.connect_started.set()
+        self.connect_release.wait(timeout=1.0)
+        self._connected = True
+        return {"success": True, "message": "成功连接到 127.0.0.1:37260"}
 
 
 class FakeFlightControl:
@@ -359,7 +385,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("move", -200, 150)])
 
-    def test_camera_screen_drag_lazily_connects_viewlink_before_move(self):
+    def test_camera_screen_drag_starts_viewlink_background_connect_when_disconnected(self):
         gimbal = GimbalController()
         direct_payload = FakeLazyConnectPayload()
         gimbal.set_gimbal_control(direct_payload)
@@ -369,11 +395,12 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             "yaw_speed": 0.5,
         }))
 
-        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
         self.assertEqual(direct_payload.calls, [
-            ("ensure_connected", 2.0, 2.0),
-            ("move", 50, 100),
+            ("ensure_connected_async", 2.0, 2.0),
         ])
+        self.assertEqual(reply["data"]["viewlink_result"]["stage"], "connecting")
+        self.assertTrue(reply["data"]["viewlink_result"]["connecting"])
 
     def test_gimbal_rotate_zero_speed_stops_viewlink(self):
         gimbal = GimbalController()
@@ -468,7 +495,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ],
         )
 
-    def test_camera_frame_zoom_lazily_connects_viewlink(self):
+    def test_camera_frame_zoom_starts_viewlink_background_connect_when_disconnected(self):
         camera = CameraController()
         direct_payload = FakeLazyConnectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -483,12 +510,26 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             "normalized": {"x": 0.2, "y": 0.2, "width": 0.333, "height": 0.333},
         }))
 
-        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
         self.assertEqual(direct_payload.calls, [
-            ("ensure_connected", 2.0, 2.0),
-            ("start_track", 703, 396, 1920, 1080),
-            ("zoom_to", 4.0),
+            ("ensure_connected_async", 2.0, 2.0),
         ])
+        self.assertEqual(reply["data"]["viewlink_result"]["stage"], "connecting")
+
+    def test_viewlink_background_connect_deduplicates_repeated_attempts(self):
+        direct_payload = FakeSlowGimbalControl()
+
+        first = direct_payload.ensure_connected_async(timeout=2.0, retry_interval=2.0)
+        direct_payload.connect_started.wait(timeout=1.0)
+        second = direct_payload.ensure_connected_async(timeout=2.0, retry_interval=2.0)
+        direct_payload.connect_release.set()
+        if direct_payload._connect_thread:
+            direct_payload._connect_thread.join(timeout=2.0)
+
+        self.assertEqual(first["stage"], "connecting")
+        self.assertEqual(second["stage"], "connecting")
+        self.assertEqual(direct_payload.connect_calls, 1)
+        self.assertTrue(direct_payload.is_connected())
 
     def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()
