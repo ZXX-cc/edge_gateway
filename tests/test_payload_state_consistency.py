@@ -4,6 +4,7 @@ import types
 import os
 import tempfile
 import threading
+import time
 from copy import deepcopy
 
 
@@ -212,8 +213,25 @@ class FakeSlowGimbalControl(GimbalControl):
         self.connect_calls += 1
         self.connect_started.set()
         self.connect_release.wait(timeout=1.0)
+        self._lib = object()
         self._connected = True
         return {"success": True, "message": "成功连接到 127.0.0.1:37260"}
+
+
+class FakeStuckGimbalControl(GimbalControl):
+    def __init__(self):
+        super().__init__(sdk_dir="/tmp", gimbal_ip="127.0.0.1", gimbal_port=37260)
+        self.connect_started = threading.Event()
+
+    def initialize(self):
+        self._initialized = True
+        self._sdk_available = True
+        return {"success": True, "message": "SDK 初始化成功"}
+
+    def connect(self, timeout=2.0, **kwargs):
+        self.connect_started.set()
+        time.sleep(10.0)
+        return {"success": False, "message": "unexpected"}
 
 
 class FakeViewLinkLib:
@@ -589,6 +607,21 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(second["stage"], "connecting")
         self.assertEqual(direct_payload.connect_calls, 1)
         self.assertTrue(direct_payload.is_connected())
+
+    def test_viewlink_background_connect_reports_stale_sdk_thread(self):
+        direct_payload = FakeStuckGimbalControl()
+
+        first = direct_payload.ensure_connected_async(timeout=0.1, retry_interval=0)
+        self.assertEqual(first["stage"], "connecting")
+        self.assertTrue(direct_payload.connect_started.wait(timeout=1.0))
+        time.sleep(1.2)
+
+        second = direct_payload.ensure_connected_async(timeout=0.1, retry_interval=0)
+
+        self.assertEqual(second["stage"], "connect_timeout")
+        self.assertFalse(second["connecting"])
+        self.assertTrue(second["stale_thread"])
+        self.assertIn("VLK_Connect", second["message"])
 
     def test_viewlink_connect_skips_device_status_callback_by_default(self):
         direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
