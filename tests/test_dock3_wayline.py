@@ -1104,6 +1104,17 @@ class Dock3WaylineTest(unittest.TestCase):
         ))
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
 
+    def test_return_home_directly_switches_aircraft_to_rtl(self):
+        manager = MissionManager()
+        flight_control = RecordingRealWaylineFlightControl()
+        manager.set_flight_control(flight_control)
+
+        reply = manager.handle_return_home(base_msg("return_home", {}))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertIn(("set_mode", "RTL"), flight_control.calls)
+        self.assertNotIn(("one_click_return", None), flight_control.calls)
+
     def test_mission_completion_retries_and_reports_failure_without_fake_success(self):
         manager = MissionManager()
         flight_control = FailingFlightControl()

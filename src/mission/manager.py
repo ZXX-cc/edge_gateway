@@ -5351,9 +5351,9 @@ class MissionManager:
             reason = "FlightControl not available"
             logger.warning(f"一键返航失败: {reason}")
             return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
-        result = self._flight_control.one_click_return()
+        result = self._flight_control.set_mode("RTL")
         if not result.get("success"):
-            reason = result.get("message") or "return home failed"
+            reason = result.get("message") or "RTL mode switch failed"
             logger.warning(f"一键返航失败: {reason}")
             return MessageBuilder.build_reply(msg, result=WAYLINE_EXECUTION_FAILED, msg_str=reason)
 
