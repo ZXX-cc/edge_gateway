@@ -97,6 +97,7 @@ class CameraController:
 
         # ViewLink SDK 云台控制模块引用
         self._gimbal_control = None
+        self._last_viewlink_connection_result = None
 
         # 遥测模块引用
         self._telemetry_module = None
@@ -577,6 +578,10 @@ class CameraController:
 
     def _viewlink_connected(self) -> bool:
         if not self._gimbal_control:
+            self._last_viewlink_connection_result = {
+                "success": False,
+                "message": "ViewLink control is not configured",
+            }
             return False
         try:
             if (
@@ -585,17 +590,32 @@ class CameraController:
                 and hasattr(self._gimbal_control, "ensure_connected_async")
             ):
                 result = self._gimbal_control.ensure_connected_async(timeout=2.0, retry_interval=2.0)
+                self._last_viewlink_connection_result = result
                 logger.warning("ViewLink background connect pending before camera control: %s", result)
                 return False
             if self._gimbal_control.is_connected():
+                self._last_viewlink_connection_result = {
+                    "success": True,
+                    "message": "ViewLink control is connected",
+                }
                 return True
             if hasattr(self._gimbal_control, "ensure_connected_async"):
                 result = self._gimbal_control.ensure_connected_async(timeout=2.0, retry_interval=2.0)
+                self._last_viewlink_connection_result = result
                 if not result.get("success"):
                     logger.warning("ViewLink background connect pending before camera control: %s", result)
                 return bool(result.get("success", False))
         except Exception as exc:
+            self._last_viewlink_connection_result = {
+                "success": False,
+                "message": f"ViewLink connection check failed: {exc}",
+            }
             logger.warning("ViewLink connection check failed before camera control: %s", exc)
+            return False
+        self._last_viewlink_connection_result = {
+            "success": False,
+            "message": "ViewLink control is not connected",
+        }
         return False
 
     @staticmethod
@@ -868,7 +888,8 @@ class CameraController:
         photo_source = ""
 
         # 优先使用 ViewLink SDK 拍照
-        if self._viewlink_connected():
+        viewlink_ready = self._viewlink_connected()
+        if viewlink_ready:
             viewlink_attempted = True
             camera_type_result = self._set_viewlink_camera_type(data)
             if camera_type_result and not camera_type_result.get("success", False):
@@ -1734,11 +1755,19 @@ class CameraController:
                 })
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
         else:
+            connection_result = self._last_viewlink_connection_result
+            if self._gimbal_control and isinstance(connection_result, dict):
+                result = dict(connection_result)
+                pipeline_status = "pending" if result.get("connecting") else "failed"
+                pipeline_reason = result.get("message", "ViewLink control is not connected")
+            else:
+                pipeline_status = "simulated"
+                pipeline_reason = "ViewLink control is not connected"
             pipeline.append({
                 "step": "camera_zoom_to",
-                "status": "simulated",
+                "status": pipeline_status,
                 "zoom_ratio": zoom_ratio,
-                "reason": "ViewLink control is not connected",
+                "reason": pipeline_reason,
             })
 
         success = bool(

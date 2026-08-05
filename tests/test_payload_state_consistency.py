@@ -4,6 +4,7 @@ import types
 import os
 import tempfile
 import threading
+import ctypes
 from copy import deepcopy
 
 
@@ -52,7 +53,7 @@ if "src.database.media_db" not in sys.modules:
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
-from src.modules.gimbal_control import GimbalControl
+from src.modules.gimbal_control import DevStatusCallback, GimbalControl
 from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
 from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
@@ -220,16 +221,26 @@ class FakeViewLinkLib:
     def __init__(self):
         self.register_dev_status_calls = 0
         self.connect_calls = 0
+        self.events = []
 
     def VLK_RegisterDevStatusCB(self, callback, user_param):
         self.register_dev_status_calls += 1
+        self.events.append("register_dev_status")
+        callback(2, None, 128, user_param)
 
     def VLK_Connect(self, param, callback, user_param):
         self.connect_calls += 1
+        self.events.append("connect")
         return 0
 
     def VLK_IsConnected(self):
         return 1
+
+
+def wait_for_dev_status_registration(gimbal_control):
+    thread = getattr(gimbal_control, "_dev_status_thread", None)
+    if thread:
+        thread.join(timeout=1.0)
 
 
 class FakeFlightControl:
@@ -597,10 +608,14 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         direct_payload._lib = fake_lib
 
         result = direct_payload.connect(timeout=0.1)
+        wait_for_dev_status_registration(direct_payload)
 
         self.assertTrue(result["success"])
         self.assertEqual(fake_lib.connect_calls, 1)
         self.assertEqual(fake_lib.register_dev_status_calls, 0)
+
+    def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
+        self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)
 
     def test_viewlink_connect_can_enable_device_status_callback_explicitly(self):
         direct_payload = GimbalControl(
@@ -614,10 +629,14 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         direct_payload._lib = fake_lib
 
         result = direct_payload.connect(timeout=0.1)
+        wait_for_dev_status_registration(direct_payload)
 
         self.assertTrue(result["success"])
         self.assertEqual(fake_lib.connect_calls, 1)
         self.assertEqual(fake_lib.register_dev_status_calls, 1)
+        self.assertEqual(fake_lib.events, ["connect", "register_dev_status"])
+        self.assertTrue(direct_payload._dev_status_callback_registered)
+        self.assertEqual(direct_payload._last_dev_status["type"], 2)
 
     def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()

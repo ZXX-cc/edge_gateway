@@ -10,7 +10,7 @@ modules/gimbal_control.py
 - 拍摄控制（拍照、录像）
 """
 import ctypes
-from ctypes import c_char, c_int, c_void_p, c_char_p, CFUNCTYPE, Structure, Union, POINTER
+from ctypes import c_char, c_int, c_short, c_void_p, c_char_p, CFUNCTYPE, Structure, Union, POINTER
 import os
 import shutil
 import socket
@@ -134,12 +134,14 @@ class VLK_TRACK_MODE_PARAM(Structure):
 
 
 # ===== 回调函数类型 =====
-# ViewLink.h defines VLK_CALL as __stdcall on Windows. ctypes callbacks and DLL
-# loading must use the same calling convention or the native SDK can terminate
-# the process without a Python traceback.
-CallbackFactory = ctypes.WINFUNCTYPE if os.name == "nt" else CFUNCTYPE
+# ViewLink.h uses VLK_CALL (__stdcall on Windows) for exported SDK functions,
+# but the callback typedefs themselves are plain function pointers:
+#   typedef int (*VLK_ConnStatus_CB)(...);
+#   typedef int (*VLK_DevStatus_CB)(...);
+CallbackFactory = CFUNCTYPE
 ConnStatusCallback = CallbackFactory(c_int, c_int, c_char_p, c_int, c_void_p)
-DevStatusCallback = CallbackFactory(c_int, c_int, c_char_p, c_int, c_void_p)
+# Device status szBuffer points at a binary status struct, not a NUL-terminated string.
+DevStatusCallback = CallbackFactory(c_int, c_int, c_void_p, c_int, c_void_p)
 
 
 class GimbalControl:
@@ -197,6 +199,14 @@ class GimbalControl:
         self._last_ensure_connect_result = {"success": False, "message": "尚未尝试连接"}
         self._connect_thread: Optional[threading.Thread] = None
         self._connect_in_progress = False
+        self._dev_status_thread: Optional[threading.Thread] = None
+        self._dev_status_registration_in_progress = False
+        self._dev_status_callback_registered = False
+        self._dev_status_registration_result = {
+            "success": False,
+            "message": "设备状态回调尚未注册",
+        }
+        self._last_dev_status = None
 
         # 回调引用（防止被GC回收）
         self._conn_callback = None
@@ -328,7 +338,7 @@ class GimbalControl:
         lib.VLK_RegisterDevStatusCB.restype = None
 
         # 云台控制
-        lib.VLK_Move.argtypes = [c_int, c_int]
+        lib.VLK_Move.argtypes = [c_short, c_short]
         lib.VLK_Move.restype = None
 
         lib.VLK_Stop.argtypes = []
@@ -341,10 +351,10 @@ class GimbalControl:
         lib.VLK_TurnTo.restype = None
 
         # 变焦控制
-        lib.VLK_ZoomIn.argtypes = [c_int]
+        lib.VLK_ZoomIn.argtypes = [c_short]
         lib.VLK_ZoomIn.restype = None
 
-        lib.VLK_ZoomOut.argtypes = [c_int]
+        lib.VLK_ZoomOut.argtypes = [c_short]
         lib.VLK_ZoomOut.restype = None
 
         lib.VLK_StopZoom.argtypes = []
@@ -376,10 +386,10 @@ class GimbalControl:
         lib.VLK_GetRecordMode.restype = c_int
 
         # 对焦和指定倍率
-        lib.VLK_FocusIn.argtypes = [c_int]
+        lib.VLK_FocusIn.argtypes = [c_short]
         lib.VLK_FocusIn.restype = None
 
-        lib.VLK_FocusOut.argtypes = [c_int]
+        lib.VLK_FocusOut.argtypes = [c_short]
         lib.VLK_FocusOut.restype = None
 
         lib.VLK_StopFocus.argtypes = []
@@ -401,10 +411,10 @@ class GimbalControl:
         lib.VLK_SwitchEODigitalZoom.argtypes = [c_int]
         lib.VLK_SwitchEODigitalZoom.restype = None
 
-        lib.VLK_IRDigitalZoomIn.argtypes = [c_int]
+        lib.VLK_IRDigitalZoomIn.argtypes = [c_short]
         lib.VLK_IRDigitalZoomIn.restype = None
 
-        lib.VLK_IRDigitalZoomOut.argtypes = [c_int]
+        lib.VLK_IRDigitalZoomOut.argtypes = [c_short]
         lib.VLK_IRDigitalZoomOut.restype = None
 
         lib.VLK_SwitchDefog.argtypes = [c_int]
@@ -419,10 +429,10 @@ class GimbalControl:
         lib.VLK_LaserSingle.argtypes = []
         lib.VLK_LaserSingle.restype = None
 
-        lib.VLK_LaserZoomIn.argtypes = [c_int]
+        lib.VLK_LaserZoomIn.argtypes = [c_short]
         lib.VLK_LaserZoomIn.restype = None
 
-        lib.VLK_LaserZoomOut.argtypes = [c_int]
+        lib.VLK_LaserZoomOut.argtypes = [c_short]
         lib.VLK_LaserZoomOut.restype = None
 
         lib.VLK_LaserStopZoom.argtypes = []
@@ -485,16 +495,88 @@ class GimbalControl:
                 0: "设备型号",
                 1: "设备配置",
                 2: "设备遥测数据",
+                3: "AI状态",
+                5: "跟踪坐标",
             }
             type_text = type_map.get(dev_type, f"未知类型({dev_type})")
+            self._last_dev_status = {
+                "type": dev_type,
+                "type_name": type_text,
+                "buffer_address": int(buffer or 0),
+                "buffer_length": int(buf_len or 0),
+                "timestamp": time.time(),
+            }
             self.log(f"设备状态: {type_text}, 数据长度: {buf_len}")
 
             if self._on_dev_status_change:
-                self._on_dev_status_change(dev_type, buf_len)
+                try:
+                    self._on_dev_status_change(dev_type, buf_len, dict(self._last_dev_status))
+                except TypeError:
+                    self._on_dev_status_change(dev_type, buf_len)
 
             return 0
 
         return callback
+
+    def _register_dev_status_callback_once(self) -> dict:
+        """注册设备状态回调。该调用可能进入原生 SDK，必须由后台线程调用。"""
+        if not self._lib:
+            return {"success": False, "message": "SDK 未加载"}
+        if self._dev_status_callback_registered:
+            return {"success": True, "message": "设备状态回调已注册"}
+
+        self._dev_callback = self._create_dev_callback()
+        self.log("开始注册 ViewLink 设备状态回调")
+        self._lib.VLK_RegisterDevStatusCB(self._dev_callback, None)
+        self._dev_status_callback_registered = True
+        return {"success": True, "message": "设备状态回调已注册"}
+
+    def _register_dev_status_callback_background(self):
+        result = None
+        try:
+            result = self._register_dev_status_callback_once()
+            if result.get("success"):
+                self.log(result.get("message", "设备状态回调已注册"), "OK")
+            else:
+                self.log(result.get("message", "设备状态回调注册失败"), "WARN")
+        except Exception as exc:
+            result = {"success": False, "message": f"设备状态回调注册异常: {exc}"}
+            self.log(result["message"], "ERROR")
+        finally:
+            with self._lock:
+                self._dev_status_registration_result = result or {
+                    "success": False,
+                    "message": "设备状态回调注册未返回结果",
+                }
+                self._dev_status_registration_in_progress = False
+
+    def _ensure_dev_status_callback_registration(self):
+        """连接成功后异步注册设备状态回调，避免阻塞网关主链路。"""
+        if not self.register_dev_status_callback:
+            self._dev_status_registration_result = {
+                "success": False,
+                "message": "设备状态回调未启用",
+                "enabled": False,
+            }
+            self.log("跳过 ViewLink 设备状态回调注册")
+            return
+
+        with self._lock:
+            if self._dev_status_callback_registered or self._dev_status_registration_in_progress:
+                return
+            self._dev_status_registration_in_progress = True
+            self._dev_status_registration_result = {
+                "success": False,
+                "message": "设备状态回调正在后台注册",
+                "registering": True,
+            }
+            self._dev_status_thread = threading.Thread(
+                target=self._register_dev_status_callback_background,
+                name="viewlink-dev-status-cb",
+                daemon=True,
+            )
+            self._dev_status_thread.start()
+        self.log("ViewLink 设备状态回调后台注册已启动")
 
     def connect(
         self,
@@ -522,6 +604,7 @@ class GimbalControl:
             return result
 
         if self._connected:
+            self._ensure_dev_status_callback_registration()
             result["success"] = True
             result["message"] = "已连接到设备"
             return result
@@ -532,14 +615,6 @@ class GimbalControl:
         try:
             # 创建连接回调（保持引用）
             self._conn_callback = self._create_conn_callback()
-
-            if self.register_dev_status_callback:
-                # 部分 Windows ViewLink SDK 在注册设备状态回调时会直接导致进程停止。
-                # 该回调不影响连接和 move/stop 主控制链路，默认关闭，仅在明确需要状态回调时开启。
-                self._dev_callback = self._create_dev_callback()
-                self._lib.VLK_RegisterDevStatusCB(self._dev_callback, None)
-            else:
-                self.log("跳过 ViewLink 设备状态回调注册")
 
             # 准备连接参数
             param = VLK_CONN_PARAM()
@@ -570,6 +645,7 @@ class GimbalControl:
                     result["success"] = True
                     result["message"] = f"成功连接到 {ip}:{port}"
                     self.log(result["message"], "OK")
+                    self._ensure_dev_status_callback_registration()
                     return result
                 time.sleep(0.1)
 
@@ -598,10 +674,10 @@ class GimbalControl:
 
     def is_connected(self) -> bool:
         """检查是否已连接"""
-        if not self._lib:
-            return False
         if self._connected:
             return True
+        if not self._lib:
+            return False
         try:
             connected = self._lib.VLK_IsConnected() != 0
             if connected:
@@ -1364,7 +1440,11 @@ class GimbalControl:
             "gimbal_ip": self.gimbal_ip,
             "gimbal_port": self.gimbal_port,
             "sdk_dir": self.sdk_dir,
-            "register_dev_status_callback": self.register_dev_status_callback
+            "register_dev_status_callback": self.register_dev_status_callback,
+            "dev_status_callback_registered": self._dev_status_callback_registered,
+            "dev_status_callback_registering": self._dev_status_registration_in_progress,
+            "dev_status_registration_result": dict(self._dev_status_registration_result),
+            "last_dev_status": dict(self._last_dev_status) if self._last_dev_status else None,
         }
 
     # ==================== 回调设置 ====================
