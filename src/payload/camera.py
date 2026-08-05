@@ -556,7 +556,19 @@ class CameraController:
     # ---- 拍照API ----
 
     def _viewlink_connected(self) -> bool:
-        return bool(self._gimbal_control and self._gimbal_control.is_connected())
+        if not self._gimbal_control:
+            return False
+        try:
+            if self._gimbal_control.is_connected():
+                return True
+            if hasattr(self._gimbal_control, "ensure_connected"):
+                result = self._gimbal_control.ensure_connected(timeout=2.0, retry_interval=2.0)
+                if not result.get("success"):
+                    logger.warning("ViewLink lazy connect failed before camera control: %s", result)
+                return bool(result.get("success", False))
+        except Exception as exc:
+            logger.warning("ViewLink connection check failed before camera control: %s", exc)
+        return False
 
     @staticmethod
     def _camera_mode_name(raw_mode) -> str:

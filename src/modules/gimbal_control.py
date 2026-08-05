@@ -179,6 +179,8 @@ class GimbalControl:
         # 连接状态
         self._conn_status = None
         self._conn_message = ""
+        self._last_ensure_connect_time = 0.0
+        self._last_ensure_connect_result = {"success": False, "message": "尚未尝试连接"}
 
         # 回调引用（防止被GC回收）
         self._conn_callback = None
@@ -585,6 +587,50 @@ class GimbalControl:
             return {"success": True, "message": ""}
         return {"success": False, "message": "未连接到设备"}
 
+    def ensure_connected(self, timeout: float = 2.0, retry_interval: float = 2.0) -> dict:
+        """按需初始化并连接云台，用于按钮控制前的懒连接兜底。"""
+        if self.is_connected():
+            return {"success": True, "message": "已连接到设备", "connected": True}
+
+        now = time.time()
+        if (
+            retry_interval > 0
+            and self._last_ensure_connect_time
+            and now - self._last_ensure_connect_time < retry_interval
+            and not self._last_ensure_connect_result.get("success", False)
+        ):
+            return dict(self._last_ensure_connect_result)
+
+        with self._lock:
+            if self.is_connected():
+                result = {"success": True, "message": "已连接到设备", "connected": True}
+                self._last_ensure_connect_result = result
+                self._last_ensure_connect_time = time.time()
+                return dict(result)
+
+            self.log("按需连接 ViewLink 云台")
+            if not self._initialized:
+                init_result = self.initialize()
+                if not init_result.get("success"):
+                    result = {
+                        "success": False,
+                        "message": init_result.get("message", "SDK 初始化失败"),
+                        "stage": "initialize",
+                    }
+                    self._last_ensure_connect_result = result
+                    self._last_ensure_connect_time = time.time()
+                    return dict(result)
+
+            connect_result = self.connect(timeout=timeout)
+            result = {
+                "success": bool(connect_result.get("success", False)),
+                "message": connect_result.get("message", ""),
+                "stage": "connect",
+            }
+            self._last_ensure_connect_result = result
+            self._last_ensure_connect_time = time.time()
+            return dict(result)
+
     def send_protocol_frame(self, frame: bytes, timeout: float = 1.0) -> dict:
         """通过 TCP 直接发送 ViewLink V3.4.9 原始协议帧。
 
@@ -801,8 +847,9 @@ class GimbalControl:
         """近焦方向连续对焦"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         speed = max(1, min(8, int(speed)))
@@ -816,8 +863,9 @@ class GimbalControl:
         """远焦方向连续对焦"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         speed = max(1, min(8, int(speed)))
@@ -1045,8 +1093,9 @@ class GimbalControl:
         """
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         param = VLK_TRACK_MODE_PARAM()

@@ -161,14 +161,19 @@ class GimbalController:
     def _move_result_success(result: dict) -> bool:
         return bool(result.get("success", False)) if isinstance(result, dict) else False
 
-    def _viewlink_connected(self) -> bool:
+    def _ensure_viewlink_connected(self) -> tuple[bool, dict]:
         if not self._gimbal_control:
-            return False
+            return False, {"success": False, "message": "ViewLink control is not configured"}
         try:
-            return bool(self._gimbal_control.is_connected())
+            if self._gimbal_control.is_connected():
+                return True, {"success": True, "message": "ViewLink control is connected"}
+            if hasattr(self._gimbal_control, "ensure_connected"):
+                result = self._gimbal_control.ensure_connected(timeout=2.0, retry_interval=2.0)
+                return bool(result.get("success", False)), result
+            return False, {"success": False, "message": "ViewLink control is not connected"}
         except Exception as exc:
             logger.warning("Query ViewLink connection failed: %s", exc)
-            return False
+            return False, {"success": False, "message": str(exc)}
 
     @staticmethod
     def _frame_number(data: dict, key: str, default: float) -> float:
@@ -437,7 +442,10 @@ class GimbalController:
         result = {"success": False, "message": "ViewLink control is not connected"}
 
         # 优先使用 ViewLink SDK 云台控制
-        if self._viewlink_connected():
+        connected, connect_result = self._ensure_viewlink_connected()
+        if not connected:
+            result = connect_result
+        if connected:
             if has_speed:
                 yaw_spd = self._viewlink_speed(yaw_speed or 0.0)
                 pitch_spd = self._viewlink_speed(pitch_speed or 0.0)
@@ -523,7 +531,10 @@ class GimbalController:
 
         success = False
         result = {"success": False, "message": "ViewLink control is not connected"}
-        if self._viewlink_connected():
+        connected, connect_result = self._ensure_viewlink_connected()
+        if not connected:
+            result = connect_result
+        if connected:
             yaw_spd = self._viewlink_speed(yaw_speed)
             pitch_spd = self._viewlink_speed(pitch_speed)
             logger.info("ViewLink mapped: %s", build_viewlink_call("move", {

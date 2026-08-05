@@ -253,6 +253,12 @@ python -m unittest -v tests.test_payload_state_consistency.PayloadStateConsisten
 `data.params`、`pitchSpeed/yawSpeed` 等驼峰字段；当请求包含速度字段时，不再回落到
 MAVLink 角度命令，避免服务回包 `result=0` 但真实 ViewLink 云台不动。DRC
 `payload_control action=gimbal_rotate/zoom` 也改为按 SDK 返回值决定成功或失败。
+2026-08-05 Windows 日志排查确认：按钮消息已进入网关，但回包为
+`result=319999`、`viewlink_result.message=ViewLink control is not connected`，且启动段
+没有 `连接到 <云台IP>:<端口>` 或 `ViewLink gimbal auto connected`，说明失败点在
+ViewLink 未连接。当前已新增懒连接：按钮转动或框选变焦命令到达时，如果 ViewLink
+已配置但未连接，会先尝试 `initialize/connect`，日志应出现 `按需连接 ViewLink 云台`、
+`连接到 <IP>:<端口>` 和连接成功/失败原因。
 
 Windows 真实 ViewLink 验收命令：
 

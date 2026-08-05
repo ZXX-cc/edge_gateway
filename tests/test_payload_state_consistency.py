@@ -165,6 +165,20 @@ class FakeDisconnectedDirectPayload(FakeDirectPayload):
         return False
 
 
+class FakeLazyConnectPayload(FakeDirectPayload):
+    def __init__(self):
+        super().__init__()
+        self.connected = False
+
+    def is_connected(self):
+        return self.connected
+
+    def ensure_connected(self, timeout=2.0, retry_interval=2.0):
+        self.calls.append(("ensure_connected", timeout, retry_interval))
+        self.connected = True
+        return {"success": True, "message": "lazy connected"}
+
+
 class FakeFlightControl:
     def __init__(self, armed=False):
         self.armed = armed
@@ -314,6 +328,22 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("move", -200, 150)])
 
+    def test_camera_screen_drag_lazily_connects_viewlink_before_move(self):
+        gimbal = GimbalController()
+        direct_payload = FakeLazyConnectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_screen_drag(message("camera_screen_drag", {
+            "pitch_speed": 1.0,
+            "yaw_speed": 0.5,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("ensure_connected", 2.0, 2.0),
+            ("move", 50, 100),
+        ])
+
     def test_gimbal_rotate_zero_speed_stops_viewlink(self):
         gimbal = GimbalController()
         direct_payload = FakeDirectPayload()
@@ -406,6 +436,28 @@ class PayloadStateConsistencyTest(unittest.TestCase):
                 "camera_zoom_to",
             ],
         )
+
+    def test_camera_frame_zoom_lazily_connects_viewlink(self):
+        camera = CameraController()
+        direct_payload = FakeLazyConnectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "x": 384,
+            "y": 216,
+            "width": 640,
+            "height": 360,
+            "zoom_ratio": 4.0,
+            "normalized": {"x": 0.2, "y": 0.2, "width": 0.333, "height": 0.333},
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("ensure_connected", 2.0, 2.0),
+            ("start_track", 703, 396, 1920, 1080),
+            ("zoom_to", 4.0),
+        ])
 
     def test_camera_frame_zoom_skips_center_move_when_selection_aligned(self):
         camera = CameraController()
