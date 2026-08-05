@@ -156,9 +156,9 @@ class GimbalControl:
 
     def __init__(
         self,
-        sdk_dir: str = "C:/workspace/ViewLink-SDK-2025/bin/win64",
-        gimbal_ip: str = "192.168.2.119",
-        gimbal_port: int = 2000
+        sdk_dir: str,
+        gimbal_ip: str,
+        gimbal_port: int
     ):
         """
         初始化云台控制模块
@@ -168,9 +168,16 @@ class GimbalControl:
             gimbal_ip: 云台 IP 地址
             gimbal_port: 云台端口
         """
+        if not sdk_dir:
+            raise ValueError("ViewLink sdk_dir must be configured in payload.devices.gimbal.channels.control.sdk_dir")
+        if not gimbal_ip:
+            raise ValueError("ViewLink host must be configured in payload.devices.gimbal.channels.control.host")
+        if not gimbal_port:
+            raise ValueError("ViewLink port must be configured in payload.devices.gimbal.channels.control.port")
+
         self.sdk_dir = sdk_dir
         self.gimbal_ip = gimbal_ip
-        self.gimbal_port = gimbal_port
+        self.gimbal_port = int(gimbal_port)
 
         # 状态
         self._initialized = False
