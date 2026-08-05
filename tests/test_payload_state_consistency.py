@@ -77,6 +77,8 @@ class FakeConnection:
 class FakeDirectPayload:
     def __init__(self):
         self.calls = []
+        self.record_mode = 1
+        self.recording = False
 
     def is_connected(self):
         return True
@@ -87,15 +89,24 @@ class FakeDirectPayload:
 
     def start_recording(self):
         self.calls.append(("start_recording",))
+        self.recording = True
         return {"success": True}
 
     def stop_recording(self):
         self.calls.append(("stop_recording",))
+        self.recording = False
         return {"success": True}
 
     def set_record_mode(self, mode):
         self.calls.append(("set_record_mode", int(mode)))
+        self.record_mode = int(mode)
         return {"success": True}
+
+    def get_record_mode(self):
+        return {"success": True, "mode": self.record_mode}
+
+    def is_recording(self):
+        return self.recording
 
     def turn_to(self, yaw, pitch):
         self.calls.append(("turn_to", yaw, pitch))
@@ -264,6 +275,38 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["mode"], "photo")
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
         self.assertEqual(direct_payload.calls, [("set_record_mode", 1)])
+
+    def test_aircraft_osd_cameras_use_real_payload_readback(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        mode_reply = camera.handle_camera_mode_switch(message("camera_mode_switch", {"camera_mode": 1}))
+        zoom_reply = camera.handle_camera_focal_length_set(
+            message("camera_focal_length_set", {"zoom_factor": 3.5})
+        )
+
+        cameras = camera.build_aircraft_osd_cameras()
+
+        self.assertEqual(mode_reply["data"]["result"], 0)
+        self.assertEqual(zoom_reply["data"]["result"], 0)
+        self.assertEqual(cameras[0]["payload_index"], "52-0-0")
+        self.assertEqual(cameras[0]["camera_mode"], 1)
+        self.assertEqual(cameras[0]["recording_state"], 0)
+        self.assertEqual(cameras[0]["photo_state"], 0)
+        self.assertEqual(cameras[0]["zoom_factor"], 3.5)
+        self.assertNotIn("remain_photo_num", cameras[0])
+        self.assertNotIn("remain_record_duration", cameras[0])
+
+    def test_aircraft_osd_cameras_skip_disconnected_payload(self):
+        class DisconnectedPayload(FakeDirectPayload):
+            def is_connected(self):
+                return False
+
+        camera = CameraController()
+        camera.set_gimbal_control(DisconnectedPayload())
+
+        self.assertEqual(camera.build_aircraft_osd_cameras(), [])
 
     def test_camera_photo_session_uses_viewlink_photograph_not_live_frame_capture(self):
         camera = CameraController()

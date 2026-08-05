@@ -240,6 +240,25 @@ class Dock3OsdStateClientTest(unittest.TestCase):
         self.assertEqual(self.client.stats["observed"], 3)
         self.assertEqual(self.client.invalid_samples, [])
 
+    def test_drone_osd_accepts_real_payload_cameras(self):
+        payload = valid_drone_osd()
+        payload["data"]["cameras"] = [
+            {
+                "payload_index": "52-0-0",
+                "camera_mode": 1,
+                "photo_state": 0,
+                "recording_state": 1,
+                "record_time": 12,
+                "zoom_factor": 3.5,
+            }
+        ]
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.client._on_message(None, None, mqtt_message(self.client.drone_osd_topic, payload))
+
+        self.assertEqual(self.client.counts()[1], 1)
+        self.assertEqual(self.client.invalid_samples, [])
+
     def test_invalid_dock_osd_is_recorded(self):
         payload = valid_dock_osd()
         payload["data"]["battery"] = {"capacity_percent": 80}

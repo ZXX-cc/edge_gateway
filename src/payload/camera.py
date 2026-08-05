@@ -8,7 +8,7 @@ import socket
 import threading
 import asyncio
 import urllib.parse
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
@@ -82,6 +82,7 @@ class CameraController:
         self._photo_session_stop = threading.Event()
         self._photo_session_lock = threading.Lock()
         self._zoom_level = 1.0
+        self._last_real_zoom_factor = None
         self._resolution = None
         self._exposure_mode = 'auto'
         self._focus_mode = 'auto_focus'
@@ -630,6 +631,134 @@ class CameraController:
         logger.info("ViewLink camera mode mapped to record mode: mode=%s result=%s", mode_name, result)
         return True, result
 
+    def build_aircraft_osd_cameras(self) -> list[dict[str, Any]]:
+        """Build Dock3 aircraft OSD ``cameras`` from real payload adapters only.
+
+        This deliberately avoids defaulting capacity-like values such as
+        remaining photo count or remaining recording duration.  The current
+        adapters do not expose trustworthy device-side readback for those
+        fields, so publishing guessed values would make fake data look real.
+        """
+        cameras: list[dict[str, Any]] = []
+
+        viewlink_camera = self._build_viewlink_aircraft_osd_camera()
+        if viewlink_camera:
+            cameras.append(viewlink_camera)
+
+        for state in (
+            self.build_mapping_camera_payload_state(),
+            self._spectral_payload_state(),
+        ):
+            camera = self._build_connected_payload_camera_index(state)
+            if camera:
+                cameras.append(camera)
+
+        return cameras
+
+    def _build_viewlink_aircraft_osd_camera(self) -> dict[str, Any]:
+        if not self._gimbal_control:
+            return {}
+        try:
+            if not self._gimbal_control.is_connected():
+                return {}
+        except Exception as exc:
+            logger.warning("Read ViewLink connection for aircraft OSD failed: %s", exc)
+            return {}
+
+        payload_index = self._gimbal_payload_index()
+        camera: dict[str, Any] = {"payload_index": payload_index}
+
+        record_mode = self._safe_viewlink_record_mode()
+        if record_mode is not None:
+            camera["camera_mode"] = self._dock3_camera_mode_from_record_mode(record_mode)
+
+        recording = self._safe_viewlink_recording_state()
+        if recording is not None:
+            camera["recording_state"] = 1 if recording else 0
+            if recording and getattr(self, "_recording_start_time", None):
+                camera["record_time"] = max(0, int(time.time() - self._recording_start_time))
+            elif self._recording_time:
+                camera["record_time"] = max(0, int(self._recording_time))
+
+        photo_active = self._viewlink_photo_session_active()
+        if photo_active is not None:
+            camera["photo_state"] = 1 if photo_active else 0
+
+        if self._last_real_zoom_factor is not None:
+            camera["zoom_factor"] = max(1.0, float(self._last_real_zoom_factor))
+
+        return camera if len(camera) > 1 else {}
+
+    def _gimbal_payload_index(self) -> str:
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        gimbal = devices.get("gimbal", {}) if isinstance(devices, dict) else {}
+        cloud_api = gimbal.get("cloud_api", {}) if isinstance(gimbal, dict) else {}
+        return "{type}-{subtype}-{gimbal_index}".format(
+            type=cloud_api.get("type", 52),
+            subtype=cloud_api.get("subtype", 0),
+            gimbal_index=cloud_api.get("gimbal_index", 0),
+        )
+
+    def _safe_viewlink_record_mode(self) -> Optional[int]:
+        if not hasattr(self._gimbal_control, "get_record_mode"):
+            return None
+        try:
+            result = self._gimbal_control.get_record_mode()
+        except Exception as exc:
+            logger.warning("Read ViewLink record mode for aircraft OSD failed: %s", exc)
+            return None
+        if not isinstance(result, dict) or not result.get("success"):
+            return None
+        try:
+            return int(result.get("mode"))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _dock3_camera_mode_from_record_mode(record_mode: int) -> int:
+        # ViewLink: 1=photo, 2=record. Dock3 camera_mode: 0=photo, 1=video.
+        return {1: 0, 2: 1}.get(record_mode, -1)
+
+    def _safe_viewlink_recording_state(self) -> Optional[bool]:
+        if not hasattr(self._gimbal_control, "is_recording"):
+            return None
+        try:
+            return bool(self._gimbal_control.is_recording())
+        except Exception as exc:
+            logger.warning("Read ViewLink recording state for aircraft OSD failed: %s", exc)
+            return None
+
+    def _viewlink_photo_session_active(self) -> Optional[bool]:
+        if not self._gimbal_control:
+            return None
+        thread = self._photo_session_thread
+        if thread is None:
+            return False
+        return bool(thread.is_alive())
+
+    def _spectral_payload_state(self) -> dict[str, Any]:
+        if not self._last_spectral_camera_cache:
+            return {}
+        cloud_api = self._spectral_camera_cloud_api()
+        return {
+            "payload_index": "{type}-{subtype}-{gimbal_index}".format(
+                type=cloud_api.get("type", 52),
+                subtype=cloud_api.get("subtype", 0),
+                gimbal_index=cloud_api.get("gimbal_index", 2),
+            ),
+            "connection_state": "connected",
+        }
+
+    @staticmethod
+    def _build_connected_payload_camera_index(state: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(state, dict) or state.get("connection_state") != "connected":
+            return {}
+        payload_index = state.get("payload_index")
+        if not payload_index:
+            return {}
+        return {"payload_index": str(payload_index)}
+
     def _set_viewlink_camera_type(self, data: dict) -> Optional[dict]:
         camera_type = str(data.get("camera_type") or "").strip().lower()
         if not camera_type:
@@ -1083,6 +1212,8 @@ class CameraController:
                 viewlink_attempted = True
                 result = self._gimbal_control.zoom_to(float(ratio))
                 success = result.get('success', False)
+                if success:
+                    self._last_real_zoom_factor = float(ratio)
                 logger.info(f"ViewLink zoom_to: {result}")
         else:
             direction = data.get('zoom_direction', 0)
@@ -1572,6 +1703,8 @@ class CameraController:
             )
             if center_result.get("success", False) or allow_zoom_without_center:
                 result = self._gimbal_control.zoom_to(zoom_ratio)
+                if result.get("success", False):
+                    self._last_real_zoom_factor = float(zoom_ratio)
                 pipeline.append({
                     "step": "camera_zoom_to",
                     "status": "ok" if bool(result.get("success", False)) else "failed",

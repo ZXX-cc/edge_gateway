@@ -207,9 +207,65 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     check_field(data, "flight_time", int, errors, min_value=0)
     check_field(data, "timestamp", int, errors, min_value=0)
 
+    cameras = data.get("cameras")
+    if cameras is not None:
+        if not isinstance(cameras, list):
+            errors.append("data.cameras expected list")
+        else:
+            for index, camera in enumerate(cameras):
+                if not isinstance(camera, dict):
+                    errors.append(f"data.cameras[{index}] expected object")
+                    continue
+                if not isinstance(camera.get("payload_index"), str) or not camera.get("payload_index"):
+                    errors.append(f"data.cameras[{index}].payload_index expected non-empty str")
+                if "camera_mode" in camera:
+                    _check_inline_camera_field(camera, index, "camera_mode", int, errors, allowed={-1, 0, 1, 2, 3})
+                if "photo_state" in camera:
+                    _check_inline_camera_field(camera, index, "photo_state", int, errors, allowed={0, 1})
+                if "recording_state" in camera:
+                    _check_inline_camera_field(camera, index, "recording_state", int, errors, allowed={0, 1})
+                if "record_time" in camera:
+                    _check_inline_camera_field(camera, index, "record_time", int, errors, min_value=0)
+                if "zoom_factor" in camera:
+                    _check_inline_camera_field(camera, index, "zoom_factor", "number", errors, min_value=1)
+                if "ir_zoom_factor" in camera:
+                    _check_inline_camera_field(camera, index, "ir_zoom_factor", "number", errors, min_value=1)
+                if "screen_split_enable" in camera:
+                    _check_inline_camera_field(camera, index, "screen_split_enable", bool, errors)
+
     if "drone_charge_state" in data:
         errors.append("drone OSD must use drone telemetry, not dock drone_charge_state")
     return errors
+
+
+def _check_inline_camera_field(
+    camera: Dict[str, Any],
+    index: int,
+    name: str,
+    expected_type: Any,
+    errors: List[str],
+    *,
+    allowed: Optional[Iterable[Any]] = None,
+    min_value: Optional[float] = None,
+    max_value: Optional[float] = None,
+) -> None:
+    value = camera.get(name)
+    if expected_type == "number":
+        ok = is_number(value)
+    else:
+        ok = isinstance(value, expected_type)
+    if not ok:
+        errors.append(
+            f"data.cameras[{index}].{name} expected {type_label(expected_type)}, "
+            f"actual={type(value).__name__}"
+        )
+        return
+    if allowed is not None and value not in set(allowed):
+        errors.append(f"data.cameras[{index}].{name} expected one of {sorted(set(allowed))}, actual={value}")
+    if min_value is not None and value < min_value:
+        errors.append(f"data.cameras[{index}].{name} expected >= {min_value}, actual={value}")
+    if max_value is not None and value > max_value:
+        errors.append(f"data.cameras[{index}].{name} expected <= {max_value}, actual={value}")
 
 
 def live_drone_osd_errors(payload: Dict[str, Any]) -> List[str]:

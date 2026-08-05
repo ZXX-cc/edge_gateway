@@ -1115,6 +1115,20 @@ class EdgeGateway:
             self.device.build_dock3_dock_osd(include_payload=True),
         )
 
+    def _build_aircraft_osd_for_report(self, osd_data: dict) -> dict:
+        """Return aircraft OSD enriched with real payload state, without faking fields."""
+        enriched = dict(osd_data or {})
+        if not self.camera:
+            return enriched
+        try:
+            cameras = self.camera.build_aircraft_osd_cameras()
+        except Exception as exc:
+            logger.warning("Build aircraft payload OSD failed: %s", exc)
+            return enriched
+        if cameras:
+            enriched["cameras"] = cameras
+        return enriched
+
     def handle_gateway_state_query(self, msg: dict) -> dict:
         """返回全局状态机快照，供平台侧验收脚本做只读准入检查。"""
         data = msg.get('data', {}) if isinstance(msg.get('data', {}), dict) else {}
@@ -1480,6 +1494,7 @@ class EdgeGateway:
         def osd_cb(osd_data):
             self._apply_real_aircraft_mode_code(osd_data)
             self._apply_aircraft_limit_fields(osd_data)
+            aircraft_osd = self._build_aircraft_osd_for_report(osd_data)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
             self._report_dock_osd_if_due(force=True)
@@ -1487,18 +1502,18 @@ class EdgeGateway:
             published_drone_osd = False
             for sub_device in self.device.get_all_sub_devices():
                 if sub_device.online:
-                    persist_telemetry(sub_device.sn, osd_data)
+                    persist_telemetry(sub_device.sn, aircraft_osd)
                     if self.history_logger:
                         self.history_logger.record_flight_telemetry(
-                            sub_device.sn, osd_data, source='aircraft_osd'
+                            sub_device.sn, aircraft_osd, source='aircraft_osd'
                         )
-                    self.telemetry_reporter.report_osd(sub_device.sn, osd_data)
+                    self.telemetry_reporter.report_osd(sub_device.sn, aircraft_osd)
                     published_drone_osd = True
             if not published_drone_osd:
-                persist_telemetry(gateway_sn, osd_data)
+                persist_telemetry(gateway_sn, aircraft_osd)
                 if self.history_logger:
                     self.history_logger.record_flight_telemetry(
-                        gateway_sn, osd_data, source='aircraft_osd'
+                        gateway_sn, aircraft_osd, source='aircraft_osd'
                     )
 
         def state_cb(state_data):
