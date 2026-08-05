@@ -297,6 +297,9 @@ class EdgeGateway:
         self.spectral_camera = None
         self.payload_config = None
         self.payload_topology = None
+        self._gimbal_auto_connect_control = None
+        self._gimbal_auto_connect_started = False
+        self._gimbal_auto_connect_lock = threading.Lock()
 
         # 遥测处理
         self.telemetry: TelemetryProcessor = None
@@ -774,7 +777,8 @@ class EdgeGateway:
             self.camera.set_gimbal_control(self.gimbal_control)
             self.gimbal.set_gimbal_control(self.gimbal_control)
             if bool(gimbal_config.get('auto_connect', True)):
-                self._auto_connect_gimbal_payload(control)
+                self._gimbal_auto_connect_control = dict(control)
+                logger.info("ViewLink gimbal auto connect deferred until MQTT is connected")
 
         spectral_config = self.payload_topology.get_device('spectral_camera')
         if bool(spectral_config.get('enabled', True)) and bool(spectral_config.get('direct_to_gateway')):
@@ -797,7 +801,7 @@ class EdgeGateway:
     def _auto_connect_gimbal_payload(self, control: dict):
         """Start a non-blocking ViewLink gimbal connection during gateway startup."""
         if not self.gimbal_control:
-            return
+            return None
         timeout = float(control.get("connect_timeout", 5.0) or 5.0)
         if hasattr(self.gimbal_control, "ensure_connected_async"):
             result = self.gimbal_control.ensure_connected_async(timeout=timeout, retry_interval=0)
@@ -810,6 +814,31 @@ class EdgeGateway:
             logger.info("ViewLink gimbal auto connect started in background: %s", result.get("message"))
         else:
             logger.warning("ViewLink gimbal auto connect failed to start: %s", result)
+        return result
+
+    def _auto_connect_gimbal_payload_after_mqtt_connected(self):
+        """Start ViewLink auto-connect only after the gateway has an MQTT session."""
+        with self._gimbal_auto_connect_lock:
+            if self._gimbal_auto_connect_started:
+                return
+            control = self._gimbal_auto_connect_control
+            if not control:
+                return
+            if not self.mqtt or not self.mqtt.connected:
+                logger.info("ViewLink gimbal auto connect waiting for MQTT connection")
+                return
+            if not self._startup_connections_ready:
+                logger.info("ViewLink gimbal auto connect deferred until gateway startup is ready")
+                return
+            self._gimbal_auto_connect_started = True
+
+        result = self._auto_connect_gimbal_payload(control)
+        if not isinstance(result, dict) or (
+            not result.get("success")
+            and not result.get("connecting")
+        ):
+            with self._gimbal_auto_connect_lock:
+                self._gimbal_auto_connect_started = False
 
     def _payload_connection_states(self) -> dict:
         """Return adapter state without treating configured endpoints as connected."""
@@ -1049,6 +1078,12 @@ class EdgeGateway:
 
             self.running = True
             logger.info("Edge Gateway started successfully")
+            gimbal_auto_connect_timer = threading.Timer(
+                1.0,
+                self._auto_connect_gimbal_payload_after_mqtt_connected,
+            )
+            gimbal_auto_connect_timer.daemon = True
+            gimbal_auto_connect_timer.start()
             return True
 
         except Exception as e:
@@ -1471,6 +1506,7 @@ class EdgeGateway:
 
         # 注册 requests_reply 处理器
         self.mqtt.set_requests_reply_handler(self.cloud_conn.handle_requests_reply)
+        self.mqtt.register_connect_callback(self._auto_connect_gimbal_payload_after_mqtt_connected)
         self.mqtt.register_connect_callback(self._on_mqtt_connected_for_startup_sync)
 
         # 启动请求清理线程

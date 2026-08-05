@@ -16,6 +16,7 @@ import shutil
 import socket
 import time
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Callable
 from enum import IntEnum
@@ -23,6 +24,22 @@ from src.utils.logger import get_logger
 
 
 logger = get_logger("payload.gimbal_control")
+_SDK_CWD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _sdk_working_directory(sdk_dir: str):
+    """Run ViewLink SDK calls that depend on cwd from the SDK directory."""
+    with _SDK_CWD_LOCK:
+        original_dir = os.getcwd()
+        try:
+            os.chdir(sdk_dir)
+            yield
+        finally:
+            try:
+                os.chdir(original_dir)
+            except Exception as exc:
+                logger.warning("[GimbalControl] 恢复工作目录失败: %s", exc)
 
 
 # ===== 枚举定义 =====
@@ -248,6 +265,13 @@ class GimbalControl:
         project_root = Path(__file__).resolve().parents[2]
         return str((project_root / path).resolve())
 
+    def _call_sdk(self, function_name: str, *args):
+        """从 SDK 目录调用依赖 cwd 的 ViewLink SDK 函数。"""
+        if not self._lib:
+            raise RuntimeError("SDK 未加载")
+        with _sdk_working_directory(self.sdk_dir):
+            return getattr(self._lib, function_name)(*args)
+
     def log(self, message: str, level: str = "INFO"):
         """日志输出"""
         level_method = {
@@ -273,54 +297,48 @@ class GimbalControl:
             result["success"] = True
             return result
 
-        original_dir = os.getcwd()
         try:
             # 切换到 SDK 目录
-            os.chdir(self.sdk_dir)
-            self.log(f"切换到 SDK 目录: {self.sdk_dir}")
+            with _sdk_working_directory(self.sdk_dir):
+                self.log(f"切换到 SDK 目录: {self.sdk_dir}")
 
-            # 清理 VLKLog 目录
-            vlklog_path = os.path.join(self.sdk_dir, "VLKLog")
-            if os.path.exists(vlklog_path):
-                shutil.rmtree(vlklog_path)
-                self.log("清理 VLKLog 目录")
+                # 清理 VLKLog 目录
+                vlklog_path = os.path.join(self.sdk_dir, "VLKLog")
+                if os.path.exists(vlklog_path):
+                    shutil.rmtree(vlklog_path)
+                    self.log("清理 VLKLog 目录")
 
-            # 加载库
-            self._lib = ctypes.WinDLL("./ViewLink.dll") if os.name == "nt" else ctypes.CDLL("./ViewLink.dll")
-            self.log("加载 ViewLink.dll 成功")
+                # 加载库
+                self._lib = ctypes.WinDLL("./ViewLink.dll") if os.name == "nt" else ctypes.CDLL("./ViewLink.dll")
+                self.log("加载 ViewLink.dll 成功")
 
-            # 定义函数签名
-            self._define_function_signatures()
+                # 定义函数签名
+                self._define_function_signatures()
 
-            # 获取版本
-            version = self._lib.GetSDKVersion()
-            version_str = version.decode('utf-8') if version else "unknown"
-            result["version"] = version_str
-            self.log(f"SDK 版本: {version_str}")
+                # 获取版本
+                version = self._lib.GetSDKVersion()
+                version_str = version.decode('utf-8') if version else "unknown"
+                result["version"] = version_str
+                self.log(f"SDK 版本: {version_str}")
 
-            # 初始化 SDK
-            ret = self._lib.VLK_Init()
-            if ret != 0:
-                result["message"] = f"VLK_Init 失败，返回码: {ret}"
-                self.log(result["message"], "ERROR")
-                return result
+                # 初始化 SDK
+                ret = self._lib.VLK_Init()
+                if ret != 0:
+                    result["message"] = f"VLK_Init 失败，返回码: {ret}"
+                    self.log(result["message"], "ERROR")
+                    return result
 
-            self._initialized = True
-            self._sdk_available = True
-            result["success"] = True
-            result["message"] = "SDK 初始化成功"
-            self.log(result["message"], "OK")
+                self._initialized = True
+                self._sdk_available = True
+                result["success"] = True
+                result["message"] = "SDK 初始化成功"
+                self.log(result["message"], "OK")
 
         except Exception as e:
             result["message"] = f"初始化异常: {str(e)}"
             self._sdk_available = False
             self.log(result["message"], "ERROR")
             self.log("SDK 不可用，将使用 MAVLink 作为降级方案", "WARN")
-        finally:
-            try:
-                os.chdir(original_dir)
-            except Exception as exc:
-                self.log(f"恢复工作目录失败: {exc}", "WARN")
 
         return result
 
@@ -467,7 +485,7 @@ class GimbalControl:
         """反初始化 SDK"""
         if self._initialized and self._lib:
             self.disconnect()
-            self._lib.VLK_UnInit()
+            self._call_sdk("VLK_UnInit")
             self._initialized = False
             self.log("SDK 已反初始化", "OK")
 
@@ -546,7 +564,7 @@ class GimbalControl:
 
         self._dev_callback = self._create_dev_callback()
         self.log("开始注册 ViewLink 设备状态回调")
-        self._lib.VLK_RegisterDevStatusCB(self._dev_callback, None)
+        self._call_sdk("VLK_RegisterDevStatusCB", self._dev_callback, None)
         self._dev_status_callback_registered = True
         return {"success": True, "message": "设备状态回调已注册"}
 
@@ -645,10 +663,11 @@ class GimbalControl:
             self.log(f"连接到 {ip}:{port} (类型: {conn_type.name})")
 
             # 发起连接
-            ret = self._lib.VLK_Connect(
+            ret = self._call_sdk(
+                "VLK_Connect",
                 ctypes.byref(param),
                 self._conn_callback,
-                None
+                None,
             )
 
             if ret != 0:
@@ -659,7 +678,8 @@ class GimbalControl:
             # 等待连接建立
             start_time = time.time()
             while time.time() - start_time < timeout:
-                if self._lib.VLK_IsConnected():
+                connected = self._call_sdk("VLK_IsConnected")
+                if connected:
                     self._connected = True
                     result["success"] = True
                     result["message"] = f"成功连接到 {ip}:{port}"
@@ -682,7 +702,7 @@ class GimbalControl:
         result = {"success": True, "message": ""}
 
         if self._lib and self._connected:
-            self._lib.VLK_Disconnect()
+            self._call_sdk("VLK_Disconnect")
             self._connected = False
             result["message"] = "已断开连接"
             self.log(result["message"], "OK")
@@ -698,7 +718,7 @@ class GimbalControl:
         if not self._lib:
             return False
         try:
-            connected = self._lib.VLK_IsConnected() != 0
+            connected = self._call_sdk("VLK_IsConnected") != 0
             if connected:
                 self._connected = True
             return connected
@@ -952,7 +972,7 @@ class GimbalControl:
         yaw_speed = max(-16383, min(16383, int(yaw_speed or 0)))
         pitch_speed = max(-16383, min(16383, int(pitch_speed or 0)))
 
-        self._lib.VLK_Move(yaw_speed, pitch_speed)
+        self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
         result["success"] = True
         result["message"] = f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}"
         self.log(result["message"])
@@ -968,7 +988,7 @@ class GimbalControl:
             result["message"] = connected["message"]
             return result
 
-        self._lib.VLK_Stop()
+        self._call_sdk("VLK_Stop")
         result["success"] = True
         result["message"] = "云台已停止"
         self.log(result["message"])
@@ -984,7 +1004,7 @@ class GimbalControl:
             result["message"] = connected["message"]
             return result
 
-        self._lib.VLK_Home()
+        self._call_sdk("VLK_Home")
         result["success"] = True
         result["message"] = "云台正在归位"
         self.log(result["message"])
@@ -1011,7 +1031,7 @@ class GimbalControl:
 
         yaw = float(yaw or 0.0)
         pitch = float(pitch or 0.0)
-        self._lib.VLK_TurnTo(ctypes.c_double(yaw), ctypes.c_double(pitch))
+        self._call_sdk("VLK_TurnTo", ctypes.c_double(yaw), ctypes.c_double(pitch))
         result["success"] = True
         result["message"] = f"云台转向: yaw={yaw}°, pitch={pitch}°"
         self.log(result["message"])
@@ -1038,7 +1058,7 @@ class GimbalControl:
             return result
 
         speed = max(1, min(8, int(speed or 5)))
-        self._lib.VLK_ZoomIn(speed)
+        self._call_sdk("VLK_ZoomIn", speed)
         result["success"] = True
         result["message"] = f"放大中，速度: {speed}"
         self.log(result["message"])
@@ -1063,7 +1083,7 @@ class GimbalControl:
             return result
 
         speed = max(1, min(8, int(speed or 5)))
-        self._lib.VLK_ZoomOut(speed)
+        self._call_sdk("VLK_ZoomOut", speed)
         result["success"] = True
         result["message"] = f"缩小中，速度: {speed}"
         self.log(result["message"])
@@ -1079,7 +1099,7 @@ class GimbalControl:
             result["message"] = connected["message"]
             return result
 
-        self._lib.VLK_StopZoom()
+        self._call_sdk("VLK_StopZoom")
         result["success"] = True
         result["message"] = "变焦已停止"
         self.log(result["message"])
@@ -1096,7 +1116,7 @@ class GimbalControl:
             return result
 
         magnification = max(1.0, float(magnification))
-        self._lib.VLK_ZoomTo(ctypes.c_float(magnification))
+        self._call_sdk("VLK_ZoomTo", ctypes.c_float(magnification))
         result["success"] = True
         result["message"] = f"变焦到指定倍率: {magnification}x"
         self.log(result["message"])
@@ -1115,7 +1135,7 @@ class GimbalControl:
             return result
 
         speed = max(1, min(8, int(speed)))
-        self._lib.VLK_FocusIn(speed)
+        self._call_sdk("VLK_FocusIn", speed)
         result["success"] = True
         result["message"] = f"近焦中，速度: {speed}"
         self.log(result["message"])
@@ -1131,7 +1151,7 @@ class GimbalControl:
             return result
 
         speed = max(1, min(8, int(speed)))
-        self._lib.VLK_FocusOut(speed)
+        self._call_sdk("VLK_FocusOut", speed)
         result["success"] = True
         result["message"] = f"远焦中，速度: {speed}"
         self.log(result["message"])
@@ -1145,7 +1165,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_StopFocus()
+        self._call_sdk("VLK_StopFocus")
         result["success"] = True
         result["message"] = "对焦已停止"
         self.log(result["message"])
@@ -1159,7 +1179,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_SetFocusMode(int(mode))
+        self._call_sdk("VLK_SetFocusMode", int(mode))
         mode_names = {
             VLKFocusMode.AUTO: "自动对焦",
             VLKFocusMode.MANUAL: "手动对焦",
@@ -1174,7 +1194,7 @@ class GimbalControl:
         if not self._connected:
             return {"success": False, "mode": -1, "mode_name": "未连接"}
 
-        mode = self._lib.VLK_GetFocusMode()
+        mode = self._call_sdk("VLK_GetFocusMode")
         mode_names = {
             0: "自动对焦",
             1: "手动对焦",
@@ -1197,7 +1217,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_IRDigitalZoomIn(int(speed))
+        self._call_sdk("VLK_IRDigitalZoomIn", int(speed))
         result["success"] = True
         result["message"] = "红外电子变焦放大"
         self.log(result["message"])
@@ -1209,7 +1229,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_IRDigitalZoomOut(int(speed))
+        self._call_sdk("VLK_IRDigitalZoomOut", int(speed))
         result["success"] = True
         result["message"] = "红外电子变焦缩小"
         self.log(result["message"])
@@ -1223,7 +1243,7 @@ class GimbalControl:
         """查询除雾状态"""
         if not self._connected:
             return {"success": False, "on": False, "message": "未连接到设备"}
-        on = self._lib.VLK_IsDefogOn() == 1
+        on = self._call_sdk("VLK_IsDefogOn") == 1
         return {"success": True, "on": on}
 
     def switch_laser(self, on: bool) -> dict:
@@ -1236,7 +1256,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_LaserSingle()
+        self._call_sdk("VLK_LaserSingle")
         result["success"] = True
         result["message"] = "激光单次测距命令已发送"
         self.log(result["message"])
@@ -1248,7 +1268,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_LaserZoomIn(int(speed))
+        self._call_sdk("VLK_LaserZoomIn", int(speed))
         result["success"] = True
         result["message"] = "激光变焦放大"
         self.log(result["message"])
@@ -1260,7 +1280,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_LaserZoomOut(int(speed))
+        self._call_sdk("VLK_LaserZoomOut", int(speed))
         result["success"] = True
         result["message"] = "激光变焦缩小"
         self.log(result["message"])
@@ -1272,7 +1292,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_LaserStopZoom()
+        self._call_sdk("VLK_LaserStopZoom")
         result["success"] = True
         result["message"] = "激光变焦已停止"
         self.log(result["message"])
@@ -1284,7 +1304,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_SetLaserZoomMode(int(mode))
+        self._call_sdk("VLK_SetLaserZoomMode", int(mode))
         result["success"] = True
         result["message"] = f"设置激光变焦模式: {int(mode)}"
         self.log(result["message"])
@@ -1294,7 +1314,7 @@ class GimbalControl:
         """查询跟踪状态"""
         if not self._connected:
             return {"success": False, "tracking": False, "message": "未连接到设备"}
-        tracking = self._lib.VLK_IsTracking() == 1
+        tracking = self._call_sdk("VLK_IsTracking") == 1
         return {"success": True, "tracking": tracking}
 
     def set_image_color(
@@ -1308,7 +1328,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        self._lib.VLK_SetImageColor(int(image_type), 1 if enable_pip else 0, int(ir_color))
+        self._call_sdk("VLK_SetImageColor", int(image_type), 1 if enable_pip else 0, int(ir_color))
         result["success"] = True
         result["message"] = (
             f"设置图像显示: image_type={int(image_type)}, "
@@ -1322,7 +1342,7 @@ class GimbalControl:
         if not self._connected:
             result["message"] = "未连接到设备"
             return result
-        getattr(self._lib, sdk_method)(1 if on else 0)
+        self._call_sdk(sdk_method, 1 if on else 0)
         result["success"] = True
         result["message"] = f"{label}{'开启' if on else '关闭'}"
         self.log(result["message"])
@@ -1364,7 +1384,8 @@ class GimbalControl:
         param.emTrackTempSize = int(template_size)
         param.emTrackSensor = int(sensor)
 
-        self._lib.VLK_TrackTargetPositionEx(
+        self._call_sdk(
+            "VLK_TrackTargetPositionEx",
             ctypes.byref(param), x, y, video_width, video_height
         )
 
@@ -1382,7 +1403,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_DisableTrackMode()
+        self._call_sdk("VLK_DisableTrackMode")
         result["success"] = True
         result["message"] = "跟踪已停止"
         self.log(result["message"])
@@ -1399,7 +1420,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_Photograph()
+        self._call_sdk("VLK_Photograph")
         result["success"] = True
         result["message"] = "拍照命令已发送"
         self.log(result["message"])
@@ -1414,7 +1435,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_SwitchRecord(1)
+        self._call_sdk("VLK_SwitchRecord", 1)
         self._is_recording = True
         result["success"] = True
         result["message"] = "开始录像"
@@ -1430,7 +1451,7 @@ class GimbalControl:
             result["message"] = "未连接到设备"
             return result
 
-        self._lib.VLK_SwitchRecord(0)
+        self._call_sdk("VLK_SwitchRecord", 0)
         self._is_recording = False
         result["success"] = True
         result["message"] = "停止录像"
@@ -1441,7 +1462,7 @@ class GimbalControl:
     def is_recording(self) -> bool:
         """检查是否正在录像"""
         if self._lib and self._connected:
-            return self._lib.VLK_IsRecording() == 1
+            return self._call_sdk("VLK_IsRecording") == 1
         return False
 
     def set_record_mode(self, mode: VLKRecordMode) -> dict:
@@ -1466,7 +1487,7 @@ class GimbalControl:
             VLKRecordMode.RECORD: "录像模式"
         }
 
-        self._lib.VLK_SetRecordMode(int(mode))
+        self._call_sdk("VLK_SetRecordMode", int(mode))
         self._current_record_mode = mode
         result["success"] = True
         result["message"] = f"设置模式: {mode_names.get(mode, '未知')}"
@@ -1484,7 +1505,7 @@ class GimbalControl:
         if not self._connected:
             return {"success": False, "mode": -1, "mode_name": "未连接"}
 
-        mode = self._lib.VLK_GetRecordMode()
+        mode = self._call_sdk("VLK_GetRecordMode")
         mode_names = {
             0: "无模式",
             1: "拍照模式",
