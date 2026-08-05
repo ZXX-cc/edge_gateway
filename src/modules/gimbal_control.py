@@ -207,6 +207,8 @@ class GimbalControl:
             "message": "设备状态回调尚未注册",
         }
         self._last_dev_status = None
+        self._connect_deadline = 0.0
+        self._connect_timeout_seconds = 0.0
 
         # 回调引用（防止被GC回收）
         self._conn_callback = None
@@ -701,8 +703,45 @@ class GimbalControl:
             "connecting": True,
         }
 
+    def _connect_timeout_result(self) -> dict:
+        timeout = self._connect_timeout_seconds or 0.0
+        return {
+            "success": False,
+            "message": f"ViewLink 连接线程超过 {timeout:.1f} 秒未返回，可能卡在 SDK VLK_Connect；请重启网关进程后重试",
+            "stage": "connect_timeout",
+            "connecting": False,
+            "stale_thread": True,
+            "timeout_seconds": timeout,
+        }
+
+    def _refresh_connect_watchdog(self) -> Optional[dict]:
+        """Turn an over-time background SDK call into a visible failed state."""
+        with self._lock:
+            if (
+                self._connect_in_progress
+                and self._connect_deadline
+                and time.time() > self._connect_deadline
+            ):
+                result = self._connect_timeout_result()
+                self._connect_in_progress = False
+                self._last_ensure_connect_result = result
+                self._last_ensure_connect_time = time.time()
+                self.log(result["message"], "ERROR")
+                return dict(result)
+        return None
+
+    def _stale_connect_thread_alive(self) -> bool:
+        thread = self._connect_thread
+        return bool(
+            thread
+            and thread.is_alive()
+            and isinstance(self._last_ensure_connect_result, dict)
+            and self._last_ensure_connect_result.get("stage") == "connect_timeout"
+        )
+
     def connect_in_progress(self) -> bool:
         """返回当前是否已有后台连接正在执行。"""
+        self._refresh_connect_watchdog()
         return bool(self._connect_in_progress)
 
     def _connect_once(self, timeout: float) -> dict:
@@ -729,6 +768,11 @@ class GimbalControl:
 
     def ensure_connected(self, timeout: float = 2.0, retry_interval: float = 2.0) -> dict:
         """按需初始化并连接云台，用于按钮控制前的懒连接兜底。"""
+        stale_result = self._refresh_connect_watchdog()
+        if stale_result:
+            return stale_result
+        if self._stale_connect_thread_alive():
+            return dict(self._last_ensure_connect_result)
         if self.connect_in_progress():
             return self._connecting_result()
         if self.is_connected():
@@ -748,6 +792,8 @@ class GimbalControl:
                 return self._connecting_result()
 
             self._connect_in_progress = True
+            self._connect_timeout_seconds = float(timeout or 0.0)
+            self._connect_deadline = time.time() + self._connect_timeout_seconds + 1.0
 
         try:
             result = self._connect_once(timeout)
@@ -761,12 +807,18 @@ class GimbalControl:
         finally:
             with self._lock:
                 self._connect_in_progress = False
+                self._connect_deadline = 0.0
                 self._last_ensure_connect_result = result
                 self._last_ensure_connect_time = time.time()
         return dict(result)
 
     def ensure_connected_async(self, timeout: float = 2.0, retry_interval: float = 2.0) -> dict:
         """后台初始化并连接云台，避免 MQTT 回调线程被 ViewLink SDK 阻塞。"""
+        stale_result = self._refresh_connect_watchdog()
+        if stale_result:
+            return stale_result
+        if self._stale_connect_thread_alive():
+            return dict(self._last_ensure_connect_result)
         if self.connect_in_progress():
             return self._connecting_result()
         if self.is_connected():
@@ -790,6 +842,8 @@ class GimbalControl:
                 return dict(self._last_ensure_connect_result)
 
             self._connect_in_progress = True
+            self._connect_timeout_seconds = float(timeout or 0.0)
+            self._connect_deadline = time.time() + self._connect_timeout_seconds + 1.0
             connecting = self._connecting_result()
             self._last_ensure_connect_result = connecting
             self._last_ensure_connect_time = now
@@ -820,6 +874,7 @@ class GimbalControl:
                     self._last_ensure_connect_result = result
                     self._last_ensure_connect_time = time.time()
                 self._connect_in_progress = False
+                self._connect_deadline = 0.0
 
     def send_protocol_frame(self, frame: bytes, timeout: float = 1.0) -> dict:
         """通过 TCP 直接发送 ViewLink V3.4.9 原始协议帧。
