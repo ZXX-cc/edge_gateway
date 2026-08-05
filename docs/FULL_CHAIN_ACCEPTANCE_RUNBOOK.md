@@ -1,6 +1,6 @@
 # 全链路验收 Runbook
 
-更新时间：2026-08-04
+更新时间：2026-08-05
 
 本文档用于证明 Edge Gateway 按客户需求和 DJI Dock 3 口径完成全链路可用。它不是开发计划，而是验收执行手册。
 
@@ -86,6 +86,43 @@ python -m unittest tests.test_mqtt_background_handlers
 通过标准：慢日志/媒体 handler 已启动但未完成时，MQTT 回调立即返回；解除 handler 后，同一 `tid` 在正确 reply topic 收到 `result=0`。该单测不替代 Ubuntu 上的长时间 E2E 和 DB/上传超时注入。
 
 2026-07-10 Ubuntu 已通过：`tests.test_mqtt_background_handlers` 为 2/2；随后 `mqtt_dock3_hms_log_test.py --timeout 20 --quiet-stale` 输出 `accepted=8, events=5`，`mqtt_dock3_media_test.py --timeout 12 --quiet-stale` 输出 `accepted=6, events=2`。该证据确认日志/媒体后台 handler 的 services reply 和事件链路可用，但不替代后续 DB、上传和长时间 E2E 压测。
+
+2026-08-05 远程日志修复验收：本轮修复 `modules/log_manager.py` 和旧 `device_log_*`
+入口的模块硬编码、分组伪造、多文件覆盖、取消语义和上传任务状态漏洞。验收重点：
+
+- `fileupload_list` 查询 `module_list=[0,3]` 时，飞行器日志只出现在 `module=0`，机巢/网关日志只出现在 `module=3`。
+- `fileupload_list` 回包 `data` 只保留 `files`，不再额外塞 `total` 或 `output.status`。
+- `fileupload_start` 多个日志共用外层 `object_key` 时，每个文件实际上传 URL 必须不同，避免对象覆盖。
+- `fileupload_progress` 中每个文件使用自己的 `key/status/result/progress`。
+- `fileupload_update` 只接受 `cancel`，`pause/resume` 必须拒绝。
+- 旧 `device_log_list_get/device_log_upload` 也必须支持飞行器 `module=0`。
+
+Windows 本地逻辑验收命令：
+
+```powershell
+cd D:\dev\edge_gateway
+$EVIDENCE_DIR = "logs\acceptance_evidence\$(Get-Date -Format yyyyMMdd_HHmmss)_remote_log_fix_windows"
+New-Item -ItemType Directory -Force $EVIDENCE_DIR | Out-Null
+
+python -m unittest -v tests.test_dock3_hms_log *> "$EVIDENCE_DIR\unit_hms_log.log"
+```
+
+Ubuntu MQTT 联调验收命令：
+
+```bash
+cd ~/lxz/edge_gateway
+EVIDENCE_DIR=logs/acceptance_evidence/$(date +%Y%m%d_%H%M%S)_remote_log_fix
+mkdir -p "$EVIDENCE_DIR"
+
+python -m unittest -v tests.test_dock3_hms_log \
+  > "$EVIDENCE_DIR/unit_hms_log.log" 2>&1
+
+python tools/mqtt_dock3_hms_log_test.py --host 127.0.0.1 --port 1883 --timeout 20 --quiet-stale --fail-on-stale \
+  > "$EVIDENCE_DIR/mqtt_hms_log.log" 2>&1
+```
+
+通过标准：单测日志出现 `OK`；MQTT 专项输出 `dock3 hms/log test ok`，且留证目录内保存
+`unit_hms_log.log` 和 `mqtt_hms_log.log`。
 
 全局状态机/命令准入第一版验收命令：
 

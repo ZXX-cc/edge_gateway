@@ -1,6 +1,6 @@
 # Dock3 模块完成状态总表
 
-更新时间：2026-08-04
+更新时间：2026-08-05
 
 本文档给多人协同开发使用，用一张表说明当前 DJI Dock 3 迁移中每个模块的完成状态、已验证内容、未完成内容和下一步。更细的过程记录见 `docs/DOCK3_FULL_MIGRATION_PROGRESS.md`，接口字段和错误码见 `docs/INTERFACE_DESIGN_SPEC.md`。
 
@@ -117,7 +117,7 @@
 | Live 直播功能 | 已通过 | 45% | `live_capability_query/live_start/live_set_quality/live_lens_change/live_stop` 已通过 Ubuntu 专项；输出 `dock3 live test ok (accepted=6, events=4, ignored_total=0)`；支持 `mock://` 纯模拟、状态回包和 `live_status_notify` 事件 | 真实 RTMP/WebRTC/GB28181 推流适配未完成 | 后续接真实推流 adapter 和高级协议能力 | 人员1/人员3 |
 | HMS 管理 | 已通过 | 60% | `hms_get/hms_clear` 的 Dock3 `output.status`、告警结构规范化、模拟告警注入和 `hms` 事件已通过 Ubuntu 专项；`DeviceManager.update_from_nest()` 已把机巢 `fault/estop/emergency_landing/error_code/heartbeat lost` 同步为 Dock3 HMS，并发 `dock_operation` 证据事件 | 真实 HMS 文案 key、硬件故障源和 Ubuntu 机巢实跑证据仍需精校 | 接机巢故障位实跑证据和告警文案精校 | 人员1 |
 | Firmware 固件升级 | 已通过 | 55% | `ota_create/ota_cancel` 已补 Dock3 `output.status`、`ota_progress/ota_result`、模拟升级、取消、非法载荷拒绝；新增 `firmware_upgrade/firmware_upgrade_cancel` 兼容别名；Ubuntu 输出 `dock3 firmware/config test ok (accepted=8, events=10, ignored_total=7)` | 当前是 mock OTA，可证明云端协议和状态机；真实下载、MD5、刷写、备份、回滚仍需接真实 adapter | 补真实 OTA adapter 边界和操作记录 | 人员1/人员3 |
-| Remote Log 远程日志 | 部分通过 | 68% | 本地日志落盘、日志列表扫描、`device_log_list_get`、`device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝已补齐；本轮按 Dock3 log 页补 `boot_index` int、`current_step/total_step` 和 `fileupload_start -> HTTP PUT -> fileupload_progress ok` 字节上传测试链路，测试凭证只在专项脚本内写死 | 生产 Ali/AWS/MinIO SDK 签名上传、日志压缩、多文件打包和超时策略未完整实现；新上传闭环待 Ubuntu 留证 | 补生产对象存储 adapter、压缩和 Ubuntu 复测证据 | 人员1/人员3 |
+| Remote Log 远程日志 | 待复测 | 76% | 本地日志落盘、日志列表扫描、`device_log_list_get`、`device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝已补齐；已去除远程日志 `module=3` 硬编码，按路径推断 `module=0` 飞行器日志和 `module=3` 机巢/网关日志，`fileupload_list` 不再额外返回 `total/output.status`，也不再把同一批日志复制伪造成多个模块；`fileupload_start` 已保存并检查临时凭证过期，多文件上传会为每个日志生成独立 `object_key/key`，进度事件按单文件状态/result/progress 上报；`fileupload_update` 只允许 `cancel`，上传任务使用锁和过期清理 | OSS/AWS/MinIO 真实签名上传仍需按平台凭证规则最终精校；日志压缩、多文件打包和真实对象存储上传闭环待 Windows/Ubuntu 留证 | 先执行远程日志单测和 MQTT 专项留证；再接真实 OSS 凭证做对象存储上传验收 | 人员1/人员3 |
 | Config 配置更新 | 已通过 | 65% | `config_update/config_get/config_rollback/config` 已补本地配置持久化、版本号、历史回滚、`config_update_result/config_rollback_result` 事件和非法载荷拒绝；Ubuntu 输出 `dock3 firmware/config test ok (accepted=8, events=10, ignored_total=7)` | 与真实云端 config 字段边界仍需精校；当前晚到旧回包统计不阻断但需后续清理环境做严格复测 | 接入真实字段矩阵和 `--fail-on-stale` 严格环境复测 | 人员1 |
 | Custom Fly Region 自定义飞行区 | 待迁移 | 10% | 有飞行区 manager 入口 | Dock3 `custom-fly-region.html` 字段、缓存和生效逻辑未对齐 | 建字段矩阵和缓存模型 | 人员1/人员2 |
 | Remote Control 远程控制 | 待迁移 | 15% | DRC 控制通道已有基础 | Dock3 `remote-control.html` 独立语义未迁移 | DRC 稳定后再迁移 | 人员1/人员2 |

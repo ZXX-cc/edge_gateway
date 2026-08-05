@@ -16,6 +16,34 @@ TASK_STATUS_REJECTED = "rejected"
 
 DEFAULT_LOG_MODULES = (0, 3)
 LOG_EXTENSIONS = {".log", ".jsonl", ".txt", ".out", ".err"}
+AIRCRAFT_LOG_KEYWORDS = {
+    "aircraft",
+    "drone",
+    "flight",
+    "flight_control",
+    "flight_telemetry",
+    "mavlink",
+    "mission",
+    "telemetry",
+    "wayline",
+    "waypoint",
+}
+DOCK_LOG_KEYWORDS = {
+    "alarm",
+    "cmd",
+    "device_state",
+    "dock",
+    "edge_gateway",
+    "gateway",
+    "hms",
+    "log_mgr",
+    "mqtt",
+    "nest",
+    "operation",
+    "payload",
+    "plc",
+    "state",
+}
 
 
 def task_output(status: str = TASK_STATUS_OK, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -235,13 +263,35 @@ def _is_log_candidate(path: Path) -> bool:
     return path.suffix.lower() in LOG_EXTENSIONS or "log" in path.name.lower()
 
 
-def build_log_file(path: str | Path, log_root: str | Path, device_sn: str, module: int = 3) -> Dict[str, Any]:
+def infer_log_module(path: str | Path) -> int:
+    """根据日志路径推断 Dock3 远程日志模块：0=飞行器，3=机巢/网关。"""
+    text = Path(path).as_posix().lower()
+    parts = set(Path(path).parts)
+    normalized_parts = {str(item).lower() for item in parts}
+    if AIRCRAFT_LOG_KEYWORDS & normalized_parts:
+        return 0
+    if any(keyword in text for keyword in AIRCRAFT_LOG_KEYWORDS):
+        return 0
+    if DOCK_LOG_KEYWORDS & normalized_parts:
+        return 3
+    if any(keyword in text for keyword in DOCK_LOG_KEYWORDS):
+        return 3
+    return 3
+
+
+def build_log_file(
+    path: str | Path,
+    log_root: str | Path,
+    device_sn: str,
+    module: int | None = None,
+) -> Dict[str, Any]:
     filepath = Path(path)
     root = Path(log_root)
     stat = filepath.stat()
     relative = filepath.relative_to(root) if filepath.is_relative_to(root) else Path(filepath.name)
     relative_key = relative.as_posix()
     resolved = str(filepath.resolve())
+    module_value = infer_log_module(filepath) if module is None else int(module)
     file_id = stable_id(resolved)
     update_time = int(stat.st_mtime * 1000)
 
@@ -249,7 +299,7 @@ def build_log_file(path: str | Path, log_root: str | Path, device_sn: str, modul
         "file_id": file_id,
         "fingerprint": file_id,
         "device_sn": device_sn,
-        "module": str(module),
+        "module": str(module_value),
         "name": filepath.name,
         "file_name": filepath.name,
         "object_key": f"logs/{device_sn}/{relative_key}",
@@ -267,7 +317,7 @@ def build_log_file(path: str | Path, log_root: str | Path, device_sn: str, modul
 def scan_log_files(
     log_root: str | Path,
     device_sn: str,
-    module: int = 3,
+    module: int | None = 3,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     root = Path(log_root)
@@ -279,12 +329,30 @@ def scan_log_files(
         if not _is_log_candidate(path):
             continue
         try:
-            files.append(build_log_file(path, root, device_sn, module=module))
+            inferred_module = infer_log_module(path)
+            if module is not None and int(module) != inferred_module:
+                continue
+            files.append(build_log_file(path, root, device_sn, module=inferred_module))
         except OSError:
             continue
 
     files.sort(key=lambda item: item.get("update_time", 0), reverse=True)
     return files[:limit]
+
+
+def scan_log_files_for_modules(
+    log_root: str | Path,
+    device_sn: str,
+    modules: Iterable[int],
+    limit_per_module: int = 200,
+) -> List[Dict[str, Any]]:
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for module in modules:
+        for item in scan_log_files(log_root, device_sn, module=int(module), limit=limit_per_module):
+            indexed[item["file_id"]] = item
+    files = list(indexed.values())
+    files.sort(key=lambda item: item.get("update_time", 0), reverse=True)
+    return files
 
 
 def group_fileupload_files(
@@ -294,13 +362,15 @@ def group_fileupload_files(
 ) -> List[Dict[str, Any]]:
     grouped: List[Dict[str, Any]] = []
     for module in modules:
+        module_value = str(int(module))
         module_files = [
-            {**item, "module": str(module)}
+            {**item, "module": module_value}
             for item in log_files
+            if str(item.get("module", "")) == module_value
         ]
         grouped.append({
             "device_sn": device_sn,
-            "module": str(module),
+            "module": module_value,
             "result": 0,
             "list": module_files,
         })
@@ -357,9 +427,20 @@ def upload_progress_event_data(
     result: int = 0,
 ) -> Dict[str, Any]:
     now_ms = int(time.time() * 1000)
-    progress_value = max(0, min(100, int(progress)))
     event_files: List[Dict[str, Any]] = []
     for item in files:
+        item_status = str(item.get("upload_status") or item.get("status") or status)
+        item_progress = item.get("upload_progress", item.get("progress", progress))
+        if isinstance(item_progress, dict):
+            item_progress = item_progress.get("progress", progress)
+        try:
+            progress_value = max(0, min(100, int(item_progress)))
+        except (TypeError, ValueError):
+            progress_value = max(0, min(100, int(progress)))
+        try:
+            item_result = int(item.get("upload_result", item.get("result", result)) or 0)
+        except (TypeError, ValueError):
+            item_result = result
         event_files.append({
             "device_sn": item.get("device_sn") or device_sn,
             "module": str(item.get("module", "3")),
@@ -369,11 +450,11 @@ def upload_progress_event_data(
             "progress": {
                 "current_step": progress_value,
                 "progress": progress_value,
-                "finish_time": now_ms if progress_value >= 100 or status in {TASK_STATUS_OK, TASK_STATUS_CANCELED} else 0,
+                "finish_time": now_ms if progress_value >= 100 or item_status in {TASK_STATUS_OK, TASK_STATUS_CANCELED} else 0,
                 "total_step": 100,
                 "upload_rate": 0,
-                "status": status,
-                "result": result,
+                "status": item_status,
+                "result": item_result,
             },
         })
 

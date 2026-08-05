@@ -66,10 +66,11 @@ from src.cloud_api.dock3_hms_log import (
     hms_list_data,
     normalize_alarm_ids,
     normalize_hms_alarms,
+    normalize_module_list as normalize_hms_log_modules,
     normalize_page as normalize_hms_log_page,
     paginate as paginate_hms_log,
     resolve_log_root,
-    scan_log_files,
+    scan_log_files_for_modules,
     task_output as hms_log_task_output,
     upload_progress_event_data as hms_log_progress_event_data,
 )
@@ -3107,22 +3108,24 @@ class DeviceManager:
         """获取设备日志列表"""
         data = msg.get('data', {})
         page, page_size = normalize_hms_log_page(data)
+        module_list = normalize_hms_log_modules(data)
         logs = []
         try:
             log_dir = resolve_log_root(Config.get('logging.dir', './logs'))
-            logs = scan_log_files(log_dir, self.gateway_sn, module=3)
+            logs = scan_log_files_for_modules(log_dir, self.gateway_sn, module_list)
         except Exception as e:
             logger.warning(f"Log list scan failed: {e}")
 
         total = len(logs)
         selected = paginate_hms_log(logs, page, page_size)
 
-        logger.info(f"Device log list: total={total}, page={page}")
+        logger.info(f"Device log list: total={total}, page={page}, modules={module_list}")
         return MessageBuilder.build_reply(msg, result=0, data={
             **hms_log_task_output(HMS_LOG_STATUS_OK),
             'total': total,
             'page': page,
             'page_size': page_size,
+            'module_list': module_list,
             'logs': selected,
             'list': selected,
         })
@@ -3144,7 +3147,8 @@ class DeviceManager:
 
         normalized_log_ids = [str(item) for item in log_ids if item]
         log_dir = resolve_log_root(Config.get('logging.dir', './logs'))
-        known_logs = scan_log_files(log_dir, self.gateway_sn, module=3)
+        module_list = normalize_hms_log_modules(data)
+        known_logs = scan_log_files_for_modules(log_dir, self.gateway_sn, module_list)
         by_id = {item['file_id']: item for item in known_logs}
         selected = [by_id[item] for item in normalized_log_ids if item in by_id]
         if selected:
@@ -3164,6 +3168,7 @@ class DeviceManager:
                 'upload_task_id': str(int(time.time() * 1000)),
                 'accepted_count': len(selected),
                 'missing_ids': [item for item in normalized_log_ids if item not in by_id],
+                'module_list': module_list,
             },
         ))
 
