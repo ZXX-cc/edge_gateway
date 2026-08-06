@@ -54,10 +54,11 @@ if "src.database.media_db" not in sys.modules:
 
 from src.payload.camera import CameraController
 from src.payload.gimbal import GimbalController
+from src.payload.third_party import ThirdPartyController
 from src.modules.gimbal_control import DevStatusCallback, GimbalControl
 from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR
 from web.mavlink.camera.mapping import build_camera_setting
 
 
@@ -132,6 +133,26 @@ class FakeDirectPayload:
         self.calls.append(("zoom_to", magnification))
         return {"success": True}
 
+    def zoom_in(self, speed):
+        self.calls.append(("zoom_in", speed))
+        return {"success": True}
+
+    def zoom_out(self, speed):
+        self.calls.append(("zoom_out", speed))
+        return {"success": True}
+
+    def stop_zoom(self):
+        self.calls.append(("stop_zoom",))
+        return {"success": True}
+
+    def ir_digital_zoom_in(self, speed=0):
+        self.calls.append(("ir_digital_zoom_in", speed))
+        return {"success": True}
+
+    def ir_digital_zoom_out(self, speed=0):
+        self.calls.append(("ir_digital_zoom_out", speed))
+        return {"success": True}
+
     def set_focus_mode(self, mode):
         self.calls.append(("set_focus_mode", int(mode)))
         return {"success": True}
@@ -179,6 +200,18 @@ class FakeDirectPayloadWithEODigitalZoom(FakeDirectPayload):
     def switch_eo_digital_zoom(self, on):
         self.calls.append(("switch_eo_digital_zoom", bool(on)))
         return {"success": True}
+
+
+class FakeDirectPayloadWithTrackSensor(FakeDirectPayload):
+    def start_track(self, x, y, width, height, template_size=None, sensor=None):
+        self.calls.append(("start_track", x, y, width, height, int(sensor) if sensor is not None else None))
+        return {"success": True}
+
+
+class FakeDirectPayloadWithFailingEODigitalZoom(FakeDirectPayload):
+    def switch_eo_digital_zoom(self, on):
+        self.calls.append(("switch_eo_digital_zoom", bool(on)))
+        return {"success": False, "message": "EO digital zoom rejected"}
 
 
 class FakeDisconnectedDirectPayload(FakeDirectPayload):
@@ -555,6 +588,38 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("start_track", 320, 540, 1280, 720)])
 
+    def test_camera_aim_locked_false_stops_viewlink_tracking(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_aim(message("camera_aim", {
+            "payload_index": "52-0-0",
+            "locked": False,
+            "x": 0.25,
+            "y": 0.75,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("stop_track",)])
+
+    def test_camera_aim_maps_infrared_camera_type_to_ir_sensor(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayloadWithTrackSensor()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_aim(message("camera_aim", {
+            "payload_index": "52-0-0",
+            "camera_type": "infrared",
+            "locked": True,
+            "x": 0.25,
+            "y": 0.75,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("start_track", 320, 540, 1280, 720, 1)])
+
     def test_camera_frame_zoom_centers_selection_before_viewlink_zoom(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
@@ -751,6 +816,48 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             [step["step"] for step in reply["data"]["software_pipeline"]],
         )
 
+    def test_camera_frame_zoom_reports_eo_digital_zoom_failure(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithFailingEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "camera_type": "zoom",
+            "locked": False,
+            "normalized": {"x": 0.20, "y": 0.20, "width": 0.25, "height": 0.25},
+            "zoom_ratio": 4.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["msg"], "EO digital zoom rejected")
+        self.assertEqual(reply["data"]["failure_step"], "eo_digital_zoom_enable")
+        self.assertEqual(direct_payload.calls, [
+            ("switch_eo_digital_zoom", True),
+        ])
+        self.assertEqual(reply["data"]["software_pipeline"][-1]["status"], "skipped")
+
+    def test_camera_frame_zoom_warns_when_centering_fails_but_zoom_continues(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
+            "payload_index": "52-0-0",
+            "camera_type": "zoom",
+            "center_mode": "unsupported",
+            "allow_zoom_without_center": True,
+            "normalized": {"x": 0.20, "y": 0.20, "width": 0.25, "height": 0.25},
+            "zoom_ratio": 4.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["warnings"][0]["step"], "gimbal_center")
+        self.assertIn("unsupported centering mode", reply["data"]["warnings"][0]["message"])
+        self.assertEqual(direct_payload.calls, [
+            ("zoom_to", 4.0),
+        ])
+
     def test_camera_frame_zoom_infers_zoom_ratio_from_selection_size(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
@@ -840,6 +947,54 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("stop_focus",),
         ])
 
+    def test_camera_focal_length_set_enables_eo_digital_zoom_before_zoom_to(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {
+            "camera_type": "zoom",
+            "zoom_factor": 3.5,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("switch_eo_digital_zoom", True),
+            ("zoom_to", 3.5),
+        ])
+
+    def test_camera_focal_length_set_routes_infrared_zoom_to_ir_sdk(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {
+            "camera_type": "infrared",
+            "zoom_factor": 2.0,
+            "zoom_speed": 3,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("ir_digital_zoom_in", 3),
+        ])
+
+    def test_camera_focal_length_set_routes_infrared_direction_to_ir_sdk(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {
+            "camera_type": "infrared",
+            "zoom_direction": "out",
+            "zoom_speed": 2,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("ir_digital_zoom_out", 2),
+        ])
+
     def test_camera_focal_length_set_keeps_legacy_zoom_ratio_compatibility(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
@@ -883,6 +1038,38 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["ir_color"], 1)
         self.assertEqual(direct_payload.calls, [("set_image_color", 2, True, 1)])
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "ir_display_mode_set")
+
+    def test_ir_color_palette_set_uses_viewlink_image_color(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        events = []
+        gimbal.set_gimbal_control(direct_payload)
+        gimbal.set_event_callback(events.append)
+
+        reply = gimbal.handle_ir_color_palette_set(message("ir_color_palette_set", {
+            "palette": "black_hot",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "ir")
+        self.assertEqual(reply["data"]["image_type"], 2)
+        self.assertEqual(reply["data"]["ir_color"], 1)
+        self.assertEqual(direct_payload.calls, [("set_image_color", 2, False, 1)])
+        self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "ir_color_palette_set")
+
+    def test_ir_zoom_set_uses_viewlink_ir_digital_zoom(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_ir_zoom_set(message("ir_zoom_set", {
+            "zoom_ratio": 2.0,
+            "zoom_speed": 4,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["zoom_ratio"], 2.0)
+        self.assertEqual(direct_payload.calls, [("ir_digital_zoom_in", 4)])
 
     def test_screen_split_uses_sdk_when_connected(self):
         gimbal = GimbalController()
@@ -1198,9 +1385,10 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
     def test_services_payload_methods_do_not_depend_on_drc_placeholders(self):
         camera = CameraController()
+        camera.set_gimbal_control(FakeDirectPayload())
         gimbal = GimbalController()
 
-        checks = [
+        supported_checks = [
             camera.handle_camera_frame_zoom(message("camera_frame_zoom", {
                 "payload_index": "52-0-0",
                 "x": 0.5,
@@ -1209,16 +1397,47 @@ class PayloadStateConsistencyTest(unittest.TestCase):
                 "height": 0.2,
             })),
             camera.handle_camera_mode_switch(message("camera_mode_switch", {"camera_mode": 0})),
-            camera.handle_video_storage_set(message("video_storage_set", {"video_storage_settings": []})),
-            camera.handle_camera_exposure_set(message("camera_exposure_set", {"exposure_value": 1})),
             gimbal.handle_camera_aim(message("camera_aim", {"payload_index": "52-0-0", "locked": False})),
             gimbal.handle_camera_screen_split(message("camera_screen_split", {"payload_index": "52-0-0", "enable": True})),
             gimbal.handle_ir_metering_point_set(message("ir_metering_point_set", {"x": 0.4, "y": 0.6})),
             gimbal.handle_ir_metering_area_set(message("ir_metering_area_set", {"width": 0.2, "height": 0.3})),
         ]
 
-        for reply in checks:
+        for reply in supported_checks:
             self.assertEqual(reply["data"]["result"], 0)
+
+        unsupported_checks = [
+            camera.handle_video_storage_set(message("video_storage_set", {"video_storage_settings": []})),
+            camera.handle_camera_exposure_set(message("camera_exposure_set", {"exposure_value": 1})),
+            camera.handle_camera_exposure_mode_set(message("camera_exposure_mode_set", {"mode": "manual"})),
+            gimbal.handle_ir_isotherm_set(message("ir_isotherm_set", {"enabled": True})),
+        ]
+
+        for reply in unsupported_checks:
+            self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+            self.assertFalse(reply["data"]["supported"])
+
+    def test_third_party_unwired_handlers_return_unsupported_instead_of_success(self):
+        third_party = ThirdPartyController()
+
+        checks = [
+            third_party.handle_drc_light_calibration(message("drc_light_calibration")),
+            third_party.handle_drc_light_fine_tuning_set(message("drc_light_fine_tuning_set", {"offset": 1})),
+            third_party.handle_psdk_ui_resource_upload_result(message("psdk_ui_resource_upload_result", {
+                "psdk_index": 0,
+                "object_key": "ui.zip",
+                "size": 10,
+                "result": 0,
+            })),
+            third_party.handle_psdk_floating_window_text(message("psdk_floating_window_text", {"value": "hello"})),
+            third_party.handle_psdk_widget_value_set(message("psdk_widget_value_set", {"index": 1, "value": 2})),
+            third_party.handle_psdk_input_box_text_set(message("psdk_input_box_text_set", {"value": "hello"})),
+        ]
+
+        for reply in checks:
+            self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+            self.assertEqual(reply["data"]["output"]["status"], "failed")
+            self.assertFalse(reply["data"]["output"]["supported"])
 
     def test_mapping_camera_payload_state_exposes_gateway_binding(self):
         Config.merge({

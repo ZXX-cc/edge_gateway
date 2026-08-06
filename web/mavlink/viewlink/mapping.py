@@ -140,6 +140,8 @@ def _normalize_value(name: str, value: Any) -> Any:
     if name == "conn_type":
         return CONN_TYPE_MAP.get(str(value or "tcp").lower(), CONN_TYPE_MAP["tcp"])
     if name == "sensor":
+        if str(value or "").isdigit():
+            return int(value)
         return SENSOR_MAP.get(str(value or "VISIBLE1").upper(), SENSOR_MAP["VISIBLE1"])
     if name == "mode":
         key = str(value if value is not None else "NONE").upper()

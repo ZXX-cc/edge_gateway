@@ -5,11 +5,10 @@
 import base64
 import threading
 from typing import Optional, Callable
-from pymavlink import mavutil
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from src.payload.jz_speaker import JzSpeakerAdapter, JzSpeakerResult
 
 logger = get_logger("third_party")
@@ -25,11 +24,11 @@ class ThirdPartyController:
     3. PSDK功能调用
     4. 红外相机控制
 
-    API方法(drc/down通道):
-    - drc_light_control_set, drc_light_calibration
-    - drc_speaker_tts_set, drc_speaker_audio_play, drc_speaker_play_volume_set
-    - psdk_function_set
-    - set_thermal_mode, set_palette
+    API方法(drc/down/services通道):
+    - drc_light_calibration, drc_light_fine_tuning_set
+    - drc_speaker_tts_set, drc_speaker_play_volume_set
+    - speaker_audio_play_start, speaker_tts_play_start, speaker_play_stop
+    - psdk_widget_value_set, psdk_input_box_text_set
     """
 
     def __init__(self):
@@ -103,6 +102,22 @@ class ThirdPartyController:
 
     def set_event_callback(self, callback: Callable):
         self._event_callback = callback
+
+    @staticmethod
+    def _unsupported_reply(msg: dict, capability: str, data: Optional[dict] = None) -> dict:
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str=f"{capability} is not wired to a real payload adapter",
+            data={
+                "output": {
+                    "status": "failed",
+                    "message": f"{capability} is not wired to a real payload adapter",
+                    "supported": False,
+                    **(data or {}),
+                }
+            },
+        )
 
     # ---- PSDK 事件上报 ----
 
@@ -182,47 +197,16 @@ class ThirdPartyController:
 
     # ---- 探照灯API ----
 
-    def handle_drc_light_control_set(self, msg: dict) -> dict:
-        """
-        探照灯控制
-
-        Request: { turn_on, brightness(0-100), mode(0=常亮/1=闪烁/2=随动) }
-        """
-        data = msg.get('data', {})
-        turn_on = data.get('turn_on')
-        brightness = data.get('brightness')
-        mode = data.get('mode')
-
-        if turn_on is not None:
-            self._light_on = turn_on
-        if brightness is not None:
-            self._light_brightness = max(0, min(100, brightness))
-        if mode is not None:
-            self._light_mode = mode
-
-        logger.info(f"Light control: on={self._light_on}, "
-                   f"brightness={self._light_brightness}, mode={self._light_mode}")
-
-        # 通过MAVLink发送探照灯控制 (使用DO_SET_SERVO模拟PWM输出)
-        pwm_value = self._light_brightness * 10 if self._light_on else 0
-        self._send_mavlink_command(
-            mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-            [9, pwm_value, 0, 0, 0, 0, 0]  # servo9 作为探照灯通道
-        )
-
-        return MessageBuilder.build_reply(msg, result=0)
-
     def handle_drc_light_calibration(self, msg: dict) -> dict:
         """探照灯校准"""
         logger.info("Light calibration")
-        # TODO: 执行校准流程
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "drc_light_calibration")
 
     def handle_drc_light_fine_tuning_set(self, msg: dict) -> dict:
         """探照灯微调"""
         data = msg.get('data', {})
         logger.info(f"Light fine tuning: {data}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "drc_light_fine_tuning_set", {"request": data})
 
     # ---- 喊话器API ----
 
@@ -275,12 +259,8 @@ class ThirdPartyController:
         logger.info(f"Speaker volume: {self._speaker_volume}")
         return self._speaker_reply(msg, self._speaker_adapter.set_volume(self._speaker_volume))
 
-    def handle_drc_speaker_audio_play(self, msg: dict) -> dict:
-        """
-        预录音频播放
-
-        Request: { file_id, play_mode(0=单次/1=循环) }
-        """
+    def _handle_speaker_audio_play(self, msg: dict) -> dict:
+        """预录音频播放。由官方 speaker_audio_play_start 入口调用。"""
         data = msg.get('data', {})
         defaults = self._speaker_control_config.get('audio_file_play') or {}
         file_id = (
@@ -312,64 +292,13 @@ class ThirdPartyController:
 
         return self._speaker_reply(msg, result if result.ok else mode_result if not mode_result.ok else result)
 
-    def handle_drc_speaker_audio_pause(self, msg: dict) -> dict:
-        """暂停播放"""
-        logger.info("Audio pause")
-        result = self._speaker_adapter.pause_audio()
-        if result.ok:
-            self._speaker_playing = False
-        return self._speaker_reply(msg, result)
-
-    def handle_drc_speaker_audio_stop(self, msg: dict) -> dict:
-        """停止播放"""
+    def _handle_speaker_audio_stop(self, msg: dict) -> dict:
+        """停止播放。由官方 speaker_play_stop 入口调用。"""
         logger.info("Audio stop")
         result = self._speaker_adapter.stop_audio()
         if result.ok:
             self._speaker_playing = False
         return self._speaker_reply(msg, result)
-
-    # ---- PSDK API ----
-
-    def handle_psdk_function_set(self, msg: dict) -> dict:
-        """
-        PSDK功能调用
-
-        Request: { device_sn, function_id, params }
-        """
-        data = msg.get('data', {})
-        device_sn = data.get('device_sn', '')
-        function_id = data.get('function_id', 0)
-        params = data.get('params', {})
-
-        logger.info(f"PSDK function: device={device_sn}, func={function_id}, params={params}")
-
-        # TODO: 通过PSDK通道发送功能调用
-
-        return MessageBuilder.build_reply(msg, result=0)
-
-    # ---- 红外相机API ----
-
-    def handle_set_thermal_mode(self, msg: dict) -> dict:
-        """
-        红外测温模式设置
-
-        Request: { mode: 0=点测温/1=区域测温/2=全屏测温 }
-        """
-        data = msg.get('data', {})
-        mode = data.get('mode', 0)
-        logger.info(f"Thermal mode: {mode}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_set_palette(self, msg: dict) -> dict:
-        """
-        调色板设置
-
-        Request: { palette: white_hot/black_hot/iron_red/rainbow }
-        """
-        data = msg.get('data', {})
-        palette = data.get('palette', 'white_hot')
-        logger.info(f"Palette: {palette}")
-        return MessageBuilder.build_reply(msg, result=0)
 
     # ---- 大疆标准第三方负载接口扩展 ----
 
@@ -416,43 +345,6 @@ class ThirdPartyController:
         return MessageBuilder.build_reply(msg, result=0, data={
             'payloads': payloads,
             'flight_controller_fallback': bool(self._mavlink_conn),
-        })
-
-    def handle_parachute_open(self, msg: dict) -> dict:
-        """降落伞打开"""
-        logger.info("Parachute open")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_parachute_status_query(self, msg: dict) -> dict:
-        """降落伞状态查询"""
-        logger.info("Parachute status query")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'status': 0,
-            'battery_percent': 100
-        })
-
-    def handle_night_vision_mode_set(self, msg: dict) -> dict:
-        """夜视模式设置"""
-        data = msg.get('data', {})
-        mode = data.get('mode', 0)
-        logger.info(f"Night vision mode: {mode}")
-        return MessageBuilder.build_reply(msg, result=0)
-
-    def handle_gas_detector_data_get(self, msg: dict) -> dict:
-        """气体检测数据获取"""
-        logger.info("Gas detector data get")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'gas_type': '',
-            'concentration': 0,
-            'unit': 'ppm'
-        })
-
-    def handle_radar_status_query(self, msg: dict) -> dict:
-        """雷达状态查询"""
-        logger.info("Radar status query")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'enabled': False,
-            'obstacle_distance': 0
         })
 
     def handle_searchlight_status_query(self, msg: dict) -> dict:
@@ -517,8 +409,12 @@ class ThirdPartyController:
         result = data.get('result', 0)
         logger.info(f"PSDK UI resource upload result: index={psdk_index}, "
                    f"object_key={object_key}, size={size}, result={result}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "psdk_ui_resource_upload_result", {
+            "psdk_index": psdk_index,
+            "object_key": object_key,
+            "size": size,
+            "result": result,
+        })
 
     def handle_psdk_floating_window_text(self, msg: dict) -> dict:
         """
@@ -533,8 +429,10 @@ class ThirdPartyController:
         psdk_index = data.get('psdk_index', 0)
         value = data.get('value', '')
         logger.info(f"PSDK floating window text: index={psdk_index}, value={value}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "psdk_floating_window_text", {
+            "psdk_index": psdk_index,
+            "value": value,
+        })
 
     def handle_psdk_widget_value_set(self, msg: dict) -> dict:
         """
@@ -551,8 +449,11 @@ class ThirdPartyController:
         index = data.get('index', 0)
         value = data.get('value', 0)
         logger.info(f"PSDK widget value set: psdk_index={psdk_index}, index={index}, value={value}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "psdk_widget_value_set", {
+            "psdk_index": psdk_index,
+            "index": index,
+            "value": value,
+        })
 
     def handle_psdk_input_box_text_set(self, msg: dict) -> dict:
         """
@@ -567,8 +468,10 @@ class ThirdPartyController:
         psdk_index = data.get('psdk_index', 0)
         value = data.get('value', '')
         logger.info(f"PSDK input box text set: index={psdk_index}, value={value}")
-        # TODO: 实现具体逻辑
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._unsupported_reply(msg, "psdk_input_box_text_set", {
+            "psdk_index": psdk_index,
+            "value": value,
+        })
 
     # ---- 喊话器接口扩展 ----
 
@@ -710,18 +613,14 @@ class ThirdPartyController:
     def handle_speaker_play_stop(self, msg: dict) -> dict:
         """
         喊话器停止播放 (speaker_play_stop)
-
-        别名，调用 drc_speaker_audio_stop
         """
-        return self.handle_drc_speaker_audio_stop(msg)
+        return self._handle_speaker_audio_stop(msg)
 
     def handle_speaker_audio_play_start(self, msg: dict) -> dict:
         """
         喊话器开始播放音频 (speaker_audio_play_start)
-
-        别名，调用 drc_speaker_audio_play
         """
-        return self.handle_drc_speaker_audio_play(msg)
+        return self._handle_speaker_audio_play(msg)
 
     def handle_speaker_tts_play_start(self, msg: dict) -> dict:
         """

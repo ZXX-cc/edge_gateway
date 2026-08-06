@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED
 from src.modules.gimbal_control import (
     VLKConnType,
     VLKFocusMode,
@@ -54,7 +55,26 @@ IR_COLOR_MAP = {
     "blackhot": VLKIrColor.BLACKHOT,
     "pseudo_hot": VLKIrColor.PSEUDOHOT,
     "pseudohot": VLKIrColor.PSEUDOHOT,
+    "rainbow": VLKIrColor.PSEUDOHOT,
+    "iron_red": VLKIrColor.RUSTY,
+    "ironred": VLKIrColor.RUSTY,
     "rusty": VLKIrColor.RUSTY,
+}
+
+CAMERA_TYPE_SENSOR_MAP = {
+    "visible": VLKSensor.VISIBLE1,
+    "normal": VLKSensor.VISIBLE1,
+    "wide": VLKSensor.VISIBLE1,
+    "zoom": VLKSensor.VISIBLE1,
+    "eo": VLKSensor.VISIBLE1,
+    "ir": VLKSensor.IR,
+    "infrared": VLKSensor.IR,
+    "thermal": VLKSensor.IR,
+    "fusion": VLKSensor.VISIBLE_IR,
+    "visible_ir": VLKSensor.VISIBLE_IR,
+    "eo_ir": VLKSensor.VISIBLE_IR,
+    "ir_visible": VLKSensor.IR_VISIBLE,
+    "ir_eo": VLKSensor.IR_VISIBLE,
 }
 
 
@@ -87,6 +107,7 @@ class GimbalController:
         self._roll = 0.0
         self._yaw = 0.0
         self._mode = self.MODE_FOLLOW
+        self._ir_zoom_level = 1.0
         self._last_control: Dict[str, Any] = {}
         self._last_update_time = int(time.time() * 1000)
 
@@ -160,6 +181,33 @@ class GimbalController:
     @staticmethod
     def _move_result_success(result: dict) -> bool:
         return bool(result.get("success", False)) if isinstance(result, dict) else False
+
+    @staticmethod
+    def _camera_type_sensor(data: dict) -> VLKSensor:
+        if data.get("sensor") is not None:
+            return VLKSensor(int(data.get("sensor")))
+        camera_type = str(data.get("camera_type") or "").strip().lower()
+        return CAMERA_TYPE_SENSOR_MAP.get(camera_type, VLKSensor.VISIBLE1)
+
+    @staticmethod
+    def _ir_color_value(value) -> VLKIrColor:
+        if value is None:
+            return VLKIrColor.WHITEHOT
+        text = str(value).strip().lower()
+        if text.isdigit():
+            try:
+                return VLKIrColor(int(text))
+            except ValueError:
+                return VLKIrColor.WHITEHOT
+        return IR_COLOR_MAP.get(text, VLKIrColor.WHITEHOT)
+
+    @staticmethod
+    def _zoom_direction_value(direction) -> tuple[int, str]:
+        try:
+            direction_value = int(direction)
+        except (TypeError, ValueError):
+            direction_value = 0
+        return direction_value, str(direction).strip().lower()
 
     def _ensure_viewlink_connected(self) -> tuple[bool, dict]:
         if not self._gimbal_control:
@@ -592,16 +640,26 @@ class GimbalController:
         result = {"success": True, "message": "aim accepted locally"}
         if locked and self._gimbal_control and self._gimbal_control.is_connected():
             x_px, y_px, frame_size = self._frame_point_pixels(data, x, y)
+            sensor = self._camera_type_sensor(data)
             mapping = build_viewlink_call("start_track", {
                 "x": x_px,
                 "y": y_px,
                 "video_width": frame_size["width"],
                 "video_height": frame_size["height"],
                 "template_size": data.get("template_size"),
-                "sensor": data.get("sensor"),
+                "sensor": int(sensor),
             })
             logger.info("ViewLink mapped: %s", mapping)
             result = self._execute_viewlink_call(mapping)
+        elif not locked and self._gimbal_control and self._gimbal_control.is_connected():
+            if hasattr(self._gimbal_control, "stop_track"):
+                result = self._gimbal_control.stop_track()
+            else:
+                result = {
+                    "success": True,
+                    "message": "ViewLink stop_track is not exposed by this adapter",
+                    "skipped": True,
+                }
 
         success = bool(result.get("success", False))
         if success:
@@ -884,9 +942,57 @@ class GimbalController:
     def handle_ir_color_palette_set(self, msg: dict) -> dict:
         """IR色板设置"""
         data = msg.get('data', {})
-        palette = data.get('palette', 'white_hot')
-        logger.info(f"IR color palette: {palette}")
-        return MessageBuilder.build_reply(msg, result=0)
+        palette = data.get('palette', data.get("ir_color", "white_hot"))
+        mode = data.get("mode", data.get("display_mode", "ir"))
+        mode_key = str(mode).lower()
+        if mode_key.isdigit():
+            mode_key = {
+                0: "visible",
+                1: "ir",
+                2: "visible_ir",
+                3: "ir_visible",
+                4: "fusion",
+            }.get(int(mode_key), "ir")
+        image_type, enable_pip = IR_DISPLAY_MODE_MAP.get(mode_key, IR_DISPLAY_MODE_MAP["ir"])
+        if "image_type" in data:
+            image_type = VLKImageType(int(data.get("image_type")))
+        if "enable_pip" in data:
+            enable_pip = bool(data.get("enable_pip"))
+        ir_color = self._ir_color_value(palette)
+        logger.info(
+            "IR color palette: palette=%s image_type=%s enable_pip=%s",
+            palette,
+            int(image_type),
+            enable_pip,
+        )
+
+        result = {"success": False, "message": "ViewLink control is not connected"}
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            result = self._gimbal_control.set_image_color(image_type, enable_pip, ir_color)
+
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "ir_color_palette_set"),
+                "mode": mode_key,
+                "image_type": int(image_type),
+                "enable_pip": enable_pip,
+                "ir_color": int(ir_color),
+            }
+            self._notify_payload_state("ir_color_palette_set")
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "ir_color_palette_set failed")),
+            data={
+                "mode": mode_key,
+                "image_type": int(image_type),
+                "enable_pip": enable_pip,
+                "ir_color": int(ir_color),
+                "viewlink_result": result,
+            },
+        )
 
     def handle_ir_display_mode_set(self, msg: dict) -> dict:
         """IR显示模式设置"""
@@ -954,14 +1060,69 @@ class GimbalController:
         low = data.get('low_temperature', 0)
         high = data.get('high_temperature', 100)
         logger.info(f"IR isotherm: enabled={enabled}, range=({low}, {high})")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="ViewLink SDK/protocol mapping does not expose IR isotherm control",
+            data={
+                "enabled": enabled,
+                "low_temperature": low,
+                "high_temperature": high,
+                "supported": False,
+            },
+        )
 
     def handle_ir_zoom_set(self, msg: dict) -> dict:
         """IR变焦设置"""
         data = msg.get('data', {})
         ratio = data.get('zoom_ratio', 1.0)
+        direction = data.get("zoom_direction")
+        speed = int(data.get("zoom_speed", data.get("speed", 0)) or 0)
         logger.info(f"IR zoom: {ratio}x")
-        return MessageBuilder.build_reply(msg, result=0)
+
+        result = {"success": False, "message": "ViewLink control is not connected"}
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            if direction is not None:
+                direction_value, direction_text = self._zoom_direction_value(direction)
+                zooming_in = direction_value > 0 or direction_text in {"in", "zoom_in", "tele"}
+                zooming_out = direction_value < 0 or direction_text in {"out", "zoom_out", "wide"}
+            else:
+                try:
+                    target_ratio = float(ratio)
+                except (TypeError, ValueError):
+                    target_ratio = self._ir_zoom_level
+                zooming_in = target_ratio > self._ir_zoom_level
+                zooming_out = target_ratio < self._ir_zoom_level
+            if zooming_in:
+                result = self._gimbal_control.ir_digital_zoom_in(speed)
+            elif zooming_out:
+                result = self._gimbal_control.ir_digital_zoom_out(speed)
+            else:
+                result = {"success": True, "message": "IR zoom unchanged", "skipped": True}
+
+        success = bool(result.get("success", False))
+        if success:
+            try:
+                self._ir_zoom_level = float(ratio)
+            except (TypeError, ValueError):
+                pass
+            self._last_control = {
+                "method": msg.get("method", "ir_zoom_set"),
+                "zoom_ratio": self._ir_zoom_level,
+                "zoom_direction": direction,
+            }
+            self._notify_payload_state("ir_zoom_set")
+
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "ir_zoom_set failed")),
+            data={
+                "zoom_ratio": self._ir_zoom_level,
+                "zoom_direction": direction,
+                "viewlink_result": result,
+            },
+        )
 
     def handle_viewlink_service(self, msg: dict) -> dict:
         """ViewLink SDK services 入口，方法名支持 viewlink_xxx 或文档原始 SDK 方法名。"""

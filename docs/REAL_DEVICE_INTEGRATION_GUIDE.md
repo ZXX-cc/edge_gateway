@@ -761,7 +761,7 @@ python src\mavlink_definitions\generate_dialect.py
 ### 10.7 P1：飞控固件和其他负载
 
 - PX4 或厂家自定义飞控：修改 `src/mavlink/flight_modes.py`、`src/modules/flight_control.py` 和航线模块。
-- 探照灯、喊话器、红外、PSDK/ESDK：检查 `src/payload/third_party.py`，其中多项仍为 TODO 或本地状态。
+- 探照灯、喊话器、红外、PSDK/ESDK：检查 `src/payload/third_party.py`，未接真实适配器的入口会返回不支持，不再固定成功回包。
 - 正式媒体和直播：检查 `src/media/manager.py`，补齐真实 OSS 凭据、断点续传和实际推流协议。
 
 ## 11. 当前已经实现的功能
@@ -783,7 +783,7 @@ python src\mavlink_definitions\generate_dialect.py
 | 一键启航和收尾    | 起飞请求、飞控执行、返航、降落、夹紧、关门和充电编排                       | 真实耗时状态机和失败恢复未完成              |
 | DRC               | enter/exit、心跳、杆量、速度、指点飞行和超时管理                           | 真机安全边界未验收                          |
 | 相机和云台        | MAVLink 相机命令、云台控制、ViewLink DLL、拍照和录像入口                   | SDK 自动连接和硬件 ACK 未完成               |
-| 第三方负载        | 探照灯、喊话器、红外和 PSDK/ESDK method 入口                               | 多项仍是 TODO 或固定回包                    |
+| 第三方负载        | 喊话器适配器、负载状态查询和 PSDK/ESDK method 入口                          | 未接真实适配器的入口返回不支持              |
 | 媒体和直播        | 本地扫描、删除、上传队列、HTTP PUT、FFmpeg 启停                            | 正式 OSS、WebRTC/GB28181 等未完成全协议验收 |
 | HMS 和日志        | 告警、查询、清除、分类日志、上传进度和原始帧日志                           | 真实故障码、阈值和对象存储待确认            |
 | 配置更新          | config update/get/rollback 和本地持久化                                    | 生产字段白名单和权限需补齐                  |

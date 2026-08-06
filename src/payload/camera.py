@@ -13,7 +13,7 @@ from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR
 from src.modules.gimbal_control import VLKFocusMode, VLKImageType, VLKIrColor, VLKRecordMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
@@ -83,6 +83,7 @@ class CameraController:
         self._photo_session_lock = threading.Lock()
         self._zoom_level = 1.0
         self._last_real_zoom_factor = None
+        self._last_ir_zoom_factor = 1.0
         self._resolution = None
         self._exposure_mode = 'auto'
         self._focus_mode = 'auto_focus'
@@ -822,6 +823,28 @@ class CameraController:
         logger.info("ViewLink camera type mapped: %s", result)
         return result
 
+    @staticmethod
+    def _is_ir_camera_type(data: dict) -> bool:
+        camera_type = str(data.get("camera_type") or "").strip().lower()
+        return camera_type in {"ir", "infrared", "thermal"}
+
+    @staticmethod
+    def _zoom_direction_value(direction) -> tuple[int, str]:
+        try:
+            direction_value = int(direction)
+        except (TypeError, ValueError):
+            direction_value = 0
+        return direction_value, str(direction).strip().lower()
+
+    def _enable_viewlink_eo_digital_zoom_for_zoom(self, data: dict) -> Optional[dict]:
+        if self._is_ir_camera_type(data):
+            return None
+        if not self._gimbal_control or not hasattr(self._gimbal_control, "switch_eo_digital_zoom"):
+            return None
+        result = self._gimbal_control.switch_eo_digital_zoom(True)
+        logger.info("ViewLink EO digital zoom enable before zoom: %s", result)
+        return result
+
     def _start_viewlink_photo_session(self, count: int, interval: float) -> dict:
         if not self._viewlink_connected():
             return {"success": False, "message": "ViewLink control is not connected"}
@@ -1217,10 +1240,19 @@ class CameraController:
         ev = data.get('ev', 0)
         self._log_camera_setting_mapping('set_exposure_mode', data)
 
-        self._exposure_mode = mode
         logger.info(f"Exposure mode: {mode}, EV={ev}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="ViewLink SDK does not expose camera exposure mode control",
+            data={
+                "camera_type": data.get("camera_type", ""),
+                "mode": mode,
+                "ev": ev,
+                "supported": False,
+            },
+        )
 
     def _zoom(self, msg: dict) -> dict:
         """
@@ -1234,11 +1266,39 @@ class CameraController:
 
         success = False
         viewlink_attempted = False
+        result = {"success": False, "message": "Zoom command was not sent"}
         if ratio is not None:
             self._zoom_level = ratio
             logger.info(f"Zoom ratio: {ratio}x")
             if self._gimbal_control and self._gimbal_control.is_connected():
                 viewlink_attempted = True
+                if self._is_ir_camera_type(data):
+                    previous_ratio = float(self._last_ir_zoom_factor or 1.0)
+                    target_ratio = float(ratio)
+                    if target_ratio > previous_ratio:
+                        result = self._gimbal_control.ir_digital_zoom_in(int(data.get("zoom_speed", 0) or 0))
+                    elif target_ratio < previous_ratio:
+                        result = self._gimbal_control.ir_digital_zoom_out(int(data.get("zoom_speed", 0) or 0))
+                    else:
+                        result = {"success": True, "message": "IR zoom ratio unchanged", "skipped": True}
+                    success = result.get('success', False)
+                    if success:
+                        self._last_ir_zoom_factor = target_ratio
+                    logger.info(f"ViewLink IR zoom ratio: {result}")
+                    return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+                        "camera_type": data.get("camera_type", ""),
+                        "viewlink_result": result,
+                    })
+
+                eo_digital_zoom_result = self._enable_viewlink_eo_digital_zoom_for_zoom(data)
+                if eo_digital_zoom_result is not None and not eo_digital_zoom_result.get("success", False):
+                    result = eo_digital_zoom_result
+                    success = False
+                    logger.info(f"ViewLink EO digital zoom enable failed before zoom_to: {result}")
+                    return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get("message", "EO digital zoom enable failed"), data={
+                        "camera_type": data.get("camera_type", ""),
+                        "viewlink_result": result,
+                    })
                 result = self._gimbal_control.zoom_to(float(ratio))
                 success = result.get('success', False)
                 if success:
@@ -1250,21 +1310,40 @@ class CameraController:
             logger.info(f"Zoom direction: {direction}, speed: {speed}")
             if self._gimbal_control and self._gimbal_control.is_connected():
                 viewlink_attempted = True
-                try:
-                    direction_value = int(direction)
-                except (TypeError, ValueError):
-                    direction_value = 0
-                direction_text = str(direction).lower()
-                if direction_value > 0 or direction_text in {"in", "zoom_in", "tele"}:
-                    result = self._gimbal_control.zoom_in(int(speed))
-                elif direction_value < 0 or direction_text in {"out", "zoom_out", "wide"}:
-                    result = self._gimbal_control.zoom_out(int(speed))
+                direction_value, direction_text = self._zoom_direction_value(direction)
+                zooming_in = direction_value > 0 or direction_text in {"in", "zoom_in", "tele"}
+                zooming_out = direction_value < 0 or direction_text in {"out", "zoom_out", "wide"}
+                if self._is_ir_camera_type(data):
+                    if zooming_in:
+                        result = self._gimbal_control.ir_digital_zoom_in(int(speed))
+                    elif zooming_out:
+                        result = self._gimbal_control.ir_digital_zoom_out(int(speed))
+                    else:
+                        result = {"success": True, "message": "IR zoom stop is not exposed by ViewLink SDK", "skipped": True}
                 else:
-                    result = self._gimbal_control.stop_zoom()
+                    if zooming_in or zooming_out:
+                        eo_digital_zoom_result = self._enable_viewlink_eo_digital_zoom_for_zoom(data)
+                        if eo_digital_zoom_result is not None and not eo_digital_zoom_result.get("success", False):
+                            result = eo_digital_zoom_result
+                            success = False
+                            logger.info(f"ViewLink EO digital zoom enable failed before zoom direction: {result}")
+                            return MessageBuilder.build_reply(msg, result=-1, msg_str=result.get("message", "EO digital zoom enable failed"), data={
+                                "camera_type": data.get("camera_type", ""),
+                                "viewlink_result": result,
+                            })
+                    if zooming_in:
+                        result = self._gimbal_control.zoom_in(int(speed))
+                    elif zooming_out:
+                        result = self._gimbal_control.zoom_out(int(speed))
+                    else:
+                        result = self._gimbal_control.stop_zoom()
                 success = result.get('success', False)
                 logger.info(f"ViewLink zoom direction: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
+        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1, data={
+            "camera_type": data.get("camera_type", ""),
+            "viewlink_result": result if viewlink_attempted else None,
+        })
 
     def _set_focus_mode(self, msg: dict) -> dict:
         """
@@ -1365,16 +1444,31 @@ class CameraController:
 
         logger.info(f"Photo storage: quality={quality}, metadata={include_metadata}")
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="ViewLink SDK does not expose photo storage configuration",
+            data={
+                "quality": quality,
+                "include_metadata": include_metadata,
+                "supported": False,
+            },
+        )
 
     def handle_video_storage_set(self, msg: dict) -> dict:
         """视频存储设置 (video_storage_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
         settings = data.get('video_storage_settings', [])
         logger.info("Video storage set: settings=%s", settings)
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "video_storage_settings": settings,
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="ViewLink SDK does not expose video storage configuration",
+            data={
+                "video_storage_settings": settings,
+                "supported": False,
+            },
+        )
 
     @staticmethod
     def _frame_zoom_number(data: dict, key: str, default: float) -> float:
@@ -1706,6 +1800,9 @@ class CameraController:
         result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
         center_result = {"success": True, "message": "frame center already aligned", "skipped": True}
         stop_result = None
+        failure_step = ""
+        failure_message = ""
+        warnings = []
         pipeline = [
             {
                 "step": "normalize_selection",
@@ -1755,34 +1852,60 @@ class CameraController:
                 bool(Config.get("payload.frame_zoom_allow_zoom_without_center", True)),
             )
             if center_result.get("success", False) or allow_zoom_without_center:
+                if not center_result.get("success", False):
+                    warnings.append({
+                        "step": "gimbal_center",
+                        "message": center_result.get("message", "target was not centered; continue zoom by configuration"),
+                    })
                 eo_digital_zoom_result = self._enable_viewlink_eo_digital_zoom(data)
                 if eo_digital_zoom_result is not None:
+                    eo_digital_zoom_success = bool(eo_digital_zoom_result.get("success", False))
                     pipeline.append({
                         "step": "eo_digital_zoom_enable",
-                        "status": "ok" if bool(eo_digital_zoom_result.get("success", False)) else "failed",
+                        "status": "ok" if eo_digital_zoom_success else "failed",
                         "viewlink_result": eo_digital_zoom_result,
                     })
-                result = self._gimbal_control.zoom_to(zoom_ratio)
-                if result.get("success", False):
-                    self._last_real_zoom_factor = float(zoom_ratio)
-                pipeline.append({
-                    "step": "camera_zoom_to",
-                    "status": "ok" if bool(result.get("success", False)) else "failed",
-                    "zoom_ratio": zoom_ratio,
-                    "center_confirmed": bool(center_result.get("success", False)),
-                    "viewlink_result": result,
-                })
+                    if not eo_digital_zoom_success:
+                        failure_step = "eo_digital_zoom_enable"
+                        failure_message = eo_digital_zoom_result.get("message", "EO digital zoom enable failed")
+                        result = {
+                            "success": False,
+                            "message": failure_message,
+                            "viewlink_result": eo_digital_zoom_result,
+                        }
+                        pipeline.append({
+                            "step": "camera_zoom_to",
+                            "status": "skipped",
+                            "zoom_ratio": zoom_ratio,
+                            "reason": failure_message,
+                        })
+                if not failure_step:
+                    result = self._gimbal_control.zoom_to(zoom_ratio)
+                    if result.get("success", False):
+                        self._last_real_zoom_factor = float(zoom_ratio)
+                    else:
+                        failure_step = "camera_zoom_to"
+                        failure_message = result.get("message", "camera zoom failed")
+                    pipeline.append({
+                        "step": "camera_zoom_to",
+                        "status": "ok" if bool(result.get("success", False)) else "failed",
+                        "zoom_ratio": zoom_ratio,
+                        "center_confirmed": bool(center_result.get("success", False)),
+                        "viewlink_result": result,
+                    })
             else:
+                failure_step = "gimbal_center"
+                failure_message = "target was not centered; zoom skipped"
                 result = {
                     "success": False,
-                    "message": "target was not centered; zoom skipped",
+                    "message": failure_message,
                     "center_required": True,
                 }
                 pipeline.append({
                     "step": "camera_zoom_to",
                     "status": "skipped",
                     "zoom_ratio": zoom_ratio,
-                    "reason": result["message"],
+                    "reason": failure_message,
                 })
             logger.info("ViewLink frame zoom/zoom_to: %s", result)
         else:
@@ -1792,8 +1915,11 @@ class CameraController:
                 pipeline_status = "pending" if result.get("connecting") else "failed"
                 pipeline_reason = result.get("message", "ViewLink control is not connected")
             else:
+                result = {"success": False, "message": "ViewLink control is not connected"}
                 pipeline_status = "simulated"
                 pipeline_reason = "ViewLink control is not connected"
+            failure_step = "viewlink_connect"
+            failure_message = pipeline_reason
             pipeline.append({
                 "step": "camera_zoom_to",
                 "status": pipeline_status,
@@ -1801,13 +1927,10 @@ class CameraController:
                 "reason": pipeline_reason,
             })
 
-        success = bool(
-            center_result.get("success", False)
-            and result.get("success", False)
-        )
+        success = bool(result.get("success", False) and not failure_step)
         if success:
             self._zoom_level = zoom_ratio
-        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+        reply_data = {
             "locked": bool(data.get("locked", False)),
             "zoom_ratio": zoom_ratio,
             "x": x,
@@ -1825,7 +1948,18 @@ class CameraController:
             "stop_result": stop_result,
             "software_pipeline": pipeline,
             "viewlink_result": result,
-        })
+        }
+        if failure_step:
+            reply_data["failure_step"] = failure_step
+            reply_data["failure_message"] = failure_message
+        if warnings:
+            reply_data["warnings"] = warnings
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else DOCK_SYSTEM_ERROR,
+            data=reply_data,
+            msg_str="" if success else failure_message,
+        )
 
     def handle_camera_mode_switch(self, msg: dict) -> dict:
         """负载相机模式切换 (camera_mode_switch)，属于 services 负载控制。"""
@@ -1843,10 +1977,16 @@ class CameraController:
         data = msg.get('data', {})
         exposure_value = data.get("exposure_value", data.get("ev", 0))
         logger.info("Camera exposure set: camera_type=%s exposure_value=%s", data.get("camera_type", ""), exposure_value)
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "camera_type": data.get("camera_type", ""),
-            "exposure_value": exposure_value,
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="ViewLink SDK does not expose camera exposure value control",
+            data={
+                "camera_type": data.get("camera_type", ""),
+                "exposure_value": exposure_value,
+                "supported": False,
+            },
+        )
 
     # ---- 进度上报 ----
 

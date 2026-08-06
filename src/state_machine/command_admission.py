@@ -76,8 +76,6 @@ class CommandAdmissionEngine:
         "payload_capability_query",
         "gimbal_status_query",
         "gimbal_capability_query",
-        "parachute_status_query",
-        "radar_status_query",
         "searchlight_status_query",
         "speaker_status_query",
     })
