@@ -195,7 +195,7 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 - 已满足：`flight_areas_drone_location` 已按状态变化触发，支持靠近边界、进入围栏、离开围栏和离开边界范围的事件推送。
 - 部分满足：设备侧当前是 MAVLink fence 生效器，能把 Polygon 和 Point/Circle 转成飞控 fence，但还不是 DJI 官方时序里的飞行器/机场原生 FlySafe 数据升级链路。
 - 未满足：还没有比较“飞行器端已有文件版本”和“云端文件版本”的设备侧查询能力，当前主要按云端返回文件重新下载/覆盖。
-- 未满足：还没有覆盖该时序的 MQTT 专项脚本，后续脚本应按上述 8 步保存完整日志。
+- 已补充：`tools/mqtt_dock3_custom_fly_region_test.py` 可覆盖该时序的 MQTT 专项链路，后续需在 Win/Ubuntu 保存实际运行日志。
 
 当前欠缺：
 
@@ -203,7 +203,7 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 - 缺官方字段矩阵。至少需要覆盖文件名 `geofence_{fileMD5}.json`、`FeatureCollection`、`Feature.id`、`geofence_type=dfence/nfz`、`geometry.type=Polygon/Point`、`properties.subType=Circle`、`radius`、`properties.enable` 当前版本不支持等规则。
 - 缺 `flight_areas_sync_progress.reason` 全量映射。当前只覆盖 1、3、5、8、12、13，仍需补齐官方 2、4、6、7、9、10、11 的中文含义和触发场景。
 - 待精校 `flight_areas_drone_location` 与官方字段矩阵的完全一致性；当前事件数据除 `area_id/area_distance/is_in_area` 外，还包含 `area_mode/state/event/latitude/longitude` 便于平台调试状态变化来源。
-- 缺 requests/reply 专项验收脚本。需要覆盖 `flight_areas_update -> requests flight_areas_get -> requests_reply files -> download -> apply -> flight_areas_sync_progress`。
+- 待复测 requests/reply 专项验收脚本。当前已新增 `tools/mqtt_dock3_custom_fly_region_test.py`，需要在 Win/Ubuntu 覆盖 `flight_areas_update -> requests flight_areas_get -> requests_reply files -> download -> apply -> flight_areas_sync_progress` 并留证。
 - 缺设备侧文件版本比较。当前以云端 `files` 列表为准覆盖本地缓存，还没有从飞行器/机场侧查询已有自定义飞行区文件版本。
 - 缺下载安全边界。需要校验 URL 过期时间、文件大小上限、文件数量上限、checksum 与文件名 MD5 的关系，避免异常文件占满本地存储或错误生效。
 - 缺真实设备侧 FlySafe SDK 适配。当前代码使用 MAVLink fence 作为可验证替代路径，不能完全等同 Dock3 官方 FlySafe/自定义飞行区真实生效链路。
@@ -214,7 +214,8 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 - `docs/DOCK3_CUSTOM_FLY_REGION_FIELD_MATRIX.md`：记录 method、topic、payload、reason、文件格式、解析规则、错误码。
 - `tests/fixtures/custom_fly_region/geofence_<md5>.json`：继续补充 dfence、非法字段等样例；甲方 Polygon/nfz 样例已落盘。
 - `tests/test_dock3_custom_fly_region.py`：继续补充 checksum、reason、requests/reply 和缓存替换逻辑；当前已覆盖甲方样例 MD5、`nfz` 解析、Point/Circle 解析和 `files: []` 清空语义。
-- `tools/mqtt_dock3_custom_fly_region_test.py`：云端模拟器专项验收脚本，日志保存到 `logs/acceptance_evidence/<时间>_custom_fly_region/`。
+- `tools/custom_fly_region_self_test.py`：不依赖真机、不依赖网关进程的本地自测脚本，覆盖文件下载、checksum、清空、区域解析和边界状态变化告警。
+- `tools/mqtt_dock3_custom_fly_region_test.py`：网关 MQTT 专项验收脚本，模拟平台 `requests_reply`，覆盖 `flight_areas_update -> requests flight_areas_get -> requests_reply -> sync_progress -> flight_areas_get`；无 MAVLink/FlySafe 生效器时可加 `--allow-apply-fail` 验证协议和缓存链路。
 
 ## 8. Dock3 验收顺序
 
