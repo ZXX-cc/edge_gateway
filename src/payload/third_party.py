@@ -303,35 +303,36 @@ class ThirdPartyController:
     # ---- 大疆标准第三方负载接口扩展 ----
 
     def handle_payload_authority_grab(self, msg: dict) -> dict:
-        """负载控制权获取"""
+        """负载控制权获取。没有真实负载控制权适配器时不得伪造成功。"""
         data = msg.get('data', {})
         payload_index = data.get('payload_index', 0)
         logger.info(f"Payload authority grab: index={payload_index}")
-        return MessageBuilder.build_reply(
-            msg,
-            result=0,
-            data={
-                "output": {"status": "ok"},
-                "authority": "payload",
-                "payload_index": payload_index,
-            },
-        )
+        adapter = getattr(self, "_payload_authority_adapter", None)
+        if adapter and hasattr(adapter, "grab"):
+            result = adapter.grab(payload_index)
+            success = bool(result.get("success", False)) if isinstance(result, dict) else bool(result)
+            return MessageBuilder.build_reply(
+                msg,
+                result=0 if success else DOCK_SYSTEM_ERROR,
+                msg_str="" if success else "payload authority grab failed",
+            )
+        return self._unsupported_reply(msg, "payload_authority_grab")
 
     def handle_payload_authority_release(self, msg: dict) -> dict:
-        """负载控制权释放"""
+        """负载控制权释放。没有真实负载控制权适配器时不得伪造成功。"""
         data = msg.get('data', {})
         payload_index = data.get('payload_index', 0)
         logger.info(f"Payload authority release: index={payload_index}")
-        return MessageBuilder.build_reply(
-            msg,
-            result=0,
-            data={
-                "output": {"status": "ok"},
-                "authority": "payload",
-                "payload_index": payload_index,
-                "released": True,
-            },
-        )
+        adapter = getattr(self, "_payload_authority_adapter", None)
+        if adapter and hasattr(adapter, "release"):
+            result = adapter.release(payload_index)
+            success = bool(result.get("success", False)) if isinstance(result, dict) else bool(result)
+            return MessageBuilder.build_reply(
+                msg,
+                result=0 if success else DOCK_SYSTEM_ERROR,
+                msg_str="" if success else "payload authority release failed",
+            )
+        return self._unsupported_reply(msg, "payload_authority_release")
 
     def handle_payload_status_query(self, msg: dict) -> dict:
         """负载状态查询"""

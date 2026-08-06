@@ -442,9 +442,8 @@ class GimbalController:
             }
         return {
             **payload,
-            "success": True,
-            "message": "ViewLink raw protocol adapter is not configured; frame built only",
-            "simulated": True,
+            "success": False,
+            "message": "ViewLink raw protocol adapter is not configured",
         }
 
     @classmethod
@@ -637,8 +636,14 @@ class GimbalController:
             y,
         )
 
-        result = {"success": True, "message": "aim accepted locally"}
-        if locked and self._gimbal_control and self._gimbal_control.is_connected():
+        result = {"success": False, "message": "ViewLink control is not connected"}
+        if not self._gimbal_control or not self._gimbal_control.is_connected():
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        if locked:
             x_px, y_px, frame_size = self._frame_point_pixels(data, x, y)
             sensor = self._camera_type_sensor(data)
             mapping = build_viewlink_call("start_track", {
@@ -651,14 +656,13 @@ class GimbalController:
             })
             logger.info("ViewLink mapped: %s", mapping)
             result = self._execute_viewlink_call(mapping)
-        elif not locked and self._gimbal_control and self._gimbal_control.is_connected():
+        else:
             if hasattr(self._gimbal_control, "stop_track"):
                 result = self._gimbal_control.stop_track()
             else:
                 result = {
-                    "success": True,
+                    "success": False,
                     "message": "ViewLink stop_track is not exposed by this adapter",
-                    "skipped": True,
                 }
 
         success = bool(result.get("success", False))
@@ -692,7 +696,7 @@ class GimbalController:
             mode_key,
         )
 
-        result = {"success": True, "message": "screen split accepted locally", "simulated": True}
+        result = {"success": False, "message": "ViewLink control is not connected"}
         image_type = None
         enable_pip = False
         if self._gimbal_control and self._gimbal_control.is_connected():

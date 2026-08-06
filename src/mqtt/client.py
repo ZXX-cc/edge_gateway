@@ -27,6 +27,7 @@ from src.utils.dji_error_codes import (
 from src.utils.mqtt_security import MqttSecurityValidator
 from src.utils.request_trace import get_request_trace_recorder
 from src.state_machine.command_admission import CommandAdmissionEngine
+from src.cloud_api.dock3_reply_schema import sanitize_services_reply
 
 logger = get_logger("mqtt")
 
@@ -475,6 +476,15 @@ class MQTTClient:
                 conversion.get('dji_result'),
                 conversion.get('description'),
             )
+        if source_topic.endswith('/services'):
+            normalized, removed_fields = sanitize_services_reply(normalized)
+            if removed_fields:
+                logger.warning(
+                    "Dock3 services_reply schema sanitized: method=%s, tid=%s, removed_fields=%s",
+                    method,
+                    normalized.get('tid') if isinstance(normalized, dict) else "",
+                    ",".join(removed_fields),
+                )
         return normalized
 
     def _publish_reply_for_downstream_topic(self, source_topic: str, data: dict) -> bool:

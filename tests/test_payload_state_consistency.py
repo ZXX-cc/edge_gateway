@@ -1461,6 +1461,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         camera = CameraController()
         camera.set_gimbal_control(FakeDirectPayload())
         gimbal = GimbalController()
+        gimbal.set_gimbal_control(FakeDirectPayload())
 
         supported_checks = [
             camera.handle_camera_frame_zoom(message("camera_frame_zoom", {

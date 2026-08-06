@@ -19,7 +19,11 @@ from typing import Any, Dict, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_SYSTEM_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
 from src.cloud_api.dock3_media import (
     build_media_file,
     build_remote_media_file,
@@ -78,7 +82,8 @@ class MediaManager:
     4. 存储管理(容量监控)
 
     API方法:
-    - adjust_upload_priority, storage_config_get
+    - adjust_upload_priority
+    - storage_config_get: 设备主动 requests 获取存储配置
     - live_start, live_stop, set_livestream_lens, set_livestream_quality
     """
 
@@ -276,19 +281,12 @@ class MediaManager:
 
     def handle_storage_config_get(self, msg: dict) -> dict:
         """
-        请求存储配置(OSS临时凭证) - services 兼容模式
-
-        Request: { }
-        Response: { result, output: { bucket, credentials, endpoint, provider, region, object_key_prefix } }
+        storage_config_get 是 Dock3 requests/requests_reply 链路，不暴露 services 入口。
         """
-        logger.info("Storage config get (services mode)")
-
-        # 官方 Dock3 媒体文档要求云端在 requests_reply 中下发 output.credentials。
-        # 这里仅从真实配置透传，不生成临时密钥，避免测试值混入真实链路。
         return MessageBuilder.build_reply(
             msg,
-            result=0,
-            data={"output": storage_config_output(Config.get('media.oss', {}))},
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="storage_config_get must use requests/requests_reply",
         )
 
     def report_upload_complete(self, file_info: dict, flight_task: dict = None):
@@ -1193,7 +1191,6 @@ class MediaManager:
                 "video_id": self._live_video_id,
                 "video_quality": self._live_quality,
                 "video_type": self._live_video_type,
-                "software_pipeline": list(self._live_pipeline),
             }),
             msg_str=reason,
         )
@@ -1294,7 +1291,6 @@ class MediaManager:
                     result=INVALID_COMMAND_FORMAT,
                     data=live_task_output(TASK_STATUS_REJECTED, {
                         "reason": "live video source unavailable",
-                        "software_pipeline": list(self._live_pipeline),
                     }),
                     msg_str="Live video source unavailable",
                 )
@@ -1311,8 +1307,6 @@ class MediaManager:
             'url_type': self._live_protocol,
             'video_quality': self._live_quality,
             'video_type': self._live_video_type,
-            'source': selected_source,
-            'software_pipeline': list(self._live_pipeline),
         }))
 
     def handle_live_start_push(self, msg: dict) -> dict:
@@ -1432,12 +1426,10 @@ class MediaManager:
                     "Live lens change failed because ffmpeg restart failed",
                 )
 
-        photo = self._take_photo_after_lens_change(msg, video_id, video_type)
         self._publish_live_status_event(TASK_STATUS_OK, live_status=1 if self._live_streaming else 0)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
             "video_id": video_id,
             "video_type": self._live_video_type,
-            "photo": photo,
         }))
 
     def _take_photo_after_lens_change(self, msg: dict, video_id: str, video_type: str) -> dict:

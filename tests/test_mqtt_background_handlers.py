@@ -228,6 +228,127 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
         self.assertEqual(reply["tid"], payload["tid"])
         self.assertEqual(reply["data"]["result"], 0)
 
+    def test_services_reply_strips_result_only_payload_debug_fields(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "viewlink_result": {"success": True},
+                "software_pipeline": [{"step": "local"}],
+                "photo": {"reply": {"data": {"result": 0}}},
+            })
+
+        self.client.register_handler("camera_photo_take", handler, reply_required=True)
+        payload = {
+            "tid": "payload-schema-1",
+            "method": "camera_photo_take",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        _, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply["data"], {"result": 0})
+
+    def test_services_reply_strips_cmd_output_to_official_status_shape(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "action": "cover_open",
+                "ack": {"raw": 123},
+                "output": {
+                    "status": "success",
+                    "progress": {"percent": 120, "step_key": "open_cover", "raw": "x"},
+                    "ordinary_order_response": {"raw": 1},
+                },
+            })
+
+        self.client.register_handler("cover_open", handler, reply_required=True)
+        payload = {
+            "tid": "cmd-schema-1",
+            "method": "cover_open",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        _, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply["data"], {
+            "output": {
+                "status": "failed",
+                "progress": {"percent": 100, "step_key": "open_cover"},
+            },
+            "result": 0,
+        })
+
+    def test_services_reply_strips_status_service_output_debug_fields(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "source": "viewlink",
+                "output": {
+                    "status": "ok",
+                    "software_pipeline": [{"step": "push"}],
+                    "rtmp_url": "rtmp://example/live",
+                },
+            })
+
+        self.client.register_handler("live_start", handler, reply_required=True)
+        payload = {
+            "tid": "status-schema-1",
+            "method": "live_start",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        _, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply["data"], {
+            "output": {"status": "ok"},
+            "result": 0,
+        })
+
+    def test_services_reply_unknown_method_defaults_to_result_only(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "output": {"status": "ok", "detail": {"debug": True}},
+                "internal": "not-for-platform",
+            })
+
+        self.client.register_handler("project_internal_test", handler, reply_required=True)
+        payload = {
+            "tid": "unknown-schema-1",
+            "method": "project_internal_test",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        _, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply["data"], {"result": 0})
+
+    def test_services_reply_keeps_allowlisted_query_fields(self):
+        def handler(msg):
+            return MessageBuilder.build_reply(msg, result=0, data={
+                "output": {"status": "ok", "debug": "drop"},
+                "files": [{"file_id": "a"}],
+                "total": 1,
+                "absolute_path": "/tmp/a.jpg",
+            })
+
+        self.client.register_handler("file_list_get", handler, reply_required=True)
+        payload = {
+            "tid": "query-schema-1",
+            "method": "file_list_get",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        _, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply["data"], {
+            "output": {"status": "ok"},
+            "files": [{"file_id": "a"}],
+            "total": 1,
+            "result": 0,
+        })
+
     def test_remote_debug_admission_rejection_replies_without_need_reply_flag(self):
         class RejectDecision:
             accepted = False

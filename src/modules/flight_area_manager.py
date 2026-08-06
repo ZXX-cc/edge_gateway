@@ -3,7 +3,7 @@
 
 处理自定义飞行区域相关接口：
 - flight_areas_update: 更新飞行区域
-- flight_areas_get: 获取飞行区域
+- flight_areas_get: 设备主动 requests 获取飞行区域
 """
 import hashlib
 import json
@@ -15,7 +15,11 @@ from typing import Dict, Any, Optional, Callable, List, Tuple
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import (
+    DEVICE_STATE_UNSUPPORTED,
+    DOCK_SYSTEM_ERROR,
+    INVALID_COMMAND_FORMAT,
+)
 
 logger = get_logger("flight_area")
 
@@ -462,16 +466,13 @@ class FlightAreaManager:
 
     def handle_flight_areas_get(self, msg: dict) -> dict:
         """
-        获取飞行区域 (flight_areas_get) - services 兼容模式
-
-        文档标准格式为 requests / requests_reply，但保留 services 兼容。
+        flight_areas_get 是 Dock3 requests/requests_reply 链路，不暴露 services 入口。
         """
-        logger.info("Flight areas get (services mode)")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'output': {
-                'files': [self._public_file_info(file_info) for file_info in self._files],
-            },
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="flight_areas_get must use requests/requests_reply",
+        )
 
     @staticmethod
     def _public_file_info(file_info: dict) -> dict:

@@ -157,7 +157,7 @@ ALLOWED_SERVICE_METHODS = frozenset({
     'rtk_ref_points_set', 'rtk_calibration', 'rtk_ref_points_query',
     'device_format',
     'hms_get', 'hms_clear', 'device_log_list_get', 'device_log_upload',
-    'device_capability_query', 'drone_open', 'drone_close', 'drone_format',
+    'drone_open', 'drone_close', 'drone_format',
     'debug_mode_open', 'debug_mode_close', 'battery_maintenance_switch',
     'air_conditioner_mode_switch', 'alarm_state_switch',
     'battery_store_mode_switch',
@@ -182,7 +182,7 @@ ALLOWED_SERVICE_METHODS = frozenset({
     'speaker_play_mode_set', 'speaker_play_stop', 'speaker_audio_play_start',
     'speaker_tts_play_start', 'speaker_play_volume_set',
     'file_list_get', 'file_download', 'file_delete',
-    'adjust_upload_priority', 'storage_config_get',
+    'adjust_upload_priority',
     'live_start', 'live_start_push', 'live_stop', 'live_stop_push',
     'live_camera_change',
     'live_capability_query', 'highest_priority_upload_flighttask_media',
@@ -204,7 +204,7 @@ ALLOWED_SERVICE_METHODS = frozenset({
     # Log / flysafe / flight-area / custom-data services.
     'fileupload_list', 'fileupload_start', 'fileupload_update',
     'unlock_license_switch', 'unlock_license_update', 'unlock_license_list',
-    'flight_areas_update', 'flight_areas_get',
+    'flight_areas_update',
     'custom_data_transmission_from_esdk', 'custom_data_transmission_to_esdk',
     'custom_data_transmission_from_psdk', 'custom_data_transmission_to_psdk',
 })
@@ -221,6 +221,9 @@ IGNORED_NON_SERVICE_METHODS = frozenset({
     'device_unbinding',
     'workspace_bind_status',
     'workspace_get',
+    'storage_config_get',
+    'flight_areas_get',
+    'device_capability_query',
     'update_topo',
 })
 
@@ -1714,7 +1717,6 @@ class EdgeGateway:
             'hms_clear': self.device.handle_hms_clear,
             'device_log_list_get': self.device.handle_device_log_list_get,
             'device_log_upload': self.device.handle_device_log_upload,
-            'device_capability_query': self.device.handle_device_capability_query,
             'cover_force_close': self.device.handle_cover_force_close,
             'drone_open': self.device.handle_drone_open,
             'drone_close': self.device.handle_drone_close,
@@ -1790,6 +1792,7 @@ class EdgeGateway:
             'flighttask_progress_get': self.mission.handle_flighttask_progress_get,
             'flighttask_pause': self.mission.handle_flighttask_pause,
             'flighttask_resume': self.mission.handle_flighttask_resume,
+            'flighttask_return': self.mission.handle_flighttask_return,
             'resume_wayline_task': self.mission.handle_resume_wayline_task,
             'flight_setup_abort': self.mission.handle_flight_setup_abort,
             'flighttask_create': self.mission.handle_flighttask_create,
@@ -1842,7 +1845,6 @@ class EdgeGateway:
             'download_media': self.media.handle_download_media,
             'file_delete': self.media.handle_file_delete,
             'adjust_upload_priority': self.media.handle_adjust_upload_priority,
-            'storage_config_get': self.media.handle_storage_config_get,
             'live_start': self.media.handle_live_start,
             'live_start_push': self.media.handle_live_start_push,
             'live_stop': self.media.handle_live_stop,
@@ -1922,7 +1924,6 @@ class EdgeGateway:
         # ---- 飞行区域API ----
         self.router.register_batch({
             'flight_areas_update': self.flight_area.handle_flight_areas_update,
-            'flight_areas_get': self.flight_area.handle_flight_areas_get,
         }, category='flight_area')
 
         # ---- 自定义数据传输API ----

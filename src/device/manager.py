@@ -3066,18 +3066,18 @@ class DeviceManager:
         )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
-        """调试模式开启"""
-        self._debug_mode = True
-        self.update_properties({'mode_code': 2})
-        logger.info("Debug mode ON")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
+        """开启远程调试。没有真实调试适配器时不得本地伪造成功。"""
+        return self._real_device_command_unavailable(
+            msg,
+            "debug_mode_open requires a real Dock3 debug-mode adapter",
+        )
 
     def handle_debug_mode_close(self, msg: dict) -> dict:
-        """调试模式关闭"""
-        self._debug_mode = False
-        self.update_properties({'mode_code': 0})
-        logger.info("Debug mode OFF")
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
+        """关闭远程调试。没有真实调试适配器时不得本地伪造成功。"""
+        return self._real_device_command_unavailable(
+            msg,
+            "debug_mode_close requires a real Dock3 debug-mode adapter",
+        )
 
     def handle_device_enter_simulation_mode(self, msg: dict) -> dict:
         """进入仿真模式"""
@@ -3549,39 +3549,12 @@ class DeviceManager:
         ))
 
     def handle_device_capability_query(self, msg: dict) -> dict:
-        """设备能力查询 - 返回网关和无人机的完整能力集"""
-        logger.info("Device capability query")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'dock_capability': {
-                'cover_control': True,
-                'charge_control': True,
-                'putter_control': True,
-                'supplement_light': True,
-                'air_conditioner': True,
-                'rtk_support': True,
-                'alternate_landing_point': True,
-                'emergency_stop': True,
-                'silent_mode': True,
-                'battery_maintenance': True,
-            },
-            'drone_capability': {
-                'max_flight_time': 1800,
-                'max_speed': 15.0,
-                'max_height': 120.0,
-                'max_distance': 1000.0,
-                'drc_support': True,
-                'waypoint_support': True,
-                'simulation_mode': True,
-            },
-            'payload_capability': {
-                'camera_types': ['wide', 'zoom', 'ir'],
-                'gimbal_types': ['3-axis'],
-                'speaker_support': True,
-                'searchlight_support': True,
-                'night_vision_support': True,
-                'parachute_support': False,
-            }
-        })
+        """device_capability_query 不作为 Dock3 services 方法暴露。"""
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="device_capability_query is not an exposed Dock3 services method",
+        )
 
     # ========== API处理器：AirSense / 别名 / update_topo ==========
 

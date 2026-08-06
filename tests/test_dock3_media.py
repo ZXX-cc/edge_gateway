@@ -481,15 +481,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         }))
         self.assertEqual(start["data"]["result"], 0)
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
-        self.assertEqual(
-            [step["step"] for step in start["data"]["software_pipeline"]],
-            [
-                "validate_live_start",
-                "select_video_source",
-                "start_mock_stream",
-                "publish_live_status",
-            ],
-        )
+        self.assertNotIn("software_pipeline", start["data"])
         self.assertTrue(manager._live_streaming)
         live_status = states[-1]["property"]["live_status"]
         self.assertEqual(live_status[0]["video_id"], video_id)
@@ -538,7 +530,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
             4,
         )
 
-    def test_live_lens_change_takes_photo_directly_without_camera_mode_switch(self):
+    def test_live_lens_change_does_not_embed_photo_reply(self):
         manager = MediaManager()
         manager.gateway_sn = "EDGEGW001"
         camera = FakeCameraController()
@@ -558,12 +550,8 @@ class Dock3MediaManagerTest(unittest.TestCase):
         }))
 
         self.assertEqual(lens["data"]["result"], 0)
-        self.assertEqual(lens["data"]["photo"]["status"], "ok")
-        self.assertEqual([call[0] for call in camera.calls], ["camera_photo_take"])
-        photo_data = camera.calls[0][1]["data"]
-        self.assertEqual(photo_data["trigger"], "live_lens_change")
-        self.assertEqual(photo_data["camera_type"], "zoom")
-        self.assertEqual(photo_data["video_id"], video_id)
+        self.assertNotIn("photo", lens["data"])
+        self.assertEqual(camera.calls, [])
 
     def test_live_quality_change_reports_failure_when_ffmpeg_restart_fails(self):
         events = []

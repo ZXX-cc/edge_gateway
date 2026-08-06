@@ -1278,12 +1278,20 @@ class CameraController:
         self._log_camera_setting_mapping('set_camera_mode', data)
 
         mode_map = {'photo': self.MODE_PHOTO, 'video': self.MODE_VIDEO, 'playback': self.MODE_PLAYBACK}
-        self._mode = mode_map.get(mode_str, self.MODE_PHOTO)
+        target_mode = mode_map.get(mode_str, self.MODE_PHOTO)
 
         logger.info(f"Camera mode: {mode_str}")
 
         viewlink_attempted, viewlink_result = self._set_viewlink_record_mode(mode_str)
-        success = not viewlink_attempted or bool(viewlink_result and viewlink_result.get("success"))
+        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        success = bool(viewlink_result and viewlink_result.get("success"))
+        if success:
+            self._mode = target_mode
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "camera_mode": self._mode,
@@ -1350,7 +1358,6 @@ class CameraController:
         viewlink_attempted = False
         result = {"success": False, "message": "Zoom command was not sent"}
         if ratio is not None:
-            self._zoom_level = ratio
             logger.info(f"Zoom ratio: {ratio}x")
             if self._gimbal_control and self._gimbal_control.is_connected():
                 viewlink_attempted = True
@@ -1422,10 +1429,19 @@ class CameraController:
                 success = result.get('success', False)
                 logger.info(f"ViewLink zoom direction: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1, data={
-            "camera_type": data.get("camera_type", ""),
-            "viewlink_result": result if viewlink_attempted else None,
-        })
+        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        if success:
+            self._zoom_level = ratio if ratio is not None else self._zoom_level
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else str(result.get("message", "camera zoom failed")),
+        )
 
     def _set_focus_mode(self, msg: dict) -> dict:
         """
@@ -1450,7 +1466,13 @@ class CameraController:
             success = result.get('success', False)
             logger.info(f"ViewLink focus mode: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
+        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def _set_focus_value(self, msg: dict) -> dict:
         """
@@ -1490,7 +1512,13 @@ class CameraController:
                 success = stop_result.get('success', False)
                 logger.info(f"ViewLink stop focus: {stop_result}")
 
-        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
+        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def _spot_focus(self, msg: dict) -> dict:
         """
@@ -1512,7 +1540,13 @@ class CameraController:
             success = result.get('success', False)
             logger.info(f"ViewLink point focus fallback to auto focus: {result}")
 
-        return MessageBuilder.build_reply(msg, result=0 if success or not viewlink_attempted else -1)
+        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink control is not connected",
+            )
+        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_photo_storage_set(self, msg: dict) -> dict:
         """
@@ -1879,7 +1913,7 @@ class CameraController:
             zoom_ratio,
         )
 
-        result = {"success": True, "message": "frame zoom accepted locally", "simulated": True}
+        result = {"success": False, "message": "Frame zoom command was not sent"}
         center_result = {"success": True, "message": "frame center already aligned", "skipped": True}
         stop_result = None
         failure_step = ""
@@ -1998,7 +2032,7 @@ class CameraController:
                 pipeline_reason = result.get("message", "ViewLink control is not connected")
             else:
                 result = {"success": False, "message": "ViewLink control is not connected"}
-                pipeline_status = "simulated"
+                pipeline_status = "failed"
                 pipeline_reason = "ViewLink control is not connected"
             failure_step = "viewlink_connect"
             failure_message = pipeline_reason
