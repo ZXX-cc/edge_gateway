@@ -72,12 +72,6 @@ class CommandAdmissionEngine:
         "file_list_get",
         "storage_config_get",
         "live_capability_query",
-        "payload_status_query",
-        "payload_capability_query",
-        "gimbal_status_query",
-        "gimbal_capability_query",
-        "searchlight_status_query",
-        "speaker_status_query",
     })
 
     BINDING_METHODS = frozenset({
@@ -167,7 +161,7 @@ class CommandAdmissionEngine:
 
     DRC_ENTER_METHODS = frozenset({"drc_mode_enter"})
     DRC_EXIT_METHODS = frozenset({"drc_mode_exit"})
-    DRC_HEARTBEAT_METHODS = frozenset({"heart_beat", "drc_heartbeat"})
+    DRC_HEARTBEAT_METHODS = frozenset({"heart_beat"})
     DRC_POINT_FLIGHT_METHODS = frozenset({
         "start_takeoff_to_point",
         "takeoff_to_point",
@@ -177,18 +171,9 @@ class CommandAdmissionEngine:
         "fly_to_point_stop",
     })
     DRC_CONTROL_METHODS = frozenset({
-        "drc_speed_push",
-        "drc_heading_push",
-        "drc_altitude_push",
-        "drc_flyto_point_push",
         "stick_control",
         "drone_control",
-        "payload_control",
         "flight_authority_grab",
-        "drc_gimbal_speed_push",
-        "poi_mode_enter",
-        "poi_mode_exit",
-        "poi_circle_speed_set",
     }) | DRC_POINT_FLIGHT_METHODS
 
     OTA_METHODS = frozenset({

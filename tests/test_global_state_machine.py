@@ -82,7 +82,6 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
         self.check("camera_screen_drag", idle, True)
         self.check("camera_aim", idle, True)
         self.check("camera_screen_split", idle, True)
-        self.check("drc_gimbal_speed_push", idle, False, "invalid_state_transition")
 
     def test_prepare_upload_allows_online_dock_but_execute_still_requires_ready(self):
         self.check("flighttask_prepare", snapshot(dock="online"), True)
