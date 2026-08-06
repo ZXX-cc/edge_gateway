@@ -57,12 +57,14 @@ if "src.database.operation_db" not in sys.modules:
 
 from src.device.manager import DeviceManager  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT  # noqa: E402
 
 
 class FakeNestModule:
-    def __init__(self, send_result=True, ack=None):
+    def __init__(self, send_result=True, ack=None, auto_ack=True):
         self.send_result = send_result
         self.ack = ack if ack is not None else {"result": 0, "status": "success", "rejections": []}
+        self.auto_ack = auto_ack
         self.commands = []
         self._condition = threading.Condition()
         self._sequence = 0
@@ -75,6 +77,8 @@ class FakeNestModule:
         self.commands.append(command)
         if self.send_result is False:
             return False
+        if not self.auto_ack:
+            return True
         with self._condition:
             self._sequence += 1
             self._condition.notify_all()
@@ -90,6 +94,9 @@ class FakeNestModule:
                     return None
                 self._condition.wait(remaining)
             return dict(self.ack)
+
+    def get_cloud_order_response(self):
+        return dict(self.ack)
 
 
 def nest_snapshot(**overrides):
@@ -267,6 +274,17 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertIn("PLC超时", reply.get("msg", ""))
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
+    def test_cover_open_times_out_when_12005_ack_missing(self):
+        self.manager._nest_command_ack_timeout = 0.05
+        self.manager._nest_module = FakeNestModule(auto_ack=False)
+
+        reply = self.manager.handle_cover_open(self._cover_msg())
+
+        self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
+        self.assertEqual(reply["data"]["output"]["status"], "timeout")
+        self.assertIn("timeout waiting for 12005 ACK", reply.get("msg", ""))
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
     def test_cover_open_times_out_when_12004_target_state_never_arrives(self):
         self.manager._nest_command_state_timeout = 0.05
         self.manager._nest_module = FakeNestModule()
@@ -274,7 +292,7 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
         reply = self.manager.handle_cover_open(self._cover_msg())
 
-        self.assertNotEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(reply["data"]["output"]["status"], "timeout")
         self.assertEqual(self.manager.get_property("cover_state"), 0)
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)

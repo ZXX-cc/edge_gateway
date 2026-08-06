@@ -76,6 +76,7 @@ from src.cloud_api.dock3_hms_log import (
     upload_progress_event_data as hms_log_progress_event_data,
 )
 from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_TIMEOUT,
     DEVICE_STATE_UNSUPPORTED,
     DOCK_COMMUNICATION_ERROR,
     INVALID_COMMAND_FORMAT,
@@ -2616,6 +2617,33 @@ class DeviceManager:
             timeout=self._nest_command_ack_timeout,
         )
         if not ack:
+            last_ack = {}
+            if hasattr(self._nest_module, "get_cloud_order_response"):
+                try:
+                    last_ack = self._nest_module.get_cloud_order_response()
+                except Exception:
+                    last_ack = {}
+            ordinary = last_ack.get("ordinary_order_response") or {}
+            takeoff = last_ack.get("takeoff_land_order_response") or {}
+            logger.error(
+                "%s: 机巢12005 ACK等待超时: command=%s, timeout=%ss, "
+                "after_sequence=%s, expected_ordinary=0x%04X, expected_takeoff=0x%02X, "
+                "last_ordinary_raw=0x%08X, last_ordinary_command=0x%02X, last_ordinary_device=0x%02X, "
+                "last_takeoff_raw=0x%08X, last_takeoff_command=0x%02X, last_status=%s, last_rejections=%s",
+                command_name,
+                getattr(cmd, "name", str(cmd)),
+                self._nest_command_ack_timeout,
+                after_sequence,
+                int(ordinary_order),
+                int(takeoff_land_order),
+                int(ordinary.get("raw") or 0),
+                int(ordinary.get("command_code") or 0),
+                int(ordinary.get("device_code") or 0),
+                int(takeoff.get("raw") or 0),
+                int(takeoff.get("command_code") or 0),
+                last_ack.get("status"),
+                last_ack.get("rejections"),
+            )
             trace_command(
                 "gateway_nest_command_ack_timeout",
                 method=command_name,
@@ -2624,7 +2652,7 @@ class DeviceManager:
             )
             return (
                 False,
-                DOCK_COMMUNICATION_ERROR,
+                DEVICE_COMMAND_TIMEOUT,
                 TASK_STATUS_TIMEOUT,
                 f"{command_name}: timeout waiting for 12005 ACK",
                 {},
@@ -2681,7 +2709,7 @@ class DeviceManager:
 
         if not self._wait_for_nest_property(prop_name, prop_value, self._nest_command_state_timeout):
             self._clear_nest_command_target(prop_name)
-            result = DOCK_COMMUNICATION_ERROR
+            result = DEVICE_COMMAND_TIMEOUT
             status = TASK_STATUS_TIMEOUT
             message = f"{command_name}: timeout waiting for {prop_name}={prop_value} from 12004"
             trace_command(
@@ -2723,7 +2751,7 @@ class DeviceManager:
             )
 
         if final_waiter and not final_waiter():
-            result = DOCK_COMMUNICATION_ERROR
+            result = DEVICE_COMMAND_TIMEOUT
             status = TASK_STATUS_TIMEOUT
             message = f"{command_name}: timeout waiting for final device state"
             self._notify_cmd_progress(command_name, status=status, percent=100, result=result)

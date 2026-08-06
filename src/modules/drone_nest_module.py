@@ -313,6 +313,14 @@ class DroneNestModule(BaseModule):
             "command_code": (raw_value >> 24) & 0xFF,
         }
 
+    @staticmethod
+    def _fmt_hex(value: Any, width: int = 0) -> str:
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            number = 0
+        return f"0x{number:0{width}X}" if width else f"0x{number:X}"
+
     def _build_cloud_order_response(self, order_result: Dict[str, Any]) -> Dict[str, Any]:
         """
         将 DRONE_NEST_ORDER_RESPONSE 解析结果转换为上层 API 可用结构。
@@ -475,6 +483,19 @@ class DroneNestModule(BaseModule):
             })
 
             self.environment_data["cloud_properties"] = self._build_cloud_properties(self.environment_data)
+            self.log(
+                "机巢12004原始状态: "
+                f"protocol={self.protocol_version}, "
+                f"boolstate1={self._fmt_hex(boolstate1, 4)}({boolstate1}), "
+                f"boolstate2={self._fmt_hex(boolstate2, 4)}({boolstate2}), "
+                f"gate_state={msg.gate_state}, clamp_state={msg.clamp_state}, "
+                f"landing_light_state={msg.landing_light_state}, error_code={msg.error_code}, "
+                f"heartbeat(nest={int(nest_heartbeat)}, drone={int(drone_heartbeat)}, plc={int(plc_heartbeat)}), "
+                f"ready={int(ready_state)}, init={int(init_state)}, initializing={int(initializing_state)}, "
+                f"busy={int(system_busy)}, fault={int(fault_state)}, estop={int(estop_state)}, "
+                f"takeoff_allowed={int(takeoff_allowed)}",
+                "INFO",
+            )
 
             # 构造 gcs_order（兼容现有API）
             # 从解析出的状态位构造 gcs_order 值
@@ -613,6 +634,20 @@ class DroneNestModule(BaseModule):
                 and takeoff_info["raw"] == 0
                 and not result["rejections"]
             )
+            self.log(
+                "机巢12005原始ACK: "
+                f"ordinary_raw={self._fmt_hex(ordinary_info['raw'], 8)}({ordinary_info['raw']}), "
+                f"ordinary.reply_status={ordinary_info['reply_status']}, "
+                f"ordinary.reject_reason_code={ordinary_info['reject_reason_code']}, "
+                f"ordinary.command_code={self._fmt_hex(ordinary_info['command_code'], 2)}, "
+                f"ordinary.device_code={self._fmt_hex(ordinary_info['device_code'], 2)}, "
+                f"takeoff_raw={self._fmt_hex(takeoff_info['raw'], 8)}({takeoff_info['raw']}), "
+                f"takeoff.reply_status={takeoff_info['reply_status']}, "
+                f"takeoff.reject_reason_code={takeoff_info['reject_reason_code']}, "
+                f"takeoff.command_code={self._fmt_hex(takeoff_info['command_code'], 2)}, "
+                f"rejections={result['rejections']}",
+                "INFO",
+            )
             if is_empty_poll_response:
                 self.last_order_response = result
                 self.last_cloud_order_response = self._build_cloud_order_response(result)
@@ -728,9 +763,41 @@ class DroneNestModule(BaseModule):
                         expected_takeoff_land_order=expected_takeoff_land_order,
                     ):
                         return response
+                    ordinary = response.get("ordinary_order_response") or {}
+                    takeoff = response.get("takeoff_land_order_response") or {}
+                    self.log(
+                        "机巢12005不匹配: "
+                        f"sequence={self._order_response_sequence}, after_sequence={after_sequence}, "
+                        f"expected_ordinary={self._fmt_hex(expected_ordinary_order, 4)}, "
+                        f"expected_takeoff={self._fmt_hex(expected_takeoff_land_order, 2)}, "
+                        f"actual_ordinary_raw={self._fmt_hex(ordinary.get('raw'), 8)}, "
+                        f"actual_ordinary_command={self._fmt_hex(ordinary.get('command_code'), 2)}, "
+                        f"actual_ordinary_device={self._fmt_hex(ordinary.get('device_code'), 2)}, "
+                        f"actual_takeoff_raw={self._fmt_hex(takeoff.get('raw'), 8)}, "
+                        f"actual_takeoff_command={self._fmt_hex(takeoff.get('command_code'), 2)}, "
+                        f"status={response.get('status')}, rejections={response.get('rejections')}",
+                        "WARNING",
+                    )
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    response = dict(self.last_cloud_order_response or {})
+                    ordinary = response.get("ordinary_order_response") or {}
+                    takeoff = response.get("takeoff_land_order_response") or {}
+                    self.log(
+                        "机巢12005等待超时: "
+                        f"timeout={timeout}s, after_sequence={after_sequence}, "
+                        f"current_sequence={self._order_response_sequence}, "
+                        f"expected_ordinary={self._fmt_hex(expected_ordinary_order, 4)}, "
+                        f"expected_takeoff={self._fmt_hex(expected_takeoff_land_order, 2)}, "
+                        f"last_ordinary_raw={self._fmt_hex(ordinary.get('raw'), 8)}, "
+                        f"last_ordinary_command={self._fmt_hex(ordinary.get('command_code'), 2)}, "
+                        f"last_ordinary_device={self._fmt_hex(ordinary.get('device_code'), 2)}, "
+                        f"last_takeoff_raw={self._fmt_hex(takeoff.get('raw'), 8)}, "
+                        f"last_takeoff_command={self._fmt_hex(takeoff.get('command_code'), 2)}, "
+                        f"last_status={response.get('status')}, last_rejections={response.get('rejections')}",
+                        "ERROR",
+                    )
                     return None
                 self._order_response_condition.wait(remaining)
     # ========== 一键启航协议支持 ==========
