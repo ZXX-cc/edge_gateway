@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Callable, List
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from src.cloud_api.dock3_media import (
     build_media_file,
     build_remote_media_file,
@@ -34,6 +34,7 @@ from src.cloud_api.dock3_media import (
     upload_progress_event_data,
 )
 from src.cloud_api.dock3_live import (
+    TASK_STATUS_FAILED,
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_OK,
     TASK_STATUS_REJECTED,
@@ -1178,6 +1179,25 @@ class MediaManager:
             self._live_session_id = ""
             self._ffmpeg_process = None
 
+    def _live_restart_failed_reply(self, msg: dict, reason: str) -> dict:
+        """直播切流重启失败时，向平台明确返回失败并同步断流状态。"""
+        logger.error("Live stream restart failed: %s", reason)
+        self._live_streaming = False
+        self._publish_live_status_event(TASK_STATUS_FAILED, reason=reason, live_status=0)
+        self._live_session_id = ""
+        return MessageBuilder.build_reply(
+            msg,
+            result=DOCK_SYSTEM_ERROR,
+            data=live_task_output(TASK_STATUS_FAILED, {
+                "reason": reason,
+                "video_id": self._live_video_id,
+                "video_quality": self._live_quality,
+                "video_type": self._live_video_type,
+                "software_pipeline": list(self._live_pipeline),
+            }),
+            msg_str=reason,
+        )
+
     def handle_live_start(self, msg: dict) -> dict:
         """
         开始直播 (live_start_push)
@@ -1406,7 +1426,11 @@ class MediaManager:
 
         # 如果正在推流，重启 ffmpeg 切换视频源
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
-            self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key)
+            if not self._start_ffmpeg(self._live_url, self._live_protocol, self._live_quality, self._live_source_key):
+                return self._live_restart_failed_reply(
+                    msg,
+                    "Live lens change failed because ffmpeg restart failed",
+                )
 
         photo = self._take_photo_after_lens_change(msg, video_id, video_type)
         self._publish_live_status_event(TASK_STATUS_OK, live_status=1 if self._live_streaming else 0)
@@ -1481,7 +1505,11 @@ class MediaManager:
 
         # 如果正在推流，重启 ffmpeg 调整画质
         if self._live_streaming and self._live_url and not is_mock_live_url(self._live_url):
-            self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_source_key)
+            if not self._start_ffmpeg(self._live_url, self._live_protocol, video_quality, self._live_source_key):
+                return self._live_restart_failed_reply(
+                    msg,
+                    "Live quality change failed because ffmpeg restart failed",
+                )
 
         self._publish_live_status_event(TASK_STATUS_OK, live_status=1 if self._live_streaming else 0)
         return MessageBuilder.build_reply(msg, result=0, data=live_task_output(TASK_STATUS_OK, {
