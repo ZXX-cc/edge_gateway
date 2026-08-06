@@ -6,10 +6,12 @@ import time
 import os
 import glob
 import hashlib
+import hmac
 import html.parser
 import subprocess
 import threading
 import asyncio
+import mimetypes
 import urllib.parse
 import requests
 from pathlib import Path
@@ -601,6 +603,130 @@ class MediaManager:
             return False
 
     @staticmethod
+    def _storage_config_from_credentials(credentials: dict) -> dict:
+        """Normalize storage_config_get data/output shapes into one config dict."""
+        if not isinstance(credentials, dict):
+            return {}
+        output = credentials.get("output") if isinstance(credentials.get("output"), dict) else {}
+        merged = dict(output)
+        for key, value in credentials.items():
+            if key in {"result", "output"}:
+                continue
+            if key not in merged or merged.get(key) in (None, ""):
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _object_key_from_storage(storage: dict, file_name: str) -> str:
+        object_key = str(storage.get("object_key") or "").strip("/")
+        if object_key:
+            return object_key
+        prefix = str(storage.get("object_key_prefix") or "").strip("/")
+        safe_name = os.path.basename(str(file_name or "media_file"))
+        return f"{prefix}/{safe_name}" if prefix else safe_name
+
+    @staticmethod
+    def _quote_s3_path(path: str) -> str:
+        return "/" + "/".join(
+            urllib.parse.quote(part, safe="")
+            for part in str(path or "").strip("/").split("/")
+            if part != ""
+        )
+
+    @staticmethod
+    def _s3_signing_key(secret: str, date_stamp: str, region: str) -> bytes:
+        key = ("AWS4" + secret).encode("utf-8")
+        for value in (date_stamp, region, "s3", "aws4_request"):
+            key = hmac.new(key, value.encode("utf-8"), hashlib.sha256).digest()
+        return key
+
+    def _upload_file_s3(self, filepath: str, storage: dict, object_key: str = "") -> tuple[bool, str, str]:
+        """Upload a file with S3/MinIO path-style SigV4 PUT."""
+        try:
+            endpoint = str(storage.get("endpoint") or "").rstrip("/")
+            bucket = str(storage.get("bucket") or "").strip("/")
+            region = str(storage.get("region") or "us-east-1") or "us-east-1"
+            credential_node = storage.get("credentials") if isinstance(storage.get("credentials"), dict) else {}
+            access_key = str(credential_node.get("access_key_id") or "")
+            secret_key = str(credential_node.get("access_key_secret") or "")
+            token = str(credential_node.get("security_token") or "")
+            if not endpoint or not bucket or not access_key or not secret_key:
+                logger.warning(
+                    "S3 upload config incomplete: endpoint=%s bucket=%s access_key=%s secret=%s",
+                    bool(endpoint),
+                    bool(bucket),
+                    bool(access_key),
+                    bool(secret_key),
+                )
+                return False, "", object_key
+
+            parsed = urllib.parse.urlparse(endpoint)
+            if not parsed.scheme or not parsed.netloc:
+                logger.warning("Invalid S3 endpoint: %s", endpoint)
+                return False, "", object_key
+
+            file_name = os.path.basename(filepath)
+            resolved_key = object_key or self._object_key_from_storage(storage, file_name)
+            object_path = f"{bucket}/{resolved_key.strip('/')}"
+            canonical_uri = self._quote_s3_path(object_path)
+            url = f"{parsed.scheme}://{parsed.netloc}{canonical_uri}"
+
+            # Read bytes once so the payload hash exactly matches the PUT body.
+            with open(filepath, "rb") as handle:
+                body = handle.read()
+
+            payload_hash = hashlib.sha256(body).hexdigest()
+            now = time.gmtime()
+            amz_date = time.strftime("%Y%m%dT%H%M%SZ", now)
+            date_stamp = time.strftime("%Y%m%d", now)
+            content_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+            headers = {
+                "host": parsed.netloc,
+                "x-amz-content-sha256": payload_hash,
+                "x-amz-date": amz_date,
+                "content-type": content_type,
+            }
+            if token:
+                headers["x-amz-security-token"] = token
+
+            signed_header_names = sorted(headers)
+            canonical_headers = "".join(f"{name}:{headers[name]}\n" for name in signed_header_names)
+            signed_headers = ";".join(signed_header_names)
+            canonical_request = "\n".join([
+                "PUT",
+                canonical_uri,
+                "",
+                canonical_headers,
+                signed_headers,
+                payload_hash,
+            ])
+            scope = f"{date_stamp}/{region}/s3/aws4_request"
+            string_to_sign = "\n".join([
+                "AWS4-HMAC-SHA256",
+                amz_date,
+                scope,
+                hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+            ])
+            signature = hmac.new(
+                self._s3_signing_key(secret_key, date_stamp, region),
+                string_to_sign.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            headers["Authorization"] = (
+                "AWS4-HMAC-SHA256 "
+                f"Credential={access_key}/{scope}, SignedHeaders={signed_headers}, Signature={signature}"
+            )
+
+            response = requests.put(url, data=body, headers=headers, timeout=300)
+            if response.status_code not in {200, 201, 204}:
+                logger.error("S3 upload failed: status=%s body=%s", response.status_code, response.text[:500])
+                return False, url, resolved_key
+            return True, url, resolved_key
+        except Exception as e:
+            logger.error(f"S3 upload failed: {e}")
+            return False, "", object_key
+
+    @staticmethod
     def _credential_expired(credentials: dict) -> bool:
         """校验 OSS 临时凭证是否已过期；小数值按相对 TTL 秒处理。"""
         if not isinstance(credentials, dict):
@@ -703,16 +829,23 @@ class MediaManager:
                 self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
                 continue
 
-            upload_url = credentials.get('upload_url', '')
-            if not upload_url:
-                logger.warning(f"No upload URL for {file_name}")
-                time.sleep(5)
-                continue
-
             # 执行上传
+            storage_config = self._storage_config_from_credentials(credentials)
+            upload_url = storage_config.get('upload_url', '')
+            uploaded_path = upload_url
+            object_key = storage_config.get("object_key") or upload_url
             success = False
             for retry in range(self._max_retry_count):
-                success = self._upload_file_http(filepath, upload_url)
+                if upload_url:
+                    success = self._upload_file_http(filepath, upload_url)
+                    object_key = storage_config.get("object_key") or upload_url
+                    uploaded_path = upload_url
+                else:
+                    success, uploaded_path, object_key = self._upload_file_s3(
+                        filepath,
+                        storage_config,
+                        self._object_key_from_storage(storage_config, file_name),
+                    )
                 if success:
                     break
                 logger.warning(f"Upload attempt {retry + 1} failed for {file_name}")
@@ -723,8 +856,8 @@ class MediaManager:
                 logger.info(f"Upload completed: {file_name}")
                 self._update_upload_progress(file_name, 100, 'completed')
                 self.report_upload_complete({
-                    'object_key': upload_url,
-                    'path': filepath,
+                    'object_key': object_key,
+                    'path': uploaded_path or filepath,
                     'name': file_name,
                     'ext': {},
                     'metadata': {}
