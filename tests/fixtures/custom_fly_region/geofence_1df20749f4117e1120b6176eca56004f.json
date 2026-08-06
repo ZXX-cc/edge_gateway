@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "2bc2d76b-87ca-4f67-b80e-a80f828f20eb",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [120.595774, 28.754642],
+            [120.604788, 28.758705],
+            [120.609939, 28.754191],
+            [120.598993, 28.748133],
+            [120.595774, 28.754642]
+          ]
+        ]
+      },
+      "properties": {
+        "radius": 0.0,
+        "enable": true
+      },
+      "geofence_type": "nfz"
+    }
+  ]
+}

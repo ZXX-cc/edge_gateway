@@ -1525,6 +1525,8 @@ class EdgeGateway:
             self._apply_real_aircraft_mode_code(osd_data)
             self._apply_aircraft_limit_fields(osd_data)
             aircraft_osd = self._build_aircraft_osd_for_report(osd_data)
+            if self.flight_area:
+                self.flight_area.update_aircraft_osd(aircraft_osd)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
             self._report_dock_osd_if_due(force=True)
