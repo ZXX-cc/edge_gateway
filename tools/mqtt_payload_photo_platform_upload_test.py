@@ -405,6 +405,57 @@ def redact(value: dict[str, Any]) -> dict[str, Any]:
     return clone
 
 
+def callback_object_key(callback: dict[str, Any]) -> str:
+    data = data_node(callback)
+    file_node = data.get("file") if isinstance(data.get("file"), dict) else {}
+    return str(file_node.get("object_key") or "")
+
+
+def verify_minio_object(args: argparse.Namespace, object_key: str) -> dict[str, Any]:
+    if not object_key:
+        raise RuntimeError("missing object_key for MinIO verification")
+    try:
+        from minio import Minio
+    except ImportError as exc:
+        raise RuntimeError("minio SDK is required: python -m pip install minio") from exc
+
+    parsed = urllib.parse.urlparse(args.s3_endpoint)
+    if parsed.scheme:
+        endpoint = parsed.netloc
+        secure = parsed.scheme == "https"
+    else:
+        endpoint = args.s3_endpoint
+        secure = False
+    if not endpoint:
+        raise RuntimeError("missing --s3-endpoint for MinIO verification")
+
+    client = Minio(
+        endpoint,
+        access_key=args.s3_access_key,
+        secret_key=args.s3_secret_key,
+        session_token=args.s3_session_token or None,
+        secure=secure,
+        region=args.region or None,
+    )
+
+    deadline = time.time() + max(0.0, args.minio_verify_timeout)
+    last_error: Exception | None = None
+    while time.time() <= deadline:
+        try:
+            stat = client.stat_object(args.bucket, object_key)
+            return {
+                "bucket": args.bucket,
+                "object_key": object_key,
+                "size": getattr(stat, "size", None),
+                "etag": getattr(stat, "etag", ""),
+                "last_modified": str(getattr(stat, "last_modified", "")),
+            }
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.5)
+    raise RuntimeError(f"MinIO object verification failed: {last_error}")
+
+
 def reply_storage_config(
     client: MqttRequestClient,
     args: argparse.Namespace,
@@ -528,11 +579,19 @@ def run(args: argparse.Namespace) -> int:
         print("file_upload_callback received:")
         print(json.dumps(callback, ensure_ascii=False, indent=2))
 
+        minio_verified = None
+        if args.verify_minio_sdk:
+            verify_key = callback_object_key(callback) or object_key
+            minio_verified = verify_minio_object(args, verify_key)
+            print("MinIO object verified:")
+            print(json.dumps(minio_verified, ensure_ascii=False, indent=2))
+
         print(json.dumps({
             "status": "ok",
             "storage_mode": args.storage_mode,
             "object_key": object_key,
             "uploaded": upload_record,
+            "minio_verified": minio_verified,
         }, ensure_ascii=False, indent=2))
         return 0
     finally:
@@ -586,6 +645,8 @@ def main() -> int:
     parser.add_argument("--s3-secret-key", default="")
     parser.add_argument("--s3-session-token", default="")
     parser.add_argument("--credential-ttl", type=int, default=3600)
+    parser.add_argument("--verify-minio-sdk", action="store_true", help="Verify uploaded object with the minio SDK after callback.")
+    parser.add_argument("--minio-verify-timeout", type=float, default=30.0)
     parser.add_argument("--quiet-stale", action="store_true")
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
