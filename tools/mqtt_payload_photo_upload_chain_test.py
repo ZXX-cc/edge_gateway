@@ -3,7 +3,7 @@
 
 Flow:
 1. Trigger payload photo through the gateway.
-2. Read a caller-provided local media file.
+2. Resolve the captured media path/download URL from the photo reply.
 3. Request storage_config_get temporary upload credentials from platform.
 4. Upload by either upload_url or MinIO/S3 compatible SigV4 credentials.
 5. Optionally publish file_upload_callback for platform-side closure.
@@ -90,6 +90,85 @@ def read_upload_file(args: argparse.Namespace) -> tuple[Path, bytes, str]:
     path = Path(args.file).expanduser()
     body = path.read_bytes()
     return path, body, path.name
+
+
+def _walk_values(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_values(child)
+
+
+def _resolve_local_path(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _download_media_url(url: str, args: argparse.Namespace) -> tuple[Path, bytes, str]:
+    cache_dir = PROJECT_ROOT / "logs" / "photo_upload_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    name = urllib.parse.unquote(Path(urllib.parse.urlparse(url).path).name) or f"photo-{int(time.time())}.jpg"
+    path = cache_dir / name
+    response = requests.get(url, timeout=args.download_timeout, verify=not args.no_verify_tls)
+    response.raise_for_status()
+    path.write_bytes(response.content)
+    return path, response.content, name
+
+
+def media_item_from_photo_reply(photo_reply: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(photo_reply, dict):
+        return {}
+    data = data_node(photo_reply)
+
+    for key in ("media", "local_cache", "file", "photo", "viewlink_result"):
+        node = data.get(key)
+        if isinstance(node, dict):
+            for nested_key in ("media", "local_cache", "file"):
+                nested = node.get(nested_key)
+                if isinstance(nested, dict):
+                    return nested
+            if any(node.get(field) for field in ("file_path", "path", "download_url", "url", "file_name", "name")):
+                return node
+
+    for node in _walk_values(data):
+        if any(node.get(field) for field in ("file_path", "download_url")):
+            return node
+    return {}
+
+
+def read_photo_or_upload_file(
+    photo_reply: dict[str, Any] | None,
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], Path, bytes, str]:
+    media_item = media_item_from_photo_reply(photo_reply)
+
+    for key in ("file_path", "local_path", "path"):
+        value = media_item.get(key)
+        if isinstance(value, str) and value and not value.startswith(("http://", "https://")):
+            path = _resolve_local_path(value)
+            if path.is_file():
+                body = path.read_bytes()
+                return media_item, path, body, path.name
+
+    url = media_item.get("download_url") or media_item.get("url")
+    if isinstance(url, str) and url.startswith(("http://", "https://")):
+        path, body, name = _download_media_url(url, args)
+        return media_item, path, body, name
+
+    if args.file:
+        path, body, name = read_upload_file(args)
+        return media_item, path, body, name
+
+    raise RuntimeError(
+        "photo command succeeded, but its reply did not include a usable "
+        "file_path/download_url. Pass --file only as a fallback, or make the "
+        "camera_photo_take handler return media/local_cache.file_path."
+    )
 
 
 def wait_requests_reply(
@@ -334,10 +413,9 @@ def run(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        trigger_photo(client, args)
+        photo_reply = trigger_photo(client, args)
 
-        media_item: dict[str, Any] = {}
-        source_path, body, file_name = read_upload_file(args)
+        media_item, source_path, body, file_name = read_photo_or_upload_file(photo_reply, args)
         if not body:
             raise RuntimeError(f"empty media file: {source_path}")
         print(f"upload source: {source_path} ({len(body)} bytes)")
@@ -372,12 +450,13 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--credential-timeout", type=float, default=30.0)
     parser.add_argument("--upload-timeout", type=float, default=120.0)
+    parser.add_argument("--download-timeout", type=float, default=60.0)
     parser.add_argument("--photo-method", choices=["camera_photo_take", "viewlink_take_photo"], default="camera_photo_take")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-type", default="normal")
     parser.add_argument("--photo-wait", type=float, default=3.0)
-    parser.add_argument("--file", required=True, help="Local media file to upload through the official storage_config_get upload chain.")
-    parser.add_argument("--skip-photo", action="store_true", help="Skip photo trigger, normally used together with --file.")
+    parser.add_argument("--file", default="", help="Fallback local media file if the photo reply has no file_path/download_url.")
+    parser.add_argument("--skip-photo", action="store_true", help="Skip photo trigger; requires --file.")
     parser.add_argument("--object-key", default="", help="Override object key. Default is object_key_prefix/file_name.")
     parser.add_argument("--flight-id", default="", help="Optional flight_id written into file_upload_callback.")
     parser.add_argument("--publish-callback", action="store_true", help="Publish file_upload_callback after upload succeeds.")
@@ -386,6 +465,8 @@ def main() -> int:
 
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
+    if args.skip_photo and not args.file:
+        parser.error("--skip-photo requires --file")
     return run(args)
 
 

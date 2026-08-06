@@ -93,6 +93,38 @@ def start_upload_receiver(args: argparse.Namespace) -> tuple[ThreadingHTTPServer
     return server, capture, base_url
 
 
+def resolve_media_storage_path(args: argparse.Namespace) -> Path:
+    try:
+        from tool_config import load_config
+    except Exception:
+        return PROJECT_ROOT / "data" / "media"
+
+    config = load_config(args.config)
+    media = config.get("media") if isinstance(config, dict) else {}
+    configured = str((media or {}).get("storage_path") or "./data/media")
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def prepare_local_media_file(args: argparse.Namespace) -> Path | None:
+    if not args.prepare_local_file:
+        return None
+    storage = resolve_media_storage_path(args)
+    storage.mkdir(parents=True, exist_ok=True)
+    name = args.prepare_file_name or f"manual-upload-probe-{int(time.time() * 1000)}.jpg"
+    target = storage / Path(name).name
+    if args.prepare_file:
+        source = Path(args.prepare_file).expanduser()
+        target.write_bytes(source.read_bytes())
+    else:
+        # Tiny JPEG-like payload. The upload chain only needs bytes on disk.
+        target.write_bytes(b"\xff\xd8\xff\xe0edge-gateway-minio-upload-test\xff\xd9")
+    print(f"prepared local media file: {target}")
+    return target
+
+
 class FastPlatformResponder:
     """Reply to device-originated requests immediately from the MQTT callback."""
 
@@ -330,6 +362,22 @@ def build_storage_output(
             "mime_type": mimetypes.guess_type(file_name)[0] or "application/octet-stream",
         }, object_key
 
+    if args.storage_mode == "fake-minio":
+        return {
+            "provider": "minio",
+            "endpoint": upload_base_url,
+            "bucket": args.bucket,
+            "region": args.region,
+            "object_key_prefix": args.object_prefix,
+            "object_key": object_key,
+            "credentials": {
+                "access_key_id": args.s3_access_key or "fake-access-key",
+                "access_key_secret": args.s3_secret_key or "fake-secret-key",
+                "security_token": args.s3_session_token,
+                "expire": int(time.time()) + args.credential_ttl,
+            },
+        }, object_key
+
     return {
         "provider": args.s3_provider,
         "endpoint": args.s3_endpoint.rstrip("/"),
@@ -415,9 +463,9 @@ def run(args: argparse.Namespace) -> int:
     server = None
     capture = None
     upload_base_url = ""
-    if args.storage_mode == "upload-url":
+    if args.storage_mode in {"upload-url", "fake-minio"}:
         server, capture, upload_base_url = start_upload_receiver(args)
-        print(f"upload_url receiver listening at {upload_base_url}")
+        print(f"{args.storage_mode} receiver listening at {upload_base_url}")
     responder = FastPlatformResponder(args, upload_base_url)
     if not responder.connect(args.timeout):
         print("fast platform responder connect timeout", file=sys.stderr)
@@ -443,10 +491,10 @@ def run(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        previous_requests = client.observed_count(request_topic)
         previous_events = client.observed_count(event_topic)
         previous_puts = len(capture.records) if capture else 0
 
+        prepare_local_media_file(args)
         trigger_photo(client, args)
         if args.photo_wait > 0:
             time.sleep(args.photo_wait)
@@ -466,10 +514,10 @@ def run(args: argparse.Namespace) -> int:
         }, ensure_ascii=False, indent=2))
 
         upload_record = None
-        if args.storage_mode == "upload-url":
+        if args.storage_mode in {"upload-url", "fake-minio"}:
             assert capture is not None
             upload_record = capture.wait(previous_puts, args.upload_timeout)
-            print("upload_url PUT received:")
+            print(f"{args.storage_mode} PUT received:")
             print(json.dumps(upload_record, ensure_ascii=False, indent=2))
         else:
             print("s3/minio mode: object upload must be verified in object storage or by gateway logs")
@@ -520,11 +568,14 @@ def main() -> int:
     parser.add_argument("--flight-id", default="payload-photo-chain-test")
     parser.add_argument("--organization-id", default="org_sim_001")
     parser.add_argument("--organization-name", default="模拟组织")
-    parser.add_argument("--storage-mode", choices=["upload-url", "s3", "both"], default="upload-url")
+    parser.add_argument("--storage-mode", choices=["upload-url", "s3", "fake-minio", "both"], default="upload-url")
     parser.add_argument("--upload-bind", default="0.0.0.0")
     parser.add_argument("--upload-host", default="", help="Address in upload_url that the gateway can reach.")
     parser.add_argument("--upload-port", type=int, default=0)
     parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "logs" / "platform_upload_receiver"))
+    parser.add_argument("--prepare-local-file", action="store_true", help="Create a local media file before triggering upload.")
+    parser.add_argument("--prepare-file", default="", help="Existing file to copy into media.storage_path before upload.")
+    parser.add_argument("--prepare-file-name", default="", help="Name for the generated/copied media file.")
     parser.add_argument("--bucket", default="payload-media-test")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--object-prefix", default="payload-photo-chain")
