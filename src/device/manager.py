@@ -79,6 +79,7 @@ from src.utils.dji_error_codes import (
     DEVICE_COMMAND_TIMEOUT,
     DEVICE_STATE_UNSUPPORTED,
     DOCK_COMMUNICATION_ERROR,
+    DOCK_UNABLE_TO_RESPOND,
     INVALID_COMMAND_FORMAT,
 )
 from src.database.connection import get_async_session_local, init_database_async
@@ -2540,6 +2541,20 @@ class DeviceManager:
             return 0, value
         return value, 0
 
+    @staticmethod
+    def _dock3_result_for_nest_rejection(ack: Dict[str, Any]) -> int:
+        """Map nest protocol 12005 rejection details to a Dock3 services result."""
+        rejections = ack.get("rejections") if isinstance(ack, dict) else None
+        if not rejections:
+            return DOCK_UNABLE_TO_RESPOND
+
+        first = rejections[0] or {}
+        reason = str(first.get("reason") or "")
+        reason_code = int(first.get("reason_code") or 0)
+        if "超时" in reason or "timeout" in reason.lower() or reason_code in {2, 3}:
+            return DOCK_UNABLE_TO_RESPOND
+        return DEVICE_STATE_UNSUPPORTED
+
     def _clear_nest_command_target(self, prop_name: str):
         if prop_name:
             self._pending_nest_command_targets.pop(prop_name, None)
@@ -2664,15 +2679,17 @@ class DeviceManager:
             rejections = ack.get("rejections") or []
             first_rejection = rejections[0] if rejections else {}
             reason = first_rejection.get("reason") or f"{command_name}: rejected by nest"
+            result = self._dock3_result_for_nest_rejection(ack)
             trace_command(
                 "gateway_nest_command_rejected",
                 method=command_name,
                 gcs_command=getattr(cmd, "name", str(cmd)),
-                result=ack_result,
+                result=result,
+                nest_result=ack_result,
                 reason=reason,
                 rejections=rejections,
             )
-            return False, ack_result or DOCK_COMMUNICATION_ERROR, TASK_STATUS_REJECTED, reason, ack
+            return False, result, TASK_STATUS_REJECTED, reason, ack
 
         return True, 0, TASK_STATUS_OK, "", ack
 
@@ -2691,7 +2708,6 @@ class DeviceManager:
                 result=DOCK_COMMUNICATION_ERROR,
                 status=TASK_STATUS_FAILED,
                 msg_str=f"{command_name}: no nest command mapping",
-                extra={'action': command_name},
             )
 
         self._remember_nest_command_target(command_name, prop_name, prop_value)
@@ -2704,7 +2720,6 @@ class DeviceManager:
                 result=result,
                 status=status,
                 msg_str=message,
-                extra={'action': command_name, 'ack': ack} if ack else {'action': command_name},
             )
 
         if not self._wait_for_nest_property(prop_name, prop_value, self._nest_command_state_timeout):
@@ -2726,7 +2741,6 @@ class DeviceManager:
                 result=result,
                 status=status,
                 msg_str=message,
-                extra={'action': command_name, 'ack': ack},
             )
 
         self._clear_nest_command_target(prop_name)
@@ -2735,7 +2749,6 @@ class DeviceManager:
             msg,
             result=0,
             status=TASK_STATUS_OK,
-            extra={'action': command_name, 'ack': ack},
         )
 
     def _execute_nest_ack_command_sync(self, msg: dict, command_name: str, cmd, final_waiter: Optional[Callable[[], bool]] = None) -> dict:
@@ -2747,7 +2760,6 @@ class DeviceManager:
                 result=result,
                 status=status,
                 msg_str=message,
-                extra={'action': command_name, 'ack': ack} if ack else {'action': command_name},
             )
 
         if final_waiter and not final_waiter():
@@ -2760,7 +2772,6 @@ class DeviceManager:
                 result=result,
                 status=status,
                 msg_str=message,
-                extra={'action': command_name, 'ack': ack},
             )
 
         self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
@@ -2768,7 +2779,6 @@ class DeviceManager:
             msg,
             result=0,
             status=TASK_STATUS_OK,
-            extra={'action': command_name, 'ack': ack},
         )
 
     def _send_nest_command(self, command_name: str, prop_name: str, prop_value: int) -> bool:
@@ -2898,14 +2908,12 @@ class DeviceManager:
                 msg,
                 result=0,
                 status=TASK_STATUS_OK,
-                extra={'action': command_name},
             )
         return self._build_cmd_reply(
             msg,
             result=DOCK_COMMUNICATION_ERROR,
             status=TASK_STATUS_FAILED,
             msg_str=f"{command_name}: MAVLink nest command not sent",
-            extra={'action': command_name},
         )
 
     def _reject_cmd(self, msg: dict, reason: str, result: int = INVALID_COMMAND_FORMAT) -> dict:

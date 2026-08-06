@@ -57,7 +57,7 @@ if "src.database.operation_db" not in sys.modules:
 
 from src.device.manager import DeviceManager  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
-from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT  # noqa: E402
+from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DOCK_UNABLE_TO_RESPOND  # noqa: E402
 
 
 class FakeNestModule:
@@ -269,9 +269,11 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
         reply = self.manager.handle_cover_open(self._cover_msg())
 
-        self.assertEqual(reply["data"]["result"], 2)
+        self.assertEqual(reply["data"]["result"], DOCK_UNABLE_TO_RESPOND)
         self.assertEqual(reply["data"]["output"]["status"], "rejected")
         self.assertIn("PLC超时", reply.get("msg", ""))
+        self.assertNotIn("ack", reply["data"])
+        self.assertNotIn("action", reply["data"])
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
     def test_cover_open_times_out_when_12005_ack_missing(self):
@@ -283,6 +285,8 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(reply["data"]["output"]["status"], "timeout")
         self.assertIn("timeout waiting for 12005 ACK", reply.get("msg", ""))
+        self.assertNotIn("ack", reply["data"])
+        self.assertNotIn("action", reply["data"])
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
     def test_cover_open_times_out_when_12004_target_state_never_arrives(self):
@@ -294,6 +298,8 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(reply["data"]["output"]["status"], "timeout")
+        self.assertNotIn("ack", reply["data"])
+        self.assertNotIn("action", reply["data"])
         self.assertEqual(self.manager.get_property("cover_state"), 0)
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
@@ -316,6 +322,8 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         reply = result["reply"]
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(reply["data"]["output"]["status"], "ok")
+        self.assertNotIn("ack", reply["data"])
+        self.assertNotIn("action", reply["data"])
 
 
 if __name__ == "__main__":

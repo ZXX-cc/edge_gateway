@@ -8,10 +8,13 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.dji_error_codes import (
+    DEVICE_COMMAND_RESPONSE_FAILED,
     DOCK_BUSY,
     DOCK_SYSTEM_ERROR,
+    DOCK_UNABLE_TO_RESPOND,
     INVALID_COMMAND_FORMAT,
     PARAMETER_SET_FAILED,
+    describe_error,
     normalize_error_code,
     normalize_reply_error_codes,
 )
@@ -55,6 +58,10 @@ class DjiErrorCodeTest(unittest.TestCase):
             normalize_error_code(-3, context="invalid_request"),
             INVALID_COMMAND_FORMAT,
         )
+
+    def test_dock3_device_command_error_descriptions(self):
+        self.assertIn("指令响应失败", describe_error(DEVICE_COMMAND_RESPONSE_FAILED))
+        self.assertIn("当前机场无法响应任务", describe_error(DOCK_UNABLE_TO_RESPOND))
 
     def test_recursive_reply_normalization(self):
         reply, conversions = normalize_reply_error_codes(
