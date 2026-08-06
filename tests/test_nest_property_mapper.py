@@ -23,7 +23,10 @@ from src.device.nest_property_mapper import (  # noqa: E402
     map_nest_to_cloud_properties,
     map_rainfall,
 )
-from web.mavlink.nest.property_mapping import response_to_nest_state  # noqa: E402
+from web.mavlink.nest.property_mapping import (  # noqa: E402
+    build_dock3_properties_from_nest,
+    response_to_nest_state,
+)
 
 
 def build_nest_data(**overrides: Any) -> dict[str, Any]:
@@ -238,7 +241,55 @@ class NestPropertyMapperFlowTest(unittest.TestCase):
             },
         )
 
-        self._step("测试步骤5：Dock 状态快照字段过滤")
+        self._step("测试步骤5：真实机巢位置字段映射")
+        dock_position = build_dock3_properties_from_nest(
+            build_nest_data(
+                latitude=43.817,
+                longitude=125.3235,
+                height=250.5,
+                heading=270.0,
+                position_state={
+                    "is_calibration": 1,
+                    "is_fixed": 2,
+                    "quality": 10,
+                    "gps_number": 18,
+                    "rtk_number": 14,
+                },
+            )
+        )
+        self._check_mapping(
+            "机场固定坐标、自收敛坐标、航向和定位状态",
+            {
+                "latitude": dock_position.get("latitude"),
+                "longitude": dock_position.get("longitude"),
+                "height": dock_position.get("height"),
+                "heading": dock_position.get("heading"),
+                "home_position_is_valid": dock_position.get("home_position_is_valid"),
+                "self_converge_coordinate": dock_position.get("self_converge_coordinate"),
+                "position_state": dock_position.get("position_state"),
+            },
+            {
+                "latitude": 43.817,
+                "longitude": 125.3235,
+                "height": 250.5,
+                "heading": -90.0,
+                "home_position_is_valid": 1,
+                "self_converge_coordinate": {
+                    "longitude": 125.3235,
+                    "latitude": 43.817,
+                    "height": 250.5,
+                },
+                "position_state": {
+                    "is_calibration": 1,
+                    "is_fixed": 2,
+                    "quality": 10,
+                    "gps_number": 18,
+                    "rtk_number": 14,
+                },
+            },
+        )
+
+        self._step("测试步骤6：Dock 状态快照字段过滤")
         dock_updates = filter_dock_status_fields(
             {
                 "cover_state": 1,

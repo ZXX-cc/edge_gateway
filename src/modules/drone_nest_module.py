@@ -3,6 +3,7 @@
 modules/drone_nest_module.py
 """
 import time
+import threading
 from typing import Optional, Dict, Any, List, Callable
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
@@ -106,6 +107,8 @@ class DroneNestModule(BaseModule):
         self._last_sent_commands: List[str] = []
         self._last_sent_ordinary_order = 0
         self._last_sent_takeoff_land_order = 0
+        self._order_response_condition = threading.Condition()
+        self._order_response_sequence = 0
 
     @staticmethod
     def _normalize_protocol_version(protocol_version: str) -> str:
@@ -613,6 +616,7 @@ class DroneNestModule(BaseModule):
             if is_empty_poll_response:
                 self.last_order_response = result
                 self.last_cloud_order_response = self._build_cloud_order_response(result)
+                self._notify_order_response_waiters()
                 return
 
             trace_command(
@@ -642,6 +646,7 @@ class DroneNestModule(BaseModule):
             # ==================== 记录日志 + 存储到模块（供API读取） ====================
             self.last_order_response = result  # ⭐ 新增成员变量，供API查询
             self.last_cloud_order_response = self._build_cloud_order_response(result)
+            self._notify_order_response_waiters()
 
             # 上报命令执行结果事件
             if result["rejections"]:
@@ -657,6 +662,77 @@ class DroneNestModule(BaseModule):
             self.log(f"处理指令回复时出错: {e}", "ERROR")
             self._report_operation_event('failed', 'gcs_command_response',
                                          {'error': str(e)})
+
+    def _notify_order_response_waiters(self):
+        with self._order_response_condition:
+            self._order_response_sequence += 1
+            self._order_response_condition.notify_all()
+
+    def order_response_sequence(self) -> int:
+        with self._order_response_condition:
+            return self._order_response_sequence
+
+    @staticmethod
+    def _order_response_matches(
+        response: Dict[str, Any],
+        expected_ordinary_order: int = 0,
+        expected_takeoff_land_order: int = 0,
+    ) -> bool:
+        if not isinstance(response, dict):
+            return False
+
+        ordinary = response.get("ordinary_order_response") or {}
+        takeoff = response.get("takeoff_land_order_response") or {}
+        ordinary_raw = int(ordinary.get("raw") or 0)
+        takeoff_raw = int(takeoff.get("raw") or 0)
+
+        # Some controllers reply 0/0 for accepted commands. Treat the first
+        # post-send empty success as the ACK for the command we are waiting for.
+        if ordinary_raw == 0 and takeoff_raw == 0 and response.get("status") == "success":
+            return bool(expected_ordinary_order or expected_takeoff_land_order)
+
+        if expected_ordinary_order:
+            expected_command = int(expected_ordinary_order) & 0xFF
+            expected_device = (int(expected_ordinary_order) >> 8) & 0xFF
+            return (
+                ordinary_raw != 0
+                and int(ordinary.get("command_code") or 0) == expected_command
+                and int(ordinary.get("device_code") or 0) == expected_device
+            )
+
+        if expected_takeoff_land_order:
+            expected_command = int(expected_takeoff_land_order) & 0xFF
+            return (
+                takeoff_raw != 0
+                and int(takeoff.get("command_code") or 0) == expected_command
+            )
+
+        return bool(ordinary_raw or takeoff_raw)
+
+    def wait_for_order_response(
+        self,
+        after_sequence: int,
+        expected_ordinary_order: int = 0,
+        expected_takeoff_land_order: int = 0,
+        timeout: float = 5.0,
+    ) -> Optional[Dict[str, Any]]:
+        """等待 12005 指令 ACK/拒绝回复，返回匹配的上层结构。"""
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        with self._order_response_condition:
+            while True:
+                if self._order_response_sequence > after_sequence:
+                    response = dict(self.last_cloud_order_response or {})
+                    if self._order_response_matches(
+                        response,
+                        expected_ordinary_order=expected_ordinary_order,
+                        expected_takeoff_land_order=expected_takeoff_land_order,
+                    ):
+                        return response
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._order_response_condition.wait(remaining)
     # ========== 一键启航协议支持 ==========
 
     def send_gcs_command(self, *commands: GCSCommand):

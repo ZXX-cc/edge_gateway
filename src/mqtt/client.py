@@ -50,6 +50,7 @@ class MQTTClient:
         self._handlers: Dict[str, Callable] = {}  # topic -> handler
         self._topic_handlers: Dict[str, Callable] = {}  # method -> handler
         self._reply_required_methods = set()
+        self._allowed_service_methods = set()
         self._status_reply_handler: Optional[Callable] = None
         self._requests_reply_handler: Optional[Callable] = None
         self._connect_callbacks: List[Callable] = []
@@ -400,6 +401,21 @@ class MQTTClient:
         if source_topic.endswith('/services') or source_topic.endswith('/property/set'):
             return False
         return bool(isinstance(payload, dict) and payload.get('need_reply') == 1)
+
+    def set_allowed_service_methods(self, methods):
+        """Restrict thing/product/{sn}/services to documented/project methods."""
+        self._allowed_service_methods = {
+            str(method) for method in (methods or []) if str(method)
+        }
+
+    def _validate_allowed_service_method(self, source_topic: str, method: str) -> Optional[str]:
+        if not source_topic.endswith('/services'):
+            return None
+        if not self._allowed_service_methods:
+            return None
+        if method in self._allowed_service_methods:
+            return None
+        return f"{method} is not an allowed Dock3 services method"
 
     @staticmethod
     def _build_error_reply(
@@ -926,6 +942,40 @@ class MQTTClient:
                     ("result", result),
                     ("payload", format_with_labels(payload, max_length=3000)),
                 ]))
+                return
+
+            service_method_error = self._validate_allowed_service_method(msg.topic, method)
+            if service_method_error:
+                trace_command(
+                    "mqtt_no_handler",
+                    topic=msg.topic,
+                    method=method,
+                    tid=payload.get("tid"),
+                    reason=service_method_error,
+                )
+                self._trace.record(
+                    "mqtt_service_method_not_allowed",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    error=service_method_error,
+                )
+                logger.warning(
+                    "Services method not allowed: topic=%s method=%s tid=%s reason=%s",
+                    msg.topic,
+                    method,
+                    payload.get("tid"),
+                    service_method_error,
+                )
+                error_reply = self._build_error_reply(
+                    payload,
+                    -2,
+                    service_method_error,
+                    self.gateway_sn,
+                    context="unknown_method",
+                )
+                self._publish_reply_for_source_topic(msg.topic, error_reply)
                 return
 
             handler = self._topic_handlers.get(method)

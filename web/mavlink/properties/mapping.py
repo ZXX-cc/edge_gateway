@@ -106,61 +106,12 @@ def build_properties_from_osd(osd_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     properties: Dict[str, Any] = {}
 
-    # 以下机场位置字段暂时复用 aircraft 遥测，仅保障无真机阶段的 DRC/SITL
-    # 联调。真机接入后必须替换为机场固定坐标、RTK 状态和椭球高度。
-    if "longitude" in osd_data:
-        properties["longitude"] = osd_data["longitude"]
-    if "latitude" in osd_data:
-        properties["latitude"] = osd_data["latitude"]
-    if "height" in osd_data:
-        properties["height"] = osd_data["height"]
-    if "attitude_head" in osd_data:
-        raw_heading = float(osd_data["attitude_head"] or 0.0)
-        # Aircraft OSD uses 0..360 in part of the current stack while the Dock
-        # 3 property requires -180..180. This is explicitly a simulator-only
-        # stand-in until the dock supplies its calibrated fixed heading.
-        properties["heading"] = ((raw_heading + 180.0) % 360.0) - 180.0
-
-    coordinate_keys = {"longitude", "latitude", "height"}
-    if coordinate_keys.issubset(properties):
-        longitude = float(properties["longitude"] or 0.0)
-        latitude = float(properties["latitude"] or 0.0)
-        height = float(properties["height"] or 0.0)
-        heading_available = "heading" in properties
-        coordinate_available = abs(longitude) > 1e-7 or abs(latitude) > 1e-7
-        if coordinate_available and heading_available:
-            properties["home_position_is_valid"] = 1
-        elif heading_available:
-            properties["home_position_is_valid"] = 2
-        elif coordinate_available:
-            properties["home_position_is_valid"] = 3
-        else:
-            properties["home_position_is_valid"] = 0
-        properties["self_converge_coordinate"] = {
-            "longitude": longitude,
-            "latitude": latitude,
-            "height": height,
-        }
     # aircraft mode_code 是飞行状态枚举，不能覆盖 gateway Dock3
     # mode_code(0..5)。机场作业状态只由 mission/device 状态机维护。
     if "battery" in osd_data:
         capacity_percent = osd_data["battery"].get("capacity_percent", 0)
         properties["electricity"] = capacity_percent
         properties["drone_charge_state"] = {"capacity_percent": capacity_percent}
-    if "position_state" in osd_data:
-        position = osd_data["position_state"]
-        fixed_state = int(position.get("is_fixed", 0) or 0)
-        properties["position_state"] = {
-            "is_calibration": 1 if fixed_state == 2 else 0,
-            "is_fixed": fixed_state if fixed_state in {0, 1, 2, 3} else 0,
-            # Dock 3 additionally uses quality=10 for RTK fixed.
-            "quality": (
-                10 if int(position.get("quality", 0) or 0) == 10
-                else max(0, min(5, int(position.get("quality", 0) or 0)))
-            ),
-            "gps_number": position.get("gps_number", 0),
-            "rtk_number": position.get("rtk_number", 0),
-        }
     if "wind_speed" in osd_data:
         properties["wind_speed"] = osd_data["wind_speed"]
     if osd_data.get("gear") == 1:

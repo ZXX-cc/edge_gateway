@@ -306,10 +306,9 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         })
 
         self.assertNotIn("mode_code", properties)
-        self.assertEqual(properties["position_state"]["is_fixed"], 2)
-        self.assertEqual(properties["position_state"]["quality"], 4)
+        self.assertNotIn("position_state", properties)
 
-    def test_simulated_aircraft_position_populates_missing_dock3_position_fields(self):
+    def test_aircraft_osd_position_does_not_populate_dock_position_fields(self):
         properties = build_properties_from_osd({
             "latitude": 43.817,
             "longitude": 125.3235,
@@ -323,14 +322,13 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
             },
         })
 
-        self.assertEqual(properties["heading"], -90.0)
-        self.assertEqual(properties["home_position_is_valid"], 1)
-        self.assertEqual(properties["position_state"]["quality"], 10)
-        self.assertEqual(properties["self_converge_coordinate"], {
-            "latitude": 43.817,
-            "longitude": 125.3235,
-            "height": 250.5,
-        })
+        self.assertNotIn("latitude", properties)
+        self.assertNotIn("longitude", properties)
+        self.assertNotIn("height", properties)
+        self.assertNotIn("heading", properties)
+        self.assertNotIn("home_position_is_valid", properties)
+        self.assertNotIn("position_state", properties)
+        self.assertNotIn("self_converge_coordinate", properties)
 
     def test_mount_status_maps_legacy_gimbal_angles(self):
         telemetry = new_telemetry_state()

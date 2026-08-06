@@ -140,70 +140,52 @@ BACKGROUND_IO_METHODS = frozenset({
     'adjust_upload_priority',
 })
 
-# Platform-to-gateway method reply policy. Keep this explicit: a method should
-# only be added after confirming the platform can下发 it and the Cloud API page
-# defines services_reply/property-set_reply for that downlink command.
-DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
-    # property/set -> property/set_reply
-    'property_set',
-
-    # services -> services_reply: device / dock management
-    'ota_create', 'ota_cancel', 'firmware_upgrade', 'firmware_upgrade_cancel',
+# Platform-to-gateway services exposure policy.  Keep it explicit: platform
+# /services may only call official Dock3 methods or project-owned real-chain
+# methods.  Legacy compatibility handlers can still be used internally, but are
+# not exposed to cloud services.
+ALLOWED_SERVICE_METHODS = frozenset({
+    # Device / dock management documented by Dock3 or required by this project.
+    'ota_create', 'ota_cancel',
     'config_update', 'config_get', 'config_rollback', 'property_get',
-    'gateway_state_query', 'device_binding', 'device_unbinding',
-    'device_reboot', 'format_sd_card', 'cover_open', 'cover_close',
+    'gateway_state_query',
+    'device_reboot', 'cover_open', 'cover_close', 'cover_force_close',
     'charge_open', 'charge_close', 'putter_open', 'putter_close',
-    'device_lock', 'device_unlock', 'supplement_light_open',
-    'supplement_light_close', 'sdr_workmode_switch', 'sim_slot_switch',
-    'esim_activate', 'esim_operator_switch', 'alternate_land_point_set',
+    'supplement_light_open', 'supplement_light_close',
+    'sdr_workmode_switch', 'sim_slot_switch', 'esim_activate',
+    'esim_operator_switch', 'alternate_land_point_set',
     'rtk_ref_points_set', 'rtk_calibration', 'rtk_ref_points_query',
-    'device_exit_rtk_mode', 'device_enter_simulation_mode',
-    'device_exit_simulation_mode', 'device_calibration', 'device_format',
-    'device_reset', 'workspace_bind_status', 'workspace_get',
-    'hms_get', 'hms_clear', 'device_log_list_get',
-    'device_log_upload', 'device_capability_query', 'cover_force_close',
-    'drone_open', 'drone_close', 'drone_format', 'debug_mode_open',
-    'debug_mode_close', 'battery_maintenance_switch',
+    'device_format',
+    'hms_get', 'hms_clear', 'device_log_list_get', 'device_log_upload',
+    'device_capability_query', 'drone_open', 'drone_close', 'drone_format',
+    'debug_mode_open', 'debug_mode_close', 'battery_maintenance_switch',
     'air_conditioner_mode_switch', 'alarm_state_switch',
-    'battery_store_mode_switch', 'config',
-    'airsense_warning',
+    'battery_store_mode_switch',
 
-    # services -> services_reply: mission / wayline / job
-    'load_wayline', 'upload_wayline', 'execute_task', 'cancel_task',
-    'pause_wayline', 'resume_wayline', 'flyto', 'take_off',
-    'one_key_takeoff_flow', 'one_key_return_home', 'cancel_return_home',
-    'set_flight_mode', 'go_home', 'landing', 'emergency_stop',
-    'start_takeoff_to_point', 'return_home', 'go_to_altitude',
-    'wayline_task_create', 'wayline_task_execute', 'wayline_task_pause',
-    'wayline_task_resume', 'wayline_task_cancel', 'wayline_task_query',
-    'wayline_mission_upload', 'wayline_mission_download',
-    'wayline_mission_delete', 'wayline_mission_query', 'flighttask_prepare',
-    'flighttask_execute', 'flighttask_undo', 'flighttask_stop',
-    'flighttask_progress', 'flighttask_progress_get',
-    'flighttask_pause', 'flighttask_resume', 'resume_wayline_task',
-    'flight_setup_abort', 'flighttask_create', 'flighttask_recovery',
-    'return_home_cancel', 'return_specific_home', 'flighttask_resource_get',
+    # Dock3 flighttask / wayline services plus project-owned orchestration.
+    'one_key_takeoff_flow',
+    'flighttask_prepare', 'flighttask_execute', 'flighttask_undo',
+    'flighttask_stop', 'flighttask_return', 'flighttask_progress',
+    'flighttask_progress_get', 'flighttask_pause', 'flighttask_resume',
+    'resume_wayline_task', 'flight_setup_abort', 'flighttask_create',
+    'flighttask_recovery', 'return_home', 'return_home_cancel',
+    'return_specific_home', 'flighttask_resource_get',
     'in_flight_wayline_deliver', 'in_flight_wayline_stop',
     'in_flight_wayline_recover', 'in_flight_wayline_cancel',
-    'job_create', 'job_delete', 'job_query',
 
-    # services -> services_reply: payload / media / live
-    'gimbalRotate',
-    'camera_screen_drag',
-    'drc_light_calibration',
+    # Payload / media / live services documented on Dock3 pages.
+    'gimbalRotate', 'camera_screen_drag', 'drc_light_calibration',
     'drc_light_fine_tuning_set', 'drc_speaker_tts_set',
-    'drc_speaker_play_volume_set',
-    'payload_authority_release', 'psdk_ui_resource_upload_result',
-    'psdk_floating_window_text', 'psdk_widget_value_set',
-    'psdk_input_box_text_set', 'speaker_replay', 'speaker_play_mode_set',
-    'speaker_play_stop', 'speaker_audio_play_start', 'speaker_tts_play_start',
-    'speaker_play_volume_set',
-    'file_list_get', 'file_download',
-    'download_media', 'file_delete', 'adjust_upload_priority',
-    'storage_config_get', 'live_start', 'live_start_push', 'live_stop',
-    'live_stop_push', 'live_camera_change', 'set_livestream_lens',
-    'set_livestream_quality', 'live_capability_query',
-    'highest_priority_upload_flighttask_media',
+    'drc_speaker_play_volume_set', 'payload_authority_release',
+    'psdk_ui_resource_upload_result', 'psdk_floating_window_text',
+    'psdk_widget_value_set', 'psdk_input_box_text_set', 'speaker_replay',
+    'speaker_play_mode_set', 'speaker_play_stop', 'speaker_audio_play_start',
+    'speaker_tts_play_start', 'speaker_play_volume_set',
+    'file_list_get', 'file_download', 'file_delete',
+    'adjust_upload_priority', 'storage_config_get',
+    'live_start', 'live_start_push', 'live_stop', 'live_stop_push',
+    'live_camera_change',
+    'live_capability_query', 'highest_priority_upload_flighttask_media',
     'upload_flighttask_media_prioritize', 'live_lens_change',
     'live_set_quality', 'camera_frame_zoom', 'camera_mode_switch',
     'camera_photo_take', 'camera_photo_stop', 'camera_recording_start',
@@ -214,19 +196,20 @@ DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({
     'photo_storage_set', 'video_storage_set', 'payload_authority_grab',
     'ir_metering_mode_set', 'ir_metering_point_set', 'ir_metering_area_set',
 
-    # services -> services_reply: DRC session services and point-flight mission
-    # services. Realtime drc/down stick/speed methods are intentionally not
-    # listed here and continue to follow need_reply.
-    'drc_mode_enter', 'drc_mode_exit', 'flight_authority_grab', 'takeoff_to_point',
-    'fly_to_point', 'fly_to_point_stop', 'fly_to_point_update',
+    # Services-topic DRC session and point-flight methods.
+    'drc_mode_enter', 'drc_mode_exit', 'flight_authority_grab',
+    'takeoff_to_point', 'fly_to_point', 'fly_to_point_stop',
+    'fly_to_point_update',
 
-    # services -> services_reply: log / flysafe / flight area / custom data
+    # Log / flysafe / flight-area / custom-data services.
     'fileupload_list', 'fileupload_start', 'fileupload_update',
     'unlock_license_switch', 'unlock_license_update', 'unlock_license_list',
     'flight_areas_update', 'flight_areas_get',
     'custom_data_transmission_from_esdk', 'custom_data_transmission_to_esdk',
     'custom_data_transmission_from_psdk', 'custom_data_transmission_to_psdk',
 })
+
+DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({'property_set'}) | ALLOWED_SERVICE_METHODS
 
 def filter_dock_status_fields(updates: dict) -> dict:
     """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
@@ -886,6 +869,7 @@ class EdgeGateway:
             # 连接NanoMQ
             logger.info("Connecting to NanoMQ...")
             if self.mqtt.connect():
+                self.mqtt.set_allowed_service_methods(ALLOWED_SERVICE_METHODS)
                 # 注册路由器到MQTT
                 for method, handler in self.router._routes.items():
                     self.mqtt.register_handler(

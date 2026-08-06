@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -57,6 +59,39 @@ from src.device.manager import DeviceManager  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
 
 
+class FakeNestModule:
+    def __init__(self, send_result=True, ack=None):
+        self.send_result = send_result
+        self.ack = ack if ack is not None else {"result": 0, "status": "success", "rejections": []}
+        self.commands = []
+        self._condition = threading.Condition()
+        self._sequence = 0
+
+    def order_response_sequence(self):
+        with self._condition:
+            return self._sequence
+
+    def send_gcs_command(self, command):
+        self.commands.append(command)
+        if self.send_result is False:
+            return False
+        with self._condition:
+            self._sequence += 1
+            self._condition.notify_all()
+        return True
+
+    def wait_for_order_response(self, after_sequence, **_kwargs):
+        timeout = float(_kwargs.get("timeout", 0.1) or 0.1)
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while self._sequence <= after_sequence:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+            return dict(self.ack)
+
+
 def nest_snapshot(**overrides):
     data = {
         "data_valid": True,
@@ -92,10 +127,22 @@ def nest_snapshot(**overrides):
 class DeviceManagerNestSyncTest(unittest.TestCase):
     def setUp(self):
         self.manager = DeviceManager()
+        self.manager._nest_command_ack_timeout = 0.1
+        self.manager._nest_command_state_timeout = 0.4
         self.state_events = []
         self.events = []
         self.manager._state_callback = self.state_events.append
         self.manager._event_callback = self.events.append
+
+    @staticmethod
+    def _cover_msg(method="cover_open"):
+        return {
+            "tid": f"tid-{method}",
+            "bid": f"bid-{method}",
+            "gateway": "EDGEGW001",
+            "method": method,
+            "data": {},
+        }
 
     def test_nest_status_change_updates_osd_properties_hms_and_operation(self):
         with (
@@ -168,31 +215,89 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertTrue(all(is_nest_hms_alarm(alarm) for alarm in alarms))
 
     def test_recent_nest_command_target_ignores_stale_nest_snapshot(self):
-        sent_commands = []
-        self.manager._nest_module = SimpleNamespace(send_gcs_command=sent_commands.append)
+        self.manager._nest_module = FakeNestModule()
         self.manager.update_from_nest(nest_snapshot(gate_state=1))
         self.assertEqual(self.manager.get_property("cover_state"), 1)
 
-        reply = self.manager.handle_cover_close({
-            "tid": "tid-cover-close",
-            "bid": "bid-cover-close",
-            "gateway": "EDGEGW001",
-            "method": "cover_close",
-            "data": {},
-        })
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.setdefault("reply", self.manager.handle_cover_close(self._cover_msg("cover_close")))
+        )
+        worker.start()
+        time.sleep(0.05)
 
-        self.assertEqual(reply["data"]["result"], 0)
-        self.assertTrue(sent_commands)
+        self.assertTrue(self.manager._nest_module.commands)
         self.assertEqual(self.manager.get_property("cover_state"), 1)
         self.assertIn("cover_state", self.manager._pending_nest_command_targets)
+        self.assertNotIn("reply", result)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=1))
         self.assertEqual(self.manager.get_property("cover_state"), 1)
         self.assertIn("cover_state", self.manager._pending_nest_command_targets)
+        self.assertNotIn("reply", result)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=0))
+        worker.join(timeout=1.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result["reply"]["data"]["result"], 0)
+        self.assertEqual(result["reply"]["data"]["output"]["status"], "ok")
         self.assertEqual(self.manager.get_property("cover_state"), 0)
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_reports_failure_when_nest_send_fails(self):
+        self.manager._nest_module = FakeNestModule(send_result=False)
+
+        reply = self.manager.handle_cover_open(self._cover_msg())
+
+        self.assertNotEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_reports_rejected_when_12005_rejects(self):
+        self.manager._nest_module = FakeNestModule(ack={
+            "result": 2,
+            "status": "rejected",
+            "rejections": [{"reason_code": 2, "reason": "PLC超时"}],
+        })
+
+        reply = self.manager.handle_cover_open(self._cover_msg())
+
+        self.assertEqual(reply["data"]["result"], 2)
+        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+        self.assertIn("PLC超时", reply.get("msg", ""))
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_times_out_when_12004_target_state_never_arrives(self):
+        self.manager._nest_command_state_timeout = 0.05
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
+
+        reply = self.manager.handle_cover_open(self._cover_msg())
+
+        self.assertNotEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "timeout")
+        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_returns_ok_only_after_12005_and_12004_target_state(self):
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
+
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.setdefault("reply", self.manager.handle_cover_open(self._cover_msg()))
+        )
+        worker.start()
+        time.sleep(0.05)
+        self.assertNotIn("reply", result)
+
+        self.manager.update_from_nest(nest_snapshot(gate_state=1))
+        worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        reply = result["reply"]
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
 
 
 if __name__ == "__main__":

@@ -196,6 +196,42 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
 
         self.assertFalse(self.module.send_gcs_order_response(0, 0))
 
+    def test_wait_for_order_response_returns_matching_12005_rejection(self):
+        sequence = self.module.order_response_sequence()
+        rejected_reply = SimpleNamespace(
+            ordinary_order_response=(0x11 << 24) | (0x01 << 16) | (0x02 << 8) | 0x01,
+            takeoff_land_order_response=0,
+        )
+
+        self.module._handle_order_response(rejected_reply)
+        response = self.module.wait_for_order_response(
+            after_sequence=sequence,
+            expected_ordinary_order=0x1101,
+            timeout=0.1,
+        )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response["status"], "rejected")
+        self.assertEqual(response["result"], 2)
+
+    def test_wait_for_order_response_treats_empty_success_as_command_ack(self):
+        sequence = self.module.order_response_sequence()
+        success_reply = SimpleNamespace(
+            ordinary_order_response=0,
+            takeoff_land_order_response=0,
+        )
+
+        self.module._handle_order_response(success_reply)
+        response = self.module.wait_for_order_response(
+            after_sequence=sequence,
+            expected_ordinary_order=0x1101,
+            timeout=0.1,
+        )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["result"], 0)
+
     def test_status_poll_can_be_disabled_for_tcp_links(self):
         calls = []
         self.module.status_poll_enabled = False

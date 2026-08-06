@@ -63,7 +63,7 @@ logger = get_logger("mission")
 DB_WRITE_RETRY_COUNT = 10
 DB_WRITE_RETRY_INTERVAL_SECONDS = 0.2
 HOME_TRANSITION_ALTITUDE_OFFSET_METERS = 40.0
-LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
+LOITER_GUIDED_PROTECTED_MODES = {"GUIDED"}
 VTOL_TAKEOFF_COMMAND = 84
 UAV_AND_NEST_IS_VTOL_MASK = 1 << 13
 WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED = 321773
@@ -3465,13 +3465,25 @@ class MissionManager:
             )
 
         # 通过MAVLink发送位置目标
-        if self._mode_control:
-            result = self._mode_control.guided_goto(lat, lon, alt)
-            if not result.get("success"):
-                logger.warning(f"Flyto指令失败: {result.get('message')}")
+        if not self._mode_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="guided flight adapter not available",
+            )
+        result = self._mode_control.guided_goto(lat, lon, alt)
+        if not result.get("success"):
+            reason = result.get("message") or "flyto failed"
+            logger.warning(f"Flyto指令失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={'output': {'status': STATUS_FAILED, 'detail': result}, 'fly_to_id': fly_to_id},
+            )
 
         return MessageBuilder.build_reply(
-            msg, result=0, data={'fly_to_id': fly_to_id}
+            msg, result=0, data={'output': {'status': STATUS_OK, 'detail': result}, 'fly_to_id': fly_to_id}
         )
 
     def handle_takeoff(self, msg: dict) -> dict:
@@ -3486,13 +3498,28 @@ class MissionManager:
 
         logger.info(f"Takeoff to {height}m")
 
-        # 通过MAVLink执行起飞
-        if self._flight_control:
-            result = self._flight_control.takeoff(height)
-            if not result.get("success"):
-                logger.warning(f"起飞指令失败: {result.get('message')}")
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        result = self._flight_control.takeoff(height)
+        if not result.get("success"):
+            reason = result.get("message") or "takeoff failed"
+            logger.warning(f"起飞指令失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={'output': {'status': STATUS_FAILED, 'detail': result}},
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={'output': {'status': STATUS_OK, 'detail': result}},
+        )
 
     def handle_one_key_takeoff_flow(self, msg: dict) -> dict:
         """
@@ -3669,35 +3696,42 @@ class MissionManager:
 
     def handle_one_key_return_home(self, msg: dict) -> dict:
         """处理一键返航"""
-        logger.info("Return to home")
-
-        # 通过MAVLink执行RTL
-        if self._flight_control:
-            result = self._flight_control.one_click_return()
-            if not result.get("success"):
-                logger.warning(f"返航指令失败: {result.get('message')}")
-
-        return MessageBuilder.build_reply(msg, result=0)
+        return self.handle_go_home(msg)
 
     def handle_cancel_return_home(self, msg: dict) -> dict:
         """处理取消返航"""
         logger.info("Cancel return home")
 
-        # 切换到悬停模式
-        if self._flight_control:
-            protection_reason = self._mode_change_protection_reason("LOITER")
-            if protection_reason:
-                logger.warning("Cancel return home rejected by takeoff protection: %s", protection_reason)
-                return MessageBuilder.build_reply(
-                    msg,
-                    result=DEVICE_STATE_UNSUPPORTED,
-                    msg_str=protection_reason,
-                )
-            result = self._flight_control.set_mode("LOITER")
-            if not result.get("success"):
-                logger.warning(f"取消返航失败: {result.get('message')}")
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        protection_reason = self._mode_change_protection_reason("LOITER")
+        if protection_reason:
+            logger.warning("Cancel return home rejected by takeoff protection: %s", protection_reason)
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str=protection_reason,
+            )
+        result = self._flight_control.set_mode("LOITER")
+        if not result.get("success"):
+            reason = result.get("message") or "cancel return home failed"
+            logger.warning(f"取消返航失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={'output': {'status': STATUS_FAILED, 'detail': result}},
+            )
 
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={'output': {'status': STATUS_OK, 'detail': result}},
+        )
 
     def handle_set_flight_mode(self, msg: dict) -> dict:
         """
@@ -4278,6 +4312,7 @@ class MissionManager:
     def handle_go_home(self, msg: dict) -> dict:
         """返航"""
         logger.info("Go home")
+        flight_result = None
         if self._status in (self.MISSION_RUNNING, self.MISSION_PAUSED):
             self.stop_mission_monitor()
             self._status = self.MISSION_PAUSED
@@ -4292,35 +4327,98 @@ class MissionManager:
 
         self._wayline_mission_state = 7  # 航线中断，返航后允许断点恢复
         self._current_step = 24  # 进入返航的检查准备工作
-        if self._flight_control:
-            result = self._flight_control.one_click_return()
-            if not result.get("success"):
-                logger.warning(f"返航失败: {result.get('message')}")
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        flight_result = self._flight_control.one_click_return()
+        if not flight_result.get("success"):
+            reason = flight_result.get("message") or "go_home failed"
+            logger.warning(f"返航失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={"output": {"status": STATUS_FAILED, "detail": flight_result}},
+            )
         if self._current_task_id and self._status == self.MISSION_PAUSED:
             self._mark_return_pending(
                 self._interrupted_mission_final_status(),
                 "一键返航后回巢释放任务占用",
                 result=WAYLINE_RESULT_USER_RETURN_INTERRUPTED,
             )
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": STATUS_OK, "detail": flight_result}},
+        )
 
     def handle_landing(self, msg: dict) -> dict:
         """降落"""
         logger.info("Landing")
-        if self._flight_control:
-            result = self._flight_control.land()
-            if not result.get("success"):
-                logger.warning(f"降落失败: {result.get('message')}")
-        return MessageBuilder.build_reply(msg, result=0)
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        result = self._flight_control.land()
+        if not result.get("success"):
+            reason = result.get("message") or "landing failed"
+            logger.warning(f"降落失败: {reason}")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={"output": {"status": STATUS_FAILED, "detail": result}},
+            )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": STATUS_OK, "detail": result}},
+        )
 
     def handle_emergency_stop(self, msg: dict) -> dict:
         """紧急停止"""
         logger.info("Emergency stop!")
-        if self._flight_control:
-            result = self._flight_control.disarm(force=True)
-            if not result.get("success"):
-                logger.warning(f"紧急停止失败: {result.get('message')}")
-        return MessageBuilder.build_reply(msg, result=0)
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        result = self._flight_control.disarm(force=True)
+        if result is not True:
+            logger.warning("紧急停止失败: disarm command send failed")
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="Emergency stop command send failed",
+                data={"output": {"status": STATUS_FAILED}},
+            )
+        if hasattr(self._flight_control, "_wait_for_armed"):
+            wait_result = self._flight_control._wait_for_armed(target_state=False, timeout=5.0)
+            if not wait_result.get("success"):
+                reason = wait_result.get("message") or "Emergency stop final state timeout"
+                logger.warning("紧急停止上锁确认失败: %s", reason)
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_COMMAND_TIMEOUT,
+                    msg_str=reason,
+                    data={"output": {"status": STATUS_TIMEOUT, "detail": wait_result}},
+                )
+            return MessageBuilder.build_reply(
+                msg,
+                result=0,
+                data={"output": {"status": STATUS_OK, "detail": wait_result}},
+            )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": STATUS_OK}},
+        )
 
     def handle_start_takeoff_to_point(self, msg: dict) -> dict:
         """起飞到指定点"""
@@ -4329,14 +4427,38 @@ class MissionManager:
         lon = data.get('longitude', 0)
         alt = data.get('altitude', 50)
         logger.info(f"Takeoff to point: ({lat}, {lon}, {alt})")
-        return MessageBuilder.build_reply(msg, result=0)
+        if not self._flight_control:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="FlightControl not available",
+            )
+        result = self._flight_control.takeoff(float(alt))
+        if not result.get("success"):
+            reason = result.get("message") or "takeoff failed"
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_COMMAND_TIMEOUT if "timeout" in reason.lower() or "超时" in reason else DEVICE_STATE_UNSUPPORTED,
+                msg_str=reason,
+                data={"output": {"status": STATUS_FAILED, "detail": result}},
+            )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={"output": {"status": STATUS_OK, "detail": result}},
+        )
 
     def handle_go_to_altitude(self, msg: dict) -> dict:
         """上升至指定高度"""
         data = msg.get('data', {})
         altitude = data.get('altitude', 50)
         logger.info(f"Go to altitude: {altitude}m")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="go_to_altitude requires a real altitude-control adapter",
+            data={"output": {"status": STATUS_FAILED}},
+        )
 
     # ---- 航点上传到飞控 ----
 
@@ -5567,9 +5689,12 @@ class MissionManager:
         data = msg.get('data', {})
         flight_ids = data.get('flight_ids', [])
         logger.info(f"Flighttask ready (services, unusual): {flight_ids}")
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'flight_ids': flight_ids
-        })
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="flighttask_ready is an upstream event and cannot be completed from services",
+            data={'flight_ids': flight_ids, 'output': {'status': STATUS_REJECTED}},
+        )
 
     def handle_return_home_info(self, msg: dict) -> dict:
         """
@@ -5586,7 +5711,17 @@ class MissionManager:
         planned_path_points = data.get('planned_path_points', [])
         last_point_type = data.get('last_point_type', 0)
         logger.info(f"Return home info (services, unusual): flight_id={flight_id}")
-        return MessageBuilder.build_reply(msg, result=0)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str="return_home_info is an upstream event and cannot be completed from services",
+            data={
+                'flight_id': flight_id,
+                'planned_path_points': planned_path_points,
+                'last_point_type': last_point_type,
+                'output': {'status': STATUS_REJECTED},
+            },
+        )
 
     def handle_flight_setup_abort(self, msg: dict) -> dict:
         """

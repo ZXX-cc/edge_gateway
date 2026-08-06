@@ -29,6 +29,7 @@ except ModuleNotFoundError:
     sys.modules["paho.mqtt.client"] = fake_client
 
 from src.mqtt.client import MQTTClient  # noqa: E402
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED  # noqa: E402
 from src.utils.message import MessageBuilder, TopicBuilder  # noqa: E402
 
 
@@ -156,6 +157,55 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
         self.client._on_message(None, None, mqtt_message(self.topic, payload))
 
         self.assertEqual(self.client.client.published, [])
+
+    def test_services_allowlist_blocks_registered_non_dock3_method(self):
+        calls = []
+
+        def handler(msg):
+            calls.append(msg["tid"])
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.set_allowed_service_methods({"cover_open"})
+        self.client.register_handler("format_sd_card", handler, reply_required=True)
+        payload = {
+            "tid": "services-not-allowed",
+            "method": "format_sd_card",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.client.client.published), 1)
+        reply_topic, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply_topic, TopicBuilder.services_reply(self.client.gateway_sn))
+        self.assertEqual(reply["tid"], payload["tid"])
+        self.assertEqual(reply["method"], payload["method"])
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+
+    def test_services_allowlist_permits_dock3_method(self):
+        calls = []
+
+        def handler(msg):
+            calls.append(msg["tid"])
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.set_allowed_service_methods({"cover_open"})
+        self.client.register_handler("cover_open", handler, reply_required=True)
+        payload = {
+            "tid": "services-allowed",
+            "method": "cover_open",
+            "data": {},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(calls, ["services-allowed"])
+        self.assertEqual(len(self.client.client.published), 1)
+        reply_topic, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply_topic, TopicBuilder.services_reply(self.client.gateway_sn))
+        self.assertEqual(reply["tid"], payload["tid"])
+        self.assertEqual(reply["data"]["result"], 0)
 
     def test_remote_debug_admission_rejection_replies_without_need_reply_flag(self):
         class RejectDecision:

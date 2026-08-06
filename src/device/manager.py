@@ -54,6 +54,7 @@ from src.cloud_api.dock3_cmd import (
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_OK,
     TASK_STATUS_REJECTED,
+    TASK_STATUS_TIMEOUT,
     command_output,
     progress_event_data,
     validate_action_payload,
@@ -88,7 +89,10 @@ from src.device.nest_hms_mapper import (
     is_nest_hms_alarm,
     nest_hms_signature,
 )
-from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
+from web.mavlink.nest.property_mapping import (
+    build_dock3_position_properties,
+    build_dock3_properties_from_nest,
+)
 from web.mavlink.properties.mapping import build_properties_from_osd, merge_properties
 
 logger = get_logger("device")
@@ -227,6 +231,7 @@ class DeviceManager:
         self._device_state = self.STATE_UNBOUND
         self._bound_workspace_id = ""
         self._bound_workspace_name = ""
+        self._restore_binding_from_org_data()
 
         # ===== OTA升级状态机 =====
         self._ota_state = 'idle'           # idle/checking/downloading/verifying/upgrading/completed/failed
@@ -255,6 +260,16 @@ class DeviceManager:
         self._last_nest_hms_signature = tuple()
         self._last_nest_operation_signature = ""
         self._pending_nest_command_targets: Dict[str, Dict[str, Any]] = {}
+        self._nest_state_condition = threading.Condition()
+        self._last_nest_drone_heartbeat: Optional[bool] = None
+        self._nest_command_ack_timeout = max(
+            0.1,
+            float(Config.get('device.nest_command_ack_timeout', 5.0) or 5.0),
+        )
+        self._nest_command_state_timeout = max(
+            0.1,
+            float(Config.get('device.nest_command_state_timeout', 30.0) or 30.0),
+        )
         self._topo_lock = threading.Lock()
         self._pending_update_topo: Dict[str, Dict[str, Any]] = {}
         self._topo_retry_limit = max(0, int(Config.get('device.topology.retry_limit', 2) or 0))
@@ -518,6 +533,7 @@ class DeviceManager:
         limits = device_config.get('limits', {})
         self._properties['remaining_power_for_return_home'] = limits.get(
             'return_home_power', 30)
+        self._apply_configured_dock_position()
 
         self._properties['activation_time'] = 0
         self._properties['job_number'] = 0
@@ -535,6 +551,23 @@ class DeviceManager:
                 self._sub_devices[sub_device.sn] = sub_device
             if self._sub_devices:
                 self._refresh_sub_device_property(notify=False)
+
+    def _apply_configured_dock_position(self):
+        """从现场配置加载机场固定位置，避免复用飞行器遥测。"""
+        candidates = [
+            Config.get('device.position', {}),
+            Config.get('device.dock_position', {}),
+            Config.get('dock.position', {}),
+            Config.get('nest.position', {}),
+            Config.get('nest_mavlink.position', {}),
+        ]
+        merged = {}
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                merge_properties(merged, build_dock3_position_properties(candidate))
+
+        if merged:
+            merge_properties(self._properties, merged)
 
     def _schedule_async(self, coro):
         """安全调度异步任务"""
@@ -593,6 +626,15 @@ class DeviceManager:
                     'bind_time': binding.bind_time,
                     'device_binding_code': ""
                 }
+                self._set_device_binding_info(self.gateway_sn, {
+                    'sn': self.gateway_sn,
+                    'device_model_key': f"{self._gateway_domain}-{self._gateway_type}-{self._gateway_sub_type}",
+                    'device_callsign': self.gateway_sn,
+                    'is_bound': bool(binding.is_bound),
+                    'organization_id': binding.organization_id or "",
+                    'organization_name': binding.organization_name or "",
+                    'bind_time': binding.bind_time or 0,
+                })
                 logger.info(f"Loaded binding from DB: workspace={self._bound_workspace_id}")
 
     async def _save_binding_to_db(self):
@@ -680,6 +722,44 @@ class DeviceManager:
         except Exception as e:
             logger.warning(f"Failed to load organization data: {e}")
         return default_data
+
+    def _restore_binding_from_org_data(self):
+        """恢复本地组织绑定状态，避免进程重启后误判为未绑定。"""
+        try:
+            org = self._org_data.get('organization', {})
+            gateway_binding = self._get_device_binding_info(self.gateway_sn)
+            org_id = gateway_binding.get('organization_id') or org.get('organization_id', '')
+            org_name = gateway_binding.get('organization_name') or org.get('organization_name', '')
+            bind_time = gateway_binding.get('bind_time') or org.get('bind_time', 0)
+            is_bound = bool(gateway_binding.get('is_bound')) or bool(org_id and bind_time)
+            if not is_bound:
+                return
+
+            self._device_state = self.STATE_BOUND
+            self._bound_workspace_id = org_id
+            self._bound_workspace_name = org_name
+            self._org_data['organization'] = {
+                'organization_id': org_id,
+                'organization_name': org_name,
+                'bind_time': bind_time,
+                'device_binding_code': org.get('device_binding_code', ''),
+            }
+            self._org_data.setdefault('device_bindings', {})
+            self._org_data['device_bindings'][self.gateway_sn] = {
+                'sn': self.gateway_sn,
+                'device_model_key': gateway_binding.get(
+                    'device_model_key',
+                    f"{self._gateway_domain}-{self._gateway_type}-{self._gateway_sub_type}",
+                ),
+                'device_callsign': gateway_binding.get('device_callsign') or self.gateway_sn,
+                'is_bound': True,
+                'organization_id': org_id,
+                'organization_name': org_name,
+                'bind_time': bind_time,
+            }
+            logger.info("Restored local binding cache: organization=%s", org_id)
+        except Exception as e:
+            logger.warning("Failed to restore local binding cache: %s", e)
 
     def _save_organization_data(self) -> bool:
         """保存组织绑定数据到本地文件"""
@@ -1017,13 +1097,38 @@ class DeviceManager:
                 # 无人机无心跳，可能在舱内或已关机
                 pass
 
+        if 'drone_heartbeat' in nest_data:
+            self._last_nest_drone_heartbeat = bool(nest_data.get('drone_heartbeat'))
+            self._sync_sub_device_online_from_nest(bool(nest_data.get('drone_heartbeat')))
+
         if updates:
             self.update_properties(updates, notify=False)
         if changed_state:
             self._notify_state({'property': changed_state})
 
+        with self._nest_state_condition:
+            self._nest_state_condition.notify_all()
+
         self._sync_nest_hms_alarms(nest_data)
         self._notify_nest_operation_if_needed(nest_data, changed_state)
+
+    def _sync_sub_device_online_from_nest(self, online: bool):
+        """Use the nest 12004 aircraft heartbeat as the real child-device state."""
+        if not self._sub_devices:
+            return
+
+        changed = False
+        now = time.time()
+        for dev in self._sub_devices.values():
+            if dev.online != online:
+                dev.online = online
+                changed = True
+            if online:
+                dev.paired = True
+                dev.last_heartbeat = now
+
+        if changed:
+            self._refresh_sub_device_property(notify=False)
 
     def _remember_nest_command_target(self, command_name: str, prop_name: str, prop_value: int):
         """Keep the desired command state ahead of stale nest telemetry snapshots."""
@@ -2405,18 +2510,241 @@ class DeviceManager:
 
     # ========== API处理器：设备控制（真实下发到机巢） ==========
 
+    @staticmethod
+    def _nest_command_map() -> Dict[Tuple[str, int], Any]:
+        from src.generated_dialect.gcs_order_protocol import GCSCommand
+
+        return {
+            ('cover_state', 1): GCSCommand.DOOR_OPEN,
+            ('cover_state', 0): GCSCommand.DOOR_CLOSE,
+            ('charging_state', 1): GCSCommand.CHARGE_START,
+            ('charging_state', 0): GCSCommand.CHARGE_STOP,
+            ('putter_state', 1): GCSCommand.CLAMP_RELEASE,   # 推出=释放夹紧
+            ('putter_state', 0): GCSCommand.CLAMP_TIGHTEN,   # 收回=夹紧
+            ('supplement_light_state', 1): GCSCommand.LIGHT_ON,
+            ('supplement_light_state', 0): GCSCommand.LIGHT_OFF,
+        }
+
+    @staticmethod
+    def _expected_order_fields(cmd) -> Tuple[int, int]:
+        from src.generated_dialect.gcs_order_protocol import GCSCommand
+
+        takeoff_land_values = {
+            int(GCSCommand.TAKEOFF_START),
+            int(GCSCommand.TAKEOFF_ABORT),
+            int(GCSCommand.LANDING_ABORT),
+        }
+        value = int(cmd)
+        if value in takeoff_land_values:
+            return 0, value
+        return value, 0
+
+    def _clear_nest_command_target(self, prop_name: str):
+        if prop_name:
+            self._pending_nest_command_targets.pop(prop_name, None)
+
+    def _wait_for_nest_property(self, prop_name: str, prop_value: int, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        with self._nest_state_condition:
+            while self._properties.get(prop_name) != prop_value:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._nest_state_condition.wait(remaining)
+            return True
+
+    def _wait_for_drone_heartbeat(self, online: bool, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        with self._nest_state_condition:
+            while self._last_nest_drone_heartbeat is not online:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._nest_state_condition.wait(remaining)
+            return True
+
+    def _send_nest_gcs_command_and_wait_ack(self, command_name: str, cmd) -> Tuple[bool, int, str, str, Dict[str, Any]]:
+        if not self._nest_module:
+            trace_command(
+                "gateway_nest_command_fallback",
+                method=command_name,
+                gcs_command=getattr(cmd, "name", str(cmd)),
+                reason="nest_module_not_available",
+                simulation=False,
+            )
+            logger.warning("%s: Nest module not available, MAVLink command not sent", command_name)
+            return False, DOCK_COMMUNICATION_ERROR, TASK_STATUS_FAILED, "nest module not available", {}
+
+        if not hasattr(self._nest_module, "send_gcs_command"):
+            logger.warning("%s: Nest module missing send_gcs_command", command_name)
+            return False, DOCK_COMMUNICATION_ERROR, TASK_STATUS_FAILED, "nest module missing send_gcs_command", {}
+
+        if not hasattr(self._nest_module, "wait_for_order_response"):
+            logger.warning("%s: Nest module missing 12005 wait interface", command_name)
+            return False, DOCK_COMMUNICATION_ERROR, TASK_STATUS_FAILED, "nest module missing 12005 wait interface", {}
+
+        ordinary_order, takeoff_land_order = self._expected_order_fields(cmd)
+        after_sequence = 0
+        if hasattr(self._nest_module, "order_response_sequence"):
+            after_sequence = int(self._nest_module.order_response_sequence() or 0)
+
+        trace_command(
+            "gateway_nest_command_send",
+            method=command_name,
+            gcs_command=getattr(cmd, "name", str(cmd)),
+            ordinary_order=f"0x{ordinary_order:04X}",
+            takeoff_land_order=f"0x{takeoff_land_order:02X}",
+        )
+
+        try:
+            if self._nest_module.send_gcs_command(cmd) is False:
+                trace_command(
+                    "gateway_nest_command_send_failed",
+                    method=command_name,
+                    gcs_command=getattr(cmd, "name", str(cmd)),
+                )
+                logger.warning("%s: Nest command send failed -> %s", command_name, getattr(cmd, "name", cmd))
+                return False, DOCK_COMMUNICATION_ERROR, TASK_STATUS_FAILED, "MAVLink nest command not sent", {}
+        except Exception as exc:
+            logger.error("%s: Failed to send nest command: %s", command_name, exc)
+            return False, DOCK_COMMUNICATION_ERROR, TASK_STATUS_FAILED, str(exc), {}
+
+        ack = self._nest_module.wait_for_order_response(
+            after_sequence=after_sequence,
+            expected_ordinary_order=ordinary_order,
+            expected_takeoff_land_order=takeoff_land_order,
+            timeout=self._nest_command_ack_timeout,
+        )
+        if not ack:
+            trace_command(
+                "gateway_nest_command_ack_timeout",
+                method=command_name,
+                gcs_command=getattr(cmd, "name", str(cmd)),
+                timeout=self._nest_command_ack_timeout,
+            )
+            return (
+                False,
+                DOCK_COMMUNICATION_ERROR,
+                TASK_STATUS_TIMEOUT,
+                f"{command_name}: timeout waiting for 12005 ACK",
+                {},
+            )
+
+        ack_result = int(ack.get("result") or 0)
+        ack_status = str(ack.get("status") or "")
+        if ack_result != 0 or ack_status == "rejected":
+            rejections = ack.get("rejections") or []
+            first_rejection = rejections[0] if rejections else {}
+            reason = first_rejection.get("reason") or f"{command_name}: rejected by nest"
+            trace_command(
+                "gateway_nest_command_rejected",
+                method=command_name,
+                gcs_command=getattr(cmd, "name", str(cmd)),
+                result=ack_result,
+                reason=reason,
+                rejections=rejections,
+            )
+            return False, ack_result or DOCK_COMMUNICATION_ERROR, TASK_STATUS_REJECTED, reason, ack
+
+        return True, 0, TASK_STATUS_OK, "", ack
+
+    def _execute_nest_command_sync(self, msg: dict, command_name: str, prop_name: str, prop_value: int) -> dict:
+        cmd = self._nest_command_map().get((prop_name, prop_value))
+        if not cmd:
+            trace_command(
+                "gateway_nest_command_unmapped",
+                method=command_name,
+                property=prop_name,
+                value=prop_value,
+            )
+            logger.warning("%s: No nest command mapping for %s=%s", command_name, prop_name, prop_value)
+            return self._build_cmd_reply(
+                msg,
+                result=DOCK_COMMUNICATION_ERROR,
+                status=TASK_STATUS_FAILED,
+                msg_str=f"{command_name}: no nest command mapping",
+                extra={'action': command_name},
+            )
+
+        self._remember_nest_command_target(command_name, prop_name, prop_value)
+        ok, result, status, message, ack = self._send_nest_gcs_command_and_wait_ack(command_name, cmd)
+        if not ok:
+            self._clear_nest_command_target(prop_name)
+            self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
+            return self._build_cmd_reply(
+                msg,
+                result=result,
+                status=status,
+                msg_str=message,
+                extra={'action': command_name, 'ack': ack} if ack else {'action': command_name},
+            )
+
+        if not self._wait_for_nest_property(prop_name, prop_value, self._nest_command_state_timeout):
+            self._clear_nest_command_target(prop_name)
+            result = DOCK_COMMUNICATION_ERROR
+            status = TASK_STATUS_TIMEOUT
+            message = f"{command_name}: timeout waiting for {prop_name}={prop_value} from 12004"
+            trace_command(
+                "gateway_nest_command_state_timeout",
+                method=command_name,
+                property=prop_name,
+                target=prop_value,
+                current=self._properties.get(prop_name),
+                timeout=self._nest_command_state_timeout,
+            )
+            self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
+            return self._build_cmd_reply(
+                msg,
+                result=result,
+                status=status,
+                msg_str=message,
+                extra={'action': command_name, 'ack': ack},
+            )
+
+        self._clear_nest_command_target(prop_name)
+        self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'action': command_name, 'ack': ack},
+        )
+
+    def _execute_nest_ack_command_sync(self, msg: dict, command_name: str, cmd, final_waiter: Optional[Callable[[], bool]] = None) -> dict:
+        ok, result, status, message, ack = self._send_nest_gcs_command_and_wait_ack(command_name, cmd)
+        if not ok:
+            self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
+            return self._build_cmd_reply(
+                msg,
+                result=result,
+                status=status,
+                msg_str=message,
+                extra={'action': command_name, 'ack': ack} if ack else {'action': command_name},
+            )
+
+        if final_waiter and not final_waiter():
+            result = DOCK_COMMUNICATION_ERROR
+            status = TASK_STATUS_TIMEOUT
+            message = f"{command_name}: timeout waiting for final device state"
+            self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
+            return self._build_cmd_reply(
+                msg,
+                result=result,
+                status=status,
+                msg_str=message,
+                extra={'action': command_name, 'ack': ack},
+            )
+
+        self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
+        return self._build_cmd_reply(
+            msg,
+            result=0,
+            status=TASK_STATUS_OK,
+            extra={'action': command_name, 'ack': ack},
+        )
+
     def _send_nest_command(self, command_name: str, prop_name: str, prop_value: int) -> bool:
-        """
-        通过机巢模块发送真实控制命令
-
-        Args:
-            command_name: 命令名称（用于日志）
-            prop_name: 对应的物模型属性名
-            prop_value: 属性目标值
-
-        Returns:
-            bool: 命令是否成功发送
-        """
+        """通过机巢模块发送控制命令；保留给非 services 流程使用。"""
         if not self._nest_module:
             trace_command(
                 "gateway_nest_command_fallback",
@@ -2430,20 +2758,7 @@ class DeviceManager:
             return False
 
         try:
-            from src.generated_dialect.gcs_order_protocol import GCSCommand
-
-            cmd_map = {
-                ('cover_state', 1): GCSCommand.DOOR_OPEN,
-                ('cover_state', 0): GCSCommand.DOOR_CLOSE,
-                ('charging_state', 1): GCSCommand.CHARGE_START,
-                ('charging_state', 0): GCSCommand.CHARGE_STOP,
-                ('putter_state', 1): GCSCommand.CLAMP_RELEASE,   # 推出=释放夹紧
-                ('putter_state', 0): GCSCommand.CLAMP_TIGHTEN,   # 收回=夹紧
-                ('supplement_light_state', 1): GCSCommand.LIGHT_ON,
-                ('supplement_light_state', 0): GCSCommand.LIGHT_OFF,
-            }
-
-            cmd = cmd_map.get((prop_name, prop_value))
+            cmd = self._nest_command_map().get((prop_name, prop_value))
             if cmd:
                 trace_command(
                     "gateway_nest_command_send",
@@ -2452,7 +2767,16 @@ class DeviceManager:
                     value=prop_value,
                     gcs_command=cmd.name,
                 )
-                self._nest_module.send_gcs_command(cmd)
+                if self._nest_module.send_gcs_command(cmd) is False:
+                    trace_command(
+                        "gateway_nest_command_send_failed",
+                        method=command_name,
+                        property=prop_name,
+                        value=prop_value,
+                        gcs_command=cmd.name,
+                    )
+                    logger.warning("%s: Nest command send failed -> %s", command_name, cmd.name)
+                    return False
                 logger.info(f"{command_name}: Nest command sent -> {cmd.name}")
             else:
                 trace_command(
@@ -2496,7 +2820,16 @@ class DeviceManager:
                 power_on=power_on,
                 gcs_command=cmd.name,
             )
-            self._nest_module.send_gcs_command(cmd)
+            if self._nest_module.send_gcs_command(cmd) is False:
+                trace_command(
+                    "gateway_nest_command_send_failed",
+                    method=command_name,
+                    action="drone_power",
+                    power_on=power_on,
+                    gcs_command=cmd.name,
+                )
+                logger.warning("%s: Nest command send failed -> %s", command_name, cmd.name)
+                return False
             logger.info("%s: Nest command sent -> %s", command_name, cmd.name)
             return True
         except Exception as e:
@@ -2595,13 +2928,11 @@ class DeviceManager:
 
     def handle_cover_open(self, msg: dict) -> dict:
         """打开舱盖 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('cover_open', 'cover_state', 1)
-        return self._build_nest_command_reply(msg, 'cover_open', sent)
+        return self._execute_nest_command_sync(msg, 'cover_open', 'cover_state', 1)
 
     def handle_cover_close(self, msg: dict) -> dict:
         """关闭舱盖 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('cover_close', 'cover_state', 0)
-        return self._build_nest_command_reply(msg, 'cover_close', sent)
+        return self._execute_nest_command_sync(msg, 'cover_close', 'cover_state', 0)
 
     def handle_cover_force_close(self, msg: dict) -> dict:
         """
@@ -2616,28 +2947,23 @@ class DeviceManager:
                 "Drone in dock, cannot force close cover",
                 result=DEVICE_STATE_UNSUPPORTED,
             )
-        sent = self._send_nest_command('cover_force_close', 'cover_state', 0)
-        return self._build_nest_command_reply(msg, 'cover_force_close', sent)
+        return self._execute_nest_command_sync(msg, 'cover_force_close', 'cover_state', 0)
 
     def handle_charge_open(self, msg: dict) -> dict:
         """开启充电 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('charge_open', 'charging_state', 1)
-        return self._build_nest_command_reply(msg, 'charge_open', sent)
+        return self._execute_nest_command_sync(msg, 'charge_open', 'charging_state', 1)
 
     def handle_charge_close(self, msg: dict) -> dict:
         """关闭充电 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('charge_close', 'charging_state', 0)
-        return self._build_nest_command_reply(msg, 'charge_close', sent)
+        return self._execute_nest_command_sync(msg, 'charge_close', 'charging_state', 0)
 
     def handle_putter_open(self, msg: dict) -> dict:
         """打开推杆 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('putter_open', 'putter_state', 1)
-        return self._build_nest_command_reply(msg, 'putter_open', sent)
+        return self._execute_nest_command_sync(msg, 'putter_open', 'putter_state', 1)
 
     def handle_putter_close(self, msg: dict) -> dict:
         """关闭推杆 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('putter_close', 'putter_state', 0)
-        return self._build_nest_command_reply(msg, 'putter_close', sent)
+        return self._execute_nest_command_sync(msg, 'putter_close', 'putter_state', 0)
 
     def handle_device_lock(self, msg: dict) -> dict:
         """设备锁定"""
@@ -2652,13 +2978,11 @@ class DeviceManager:
 
     def handle_supplement_light_open(self, msg: dict) -> dict:
         """补光灯开 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('supplement_light_open', 'supplement_light_state', 1)
-        return self._build_nest_command_reply(msg, 'supplement_light_open', sent)
+        return self._execute_nest_command_sync(msg, 'supplement_light_open', 'supplement_light_state', 1)
 
     def handle_supplement_light_close(self, msg: dict) -> dict:
         """补光灯关 - 通过机巢协议真实下发"""
-        sent = self._send_nest_command('supplement_light_close', 'supplement_light_state', 0)
-        return self._build_nest_command_reply(msg, 'supplement_light_close', sent)
+        return self._execute_nest_command_sync(msg, 'supplement_light_close', 'supplement_light_state', 0)
 
     def handle_sdr_workmode_switch(self, msg: dict) -> dict:
         """SDR工作模式切换"""
@@ -2810,7 +3134,21 @@ class DeviceManager:
             'height': alt
         }}, notify=False)
 
-        # TODO: 持久化到配置文件
+        self._config_store['alternate_land_point'] = {
+            'latitude': lat,
+            'longitude': lon,
+            'safe_land_height': safe_height,
+            'is_configured': 1,
+            'height': alt,
+        }
+        if not self._save_config_data():
+            return self._build_cmd_reply(
+                msg,
+                result=PARAMETER_SET_FAILED,
+                status=TASK_STATUS_FAILED,
+                msg_str="alternate_land_point_set persistence failed",
+            )
+
         return MessageBuilder.build_reply(msg, result=0, data={
             'latitude': lat, 'longitude': lon, 'altitude': alt
         })
@@ -2820,8 +3158,17 @@ class DeviceManager:
         data = msg.get('data', {})
         points = data.get('points', [])
         logger.info(f"RTK ref points set: {len(points)} points")
-        # TODO: 持久化到配置文件
-        return MessageBuilder.build_reply(msg, result=0)
+        if not isinstance(points, list):
+            return self._reject_cmd(msg, "rtk_ref_points_set.points must be array")
+        self._config_store['rtk_ref_points'] = copy.deepcopy(points)
+        if not self._save_config_data():
+            return self._build_cmd_reply(
+                msg,
+                result=PARAMETER_SET_FAILED,
+                status=TASK_STATUS_FAILED,
+                msg_str="rtk_ref_points_set persistence failed",
+            )
+        return MessageBuilder.build_reply(msg, result=0, data={'points': points})
 
     def handle_rtk_calibration(self, msg: dict) -> dict:
         """一键 RTK 标定。无真实 RTK 标定适配器时不得伪造成功。"""
@@ -2840,8 +3187,11 @@ class DeviceManager:
     def handle_rtk_ref_points_query(self, msg: dict) -> dict:
         """RTK参考点查询"""
         logger.info("RTK ref points query")
-        # TODO: 从配置文件读取
-        return MessageBuilder.build_reply(msg, result=0, data={'points': []})
+        return MessageBuilder.build_reply(
+            msg,
+            result=0,
+            data={'points': copy.deepcopy(self._config_store.get('rtk_ref_points', []))},
+        )
 
     def handle_device_exit_rtk_mode(self, msg: dict) -> dict:
         """退出RTK模式"""
@@ -2855,50 +3205,34 @@ class DeviceManager:
         飞行器开机
         """
         logger.info("Drone power ON")
-        sent = self._send_drone_power_command('drone_open', power_on=True)
-        if not sent:
-            return self._build_nest_command_reply(msg, 'drone_open', False)
-        for dev in self._sub_devices.values():
-            dev.online = True
-            dev.paired = True
-            dev.last_heartbeat = time.time()
-        first_dev = next(iter(self._sub_devices.values()), None)
-        if first_dev:
-            self.update_properties({
-                'sub_device': {
-                    'device_sn': first_dev.sn,
-                    'product_type': str(first_dev.type),
-                    'device_online_status': 1,
-                    'device_paired': 1 if first_dev.paired else 0
-                }
-            })
-        self.report_update_topo()
-        self._notify_cmd_progress('drone_open')
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
+        from src.generated_dialect.gcs_order_protocol import GCSCommand
+
+        reply = self._execute_nest_ack_command_sync(
+            msg,
+            'drone_open',
+            GCSCommand.DRONE_POWER_ON,
+            final_waiter=lambda: self._wait_for_drone_heartbeat(True, self._nest_command_state_timeout),
+        )
+        if reply.get("data", {}).get("result") == 0:
+            self.report_update_topo()
+        return reply
 
     def handle_drone_close(self, msg: dict) -> dict:
         """
         飞行器关机
         """
         logger.info("Drone power OFF")
-        sent = self._send_drone_power_command('drone_close', power_on=False)
-        if not sent:
-            return self._build_nest_command_reply(msg, 'drone_close', False)
-        for dev in self._sub_devices.values():
-            dev.online = False
-        first_dev = next(iter(self._sub_devices.values()), None)
-        if first_dev:
-            self.update_properties({
-                'sub_device': {
-                    'device_sn': first_dev.sn,
-                    'product_type': str(first_dev.type),
-                    'device_online_status': 0,
-                    'device_paired': 1 if first_dev.paired else 0
-                }
-            })
-        self.report_update_topo()
-        self._notify_cmd_progress('drone_close')
-        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
+        from src.generated_dialect.gcs_order_protocol import GCSCommand
+
+        reply = self._execute_nest_ack_command_sync(
+            msg,
+            'drone_close',
+            GCSCommand.DRONE_POWER_OFF,
+            final_waiter=lambda: self._wait_for_drone_heartbeat(False, self._nest_command_state_timeout),
+        )
+        if reply.get("data", {}).get("result") == 0:
+            self.report_update_topo()
+        return reply
 
     def handle_drone_format(self, msg: dict) -> dict:
         """飞行器数据格式化"""
@@ -2992,17 +3326,23 @@ class DeviceManager:
         )
 
     def handle_device_calibration(self, msg: dict) -> dict:
-        """设备标定"""
+        """设备标定。无真实标定适配器时不得伪造成功。"""
         logger.info("Device calibration")
-        self.update_properties({'mode_code': 5})  # 标定中
-        # TODO: 启动异步标定流程（调用传感器标定脚本）
-        return MessageBuilder.build_reply(msg, result=0, data={
-            'calibration_status': 'started'
-        })
+        return self._real_device_command_unavailable(
+            msg,
+            "device_calibration requires a real calibration adapter",
+        )
 
     def handle_device_reset(self, msg: dict) -> dict:
-        """设备重置 - 重置所有控制属性到默认值"""
+        """设备重置。默认拒绝，避免把只读硬件状态伪造成已复位。"""
         logger.info("Device reset")
+        allow_local_state_reset = bool(Config.get('device.allow_local_state_reset', False))
+        if not allow_local_state_reset:
+            return self._real_device_command_unavailable(
+                msg,
+                "device_reset requires device.allow_local_state_reset=true or a real reset adapter",
+            )
+
         reset_props = {
             'cover_state': 0,
             'putter_state': 0,
@@ -3331,7 +3671,7 @@ class DeviceManager:
                     # 网关已解绑（从云端确认）
                     if self._device_state >= self.STATE_BOUND:
                         logger.info(f"Gateway unbound detected from cloud: was org={self._bound_workspace_id}")
-                        self._device_state = self.STATE_ONLINE
+                        self._device_state = self.STATE_UNBOUND
                         self._bound_workspace_id = ''
                         self._bound_workspace_name = ''
                         self._clear_organization_info()

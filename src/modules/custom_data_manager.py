@@ -10,6 +10,7 @@
 from typing import Dict, Any, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
+from src.utils.dji_error_codes import DOCK_COMMUNICATION_ERROR
 from src.utils.message import MessageBuilder
 
 logger = get_logger("custom_data")
@@ -24,6 +25,15 @@ class CustomDataManager:
 
     def set_event_callback(self, callback: Callable):
         self._event_callback = callback
+
+    @staticmethod
+    def _adapter_unavailable_reply(msg: dict, reason: str) -> dict:
+        return MessageBuilder.build_reply(
+            msg,
+            result=DOCK_COMMUNICATION_ERROR,
+            data={"output": {"status": "failed"}},
+            msg_str=reason,
+        )
 
     def report_custom_data_from_esdk(self, value: str):
         """
@@ -65,8 +75,10 @@ class CustomDataManager:
         data = msg.get('data', {})
         value = data.get('value', data.get('data', ''))
         logger.info(f"Custom data from ESDK (services): {len(value)} chars")
-        # TODO: 转发ESDK数据到业务层
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._adapter_unavailable_reply(
+            msg,
+            "custom_data_transmission_from_esdk requires a real ESDK data adapter",
+        )
 
     def handle_custom_data_transmission_to_esdk(self, msg: dict) -> dict:
         """
@@ -78,8 +90,10 @@ class CustomDataManager:
         data = msg.get('data', {})
         value = data.get('value', data.get('data', ''))
         logger.info(f"Custom data to ESDK: {len(value)} chars")
-        # TODO: 转发云端数据到ESDK
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._adapter_unavailable_reply(
+            msg,
+            "custom_data_transmission_to_esdk requires a real ESDK data adapter",
+        )
 
     def handle_custom_data_transmission_from_psdk(self, msg: dict) -> dict:
         """
@@ -89,8 +103,10 @@ class CustomDataManager:
         data = msg.get('data', {})
         value = data.get('value', data.get('data', ''))
         logger.info(f"Custom data from PSDK (services): {len(value)} chars")
-        # TODO: 转发PSDK数据到业务层
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._adapter_unavailable_reply(
+            msg,
+            "custom_data_transmission_from_psdk requires a real PSDK data adapter",
+        )
 
     def handle_custom_data_transmission_to_psdk(self, msg: dict) -> dict:
         """
@@ -102,5 +118,7 @@ class CustomDataManager:
         data = msg.get('data', {})
         value = data.get('value', data.get('data', ''))
         logger.info(f"Custom data to PSDK: {len(value)} chars")
-        # TODO: 转发云端数据到PSDK
-        return MessageBuilder.build_reply(msg, result=0)
+        return self._adapter_unavailable_reply(
+            msg,
+            "custom_data_transmission_to_psdk requires a real PSDK data adapter",
+        )

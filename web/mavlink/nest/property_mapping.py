@@ -86,7 +86,7 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
     if not nest_state.get("data_valid", True):
         return {}
 
-    properties: Dict[str, Any] = {}
+    properties: Dict[str, Any] = build_dock3_position_properties(nest_state)
 
     if "gate_state" in nest_state:
         properties["cover_state"] = map_cover_state(nest_state["gate_state"])
@@ -132,6 +132,100 @@ def build_dock3_properties_from_nest(nest_state: Dict[str, Any]) -> Dict[str, An
     return properties
 
 
+def build_dock3_position_properties(source: Dict[str, Any]) -> Dict[str, Any]:
+    """Map real dock position fields from nest/config sources to Dock3 properties."""
+    if not isinstance(source, dict):
+        return {}
+
+    properties: Dict[str, Any] = {}
+    longitude = _first_finite(
+        source,
+        "longitude",
+        "lon",
+        "lng",
+        "dock_longitude",
+        "nest_longitude",
+    )
+    latitude = _first_finite(
+        source,
+        "latitude",
+        "lat",
+        "dock_latitude",
+        "nest_latitude",
+    )
+    height = _first_finite(
+        source,
+        "height",
+        "altitude",
+        "ellipsoid_height",
+        "dock_height",
+        "nest_height",
+    )
+    heading = _first_finite(
+        source,
+        "heading",
+        "dock_heading",
+        "nest_heading",
+    )
+
+    if longitude is not None:
+        properties["longitude"] = max(-180.0, min(180.0, longitude))
+    if latitude is not None:
+        properties["latitude"] = max(-90.0, min(90.0, latitude))
+    if height is not None:
+        properties["height"] = height
+    if heading is not None:
+        properties["heading"] = ((heading + 180.0) % 360.0) - 180.0
+
+    coordinate = source.get("self_converge_coordinate")
+    if isinstance(coordinate, dict):
+        coordinate_properties = build_dock3_position_properties(coordinate)
+        coordinate_keys = {"longitude", "latitude", "height"}
+        if coordinate_keys.issubset(coordinate_properties):
+            properties["self_converge_coordinate"] = {
+                "longitude": coordinate_properties["longitude"],
+                "latitude": coordinate_properties["latitude"],
+                "height": coordinate_properties["height"],
+            }
+
+    coordinate_keys = {"longitude", "latitude", "height"}
+    if "self_converge_coordinate" not in properties and coordinate_keys.issubset(properties):
+        properties["self_converge_coordinate"] = {
+            "longitude": properties["longitude"],
+            "latitude": properties["latitude"],
+            "height": properties["height"],
+        }
+
+    if "home_position_is_valid" in source:
+        properties["home_position_is_valid"] = _bounded_int(source.get("home_position_is_valid"), 0, 3)
+    elif coordinate_keys.issubset(properties):
+        coordinate_available = (
+            abs(float(properties["longitude"])) > 1e-7
+            or abs(float(properties["latitude"])) > 1e-7
+        )
+        heading_available = "heading" in properties
+        if coordinate_available and heading_available:
+            properties["home_position_is_valid"] = 1
+        elif heading_available:
+            properties["home_position_is_valid"] = 2
+        elif coordinate_available:
+            properties["home_position_is_valid"] = 3
+        else:
+            properties["home_position_is_valid"] = 0
+
+    position_state = source.get("position_state")
+    if isinstance(position_state, dict):
+        properties["position_state"] = {
+            "is_calibration": _bounded_int(position_state.get("is_calibration"), 0, 1),
+            "is_fixed": _bounded_int(position_state.get("is_fixed"), 0, 3),
+            "quality": _position_quality(position_state.get("quality")),
+            "gps_number": _bounded_int(position_state.get("gps_number"), 0),
+            "rtk_number": _bounded_int(position_state.get("rtk_number"), 0),
+        }
+
+    return properties
+
+
 def map_rainfall(raw_rainfall: float) -> int:
     """降雨量 mm/m^2 到 Dock3 rainfall 等级。"""
     if raw_rainfall <= 0:
@@ -171,3 +265,33 @@ def _bit(value: int, bit: int) -> bool:
 
 def _scaled(value: float, scale: float) -> float:
     return value / scale if scale else value
+
+
+def _first_finite(source: Dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key not in source:
+            continue
+        value = source.get(key)
+        if value in ("", None):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number == number and number not in (float("inf"), float("-inf")):
+            return number
+    return None
+
+
+def _bounded_int(value: Any, minimum: int, maximum: int | None = None) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = 0
+    number = max(minimum, number)
+    return min(maximum, number) if maximum is not None else number
+
+
+def _position_quality(value: Any) -> int:
+    quality = _bounded_int(value, 0)
+    return 10 if quality == 10 else min(5, quality)

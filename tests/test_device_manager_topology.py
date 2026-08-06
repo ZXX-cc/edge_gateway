@@ -66,6 +66,13 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         Config._data = {
             "gateway": {"sn": "EDGEGW001"},
             "device": {"topology": {"device_secret": "gw-secret", "nonce": "gw-nonce"}},
+            "payload": {
+                "devices": {
+                    "gimbal": {"enabled": True},
+                    "mapping_camera": {"enabled": False},
+                    "spectral_camera": {"enabled": False},
+                }
+            },
         }
         self.manager = DeviceManager()
         self.manager._org_data_path = str(Path(self.tmp.name) / "organization.json")
@@ -146,6 +153,34 @@ class DeviceManagerTopologyTest(unittest.TestCase):
 
         self.assertEqual(len(self.update_topo_events()), 1)
         self.assertEqual(self.update_topo_events()[-1]["method"], "update_topo")
+
+    def test_local_organization_cache_restores_bound_state_on_startup(self):
+        self.manager._org_data = {
+            "organization": {
+                "organization_id": "org-001",
+                "organization_name": "Grid Org",
+                "bind_time": 12345,
+                "device_binding_code": "",
+            },
+            "device_bindings": {
+                self.manager.gateway_sn: {
+                    "sn": self.manager.gateway_sn,
+                    "device_model_key": "3-119-0",
+                    "device_callsign": "Gateway",
+                    "is_bound": True,
+                    "organization_id": "org-001",
+                    "organization_name": "Grid Org",
+                    "bind_time": 12345,
+                }
+            },
+        }
+        self.manager._restore_binding_from_org_data()
+
+        self.assertEqual(self.manager.get_device_state()["state"], "bound")
+        self.manager.auto_query_bind_status_on_startup()
+
+        self.assertEqual(len(self.update_topo_events()), 1)
+        self.assertEqual(self.manager.handle_workspace_get(msg("workspace_get", {}))["data"]["is_bound"], True)
 
     def test_device_binding_reports_topology(self):
         with patch.object(
@@ -512,6 +547,40 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertGreaterEqual(len(self.update_topo_events()), 1)
         after_binding_events = len([event for event in self.events if event.get("method") == "device_binding"])
         self.assertEqual(after_binding_events, before_binding_events)
+
+    def test_bind_status_reply_unbound_clears_gateway_bound_state(self):
+        self.manager._device_state = self.manager.STATE_BOUND
+        self.manager._bound_workspace_id = "org-old"
+        self.manager._bound_workspace_name = "Old Org"
+        self.manager._set_organization_info("org-old", "Old Org", bind_time=1)
+
+        reply = {
+            "data": {
+                "result": 0,
+                "output": {
+                    "bind_status": [
+                        {
+                            "sn": self.manager.gateway_sn,
+                            "is_device_bind_organization": False,
+                            "organization_id": "",
+                            "organization_name": "",
+                            "device_callsign": self.manager.gateway_sn,
+                        }
+                    ]
+                },
+            }
+        }
+
+        with patch.object(
+            self.manager,
+            "_schedule_async",
+            new=lambda coro: coro.close() if hasattr(coro, "close") else None,
+        ):
+            self.manager._handle_airport_bind_status_reply(reply)
+
+        self.assertEqual(self.manager.get_device_state()["state"], "unbound")
+        self.assertEqual(self.manager._bound_workspace_id, "")
+        self.assertFalse(self.manager.handle_workspace_get(msg("workspace_get", {}))["data"]["is_bound"])
 
     def test_organization_bind_partial_failure_preserves_error_message(self):
         sub_device = SubDevice("DRONE-A", device_type=60, index="A")
