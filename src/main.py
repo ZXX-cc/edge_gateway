@@ -114,6 +114,13 @@ def _finite_non_negative_number(*values: Any) -> float | None:
     return parsed
 
 
+def _bounded_percent(*values: Any) -> int | None:
+    parsed = _finite_non_negative_number(*values)
+    if parsed is None:
+        return None
+    return max(0, min(100, int(parsed)))
+
+
 def _normalize_udp_target_host(host: str) -> str:
     """Convert wildcard bind addresses to a usable UDP destination."""
     if host in ("0.0.0.0", "::", ""):
@@ -1199,7 +1206,7 @@ class EdgeGateway:
         )
 
     def _apply_aircraft_limit_fields(self, osd_data: dict) -> None:
-        """Ensure aircraft OSD carries flight height/distance limits."""
+        """Ensure aircraft OSD carries configured flight safety limits."""
         if not isinstance(osd_data, dict):
             return
         telemetry = self.telemetry.get_current_data() if self.telemetry else {}
@@ -1222,6 +1229,16 @@ class EdgeGateway:
             distance_limit = _finite_non_negative_number(Config.get("device.limits.max_distance"))
         if distance_limit is not None:
             osd_data["distance_limit"] = distance_limit
+
+        return_home_power = _bounded_percent(
+            telemetry.get("return_home_power"),
+            telemetry.get("remaining_power_for_return_home"),
+            telemetry.get("return_home_battery"),
+        )
+        if return_home_power is None:
+            return_home_power = _bounded_percent(Config.get("device.limits.return_home_power"))
+        if return_home_power is not None:
+            osd_data["return_home_power"] = return_home_power
 
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""

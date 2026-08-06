@@ -222,12 +222,22 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         telemetry.update({
             "height_limit": 120,
             "distance_limit": 10000,
+            "return_home_power": 35,
         })
 
         osd = build_osd_data(telemetry)
 
         self.assertEqual(osd["height_limit"], 120.0)
         self.assertEqual(osd["distance_limit"], 10000.0)
+        self.assertEqual(osd["return_home_power"], 35)
+
+    def test_osd_return_home_power_accepts_legacy_alias_and_clamps(self):
+        telemetry = new_telemetry_state()
+        telemetry["remaining_power_for_return_home"] = 120
+
+        osd = build_osd_data(telemetry)
+
+        self.assertEqual(osd["return_home_power"], 100)
 
     def test_zero_battery_without_electrical_measurement_stays_unavailable(self):
         telemetry = new_telemetry_state()

@@ -152,6 +152,7 @@ def valid_drone_osd(sn="EDGEGW001"):
             "mode_code": 0,
             "gear": 0,
             "flight_time": 0,
+            "return_home_power": 30,
             "timestamp": 1783420000000,
         },
     )

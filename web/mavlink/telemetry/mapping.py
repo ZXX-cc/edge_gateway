@@ -337,6 +337,13 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     )
     if distance_limit is not None:
         osd["distance_limit"] = distance_limit
+    return_home_power = _percent_value(
+        telemetry.get("return_home_power"),
+        telemetry.get("remaining_power_for_return_home"),
+        telemetry.get("return_home_battery"),
+    )
+    if return_home_power is not None:
+        osd["return_home_power"] = return_home_power
     if current > 0:
         osd["battery"]["current"] = int(current * 1000)
     return osd
@@ -349,6 +356,16 @@ def _limit_value(*values: Any) -> Optional[float]:
         parsed = _finite_number(value, None)
         if parsed is not None and parsed >= 0:
             return parsed
+    return None
+
+
+def _percent_value(*values: Any) -> Optional[int]:
+    for value in values:
+        if value is None:
+            continue
+        parsed = _finite_number(value, None)
+        if parsed is not None:
+            return max(0, min(100, int(parsed)))
     return None
 
 
