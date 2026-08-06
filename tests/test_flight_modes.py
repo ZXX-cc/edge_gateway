@@ -1,4 +1,5 @@
 import os
+import struct
 import sys
 import types
 import unittest
@@ -64,6 +65,7 @@ from src.mavlink.flight_modes import (  # noqa: E402
     normalize_flight_mode_request,
     parse_flight_mode,
 )
+from src.modules.flight_control import FlightControl  # noqa: E402
 from src.mission.manager import MissionManager  # noqa: E402
 from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT  # noqa: E402
 
@@ -85,6 +87,11 @@ class RecordingFlightControl:
         self.calls = []
         self.timeouts = []
         self.armed = False
+        self.uav_and_nest_status = {
+            "data_valid": False,
+            "last_update": 0.0,
+            "is_vtol": None,
+        }
 
     def set_mode(self, mode, timeout=10.0):
         self.calls.append(mode)
@@ -96,6 +103,9 @@ class RecordingFlightControl:
 
     def is_armed_status(self):
         return self.armed
+
+    def get_uav_and_nest_status(self):
+        return dict(self.uav_and_nest_status)
 
     def arm(self):
         self.armed = True
@@ -219,95 +229,69 @@ class FlightModeMappingTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
 
-    def test_set_flight_mode_rejects_guided_inside_takeoff_protection_zone(self):
+    def test_set_flight_mode_rejects_guided_when_uav_and_nest_reports_vtol(self):
         manager = MissionManager()
         flight_control = RecordingFlightControl()
         flight_control.armed = True
+        flight_control.uav_and_nest_status = {"data_valid": True, "last_update": 0.0, "is_vtol": True}
         manager.set_flight_control(flight_control)
-        manager._set_loiter_guided_release_altitude(100.0)
-        manager.set_waypoint_manager(types.SimpleNamespace(
-            home_position={"lat": 44.0474824, "lon": 125.3614503}
-        ))
-        manager.set_telemetry_module(types.SimpleNamespace(
-            get_telemetry_data=lambda: {
-                "latitude": 44.0475000,
-                "longitude": 125.3614600,
-                "altitudeRelative": 80.0,
-            }
-        ))
 
         reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
 
         self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
-        self.assertIn("安全起飞保护区", reply["msg"])
+        self.assertIn("bit13=is_VTOL", reply["msg"])
         self.assertEqual(flight_control.calls, [])
 
-    def test_set_flight_mode_allows_guided_after_original_first_waypoint_altitude(self):
+    def test_set_flight_mode_allows_guided_when_uav_and_nest_reports_fixed_wing(self):
         manager = MissionManager()
         flight_control = RecordingFlightControl()
         flight_control.armed = True
+        flight_control.uav_and_nest_status = {"data_valid": True, "last_update": 0.0, "is_vtol": False}
         manager.set_flight_control(flight_control)
-        manager._set_loiter_guided_release_altitude(80.0)
-        manager.set_waypoint_manager(types.SimpleNamespace(
-            home_position={"lat": 44.0474824, "lon": 125.3614503}
-        ))
-        manager.set_telemetry_module(types.SimpleNamespace(
-            get_telemetry_data=lambda: {
-                "latitude": 44.0475000,
-                "longitude": 125.3614600,
-                "altitudeRelative": 80.0,
-            }
-        ))
 
         reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
 
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(flight_control.calls, ["GUIDED"])
 
-    def test_set_flight_mode_rejects_missing_altitude_before_original_first_waypoint(self):
+    def test_set_flight_mode_rejects_missing_uav_and_nest_status(self):
         manager = MissionManager()
         flight_control = RecordingFlightControl()
         flight_control.armed = True
         manager.set_flight_control(flight_control)
-        manager._set_loiter_guided_release_altitude(100.0, waypoint_seq=1)
-        manager._current_waypoint_idx = 0
-        manager.set_waypoint_manager(types.SimpleNamespace(
-            home_position={"lat": 44.0474824, "lon": 125.3614503}
-        ))
-        manager.set_telemetry_module(types.SimpleNamespace(
-            get_telemetry_data=lambda: {
-                "latitude": 44.0475000,
-                "longitude": 125.3614600,
-            }
-        ))
 
         reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
 
         self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
-        self.assertIn("信息不足", reply["msg"])
+        self.assertIn("UAV_AND_NEST", reply["msg"])
         self.assertEqual(flight_control.calls, [])
 
-    def test_set_flight_mode_allows_missing_altitude_after_original_first_waypoint(self):
+    def test_set_flight_mode_ignores_old_waypoint_release_when_uav_and_nest_reports_vtol(self):
         manager = MissionManager()
         flight_control = RecordingFlightControl()
         flight_control.armed = True
+        flight_control.uav_and_nest_status = {"data_valid": True, "last_update": 0.0, "is_vtol": True}
         manager.set_flight_control(flight_control)
         manager._set_loiter_guided_release_altitude(100.0, waypoint_seq=1)
         manager._current_waypoint_idx = 1
-        manager.set_waypoint_manager(types.SimpleNamespace(
-            home_position={"lat": 44.0474824, "lon": 125.3614503}
-        ))
-        manager.set_telemetry_module(types.SimpleNamespace(
-            get_telemetry_data=lambda: {
-                "latitude": 44.0475000,
-                "longitude": 125.3614600,
-            }
-        ))
 
         reply = manager.handle_set_flight_mode(base_msg({"flight_mode": "GUIDED"}))
 
-        self.assertEqual(reply["data"]["result"], 0)
-        self.assertEqual(flight_control.calls, ["GUIDED"])
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("bit13=is_VTOL", reply["msg"])
+        self.assertEqual(flight_control.calls, [])
+
+    def test_flight_control_decodes_uav_and_nest_raw_payload(self):
+        flight_control = FlightControl()
+        payload = struct.pack("<fH", 66.0, 1 << 13)
+        frame = bytes([0xFE, len(payload), 1, 1, 1, 0xE2]) + payload + b"\x00\x00"
+
+        flight_control._handle_uav_and_nest(types.SimpleNamespace(get_msgbuf=lambda: frame))
+
+        status = flight_control.get_uav_and_nest_status()
+        self.assertTrue(status["data_valid"])
+        self.assertTrue(status["is_vtol"])
+        self.assertAlmostEqual(status["rel_alt"], 66.0)
 
     def test_set_flight_mode_arm_avoids_non_armable_qland(self):
         for payload in ({"mode": "QLAN", "arm": True}, {"flight_mode": "QLAND", "arm": True}, {"mode_code": 7, "arm": True}):

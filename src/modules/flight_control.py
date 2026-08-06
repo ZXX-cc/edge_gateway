@@ -6,6 +6,7 @@ from typing import Optional, Dict
 from pymavlink import mavutil
 from pymavlink.mavutil import mavlink
 import math
+import struct
 import time
 from enum import Enum
 from threading import Condition, Event, Lock, Thread
@@ -20,6 +21,8 @@ from src.mavlink.flight_modes import (
 
 MIN_SAFE_TAKEOFF_ALTITUDE_METERS = 120.0
 LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
+UAV_AND_NEST_MESSAGE_ID = 12002
+UAV_AND_NEST_IS_VTOL_MASK = 1 << 13
 
 # ① 枚举新增 ENDED
 class AutoTakeoffState(Enum):
@@ -82,6 +85,13 @@ class FlightControl(BaseModule):
         self.current_position = {}
         self.loiter_guided_release_altitude = None
         self.loiter_guided_release_waypoint_seq = None
+        self.uav_and_nest_status = {
+            "status": 0,
+            "data": 0.0,
+            "is_vtol": None,
+            "last_update": 0.0,
+            "data_valid": False,
+        }
 
         # 任务信息
         self.mission_count = 0
@@ -177,6 +187,8 @@ class FlightControl(BaseModule):
         elif msg_type == 'MISSION_COUNT':
             self.mission_count = msg.count
             self.log(f"航线总数: {self.mission_count}")
+        elif msg_type == 'UAV_AND_NEST' or getattr(message, 'msg_id', None) == UAV_AND_NEST_MESSAGE_ID:
+            self._handle_uav_and_nest(msg)
 
     def idle_task(self, dispatcher: MessageDispatcher):
         if self.dispatcher is None:
@@ -743,80 +755,94 @@ class FlightControl(BaseModule):
         if not self.is_armed_status():
             return {"success": True}
 
-        missing_fields = []
-        if not isinstance(self.home_position, dict):
-            missing_fields.append("Home点经纬度")
-        if not isinstance(self.current_position, dict):
-            missing_fields.append("当前经纬度")
-
-        try:
-            home_lat = float(self.home_position.get("lat"))
-            home_lon = float(self.home_position.get("lon"))
-        except (AttributeError, TypeError, ValueError):
-            home_lat = home_lon = None
-            if "Home点经纬度" not in missing_fields:
-                missing_fields.append("Home点经纬度")
-
-        try:
-            current_lat = float(self.current_position.get("lat"))
-            current_lon = float(self.current_position.get("lon"))
-        except (AttributeError, TypeError, ValueError):
-            current_lat = current_lon = None
-            if "当前经纬度" not in missing_fields:
-                missing_fields.append("当前经纬度")
-
-        rel_altitude = (
-            self.current_position.get("relative_altitude")
-            if isinstance(self.current_position, dict)
-            else None
-        )
-        if rel_altitude is None:
-            missing_fields.append("当前相对高度")
-
-        configured_release_altitude = Config.get(
-            "mission.safety.safe_takeoff_altitude",
-            MIN_SAFE_TAKEOFF_ALTITUDE_METERS,
-        )
-        release_altitude = self._as_float(
-            self.loiter_guided_release_altitude
-            if self.loiter_guided_release_altitude is not None
-            else configured_release_altitude,
-            MIN_SAFE_TAKEOFF_ALTITUDE_METERS,
-        )
-        protected_radius = self._as_float(
-            Config.get("mission.safety.vertical_takeoff_protection_radius", release_altitude),
-            release_altitude,
-        )
-
-        if missing_fields:
-            if self._has_reached_loiter_guided_release_waypoint():
-                return {"success": True}
+        is_vtol = self._uav_and_nest_is_vtol()
+        if is_vtol is None:
             return {
                 "success": False,
-                "message": (
-                    f"{mode_name} 模式切换信息不足，缺少 {', '.join(missing_fields)}；"
-                    "当前仍在原始首航点前，禁止切换"
-                ),
-                "mode_switch_release_altitude": release_altitude,
-                "release_waypoint_seq": self.loiter_guided_release_waypoint_seq,
+                "message": f"{mode_name} 模式切换缺少飞机端 UAV_AND_NEST(12002) 状态，无法确认是否已平飞",
             }
-
-        rel_altitude = self._as_float(rel_altitude, 0.0)
-        distance = self._distance_meters(home_lat, home_lon, current_lat, current_lon)
-        if distance <= protected_radius and rel_altitude < release_altitude:
+        if is_vtol:
             return {
                 "success": False,
-                "message": (
-                    f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
-                    f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
-                    f"{protected_radius:.1f}m/{release_altitude:.1f}m 内"
-                ),
-                "distance_from_home": distance,
-                "relative_altitude": rel_altitude,
-                "mode_switch_release_altitude": release_altitude,
-                "protected_radius": protected_radius,
+                "message": f"{mode_name} 模式只允许平飞后切换；UAV_AND_NEST.status bit13=is_VTOL，飞机仍处于垂直飞行",
             }
         return {"success": True}
+
+    def get_uav_and_nest_status(self) -> Dict:
+        return dict(self.uav_and_nest_status)
+
+    def _handle_uav_and_nest(self, msg):
+        try:
+            status = int(getattr(msg, "status"))
+            data = float(getattr(msg, "data", 0.0))
+        except (TypeError, ValueError, AttributeError):
+            decoded = self._decode_uav_and_nest_raw(msg)
+            if decoded is None:
+                self.log("UAV_AND_NEST(12002) 状态帧无效，忽略", "WARNING")
+                return
+            status, data = decoded
+
+        self.uav_and_nest_status = {
+            "status": status,
+            "data": data,
+            "rel_alt": data,
+            "is_vtol": bool(status & UAV_AND_NEST_IS_VTOL_MASK),
+            "last_update": time.time(),
+            "data_valid": True,
+        }
+
+    @staticmethod
+    def _decode_uav_and_nest_raw(msg):
+        try:
+            frame = bytes(msg.get_msgbuf())
+        except Exception:
+            return None
+        if len(frame) < 14:
+            return None
+        magic = frame[0]
+        if magic == 0xFD:
+            header_len = 10
+        elif magic == 0xFE:
+            header_len = 6
+        else:
+            return None
+        payload_len = frame[1]
+        payload = frame[header_len:header_len + payload_len]
+        if len(payload) < 6:
+            payload = payload + bytes(6 - len(payload))
+        try:
+            data, status = struct.unpack("<fH", payload[:6])
+        except struct.error:
+            return None
+        return int(status), float(data)
+
+    def _uav_and_nest_is_vtol(self):
+        status_data = self.get_uav_and_nest_status()
+        if not isinstance(status_data, dict):
+            return None
+        if status_data.get("data_valid") is not True:
+            return None
+
+        last_update = self._as_float(status_data.get("last_update"), 0.0)
+        timeout = self._as_float(
+            Config.get("mavlink.uav_and_nest_status_timeout", 5.0),
+            5.0,
+        )
+        if last_update > 0 and time.time() - last_update > timeout:
+            return None
+
+        value = status_data.get("is_vtol")
+        if isinstance(value, bool):
+            return value
+        if value is not None:
+            try:
+                return bool(int(value))
+            except (TypeError, ValueError):
+                pass
+        try:
+            return bool(int(status_data.get("status")) & UAV_AND_NEST_IS_VTOL_MASK)
+        except (TypeError, ValueError):
+            return None
 
     def set_mode(self, mode: str, timeout: float = 10.0) -> Dict:
         """

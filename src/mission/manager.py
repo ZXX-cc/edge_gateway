@@ -65,6 +65,7 @@ DB_WRITE_RETRY_INTERVAL_SECONDS = 0.2
 HOME_TRANSITION_ALTITUDE_OFFSET_METERS = 40.0
 LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
 VTOL_TAKEOFF_COMMAND = 84
+UAV_AND_NEST_IS_VTOL_MASK = 1 << 13
 
 
 def serialize_flighttask(handler):
@@ -1801,54 +1802,50 @@ class MissionManager:
             except Exception as exc:
                 logger.warning("Read armed status for mode protection failed: %s", exc)
 
-        configured_release_altitude = Config.get(
-            "mission.safety.safe_takeoff_altitude",
-            MIN_WAYPOINT_ALTITUDE_METERS,
-        )
-        release_altitude = getattr(self, "_loiter_guided_release_altitude", None)
-        if release_altitude is None and self._flight_control:
-            release_altitude = getattr(self._flight_control, "loiter_guided_release_altitude", None)
-        release_altitude = self._as_float(
-            release_altitude if release_altitude is not None else configured_release_altitude,
-            MIN_WAYPOINT_ALTITUDE_METERS,
-        )
-        protected_radius = self._as_float(
-            Config.get("mission.safety.vertical_takeoff_protection_radius", release_altitude),
-            release_altitude,
-        )
-
-        missing_fields = []
-        home = self._aircraft_home_lat_lon(wait_seconds=0.0)
-        telemetry = self._get_telemetry_snapshot()
-        position = self._extract_lat_lon(telemetry)
-        if not home:
-            missing_fields.append("Home点经纬度")
-        if not position:
-            missing_fields.append("当前经纬度")
-
-        rel_alt = telemetry.get("altitudeRelative", telemetry.get("relative_altitude"))
-        if rel_alt is None:
-            rel_alt = telemetry.get("relativeAltitude", telemetry.get("alt_rel"))
-        if rel_alt is None:
-            missing_fields.append("当前相对高度")
-
-        if missing_fields:
-            if self._has_reached_loiter_guided_release_waypoint():
-                return ""
-            return (
-                f"{mode_name} 模式切换信息不足，缺少 {', '.join(missing_fields)}；"
-                "当前仍在原始首航点前，禁止切换"
-            )
-
-        rel_altitude = self._as_float(rel_alt, 0.0)
-        distance = self._distance_meters(home[0], home[1], position[0], position[1])
-        if distance <= protected_radius and rel_altitude < release_altitude:
-            return (
-                f"{mode_name} 模式只允许平飞后切换；当前距 Home 点 {distance:.1f}m、"
-                f"相对高度 {rel_altitude:.1f}m，仍在安全起飞保护区 "
-                f"{protected_radius:.1f}m/{release_altitude:.1f}m 内"
-            )
+        is_vtol = self._uav_and_nest_is_vtol()
+        if is_vtol is None:
+            return f"{mode_name} 模式切换缺少飞机端 UAV_AND_NEST(12002) 状态，无法确认是否已平飞"
+        if is_vtol:
+            return f"{mode_name} 模式只允许平飞后切换；UAV_AND_NEST.status bit13=is_VTOL，飞机仍处于垂直飞行"
         return ""
+
+    def _uav_and_nest_is_vtol(self) -> Optional[bool]:
+        if not self._flight_control:
+            return None
+        try:
+            if hasattr(self._flight_control, "get_uav_and_nest_status"):
+                status_data = self._flight_control.get_uav_and_nest_status() or {}
+            else:
+                status_data = getattr(self._flight_control, "uav_and_nest_status", {}) or {}
+        except Exception as exc:
+            logger.warning("Read UAV_AND_NEST status failed: %s", exc)
+            return None
+        if not isinstance(status_data, dict):
+            return None
+        if status_data.get("data_valid") is not True:
+            return None
+
+        last_update = self._as_float(status_data.get("last_update"), 0.0)
+        timeout = self._as_float(
+            Config.get("mavlink.uav_and_nest_status_timeout", 5.0),
+            5.0,
+        )
+        if last_update > 0 and time.time() - last_update > timeout:
+            return None
+
+        value = status_data.get("is_vtol")
+        if isinstance(value, bool):
+            return value
+        if value is not None:
+            try:
+                return bool(int(value))
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            return bool(int(status_data.get("status")) & UAV_AND_NEST_IS_VTOL_MASK)
+        except (TypeError, ValueError):
+            return None
 
     def _flight_control_heartbeat_status(self, max_age: float) -> Dict[str, Any]:
         now_wall = time.time()
