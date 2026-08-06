@@ -66,6 +66,8 @@ HOME_TRANSITION_ALTITUDE_OFFSET_METERS = 40.0
 LOITER_GUIDED_PROTECTED_MODES = {"GUIDED", "LOITER"}
 VTOL_TAKEOFF_COMMAND = 84
 UAV_AND_NEST_IS_VTOL_MASK = 1 << 13
+WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED = 321773
+WAYLINE_RESULT_USER_RETURN_INTERRUPTED = 322283
 
 
 def serialize_flighttask(handler):
@@ -317,6 +319,8 @@ class MissionManager:
         self._battery_safety_action: Optional[str] = None
         self._return_final_status: Optional[str] = None
         self._return_final_reason: str = ""
+        self._return_final_result: int = 0
+        self._current_wayline_result: int = 0
         self._return_release_lock = threading.RLock()
         self._executed_waypoint_actions = set()
 
@@ -820,6 +824,8 @@ class MissionManager:
         self._battery_safety_action = None
         self._return_final_status = None
         self._return_final_reason = ""
+        self._return_final_result = 0
+        self._current_wayline_result = 0
         self._executed_waypoint_actions.clear()
         self._clear_task_failure()
 
@@ -862,13 +868,14 @@ class MissionManager:
 
     def _emit_wayline_progress(self, status: str, current_step: int = None,
                                percent: int = None, flight_id: str = None,
-                               extra: dict = None):
+                               extra: dict = None, result: int = 0):
+        self._current_wayline_result = int(result or 0)
         if not self._event_callback:
             return
         event = MessageBuilder.build_event(
             'flighttask_progress',
             {
-                'result': 0,
+                'result': self._current_wayline_result,
                 **self._wayline_reply_data(
                     status=status,
                     current_step=current_step,
@@ -888,7 +895,7 @@ class MissionManager:
         return MessageBuilder.build_event(
             'flighttask_progress',
             {
-                'result': 0,
+                'result': self._current_wayline_result,
                 **self._wayline_reply_data(status=self._wayline_status_name()),
             },
             self.gateway_sn,
@@ -1735,12 +1742,26 @@ class MissionManager:
     def _aircraft_disarmed_on_ground(self) -> bool:
         return self._aircraft_disarmed_ground_state() is True
 
-    def _mark_return_pending(self, final_status: str, reason: str):
+    def _interrupted_mission_final_status(self) -> str:
+        """Dock3: 已有航线进度时按部分完成，否则按失败结束并释放占用。"""
+        break_point = self._break_point if isinstance(self._break_point, dict) else {}
+        try:
+            breakpoint_index = int(break_point.get("index", self._breakpoint_waypoint_idx) or 0)
+        except (TypeError, ValueError):
+            breakpoint_index = 0
+        if breakpoint_index > 0:
+            return STATUS_PARTIALLY_DONE
+        if self._current_progress_percent() > 0:
+            return STATUS_PARTIALLY_DONE
+        return STATUS_FAILED
+
+    def _mark_return_pending(self, final_status: str, reason: str, result: int = 0):
         if final_status not in self._STATUS_ENUM:
             final_status = STATUS_FAILED
         with self._return_release_lock:
             self._return_final_status = final_status
             self._return_final_reason = reason
+            self._return_final_result = int(result or 0)
         self._maybe_finish_returned_task()
 
     def _on_nest_environment_update(self, nest_data: Dict[str, Any]):
@@ -1750,6 +1771,7 @@ class MissionManager:
         with self._return_release_lock:
             final_status = self._return_final_status
             reason = self._return_final_reason
+            result = self._return_final_result
         if not final_status or not self._current_task_id:
             return False
         if self._status not in (self.MISSION_PAUSED, self.MISSION_FAILED):
@@ -1771,6 +1793,7 @@ class MissionManager:
         with self._return_release_lock:
             self._return_final_status = None
             self._return_final_reason = ""
+            self._return_final_result = 0
 
         percent = self._current_progress_percent()
         self._emit_wayline_progress(
@@ -1778,6 +1801,7 @@ class MissionManager:
             current_step=self._current_step,
             percent=percent,
             flight_id=flight_id,
+            result=result,
         )
         threading.Thread(
             target=self._run_db_coroutine,
@@ -2805,8 +2829,15 @@ class MissionManager:
                 result = self._flight_control.land()
                 if not result.get("success"):
                     logger.warning("Critical battery land failed: %s", result.get("message"))
-            self._report_mission_progress(status='failed')
-            self._mark_return_pending(STATUS_FAILED, reason)
+            self._report_mission_progress(
+                status='failed',
+                result=WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED,
+            )
+            self._mark_return_pending(
+                STATUS_FAILED,
+                reason,
+                result=WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED,
+            )
             return True
 
         if battery <= rtl_threshold and self._battery_safety_action is None:
@@ -2835,7 +2866,11 @@ class MissionManager:
                 last_point_type=0,
                 flight_id=self._current_task_id,
             )
-            self._mark_return_pending(STATUS_PARTIALLY_DONE, reason)
+            self._mark_return_pending(
+                self._interrupted_mission_final_status(),
+                reason,
+                result=WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED,
+            )
             return True
 
         return False
@@ -4262,7 +4297,11 @@ class MissionManager:
             if not result.get("success"):
                 logger.warning(f"返航失败: {result.get('message')}")
         if self._current_task_id and self._status == self.MISSION_PAUSED:
-            self._mark_return_pending(STATUS_PARTIALLY_DONE, "一键返航后回巢释放任务占用")
+            self._mark_return_pending(
+                self._interrupted_mission_final_status(),
+                "一键返航后回巢释放任务占用",
+                result=WAYLINE_RESULT_USER_RETURN_INTERRUPTED,
+            )
         return MessageBuilder.build_reply(msg, result=0)
 
     def handle_landing(self, msg: dict) -> dict:
@@ -4543,8 +4582,9 @@ class MissionManager:
                     self._mission_monitor_thread = None
                     self._monitor_running = False
 
-    def _report_mission_progress(self, status: str = 'executing'):
+    def _report_mission_progress(self, status: str = 'executing', result: int = 0):
         """上报航线任务进度 (flighttask_progress)"""
+        self._current_wayline_result = int(result or 0)
         total = len(self._current_wayline)
         current = self._current_waypoint_idx
 
@@ -4615,7 +4655,7 @@ class MissionManager:
             event = MessageBuilder.build_event(
                 'flighttask_progress',
                 {
-                    'result': 0,
+                    'result': self._current_wayline_result,
                     'output': {
                         'ext': ext,
                         'progress': {
@@ -5299,7 +5339,11 @@ class MissionManager:
             last_point_type=0,
             flight_id=task_id,
         )
-        self._mark_return_pending(STATUS_PARTIALLY_DONE, "航线返航后回巢释放任务占用")
+        self._mark_return_pending(
+            self._interrupted_mission_final_status(),
+            "航线返航后回巢释放任务占用",
+            result=WAYLINE_RESULT_USER_RETURN_INTERRUPTED,
+        )
         return MessageBuilder.build_reply(
             msg,
             result=0,
@@ -5356,7 +5400,11 @@ class MissionManager:
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent())
         if active_mission and self._current_task_id:
-            self._mark_return_pending(STATUS_PARTIALLY_DONE, "一键返航后回巢释放任务占用")
+            self._mark_return_pending(
+                self._interrupted_mission_final_status(),
+                "一键返航后回巢释放任务占用",
+                result=WAYLINE_RESULT_USER_RETURN_INTERRUPTED,
+            )
         return MessageBuilder.build_reply(
             msg,
             result=0,

@@ -155,6 +155,84 @@ class MissionProgressBoundsTest(unittest.TestCase):
             final_events[-1]["data"]["output"]["ext"]["break_point"]["break_reason"],
             773,
         )
+        self.assertEqual(final_events[-1]["data"]["result"], 321773)
+        reconnect_event = manager.build_current_wayline_progress_event()
+        self.assertEqual(reconnect_event["data"]["output"]["status"], "partially_done")
+        self.assertEqual(reconnect_event["data"]["result"], 321773)
+
+    def test_low_battery_return_without_progress_releases_as_failed(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_RUNNING
+        manager._current_task_id = "flight-low-battery-no-progress"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._current_waypoint_idx = 0
+        manager._get_telemetry_snapshot = lambda: {
+            "batteryRemaining": 20,
+            "battery_available": True,
+        }
+        manager._get_nest_snapshot = lambda: {}
+        manager._flight_control = SimpleNamespace(
+            one_click_return=lambda: {"success": True, "message": "ok"}
+        )
+        manager.stop_mission_monitor = lambda: True
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        self.assertTrue(manager._handle_battery_safety())
+        released = manager._maybe_finish_returned_task({
+            "cloud_properties": {"drone_in_dock": 1},
+            "landing_in_progress": False,
+            "takeoff_in_progress": False,
+        })
+
+        self.assertTrue(released)
+        self.assertEqual(manager._status, manager.MISSION_FAILED)
+        self.assertFalse(manager.is_busy)
+        final_events = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+            and event.get("data", {}).get("output", {}).get("status") == "failed"
+        ]
+        self.assertTrue(final_events)
+        self.assertEqual(final_events[-1]["data"]["result"], 321773)
+
+    def test_user_return_releases_with_user_return_result_code(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_RUNNING
+        manager._current_task_id = "flight-user-return"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._current_waypoint_idx = 1
+        manager._get_telemetry_snapshot = lambda: {
+            "armed": False,
+            "altitudeRelative": 0.2,
+        }
+        manager._flight_control = SimpleNamespace(
+            set_mode=lambda mode: {"success": True, "message": "ok"}
+        )
+        manager.stop_mission_monitor = lambda: True
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+
+        reply = manager.handle_return_home({"method": "return_home", "data": {}})
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(manager._status, manager.MISSION_PARTIALLY_DONE)
+        self.assertFalse(manager.is_busy)
+        final_events = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+            and event.get("data", {}).get("output", {}).get("status") == "partially_done"
+        ]
+        self.assertTrue(final_events)
+        self.assertEqual(final_events[-1]["data"]["result"], 322283)
+        self.assertEqual(
+            final_events[-1]["data"]["output"]["ext"]["break_point"]["break_reason"],
+            1283,
+        )
 
     def test_return_release_can_use_disarmed_grounded_aircraft_when_dock_state_missing(self):
         events = []
