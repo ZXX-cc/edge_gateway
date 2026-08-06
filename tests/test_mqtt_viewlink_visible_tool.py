@@ -23,8 +23,8 @@ class FakeClient:
         self.calls.append((method, data))
         if method == self.fail_method:
             return 2, None
-        if method == "workspace_bind_status":
-            return 0, {"data": {"result": 0, "is_bind": True}}
+        if method == "gateway_state_query":
+            return 0, {"data": {"result": 0, "state": {"device": "bound"}}}
         if method == "payload_status_query":
             return 0, {
                 "data": {

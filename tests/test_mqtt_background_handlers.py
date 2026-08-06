@@ -183,6 +183,27 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
         self.assertEqual(reply["method"], payload["method"])
         self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
 
+    def test_services_allowlist_ignores_known_non_services_method_without_reply(self):
+        calls = []
+
+        def handler(msg):
+            calls.append(msg["tid"])
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.set_allowed_service_methods({"cover_open"})
+        self.client.set_ignored_service_methods({"device_binding"})
+        self.client.register_handler("device_binding", handler, reply_required=True)
+        payload = {
+            "tid": "services-non-services-method",
+            "method": "device_binding",
+            "data": {"workspace_id": "legacy"},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(self.client.client.published, [])
+
     def test_services_allowlist_permits_dock3_method(self):
         calls = []
 

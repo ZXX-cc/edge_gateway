@@ -66,17 +66,6 @@ def run_status_checks(client, args):
     rc, _ = client.request("gateway_state_query", {"compact": True}, args.timeout, channel="services", allowed_results={0})
     if rc != 0:
         return rc
-
-    if args.include_legacy_bind_status:
-        rc, _ = client.request("airport_bind_status", {}, args.timeout, channel="services", allowed_results={0})
-        if rc != 0:
-            print(
-                "legacy services airport_bind_status failed. "
-                "Dock3 official organization validation uses requests/requests_reply; "
-                "rerun without --include-legacy-bind-status or use mqtt_cloud_simulator.py for official validation.",
-                file=sys.stderr,
-            )
-            return rc
     return 0
 
 
@@ -161,11 +150,6 @@ def main():
     parser.add_argument("--skip-readonly-property-check", action="store_true")
     parser.add_argument("--quiet-stale", action="store_true", help="Only count stale duplicate replies instead of printing their JSON payloads.")
     parser.add_argument("--fail-on-stale", action="store_true", help="Fail if duplicate legacy/stale replies are observed. Useful after the broker environment is cleaned.")
-    parser.add_argument(
-        "--include-legacy-bind-status",
-        action="store_true",
-        help="Also test the legacy services airport_bind_status compatibility path. Dock3 official path is requests/requests_reply.",
-    )
     args = parser.parse_args()
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure the running gateway is bound before full-chain business steps."""
+"""Ensure the running gateway is already bound before full-chain business steps."""
 
 import argparse
 import sys
@@ -17,15 +17,13 @@ def is_truthy_bound(value) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bind gateway as a full-chain precondition")
+    parser = argparse.ArgumentParser(description="Check gateway binding as a full-chain precondition")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--sn", default=None)
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
-    parser.add_argument("--workspace-id", default="full_chain_workspace")
-    parser.add_argument("--workspace-name", default="全链路验收工作空间")
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
@@ -46,11 +44,8 @@ def main() -> int:
 
     try:
         rc, reply = client.request(
-            "device_binding",
-            {
-                "workspace_id": args.workspace_id,
-                "workspace_name": args.workspace_name,
-            },
+            "gateway_state_query",
+            {"compact": True},
             args.timeout,
             channel="services",
             allowed_results={0},
@@ -58,25 +53,16 @@ def main() -> int:
         if rc != 0:
             return rc
 
-        rc, workspace_reply = client.request(
-            "workspace_get",
-            {},
-            args.timeout,
-            channel="services",
-            allowed_results={0},
-        )
-        if rc != 0:
-            return rc
-
-        data = workspace_reply.get("data", {}) if isinstance(workspace_reply, dict) else {}
-        if data.get("workspace_id") != args.workspace_id:
+        data = reply.get("data", {}) if isinstance(reply, dict) else {}
+        state = data.get("state", {}) if isinstance(data, dict) else {}
+        device_state = state.get("device") if isinstance(state, dict) else ""
+        if not is_truthy_bound(device_state == "bound"):
             print(
-                f"workspace_id mismatch: expected={args.workspace_id}, actual={data.get('workspace_id')}",
+                "gateway is not bound by the official organization flow; "
+                "start the gateway with airport_bind_status/airport_organization_get/"
+                f"airport_organization_bind configured first. state={state}",
                 file=sys.stderr,
             )
-            return 5
-        if not is_truthy_bound(data.get("is_bound")):
-            print(f"workspace_get reports unbound: {data}", file=sys.stderr)
             return 6
 
         stale_total = client.stale_total()
@@ -85,8 +71,8 @@ def main() -> int:
             return 10
 
         print(
-            "dock3 binding precondition ok "
-            f"(workspace_id={data.get('workspace_id')}, result={result_code(reply)}, "
+            "dock3 binding state precondition ok "
+            f"(device={device_state}, result={result_code(reply)}, "
             f"accepted={client.stats['accepted']}, events={client.stats['events']}, "
             f"ignored_total={stale_total})"
         )

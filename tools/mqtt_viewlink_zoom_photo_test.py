@@ -83,8 +83,8 @@ def _runtime_gimbal_control(client, timeout: float) -> tuple[int, dict[str, Any]
 
 def _check_bound(client, timeout: float) -> int:
     rc, reply = client.request(
-        "workspace_bind_status",
-        {},
+        "gateway_state_query",
+        {"compact": True},
         timeout,
         channel="services",
         allowed_results={0},
@@ -92,9 +92,10 @@ def _check_bound(client, timeout: float) -> int:
     if rc != 0:
         return rc
     data = _data(reply)
-    if data.get("is_bind") not in {True, 1, "1"}:
+    state = data.get("state", {}) if isinstance(data, dict) else {}
+    if state.get("device") != "bound":
         print(
-            "gateway is unbound; complete device binding before ViewLink actions",
+            "gateway is unbound; complete the official organization requests flow before ViewLink actions",
             file=sys.stderr,
         )
         return 23
@@ -282,7 +283,7 @@ def run_zoom_photo(
 
 def _dry_run_plan(args) -> None:
     plan = [
-        ["workspace_bind_status", {}],
+        ["gateway_state_query", {"compact": True}],
         ["payload_status_query", {}],
         ["viewlink_initialize", {"sdk_dir": args.sdk_dir or "<runtime sdk_dir>"}],
         [

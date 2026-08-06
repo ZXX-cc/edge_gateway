@@ -36,10 +36,8 @@ class E2EFullChainTest(unittest.TestCase):
             "osd_allow_invalid": False,
             "device_extra_sub_device_json": [],
             "device_include_unbind_check": False,
-            "skip_device_binding_precondition": False,
+            "skip_binding_precondition": False,
             "skip_state_precondition": False,
-            "binding_workspace_id": "full_chain_workspace",
-            "binding_workspace_name": "全链路验收工作空间",
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -126,8 +124,7 @@ class E2EFullChainTest(unittest.TestCase):
         )
 
         self.assertIn("mqtt_dock3_binding_precondition.py", command[1])
-        self.assertIn("--workspace-id", command)
-        self.assertIn("full_chain_workspace", command)
+        self.assertNotIn("--workspace-id", command)
         self.assertIn("192.168.2.188", command)
         self.assertIn("EDGEGW001", command)
         self.assertIn("--fail-on-stale", command)

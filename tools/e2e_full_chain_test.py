@@ -136,10 +136,6 @@ def build_binding_precondition_command(args) -> List[str]:
         str(args.timeout),
         "--qos",
         str(args.qos),
-        "--workspace-id",
-        args.binding_workspace_id,
-        "--workspace-name",
-        args.binding_workspace_name,
     ]
     if args.host:
         command.extend(["--host", args.host])
@@ -238,17 +234,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--skip-device-binding-precondition",
+        "--skip-binding-precondition",
+        dest="skip_binding_precondition",
         action="store_true",
-        help="Do not send device_binding before business steps that require bound/online state.",
+        help="Do not check official organization binding state before business steps.",
     )
     parser.add_argument(
         "--skip-state-precondition",
         action="store_true",
         help="Do not send drc_mode_exit before mutually exclusive mission/OTA steps.",
     )
-    parser.add_argument("--binding-workspace-id", default="full_chain_workspace")
-    parser.add_argument("--binding-workspace-name", default="全链路验收工作空间")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--python", default=sys.executable)
     args = parser.parse_args()
@@ -275,12 +270,12 @@ def main() -> int:
         if (
             step_requires_bound_device(step)
             and not binding_precondition_done
-            and not args.skip_device_binding_precondition
+            and not args.skip_binding_precondition
         ):
             binding_command = build_binding_precondition_command(args)
             binding_step = Step(
                 "binding-precondition",
-                "P0 device binding precondition",
+                "P0 organization binding state precondition",
                 "p0",
                 "mqtt_dock3_binding_precondition.py",
             )

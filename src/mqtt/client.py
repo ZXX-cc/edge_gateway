@@ -51,6 +51,7 @@ class MQTTClient:
         self._topic_handlers: Dict[str, Callable] = {}  # method -> handler
         self._reply_required_methods = set()
         self._allowed_service_methods = set()
+        self._ignored_service_methods = set()
         self._status_reply_handler: Optional[Callable] = None
         self._requests_reply_handler: Optional[Callable] = None
         self._connect_callbacks: List[Callable] = []
@@ -407,6 +408,15 @@ class MQTTClient:
         self._allowed_service_methods = {
             str(method) for method in (methods or []) if str(method)
         }
+
+    def set_ignored_service_methods(self, methods):
+        """Drop known non-services methods if they are sent to /services."""
+        self._ignored_service_methods = {
+            str(method) for method in (methods or []) if str(method)
+        }
+
+    def _should_ignore_service_method(self, source_topic: str, method: str) -> bool:
+        return source_topic.endswith('/services') and method in self._ignored_service_methods
 
     def _validate_allowed_service_method(self, source_topic: str, method: str) -> Optional[str]:
         if not source_topic.endswith('/services'):
@@ -942,6 +952,31 @@ class MQTTClient:
                     ("result", result),
                     ("payload", format_with_labels(payload, max_length=3000)),
                 ]))
+                return
+
+            if self._should_ignore_service_method(msg.topic, method):
+                trace_command(
+                    "mqtt_service_method_ignored",
+                    topic=msg.topic,
+                    method=method,
+                    tid=payload.get("tid"),
+                    reason="method belongs to a non-services Dock3 channel",
+                )
+                self._trace.record(
+                    "mqtt_service_method_ignored",
+                    direction="in",
+                    topic=msg.topic,
+                    payload=payload,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    extra={"reason": "non_services_method"},
+                )
+                logger.warning(
+                    "Services method ignored because it belongs to another Dock3 channel: "
+                    "topic=%s method=%s tid=%s",
+                    msg.topic,
+                    method,
+                    payload.get("tid"),
+                )
                 return
 
             service_method_error = self._validate_allowed_service_method(msg.topic, method)

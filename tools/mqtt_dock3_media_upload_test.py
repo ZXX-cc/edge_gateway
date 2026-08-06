@@ -77,7 +77,12 @@ def request_service(
 
 
 def trigger_viewlink_photo(client: MqttRequestClient, args) -> None:
-    request_service(client, "workspace_bind_status", {}, args.timeout)
+    state_reply = request_service(client, "gateway_state_query", {"compact": True}, args.timeout)
+    state = data(state_reply).get("state", {})
+    if not isinstance(state, dict) or state.get("device") != "bound":
+        raise RuntimeError(
+            "gateway is unbound; complete the official organization requests flow before media upload checks"
+        )
     status = request_service(client, "payload_status_query", {}, args.timeout)
 
     control = {}

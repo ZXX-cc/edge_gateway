@@ -209,6 +209,21 @@ ALLOWED_SERVICE_METHODS = frozenset({
     'custom_data_transmission_from_psdk', 'custom_data_transmission_to_psdk',
 })
 
+IGNORED_NON_SERVICE_METHODS = frozenset({
+    # Official organization binding is requests/requests_reply, topology is
+    # status/status_reply, and device_binding/device_unbinding are internal
+    # binding-cache/event semantics.  If these arrive on /services, do not emit
+    # a services_reply that makes them look like exposed cloud services.
+    'airport_bind_status',
+    'airport_organization_get',
+    'airport_organization_bind',
+    'device_binding',
+    'device_unbinding',
+    'workspace_bind_status',
+    'workspace_get',
+    'update_topo',
+})
+
 DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({'property_set'}) | ALLOWED_SERVICE_METHODS
 
 def filter_dock_status_fields(updates: dict) -> dict:
@@ -870,6 +885,7 @@ class EdgeGateway:
             logger.info("Connecting to NanoMQ...")
             if self.mqtt.connect():
                 self.mqtt.set_allowed_service_methods(ALLOWED_SERVICE_METHODS)
+                self.mqtt.set_ignored_service_methods(IGNORED_NON_SERVICE_METHODS)
                 # 注册路由器到MQTT
                 for method, handler in self.router._routes.items():
                     self.mqtt.register_handler(

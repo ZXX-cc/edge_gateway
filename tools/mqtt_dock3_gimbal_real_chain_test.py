@@ -80,23 +80,21 @@ def load_gimbal_control(args) -> dict[str, Any]:
 
 
 def ensure_gateway_bound(client: GimbalRealChainClient, args) -> int:
-    rc, workspace = client.service("workspace_get", {}, args.timeout, {0})
+    rc, reply = client.service("gateway_state_query", {"compact": True}, args.timeout, {0})
     if rc != 0:
         return rc
-    data = workspace.get("data", {}) if isinstance(workspace, dict) else {}
-    if data.get("is_bound") in {True, 1, "1", "true", "True"}:
-        print(f"gateway already bound (workspace_id={data.get('workspace_id')})")
+    data = reply.get("data", {}) if isinstance(reply, dict) else {}
+    state = data.get("state", {}) if isinstance(data, dict) else {}
+    if state.get("device") == "bound":
+        print("gateway already bound by official organization flow")
         return 0
 
-    rc, _ = client.service(
-        "device_binding",
-        {"workspace_id": args.workspace_id, "workspace_name": args.workspace_name},
-        args.timeout,
-        {0},
+    print(
+        "gateway is not bound; complete the official organization requests flow "
+        "before gimbal real-chain checks",
+        file=sys.stderr,
     )
-    if rc == 0:
-        print(f"gateway bind ok (workspace_id={args.workspace_id})")
-    return rc
+    return 23
 
 
 def ensure_gimbal_connected(client: GimbalRealChainClient, args) -> int:

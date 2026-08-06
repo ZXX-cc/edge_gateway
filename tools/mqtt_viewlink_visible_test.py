@@ -52,8 +52,8 @@ def _request_viewlink(client, method: str, data: dict[str, Any], timeout: float)
 
 def _check_bound(client, timeout: float) -> int:
     rc, reply = client.request(
-        "workspace_bind_status",
-        {},
+        "gateway_state_query",
+        {"compact": True},
         timeout,
         channel="services",
         allowed_results={0},
@@ -61,34 +61,15 @@ def _check_bound(client, timeout: float) -> int:
     if rc != 0:
         return rc
     data = _data(reply)
-    if data.get("is_bind") not in {True, 1, "1"}:
-        print("gateway is unbound; sending local test device_binding")
-        rc, _ = client.request(
-            "device_binding",
-            {
-                "workspace_id": "local_test_workspace",
-                "workspace_name": "本地测试工作空间",
-            },
-            timeout,
-            channel="services",
-            allowed_results={0},
+    state = data.get("state", {}) if isinstance(data, dict) else {}
+    if state.get("device") != "bound":
+        print(
+            "gateway is unbound; run the official organization requests flow "
+            "before ViewLink checks",
+            file=sys.stderr,
         )
-        if rc != 0:
-            return rc
-        rc, reply = client.request(
-            "workspace_bind_status",
-            {},
-            timeout,
-            channel="services",
-            allowed_results={0},
-        )
-        if rc != 0:
-            return rc
-        data = _data(reply)
-        if data.get("is_bind") not in {True, 1, "1"}:
-            print("gateway is still unbound after device_binding", file=sys.stderr)
-            return 23
-    print("ok workspace_bind_status: bound")
+        return 23
+    print("ok gateway_state_query: device bound")
     return 0
 
 
@@ -191,7 +172,7 @@ def _run_visible_motion(client, args, sleep_fn: Callable[[float], None]) -> int:
 
 def _dry_run_plan(args) -> None:
     plan = [
-        ["workspace_bind_status", {}],
+        ["gateway_state_query", {"compact": True}],
         ["payload_status_query", {}],
         ["viewlink_initialize", {"sdk_dir": args.sdk_dir or "<runtime sdk_dir>"}],
         [

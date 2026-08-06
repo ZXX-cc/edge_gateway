@@ -67,8 +67,8 @@ def _wait_for_gateway(
         if client.connect(2.0):
             try:
                 rc, _ = client.request(
-                    "workspace_bind_status",
-                    {},
+                    "gateway_state_query",
+                    {"compact": True},
                     2.0,
                     channel="services",
                     allowed_results={0},

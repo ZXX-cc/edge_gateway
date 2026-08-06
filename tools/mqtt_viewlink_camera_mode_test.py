@@ -96,12 +96,16 @@ def _runtime_gimbal_control(client: MqttRequestClient, timeout: float) -> tuple[
 def _check_bound(client: MqttRequestClient, timeout: float, *, skip: bool) -> int:
     if skip:
         return 0
-    rc, reply = _request_service(client, "workspace_bind_status", {}, timeout)
+    rc, reply = _request_service(client, "gateway_state_query", {"compact": True}, timeout)
     if rc != 0:
         return rc
     data = _reply_data(reply)
-    if data.get("is_bind") not in {True, 1, "1"}:
-        print("gateway is unbound; complete device binding before ViewLink actions", file=sys.stderr)
+    state = data.get("state", {}) if isinstance(data, dict) else {}
+    if state.get("device") != "bound":
+        print(
+            "gateway is unbound; complete the official organization requests flow before ViewLink actions",
+            file=sys.stderr,
+        )
         return 23
     return 0
 
@@ -288,7 +292,7 @@ def _mode_sequence(raw: str) -> list[str]:
 def _dry_run(args) -> None:
     steps: list[list[Any]] = []
     if not args.skip_bind_check:
-        steps.append(["workspace_bind_status", {}])
+        steps.append(["gateway_state_query", {"compact": True}])
     if not args.skip_viewlink_connect:
         steps.extend([
             ["payload_status_query", {}],

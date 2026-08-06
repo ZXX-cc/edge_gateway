@@ -441,9 +441,9 @@ def run_payload_control_checks(client: Dock3PayloadControlClient, args) -> int:
 
 
 def ensure_gateway_bound(client: Dock3PayloadControlClient, args) -> int:
-    rc, workspace = client.request(
-        "workspace_get",
-        {},
+    rc, reply = client.request(
+        "gateway_state_query",
+        {"compact": True},
         args.timeout,
         channel="services",
         allowed_results={0},
@@ -451,24 +451,17 @@ def ensure_gateway_bound(client: Dock3PayloadControlClient, args) -> int:
     )
     if rc != 0:
         return rc
-    data = workspace.get("data", {}) if isinstance(workspace, dict) else {}
-    if data.get("is_bound") in {True, 1, "1", "true", "True"}:
+    data = reply.get("data", {}) if isinstance(reply, dict) else {}
+    state = data.get("state", {}) if isinstance(data, dict) else {}
+    if state.get("device") == "bound":
         return 0
 
-    rc, _ = client.request(
-        "device_binding",
-        {
-            "workspace_id": args.workspace_id,
-            "workspace_name": args.workspace_name,
-        },
-        args.timeout,
-        channel="services",
-        allowed_results={0},
-        expected_status=None,
+    print(
+        "gateway is not bound; complete the official organization requests flow "
+        "before payload control checks",
+        file=sys.stderr,
     )
-    if rc == 0:
-        print(f"gateway bind ok (workspace_id={args.workspace_id})")
-    return rc
+    return 23
 
 
 def connect_gimbal(client: Dock3PayloadControlClient, args) -> int:
