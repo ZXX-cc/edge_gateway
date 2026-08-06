@@ -8,6 +8,7 @@ parses common polygon region files and uploads them as MAVLink fence mission
 items, waiting for the flight controller ACK before reporting success upstream.
 """
 import json
+import math
 import os
 import threading
 import time
@@ -33,6 +34,8 @@ MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION = getattr(
     "MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION",
     5002,
 )
+EARTH_RADIUS_METERS = 6378137.0
+CIRCLE_APPROX_VERTEX_COUNT = 36
 
 
 class FlightAreaDeviceApplier(BaseModule):
@@ -128,6 +131,20 @@ class FlightAreaDeviceApplier(BaseModule):
                 ))
         return items
 
+    def extract_area_polygons(self, files: List[dict]) -> List[dict]:
+        polygons = []
+        for file_info in files:
+            local_path = file_info.get("local_path")
+            if not local_path or not os.path.exists(local_path):
+                continue
+            with open(local_path, "r", encoding="utf-8") as f:
+                document = json.load(f)
+            source = file_info.get("name", local_path)
+            for polygon in self._extract_polygons(document, source):
+                polygon.setdefault("area_id", f"{source}:{len(polygons)}")
+                polygons.append(polygon)
+        return polygons
+
     def _extract_polygons(self, document: Any, source: str) -> List[dict]:
         if isinstance(document, dict) and document.get("type") == "FeatureCollection":
             return self._extract_geojson_features(document.get("features", []), source)
@@ -164,11 +181,17 @@ class FlightAreaDeviceApplier(BaseModule):
                 continue
             geometry = feature.get("geometry") or {}
             properties = feature.get("properties") or {}
-            mode = self._area_mode(properties)
+            mode_source = dict(properties) if isinstance(properties, dict) else {}
+            for key in ("geofence_type", "geofenceType", "fence_type", "fenceType"):
+                if key in feature:
+                    mode_source[key] = feature.get(key)
+            mode = self._area_mode(mode_source)
+            area_id = self._feature_area_id(feature, properties, f"{source}:{index}")
             if geometry.get("type") == "Polygon":
                 rings = geometry.get("coordinates") or []
                 if rings:
                     polygons.append({
+                        "area_id": area_id,
                         "mode": mode,
                         "points": self._normalize_ring(
                             self._points_from_geojson_ring(rings[0]),
@@ -179,12 +202,28 @@ class FlightAreaDeviceApplier(BaseModule):
                 for ring_index, polygon in enumerate(geometry.get("coordinates") or []):
                     if polygon:
                         polygons.append({
+                            "area_id": f"{area_id}:{ring_index}",
                             "mode": mode,
                             "points": self._normalize_ring(
                                 self._points_from_geojson_ring(polygon[0]),
                                 f"{source}.features[{index}].rings[{ring_index}]",
                             ),
                         })
+            elif geometry.get("type") == "Point":
+                circle_points = self._points_from_geojson_circle(
+                    geometry,
+                    properties,
+                    f"{source}.features[{index}]",
+                )
+                if circle_points:
+                    polygons.append({
+                        "area_id": area_id,
+                        "mode": mode,
+                        "points": self._normalize_ring(
+                            circle_points,
+                            f"{source}.features[{index}].circle",
+                        ),
+                    })
         if not polygons:
             raise ValueError(f"no supported GeoJSON polygons in {source}")
         return polygons
@@ -196,6 +235,63 @@ class FlightAreaDeviceApplier(BaseModule):
             if not isinstance(coord, (list, tuple)) or len(coord) < 2:
                 continue
             points.append({"longitude": float(coord[0]), "latitude": float(coord[1])})
+        return points
+
+    @staticmethod
+    def _feature_area_id(feature: dict, properties: dict, fallback: str) -> str:
+        properties = properties if isinstance(properties, dict) else {}
+        raw = (
+            feature.get("id")
+            or properties.get("id")
+            or properties.get("area_id")
+            or properties.get("areaId")
+            or properties.get("name")
+            or fallback
+        )
+        return str(raw)
+
+    @staticmethod
+    def _points_from_geojson_circle(geometry: dict, properties: dict, source: str) -> List[dict]:
+        if not isinstance(geometry, dict):
+            return []
+        properties = properties if isinstance(properties, dict) else {}
+        subtype = str(properties.get("subType") or properties.get("sub_type") or "").lower()
+        radius = properties.get("radius", geometry.get("radius"))
+        if subtype and subtype != "circle":
+            return []
+        if radius is None:
+            return []
+        radius_m = float(radius)
+        if radius_m <= 0:
+            raise ValueError(f"circle radius must be positive in {source}")
+        coordinates = geometry.get("coordinates") or []
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+            raise ValueError(f"circle center coordinate required in {source}")
+
+        center_lon = float(coordinates[0])
+        center_lat = float(coordinates[1])
+        if not (-90 <= center_lat <= 90 and -180 <= center_lon <= 180):
+            raise ValueError(f"invalid circle center in {source}: {center_lat},{center_lon}")
+
+        angular_distance = radius_m / EARTH_RADIUS_METERS
+        center_lat_rad = math.radians(center_lat)
+        center_lon_rad = math.radians(center_lon)
+        points = []
+        for index in range(CIRCLE_APPROX_VERTEX_COUNT):
+            bearing = 2 * math.pi * index / CIRCLE_APPROX_VERTEX_COUNT
+            lat_rad = math.asin(
+                math.sin(center_lat_rad) * math.cos(angular_distance)
+                + math.cos(center_lat_rad) * math.sin(angular_distance) * math.cos(bearing)
+            )
+            lon_rad = center_lon_rad + math.atan2(
+                math.sin(bearing) * math.sin(angular_distance) * math.cos(center_lat_rad),
+                math.cos(angular_distance) - math.sin(center_lat_rad) * math.sin(lat_rad),
+            )
+            lon = (math.degrees(lon_rad) + 540) % 360 - 180
+            points.append({
+                "latitude": math.degrees(lat_rad),
+                "longitude": lon,
+            })
         return points
 
     @staticmethod
@@ -232,8 +328,14 @@ class FlightAreaDeviceApplier(BaseModule):
             or area.get("areaType")
             or area.get("fence_type")
             or area.get("fenceType")
+            or area.get("geofence_type")
+            or area.get("geofenceType")
             or ""
         ).lower()
+        if raw in ("nfz", "no_fly_zone", "no-fly-zone"):
+            return "exclusion"
+        if raw in ("dfence", "inclusion", "include", "fly_zone", "fly-zone"):
+            return "inclusion"
         if any(token in raw for token in ("exclude", "exclusion", "no_fly", "nofly", "禁飞")):
             return "exclusion"
         return "inclusion"

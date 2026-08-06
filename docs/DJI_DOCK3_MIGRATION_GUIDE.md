@@ -151,26 +151,60 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 官方资料：
 
 - Dock3 自定义飞行区文档：https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/custom-fly-region.html
+- Dock 自定义飞行区功能时序图：https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/dock-feature-set/custom-flight-area.html
 - 官方自定义飞行区文件模板：https://terra-1-g.djicdn.com/fee90c2e03e04e8da67ea6f56365fc76/SDK%20%E6%96%87%E6%A1%A3/CloudAPI/custom-flight-area-file-template.json
+- 甲方自定义飞行区样例：http://fsimage.guihuao.com/geofence/geofence_1df20749f4117e1120b6176eca56004f.json
 
 当前代码已有链路：
 
 - `src/main.py` 已创建 `FlightAreaManager` 和 `FlightAreaDeviceApplier`，并注册 `flight_areas_update`、`flight_areas_get`。
 - `src/modules/flight_area_manager.py` 已支持 `flight_areas_update` 触发 `requests` 通道主动发送 `flight_areas_get`，收到 `requests_reply` 后下载文件、校验 `size/checksum`、缓存到本地并上报 `flight_areas_sync_progress`。
 - `src/modules/flight_area_manager.py` 已保留 `flight_areas_get` services 兼容查询，能返回当前缓存文件列表。
-- `src/modules/flight_area_device_applier.py` 已把下载后的多边形飞行区转换为 MAVLink fence mission items，并等待飞控 ACK 后再向平台报告同步结果。
-- `FlightAreaManager.report_flight_areas_drone_location()` 已有事件上报函数，但还没有接入飞行器位置、距离计算和周期/触发条件。
+- `src/modules/flight_area_device_applier.py` 已把下载后的多边形飞行区转换为 MAVLink fence mission items，并等待飞控 ACK 后再向平台报告同步结果；已支持官方/甲方样例中的顶层 `geofence_type=nfz/dfence`，`nfz` 映射禁飞区，`dfence` 映射飞行围栏；已支持 `Point + properties.subType=Circle + radius` 圆形区域，内部近似转换为 36 个围栏顶点。
+- `FlightAreaManager.update_aircraft_location()` 已接入飞行器 OSD 位置，按自定义飞行区边界计算 `area_distance/is_in_area`，并只在状态变化时通过 `flight_areas_drone_location` 推送：远离不重复上报，`outside -> near` 上报靠近边界，`near/outside -> inside` 上报进入围栏，`inside -> near/outside` 上报离开围栏，`near -> outside` 上报离开边界范围。
+
+甲方样例结论：
+
+- 文件名 `geofence_1df20749f4117e1120b6176eca56004f.json` 中的 `1df20749f4117e1120b6176eca56004f` 与文件内容 MD5 一致，checksum 规则按 DJI API 的 `geofence_{fileMD5}.json` 执行。
+- 文件 HTTP 响应 `Content-Length=358`，`Content-Type=application/json`，`Content-Md5=HfIHSfQRfhEgthduylYATw==`，下载侧仍需按平台下发的 `size/checksum` 做最终校验。
+- 文件格式为 GeoJSON `FeatureCollection`，含 1 个 `Polygon` Feature，`geofence_type=nfz`，属于禁飞区。
+- 已将该样例保存为 `tests/fixtures/custom_fly_region/geofence_1df20749f4117e1120b6176eca56004f.json`，并新增 `tests/test_dock3_custom_fly_region.py` 覆盖 MD5 规则和 `nfz` 解析。
+
+删除/清空语义：
+
+- 云端平台只在平台侧删除/清空某个自定义飞行区时，网关不会自动感知；必须再次下发 `flight_areas_update`，让网关主动 `flight_areas_get` 拉取最新文件列表。
+- `flight_areas_get` 的 `requests_reply` 返回 `data.output.files: []` 时，以云端为空为准，网关清空本地缓存，并向设备侧应用空飞行区列表。
+- 当前 MAVLink fence 替代链路中，空飞行区列表会进入 `apply_files([])`，即上传 0 个 fence item，用于清空飞控侧已有围栏。
+- 如果只删除其中一个区域，平台需要重新生成新的 `geofence_{fileMD5}.json` 文件，并在 `files` 中返回新的文件信息；网关按新文件覆盖旧缓存。
+
+官方时序链路：
+
+1. 平台/地理服务打包自定义飞行区文件，并上传到对象存储。
+2. 平台下发 `flight_areas_update` 到 `thing/product/{gateway_sn}/services`，通知机场/网关自定义飞行区文件已更新。
+3. 机场/网关主动发送 `flight_areas_get` 到 `thing/product/{gateway_sn}/requests`，向平台获取最新文件信息。
+4. 平台通过 `thing/product/{gateway_sn}/requests_reply` 返回最新自定义飞行区文件信息，至少包含下载 URL 和文件 MD5。
+5. 机场/网关把文件 URL 和 MD5 传递给设备侧，设备侧检查本地文件版本。
+6. 如果文件版本一致，直接通过 `flight_areas_sync_progress` 上报同步完成。
+7. 如果文件版本不一致，以云端版本为准，下载最新文件并更新设备侧自定义飞行区数据，同时通过 `flight_areas_sync_progress` 上报同步中/完成/失败状态。
+8. 设备侧后续在靠近边界、进入围栏、离开围栏或离开边界范围时推送飞行区距离/告警信息，机场/网关通过 `flight_areas_drone_location` 上报平台；该事件不按固定周期轮询上报。
+
+当前代码与时序差距：
+
+- 已满足：`flight_areas_update -> requests flight_areas_get -> requests_reply -> 下载文件 -> 校验 size/checksum -> 缓存 -> flight_areas_sync_progress` 的网关侧基础链路。
+- 已满足：云端返回 `files: []` 时按清空全部自定义飞行区处理。
+- 已满足：`flight_areas_drone_location` 已按状态变化触发，支持靠近边界、进入围栏、离开围栏和离开边界范围的事件推送。
+- 部分满足：设备侧当前是 MAVLink fence 生效器，能把 Polygon 和 Point/Circle 转成飞控 fence，但还不是 DJI 官方时序里的飞行器/机场原生 FlySafe 数据升级链路。
+- 未满足：还没有比较“飞行器端已有文件版本”和“云端文件版本”的设备侧查询能力，当前主要按云端返回文件重新下载/覆盖。
+- 未满足：还没有覆盖该时序的 MQTT 专项脚本，后续脚本应按上述 8 步保存完整日志。
 
 当前欠缺：
 
-- 缺官方模板文件的本地留存。后续应新增 `docs/reference/custom-flight-area-file-template.json` 作为文档参考，或新增 `tests/fixtures/custom_fly_region/geofence_<md5>.json` 作为测试样例。
+- 缺官方模板文件的本地留存。当前已有甲方 Polygon/nfz 样例 fixture，后续仍应新增 `docs/reference/custom-flight-area-file-template.json` 作为官方离线参考。
 - 缺官方字段矩阵。至少需要覆盖文件名 `geofence_{fileMD5}.json`、`FeatureCollection`、`Feature.id`、`geofence_type=dfence/nfz`、`geometry.type=Polygon/Point`、`properties.subType=Circle`、`radius`、`properties.enable` 当前版本不支持等规则。
-- 缺官方 `geofence_type` 语义映射。当前 `_area_mode()` 只识别 `exclude/exclusion/no_fly/nofly/禁飞` 等旧写法，未明确把 `nfz` 映射为禁飞区、`dfence` 映射为飞行围栏。
-- 缺 Point/Circle 解析。当前设备侧只处理 `Polygon/MultiPolygon`，官方模板中的 `Point + subType=Circle + radius` 还不能生效。
 - 缺 `flight_areas_sync_progress.reason` 全量映射。当前只覆盖 1、3、5、8、12、13，仍需补齐官方 2、4、6、7、9、10、11 的中文含义和触发场景。
-- 缺 `flight_areas_drone_location` 的距离计算。需要根据飞行器实时经纬度计算 `area_distance` 和 `is_in_area`，并定义上报周期或飞近边界时的触发策略。
+- 待精校 `flight_areas_drone_location` 与官方字段矩阵的完全一致性；当前事件数据除 `area_id/area_distance/is_in_area` 外，还包含 `area_mode/state/event/latitude/longitude` 便于平台调试状态变化来源。
 - 缺 requests/reply 专项验收脚本。需要覆盖 `flight_areas_update -> requests flight_areas_get -> requests_reply files -> download -> apply -> flight_areas_sync_progress`。
-- 缺空列表、版本比较和旧缓存删除语义。需要明确平台返回空 `files` 时是否清空当前飞行区，以及不同 checksum/文件名时如何替换旧缓存。
+- 缺设备侧文件版本比较。当前以云端 `files` 列表为准覆盖本地缓存，还没有从飞行器/机场侧查询已有自定义飞行区文件版本。
 - 缺下载安全边界。需要校验 URL 过期时间、文件大小上限、文件数量上限、checksum 与文件名 MD5 的关系，避免异常文件占满本地存储或错误生效。
 - 缺真实设备侧 FlySafe SDK 适配。当前代码使用 MAVLink fence 作为可验证替代路径，不能完全等同 Dock3 官方 FlySafe/自定义飞行区真实生效链路。
 
@@ -178,8 +212,8 @@ Dock1 文档仅用于差异对照，不能作为后续最终验收标准。
 
 - `docs/reference/custom-flight-area-file-template.json`：保存官方模板，便于离线对照字段。
 - `docs/DOCK3_CUSTOM_FLY_REGION_FIELD_MATRIX.md`：记录 method、topic、payload、reason、文件格式、解析规则、错误码。
-- `tests/fixtures/custom_fly_region/geofence_<md5>.json`：保存 Polygon、nfz、dfence、Point/Circle、非法字段等样例。
-- `tests/test_dock3_custom_fly_region.py`：覆盖解析、checksum、reason、requests/reply 和缓存替换逻辑。
+- `tests/fixtures/custom_fly_region/geofence_<md5>.json`：继续补充 dfence、非法字段等样例；甲方 Polygon/nfz 样例已落盘。
+- `tests/test_dock3_custom_fly_region.py`：继续补充 checksum、reason、requests/reply 和缓存替换逻辑；当前已覆盖甲方样例 MD5、`nfz` 解析、Point/Circle 解析和 `files: []` 清空语义。
 - `tools/mqtt_dock3_custom_fly_region_test.py`：云端模拟器专项验收脚本，日志保存到 `logs/acceptance_evidence/<时间>_custom_fly_region/`。
 
 ## 8. Dock3 验收顺序

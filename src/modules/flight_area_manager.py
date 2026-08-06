@@ -7,6 +7,7 @@
 """
 import hashlib
 import json
+import math
 import os
 import time
 import urllib.request
@@ -25,6 +26,8 @@ REASON_FILE_TRANSFER_FAILED = 5
 REASON_AIRCRAFT_LOAD_FAILED = 8
 REASON_CHECKSUM_FAILED = 12
 REASON_TIMEOUT = 13
+EARTH_RADIUS_METERS = 6378137.0
+DEFAULT_NEAR_BOUNDARY_METERS = 50.0
 
 FLIGHT_AREA_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -54,6 +57,8 @@ class FlightAreaManager:
         self._cache_file = os.path.join(self._cache_dir, 'flight_areas.json')
         self._file_dir = os.path.join(self._cache_dir, 'files')
         self._files: List[dict] = []
+        self._monitored_areas: List[dict] = []
+        self._area_position_states: Dict[str, str] = {}
         self._last_sync: Dict[str, Any] = {
             'status': 'wait_sync',
             'reason': 0,
@@ -73,6 +78,7 @@ class FlightAreaManager:
     def set_device_applier(self, applier):
         """设置设备侧飞行区生效器。"""
         self._device_applier = applier
+        self._refresh_monitored_areas()
 
     def request_flight_areas_get(self, callback: Callable = None) -> str:
         """
@@ -290,6 +296,7 @@ class FlightAreaManager:
                 return False
 
             self._set_last_sync('synchronized', 0)
+            self._refresh_monitored_areas()
             self._save_cache()
             self.report_flight_areas_sync_progress('synchronized', 0)
             logger.info(
@@ -365,7 +372,7 @@ class FlightAreaManager:
         上报飞行器自定义飞行区距离信息 (flight_areas_drone_location)
 
         Args:
-            locations: [{area_id, area_distance, is_in_area}, ...]
+            locations: [{area_id, area_mode, area_distance, is_in_area, state, event}, ...]
         """
         if self._event_callback:
             event = MessageBuilder.build_event(
@@ -376,6 +383,54 @@ class FlightAreaManager:
             event['need_reply'] = 0
             self._event_callback(event)
             logger.info(f"Flight areas drone location: {len(locations)} areas")
+
+    def update_aircraft_location(self, latitude: Any, longitude: Any):
+        """接收飞行器位置，仅在靠近、进入、离开围栏状态变化时上报。"""
+        if not self._monitored_areas:
+            return
+        try:
+            lat = float(latitude)
+            lon = float(longitude)
+        except (TypeError, ValueError):
+            return
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return
+
+        changed_locations = []
+        near_threshold = self._near_boundary_meters()
+        for area in self._monitored_areas:
+            area_id = area['area_id']
+            distance = self._distance_to_polygon_boundary_meters(lat, lon, area['points'])
+            inside = self._point_in_polygon(lat, lon, area['points'])
+            state = self._classify_location_state(inside, distance, near_threshold)
+            last_state = self._area_position_states.get(area_id)
+            if last_state == state:
+                continue
+            self._area_position_states[area_id] = state
+            event_type = self._transition_event_type(last_state, state)
+            if not event_type:
+                continue
+            changed_locations.append({
+                'area_id': area_id,
+                'area_mode': area.get('mode', 'inclusion'),
+                'area_distance': round(distance, 2),
+                'is_in_area': inside,
+                'state': state,
+                'event': event_type,
+                'latitude': lat,
+                'longitude': lon,
+            })
+
+        if changed_locations:
+            self.report_flight_areas_drone_location(changed_locations)
+
+    def update_aircraft_osd(self, osd_data: dict):
+        if not isinstance(osd_data, dict):
+            return
+        self.update_aircraft_location(
+            osd_data.get('latitude'),
+            osd_data.get('longitude'),
+        )
 
     def handle_flight_areas_update(self, msg: dict) -> dict:
         """
@@ -425,3 +480,129 @@ class FlightAreaManager:
             if key in file_info:
                 output[key] = file_info[key]
         return output
+
+    def _refresh_monitored_areas(self):
+        if not self._files:
+            self._monitored_areas = []
+            self._area_position_states = {}
+            return
+        if not self._device_applier or not hasattr(self._device_applier, 'extract_area_polygons'):
+            self._monitored_areas = []
+            self._area_position_states = {}
+            return
+        try:
+            areas = self._device_applier.extract_area_polygons(self._files)
+        except Exception as e:
+            logger.warning(f"Failed to refresh monitored flight areas: {e}")
+            areas = []
+        normalized = []
+        for index, area in enumerate(areas):
+            points = area.get('points') if isinstance(area, dict) else None
+            if not points:
+                continue
+            area_id = str(area.get('area_id') or f'flight_area:{index}')
+            normalized.append({
+                'area_id': area_id,
+                'mode': area.get('mode', 'inclusion'),
+                'points': points,
+            })
+        known_ids = {area['area_id'] for area in normalized}
+        self._area_position_states = {
+            area_id: state
+            for area_id, state in self._area_position_states.items()
+            if area_id in known_ids
+        }
+        self._monitored_areas = normalized
+        logger.info("Flight area location monitor refreshed: %s areas", len(normalized))
+
+    @staticmethod
+    def _classify_location_state(inside: bool, distance: float, near_threshold: float) -> str:
+        if inside:
+            return 'inside'
+        if distance <= near_threshold:
+            return 'near'
+        return 'outside'
+
+    @staticmethod
+    def _transition_event_type(last_state: Optional[str], state: str) -> str:
+        if last_state is None:
+            return 'near_boundary' if state == 'near' else ('enter_area' if state == 'inside' else '')
+        if last_state == 'inside' and state != 'inside':
+            return 'exit_area'
+        if last_state != 'inside' and state == 'inside':
+            return 'enter_area'
+        if last_state == 'outside' and state == 'near':
+            return 'near_boundary'
+        if last_state == 'near' and state == 'outside':
+            return 'leave_boundary'
+        return ''
+
+    @staticmethod
+    def _point_in_polygon(latitude: float, longitude: float, points: List[dict]) -> bool:
+        inside = False
+        j = len(points) - 1
+        for i, point in enumerate(points):
+            yi = float(point['latitude'])
+            xi = float(point['longitude'])
+            yj = float(points[j]['latitude'])
+            xj = float(points[j]['longitude'])
+            intersects = ((yi > latitude) != (yj > latitude)) and (
+                longitude < (xj - xi) * (latitude - yi) / ((yj - yi) or 1e-12) + xi
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
+
+    @staticmethod
+    def _distance_to_polygon_boundary_meters(latitude: float, longitude: float,
+                                             points: List[dict]) -> float:
+        if not points:
+            return 0.0
+        ref_lat = math.radians(latitude)
+        px, py = 0.0, 0.0
+        vertices = [
+            FlightAreaManager._latlon_to_local_xy(
+                float(point['latitude']),
+                float(point['longitude']),
+                latitude,
+                longitude,
+                ref_lat,
+            )
+            for point in points
+        ]
+        min_distance = None
+        for index, start in enumerate(vertices):
+            end = vertices[(index + 1) % len(vertices)]
+            distance = FlightAreaManager._point_segment_distance(px, py, start[0], start[1], end[0], end[1])
+            if min_distance is None or distance < min_distance:
+                min_distance = distance
+        return float(min_distance or 0.0)
+
+    @staticmethod
+    def _latlon_to_local_xy(latitude: float, longitude: float, ref_latitude: float,
+                            ref_longitude: float, ref_lat_rad: float) -> Tuple[float, float]:
+        x = math.radians(longitude - ref_longitude) * math.cos(ref_lat_rad) * EARTH_RADIUS_METERS
+        y = math.radians(latitude - ref_latitude) * EARTH_RADIUS_METERS
+        return x, y
+
+    @staticmethod
+    def _point_segment_distance(px: float, py: float, ax: float, ay: float,
+                                bx: float, by: float) -> float:
+        dx = bx - ax
+        dy = by - ay
+        if dx == 0 and dy == 0:
+            return math.hypot(px - ax, py - ay)
+        t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+        t = max(0.0, min(1.0, t))
+        closest_x = ax + t * dx
+        closest_y = ay + t * dy
+        return math.hypot(px - closest_x, py - closest_y)
+
+    @staticmethod
+    def _near_boundary_meters() -> float:
+        try:
+            value = float(Config.get('flight_area.near_boundary_meters', DEFAULT_NEAR_BOUNDARY_METERS))
+        except (TypeError, ValueError):
+            value = DEFAULT_NEAR_BOUNDARY_METERS
+        return max(0.0, value)
