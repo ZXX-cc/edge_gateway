@@ -122,8 +122,8 @@ device:
   organization_binding:
     enabled: true
     device_binding_code: "SIM-BIND-CODE"
-    organization_id: "org_sim_001"
-    device_callsign: "BXD020120260727"
+    organization_id: "flysee"
+    device_callsign: "DJI Dock"
     device_model_key: "3-119-0"
     bind_sub_devices: true
 
