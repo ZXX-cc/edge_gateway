@@ -17,6 +17,7 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 lxml==6.1.1
 MarkupSafe==3.0.3
+minio==7.2.20
 paho-mqtt==2.1.0
 pydantic>=2.0,<3.0
 pymongo>=4.6,<5.0
