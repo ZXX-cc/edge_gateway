@@ -51,6 +51,9 @@ class SpectralCameraAdapter:
         payload_index = payload_index_from_config(config)
         video_index = str(cloud_api.get("video_index") or "spectral-0")
         connection_state = "connected" if reachable_ports else "configured"
+        command_port = int(control.get("command_port", 23001) or 23001)
+        file_port = int(control.get("file_port", 23002) or 23002)
+        sdk_runtime_state = str(control.get("sdk_runtime_state") or "native_helper_required")
 
         return {
             "payload_type": "spectral_camera",
@@ -64,15 +67,33 @@ class SpectralCameraAdapter:
                 "name": "YCamSDK",
                 "version": str(control.get("sdk_version") or "v2.0"),
                 "protocol": str(control.get("protocol") or "ycam_api"),
+                "runtime_state": sdk_runtime_state,
+                "server_model": "camera_client_gateway_server",
+                "required_callbacks": [
+                    "CmdParseCallBack",
+                    "PicDataCallBack",
+                    "SdkSendMesToCamera",
+                    "SdkSendPicMesToCamera",
+                ],
+                "required_entrypoints": [
+                    "YUS_DLL_Init",
+                    "YUS_DLL_ProtocolParse",
+                    "YUS_DLL_ImageParse",
+                    "YUS_DLL_CameraTakePic",
+                    "YUS_DLL_ImageTransmit",
+                    "YUS_DLL_RealVideoPlay",
+                ],
             },
             "control": {
                 "transport": control.get("transport", "ycam_tcp_server"),
                 "listen_host": control.get("listen_host", "0.0.0.0"),
-                "command_port": int(control.get("command_port", 23001) or 23001),
-                "file_port": int(control.get("file_port", 23002) or 23002),
+                "command_port": command_port,
+                "file_port": file_port,
                 "remote_host": host,
                 "probe_ports": [int(port) for port in probe_ports],
                 "reachable_ports": reachable_ports,
+                "native_helper_required": True,
+                "native_helper_ready": sdk_runtime_state == "native_helper_ready",
             },
             "video": {
                 "transport": video.get("transport", "rtp"),

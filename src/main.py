@@ -873,6 +873,8 @@ class EdgeGateway:
                 self.mission.set_event_loop(self.loop)
             if self.media:
                 self.media.set_event_loop(self.loop)
+            if self.camera:
+                self.camera.set_event_loop(self.loop)
 
             # 连接NanoMQ
             logger.info("Connecting to NanoMQ...")

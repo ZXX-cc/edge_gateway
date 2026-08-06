@@ -67,6 +67,7 @@ def base_msg(method, data):
 class FakeCameraController:
     def __init__(self):
         self.calls = []
+        self.sync_calls = []
 
     def handle_camera_photo_take(self, msg):
         self.calls.append(("camera_photo_take", msg))
@@ -77,6 +78,10 @@ class FakeCameraController:
             "method": "camera_photo_take",
             "data": {"result": 0},
         }
+
+    def sync_mapping_camera_media(self, **kwargs):
+        self.sync_calls.append(kwargs)
+        return []
 
 
 class Dock3MediaHelperTest(unittest.TestCase):
@@ -123,6 +128,32 @@ class Dock3MediaHelperTest(unittest.TestCase):
 
 
 class Dock3MediaManagerTest(unittest.TestCase):
+    def setUp(self):
+        self._original_config = deepcopy(Config.all())
+        Config.merge({
+            "gateway": {"sn": "EDGEGW001"},
+            "payload": {
+                "devices": {
+                    "gimbal": {
+                        "enabled": True,
+                        "cloud_api": {
+                            "type": 52,
+                            "subtype": 0,
+                            "gimbal_index": 0,
+                            "video_index": "normal-0",
+                            "video_type": "normal",
+                            "switchable_video_types": ["normal", "wide", "zoom", "infrared"],
+                        },
+                    },
+                    "mapping_camera": {"enabled": True},
+                    "spectral_camera": {"enabled": True},
+                }
+            },
+        })
+
+    def tearDown(self):
+        Config._data = self._original_config
+
     def test_file_list_delete_and_priority_event(self):
         events = []
         manager = MediaManager()
@@ -202,6 +233,26 @@ class Dock3MediaManagerTest(unittest.TestCase):
         files = listed["data"]["files"]
         self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
         self.assertTrue(all(item["source"] == "remote_http" for item in files))
+
+    def test_file_list_syncs_mapping_camera_before_scan(self):
+        manager = MediaManager()
+        camera = FakeCameraController()
+        manager.set_camera_controller(camera)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Riebo000001.jpg"
+            path.write_bytes(b"mapping-photo")
+            manager.storage_path = tmp
+
+            listed = manager.handle_file_list_get(base_msg("file_list_get", {
+                "media_type": "photo",
+                "page": 1,
+                "page_size": 10,
+            }))
+
+        self.assertEqual(camera.sync_calls, [{"download_all": True}])
+        self.assertEqual(listed["data"]["result"], 0)
+        self.assertEqual(listed["data"]["files"][0]["name"], "Riebo000001.jpg")
 
     def test_remote_media_is_cached_before_upload(self):
         class FakeResponse:

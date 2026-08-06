@@ -117,6 +117,7 @@ class CameraController:
         self._last_mapping_camera_cache = {}
         self._last_mapping_camera_sync_error = ""
         self._last_mapping_camera_control_route = ""
+        self._mapping_camera_metadata_paths: set[str] = set()
         self._last_spectral_camera_cache = {}
 
     def set_mavlink_connection(self, mavlink_conn):
@@ -142,6 +143,11 @@ class CameraController:
     def set_event_callback(self, callback: Callable):
         """设置事件回调"""
         self._event_callback = callback
+
+    def set_event_loop(self, loop):
+        """注入异步事件循环引用，用于媒体元数据入库。"""
+        self._main_loop = loop
+        logger.info("CameraController event loop set")
 
     def set_current_mission_id(self, mission_id: str):
         """设置当前任务ID"""
@@ -481,36 +487,98 @@ class CameraController:
             "last_sync_error": self._last_mapping_camera_sync_error,
         }
 
-    def _download_mapping_camera_photo(self, storage_path: str, remote_hint: str = "") -> Optional[dict]:
+    def _download_mapping_camera_photos(
+        self,
+        storage_path: str,
+        remote_hint: str = "",
+        *,
+        download_all: bool = False,
+    ) -> list[dict]:
         endpoint = self._mapping_camera_data_endpoint()
         data_channel = self._mapping_camera_data_channel()
         parsed = urllib.parse.urlparse(str(endpoint or ""))
         if parsed.scheme.lower() != "ftp" or not parsed.hostname:
-            return None
+            return []
 
         timeout = float(data_channel.get("timeout_seconds", 30) or 30)
         jobs = int(data_channel.get("jobs", data_channel.get("download_jobs", 4)) or 4)
 
         try:
             downloader = MappingCameraFtpDownloader(endpoint, jobs=jobs, timeout=timeout)
-            result = downloader.download_photo(storage_path, remote_hint)
-            if not result:
-                return None
-            return {
-                "file_name": result.file_name,
-                "file_path": result.file_path,
-                "storage_path": storage_path,
-                "upload_status": "pending",
-                "source": endpoint,
-                "remote_path": result.remote_path,
-                "file_size": result.size,
-                "skipped": result.skipped,
-                "download_jobs": jobs,
-            }
+            results = downloader.download_all(storage_path) if download_all else [
+                result for result in [downloader.download_photo(storage_path, remote_hint)] if result
+            ]
+            return [
+                {
+                    "file_name": result.file_name,
+                    "file_path": result.file_path,
+                    "storage_path": storage_path,
+                    "upload_status": "pending",
+                    "payload_id": "mapping_camera",
+                    "payload_type": "mapping_camera",
+                    "source": endpoint,
+                    "remote_path": result.remote_path,
+                    "file_size": result.size,
+                    "skipped": result.skipped,
+                    "download_jobs": jobs,
+                    "resolution": self._probe_image_resolution(result.file_path),
+                }
+                for result in results
+            ]
         except Exception as exc:
             logger.warning("Mapping camera FTP photo sync failed: endpoint=%s error=%s", endpoint, exc)
             self._last_mapping_camera_sync_error = str(exc)
-            return None
+            return []
+
+    def _download_mapping_camera_photo(self, storage_path: str, remote_hint: str = "") -> Optional[dict]:
+        photos = self._download_mapping_camera_photos(storage_path, remote_hint, download_all=False)
+        return photos[0] if photos else None
+
+    def sync_mapping_camera_media(
+        self,
+        *,
+        remote_hint: str = "",
+        download_all: bool = True,
+        save_metadata: bool = True,
+    ) -> list[dict]:
+        """同步睿铂正射/倾斜相机 FTP 照片到本地媒体目录。
+
+        正射相机是独立负载：拍照/快门/ISO/RTK 属于睿铂 V3 串口协议，
+        原始照片经 FTP/SMB 从 /DCIM/架次目录下载，不走 ViewLink 吊舱 SDK。
+        """
+        storage_path = self._local_media_storage_path()
+        photos = self._download_mapping_camera_photos(
+            storage_path,
+            remote_hint,
+            download_all=download_all,
+        )
+        if not photos:
+            return []
+
+        for photo in photos:
+            photo["control_route"] = self._last_mapping_camera_control_route or (
+                "flight_controller_ttl" if self._is_aircraft_armed() else "gateway_direct"
+            )
+            file_path = str(photo.get("file_path") or "")
+            if save_metadata and file_path and file_path not in self._mapping_camera_metadata_paths:
+                self._save_media_metadata_sync(
+                    "photo",
+                    file_path=file_path,
+                    file_name=photo.get("file_name"),
+                    file_size=photo.get("file_size"),
+                    resolution=photo.get("resolution"),
+                )
+                self._mapping_camera_metadata_paths.add(file_path)
+
+        latest = sorted(photos, key=lambda item: str(item.get("remote_path") or item.get("file_name") or ""))[-1]
+        self._last_mapping_camera_cache = dict(latest)
+        self._last_mapping_camera_sync_error = ""
+        logger.info(
+            "Mapping camera FTP media synced: count=%s latest=%s",
+            len(photos),
+            latest.get("file_path", ""),
+        )
+        return photos
 
     def _cache_photo_locally(self, data: dict, route: str) -> dict:
         storage_path = self._local_media_storage_path()
@@ -956,56 +1024,51 @@ class CameraController:
     def _handle_spectral_camera_photo_take(self, msg: dict, data: dict) -> dict:
         """多光谱相机拍照触发。
 
-        YCamSDK 的真实链路由相机主动连接网关并回传文件。这里先将平台
-        拍照/航线拍照动作落为网关侧待回传媒体缓存，便于端到端验收
-        file_list_get/file_download；后续 native SDK 接入后替换触发命令即可。
+        YCamSDK 的真实链路由相机主动连接网关侧 TCP 服务，再通过 SDK
+        回调发送命令和接收文件；native helper 未接入前不能返回拍照成功。
         """
-        capture_ms = int(time.time() * 1000)
-        storage_path = self._local_media_storage_path()
-        file_name = str(data.get("file_name") or f"{capture_ms}_spectral_camera.jpg")
-        file_path = os.path.join(storage_path, file_name)
-        if not os.path.exists(file_path):
-            jpeg_bytes = bytes.fromhex(
-                "ffd8ffe000104a46494600010100000100010000ffdb004300"
-                "0302020302020303030304030304050805050404050a070706"
-                "080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113"
-                "141515150c0f171816141812141514ffdb0043010304040504"
-                "0509050509140d0b0d14141414141414141414141414141414"
-                "14141414141414141414141414141414141414141414141414"
-                "141414141414141414ffc00011080001000103012200021101"
-                "031101ffc40014000100000000000000000000000000000000"
-                "0008ffc4001410010000000000000000000000000000000000"
-                "00ffda000c03010002110311003f00b2c001ffd9"
-            )
-            with open(file_path, "wb") as handle:
-                handle.write(jpeg_bytes)
-
         payload_index = str(data.get("payload_index") or "52-0-2")
-        cached = {
-            "file_name": file_name,
-            "file_path": file_path,
-            "storage_path": storage_path,
-            "upload_status": "pending",
-            "payload_id": "spectral_camera",
-            "payload_index": payload_index,
-            "camera_type": data.get("camera_type", "multispectral"),
-            "source": "ycam_sdk",
-        }
-        self._last_spectral_camera_cache = dict(cached)
-        self._photo_count += 1
-        self._save_media_metadata_sync('photo')
-        self.report_photo_progress(
-            current=self._photo_count,
-            total=self._photo_count,
-            storage_path=file_path,
+        control = {}
+        payload_config = Config.get_payload_config()
+        devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
+        spectral_camera = devices.get("spectral_camera", {}) if isinstance(devices, dict) else {}
+        channels = spectral_camera.get("channels", {}) if isinstance(spectral_camera, dict) else {}
+        if isinstance(channels, dict):
+            control = channels.get("control", {}) if isinstance(channels.get("control"), dict) else {}
+
+        command_port = int(control.get("command_port", 23001) or 23001)
+        file_port = int(control.get("file_port", 23002) or 23002)
+        video_port = int(control.get("video_port", 23008) or 23008)
+        return MessageBuilder.build_reply(
+            msg,
+            result=DEVICE_STATE_UNSUPPORTED,
+            msg_str=(
+                "YCamSDK native TCP server/helper is not integrated; cannot send "
+                "YUS_DLL_CameraTakePic or receive returned multispectral files"
+            ),
+            data={
+                "camera_index": data.get("camera_index", payload_index),
+                "payload_index": payload_index,
+                "payload_id": "spectral_camera",
+                "camera_type": data.get("camera_type", "multispectral"),
+                "photo_source": "ycam_sdk",
+                "supported": False,
+                "implementation_state": "native_helper_required",
+                "required_adapter": "ycam_tcp_server_native_helper",
+                "required_ports": {
+                    "command_tcp": command_port,
+                    "file_tcp": file_port,
+                    "video_rtp": video_port,
+                },
+                "required_sdk_entrypoints": [
+                    "YUS_DLL_Init",
+                    "YUS_DLL_CameraTakePic",
+                    "YUS_DLL_ImageTransmit",
+                    "YUS_DLL_ProtocolParse",
+                    "YUS_DLL_ImageParse",
+                ],
+            },
         )
-        return MessageBuilder.build_reply(msg, result=0, data={
-            "camera_index": data.get("camera_index", payload_index),
-            "payload_index": payload_index,
-            "payload_id": "spectral_camera",
-            "photo_source": "ycam_sdk",
-            "media": cached,
-        })
 
     def _handle_mapping_camera_photo_take(self, msg: dict, data: dict) -> dict:
         """正射/倾斜相机：armed 时经飞控 TTL，未 armed 时网关直连并本地缓存。"""
@@ -1239,6 +1302,25 @@ class CameraController:
         mode = data.get('mode', 'auto')
         ev = data.get('ev', 0)
         self._log_camera_setting_mapping('set_exposure_mode', data)
+
+        if self._is_mapping_camera_request(data):
+            logger.info("Mapping camera exposure mode requested: mode=%s EV=%s", mode, ev)
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str=(
+                    "Rainpoo V3 manual exposes shutter mode/ISO/EV on the mapping camera, "
+                    "but this gateway has not implemented the serial command writer yet"
+                ),
+                data={
+                    "payload_id": "mapping_camera",
+                    "camera_type": data.get("camera_type", ""),
+                    "mode": mode,
+                    "ev": ev,
+                    "supported": False,
+                    "required_adapter": "rainpoo_v3_serial",
+                },
+            )
 
         logger.info(f"Exposure mode: {mode}, EV={ev}")
 
@@ -1976,7 +2058,28 @@ class CameraController:
         """相机曝光值调节 (camera_exposure_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
         exposure_value = data.get("exposure_value", data.get("ev", 0))
-        logger.info("Camera exposure set: camera_type=%s exposure_value=%s", data.get("camera_type", ""), exposure_value)
+        if self._is_mapping_camera_request(data):
+            logger.info(
+                "Mapping camera exposure set requested: exposure_value=%s payload_index=%s",
+                exposure_value,
+                data.get("payload_index", data.get("camera_index", "")),
+            )
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str=(
+                    "Rainpoo V3 manual exposes shutter/ISO/EV on the mapping camera, "
+                    "but this gateway has not implemented the serial command writer yet"
+                ),
+                data={
+                    "payload_id": "mapping_camera",
+                    "camera_type": data.get("camera_type", ""),
+                    "exposure_value": exposure_value,
+                    "supported": False,
+                    "required_adapter": "rainpoo_v3_serial",
+                },
+            )
+        logger.info("Gimbal payload exposure set: camera_type=%s exposure_value=%s", data.get("camera_type", ""), exposure_value)
         return MessageBuilder.build_reply(
             msg,
             result=DEVICE_STATE_UNSUPPORTED,

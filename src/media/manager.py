@@ -442,7 +442,23 @@ class MediaManager:
 
         return [build_remote_media_file(url, self.gateway_sn) for url in media_urls]
 
+    def _sync_direct_payload_media(self) -> List[dict]:
+        """同步网关直连负载媒体到本地目录。
+
+        例如睿铂正射/倾斜相机的照片经 FTP 暴露在相机端 /DCIM 目录；
+        DJI 的 file_list_get/file_download 仍走统一媒体域，所以列文件前先
+        让对应负载 adapter 把真实文件拉到 media.storage_path。
+        """
+        if not self._camera_controller or not hasattr(self._camera_controller, "sync_mapping_camera_media"):
+            return []
+        try:
+            return self._camera_controller.sync_mapping_camera_media(download_all=True)
+        except Exception as exc:
+            logger.warning("Direct payload media sync failed: %s", exc)
+            return []
+
     def _scan_media_files(self) -> List[dict]:
+        self._sync_direct_payload_media()
         return self._scan_local_files() + self._scan_remote_media_files()
 
     def _remote_media_cache_path(self, url: str) -> str:

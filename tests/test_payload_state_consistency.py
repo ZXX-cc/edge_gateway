@@ -1383,6 +1383,80 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertIn(b"Riebo000004.JPG", cached_bytes)
         self.assertEqual(cached["remote_path"], "/DCIM/00002/Riebo000004.JPG")
 
+    def test_mapping_camera_sync_downloads_all_ftp_photos(self):
+        class FakeFTP:
+            def __init__(self, host, timeout):
+                self.cwd_path = "/"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def login(self, username, password):
+                return None
+
+            def pwd(self):
+                return self.cwd_path
+
+            def cwd(self, path):
+                directories = {"/", "/DCIM", "/DCIM/00001", "/DCIM/00002"}
+                target = path if path.startswith("/") else f"{self.cwd_path.rstrip('/')}/{path}"
+                if target in directories:
+                    self.cwd_path = target
+                    return None
+                raise OSError("not a directory")
+
+            def nlst(self, path=None):
+                path = path or self.cwd_path
+                if path == "/DCIM":
+                    return ["/DCIM/00001", "/DCIM/00002"]
+                if path == "/DCIM/00001":
+                    return ["/DCIM/00001/Riebo000001.jpg"]
+                if path == "/DCIM/00002":
+                    return ["/DCIM/00002/Riebo000002.jpg"]
+                return []
+
+            def size(self, path):
+                return len(path.encode("utf-8"))
+
+            def retrbinary(self, command, callback):
+                callback(command.encode("utf-8"))
+
+        from src.payload import mapping_camera_ftp
+
+        old_ftp = mapping_camera_ftp.FTP
+        mapping_camera_ftp.FTP = FakeFTP
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                Config.merge({
+                    "media": {"storage_path": tmp},
+                    "payload": {
+                        "devices": {
+                            "mapping_camera": {
+                                "channels": {
+                                    "post_landing_raw_data": {
+                                        "endpoint": "ftp://192.168.5.74/DCIM",
+                                        "timeout_seconds": 1,
+                                        "download_jobs": 2,
+                                    }
+                                }
+                            }
+                        }
+                    },
+                })
+                camera = CameraController()
+
+                synced = camera.sync_mapping_camera_media(save_metadata=False)
+                paths_exist = all(os.path.exists(item["file_path"]) for item in synced)
+        finally:
+            mapping_camera_ftp.FTP = old_ftp
+
+        self.assertEqual({item["file_name"] for item in synced}, {"Riebo000001.jpg", "Riebo000002.jpg"})
+        self.assertTrue(paths_exist)
+        self.assertEqual(camera._last_mapping_camera_cache["file_name"], "Riebo000002.jpg")
+
     def test_services_payload_methods_do_not_depend_on_drc_placeholders(self):
         camera = CameraController()
         camera.set_gimbal_control(FakeDirectPayload())
@@ -1484,15 +1558,21 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(state["payload_type"], "spectral_camera")
         self.assertEqual(state["payload_index"], "52-0-2")
         self.assertEqual(state["host"], "192.168.1.115")
+        self.assertEqual(state["sdk"]["server_model"], "camera_client_gateway_server")
+        self.assertEqual(state["sdk"]["runtime_state"], "native_helper_required")
+        self.assertIn("YUS_DLL_CameraTakePic", state["sdk"]["required_entrypoints"])
+        self.assertIn("PicDataCallBack", state["sdk"]["required_callbacks"])
         self.assertEqual(state["control"]["command_port"], 23001)
         self.assertEqual(state["control"]["file_port"], 23002)
         self.assertEqual(state["control"]["reachable_ports"], [80])
+        self.assertTrue(state["control"]["native_helper_required"])
+        self.assertFalse(state["control"]["native_helper_ready"])
         self.assertEqual(state["video"]["endpoint"], "rtp://0.0.0.0:23008")
         self.assertEqual(state["video"]["video_id"], "UNKNOWN/52-0-2/spectral-0")
         self.assertTrue(state["video"]["reachable"])
         self.assertEqual(state["data_link"]["listen_port"], 23002)
 
-    def test_spectral_camera_photo_take_creates_return_media_cache(self):
+    def test_spectral_camera_photo_take_requires_native_ycam_helper(self):
         with tempfile.TemporaryDirectory() as tmp:
             Config.merge({"media": {"storage_path": tmp}})
             camera = CameraController()
@@ -1502,14 +1582,18 @@ class PayloadStateConsistencyTest(unittest.TestCase):
                 "file_name": "spectral-test.jpg",
             }))
 
-            media = reply["data"]["media"]
-            self.assertEqual(reply["data"]["result"], 0)
+            self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
             self.assertEqual(reply["data"]["payload_id"], "spectral_camera")
             self.assertEqual(reply["data"]["photo_source"], "ycam_sdk")
-            self.assertEqual(media["payload_index"], "52-0-2")
-            self.assertTrue(os.path.exists(media["file_path"]))
-            self.assertEqual(os.path.basename(media["file_path"]), "spectral-test.jpg")
-            self.assertEqual(camera._last_spectral_camera_cache["file_name"], "spectral-test.jpg")
+            self.assertFalse(reply["data"]["supported"])
+            self.assertEqual(reply["data"]["implementation_state"], "native_helper_required")
+            self.assertEqual(reply["data"]["required_adapter"], "ycam_tcp_server_native_helper")
+            self.assertEqual(reply["data"]["required_ports"]["command_tcp"], 23001)
+            self.assertEqual(reply["data"]["required_ports"]["file_tcp"], 23002)
+            self.assertEqual(reply["data"]["required_ports"]["video_rtp"], 23008)
+            self.assertIn("YUS_DLL_CameraTakePic", reply["data"]["required_sdk_entrypoints"])
+            self.assertFalse(os.path.exists(os.path.join(tmp, "spectral-test.jpg")))
+            self.assertEqual(camera._last_spectral_camera_cache, {})
 
     def test_failed_gimbal_commands_do_not_change_cached_pose_or_mode(self):
         gimbal = GimbalController()

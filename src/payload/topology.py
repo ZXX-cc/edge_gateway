@@ -31,6 +31,7 @@ REQUIRED_CHANNELS = {
         },
     },
     "spectral_camera": {
+        "control": {"direction": "bidirectional"},
         "video": {"direction": "payload_to_gateway", "timing": "realtime"},
         "post_landing_raw_data": {
             "direction": "payload_to_gateway",
