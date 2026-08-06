@@ -241,6 +241,91 @@ class Dock3MediaManagerTest(unittest.TestCase):
         finally:
             requests.get = old_get
 
+    def test_s3_upload_builds_path_style_url_and_puts_file_bytes(self):
+        class FakePutResponse:
+            status_code = 200
+            text = "ok"
+
+        calls = []
+
+        def fake_put(url, data, headers, timeout):
+            calls.append({
+                "url": url,
+                "data": data,
+                "headers": headers,
+                "timeout": timeout,
+            })
+            return FakePutResponse()
+
+        old_put = requests.put
+        requests.put = fake_put
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "sample.jpg"
+                path.write_bytes(b"jpeg-bytes")
+                ok, url, key = manager._upload_file_s3(str(path), {
+                    "endpoint": "https://minio.example:9000",
+                    "bucket": "media",
+                    "region": "cn-test-1",
+                    "object_key_prefix": "djidock",
+                    "credentials": {
+                        "access_key_id": "ak",
+                        "access_key_secret": "sk",
+                        "security_token": "token",
+                    },
+                })
+        finally:
+            requests.put = old_put
+
+        self.assertTrue(ok)
+        self.assertEqual(key, "djidock/sample.jpg")
+        self.assertEqual(url, "https://minio.example:9000/media/djidock/sample.jpg")
+        self.assertEqual(calls[0]["data"], b"jpeg-bytes")
+        self.assertEqual(calls[0]["headers"]["x-amz-security-token"], "token")
+        self.assertIn("AWS4-HMAC-SHA256", calls[0]["headers"]["Authorization"])
+
+    def test_upload_worker_uses_s3_credentials_when_upload_url_missing(self):
+        manager = MediaManager()
+        events = []
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "output": {
+                    "endpoint": "https://minio.example:9000",
+                    "bucket": "media",
+                    "region": "cn-test-1",
+                    "object_key_prefix": "djidock",
+                    "credentials": {
+                        "access_key_id": "ak",
+                        "access_key_secret": "sk",
+                    },
+                }
+            }
+            uploaded = []
+            manager._upload_file_s3 = (
+                lambda filepath, storage, object_key="": uploaded.append((filepath, storage, object_key))
+                or (True, "https://minio.example:9000/media/djidock/sample.jpg", object_key)
+            )
+            manager._upload_queue = [{
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(len(uploaded), 1)
+        self.assertEqual(uploaded[0][2], "djidock/sample.jpg")
+        callbacks = [event for event in events if event.get("method") == "file_upload_callback"]
+        self.assertEqual(callbacks[0]["data"]["file"]["object_key"], "djidock/sample.jpg")
+
     def test_file_download_caches_remote_media_without_upload(self):
         class FakeResponse:
             def __init__(self, content):
