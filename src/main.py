@@ -67,6 +67,7 @@ from src.cloud_api.capability_reporter import CapabilityReporter
 from src.modules.log_manager import LogManager
 from src.modules.flysafe_manager import FlySafeManager
 from src.modules.flight_area_manager import FlightAreaManager
+from src.modules.flight_area_device_applier import FlightAreaDeviceApplier
 from src.modules.custom_data_manager import CustomDataManager
 from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
@@ -320,6 +321,7 @@ class EdgeGateway:
         self.log_mgr: LogManager = None
         self.flysafe: FlySafeManager = None
         self.flight_area: FlightAreaManager = None
+        self.flight_area_applier: FlightAreaDeviceApplier = None
         self.custom_data: CustomDataManager = None
         self.waypoint_manager: WaypointManager = None
         self.rtk_module: RTKModule = None
@@ -388,6 +390,8 @@ class EdgeGateway:
             self.log_mgr = LogManager()
             self.flysafe = FlySafeManager()
             self.flight_area = FlightAreaManager()
+            self.flight_area_applier = FlightAreaDeviceApplier()
+            self.flight_area.set_device_applier(self.flight_area_applier)
             self.custom_data = CustomDataManager()
 
             # 负载链路独立于飞控/机巢 MAVLink，在业务模块创建后立即装配。
@@ -1049,6 +1053,7 @@ class EdgeGateway:
                 self.device.set_dock_manager(self.dock)
 
                 self._wire_nest_module_to_business()
+                self._wire_flight_area_applier(self.dispatcher)
 
                 if use_separate_nest_mavlink:
                     self._start_nest_mavlink(nest_mavlink_config)
@@ -1135,6 +1140,19 @@ class EdgeGateway:
 
         if nest_env_cb not in self.nest_module.env_callbacks:
             self.nest_module.env_callbacks.append(nest_env_cb)
+
+    def _wire_flight_area_applier(self, dispatcher):
+        """把自定义飞行区应用器挂到真实设备侧 MAVLink dispatcher。"""
+        if not dispatcher or not self.flight_area_applier:
+            return
+        self.flight_area_applier.set_dispatcher(dispatcher)
+        dispatcher.add_module(self.flight_area_applier)
+        dispatcher.register_hook('MISSION_REQUEST', self.flight_area_applier)
+        dispatcher.register_hook('MISSION_REQUEST_INT', self.flight_area_applier)
+        dispatcher.register_hook('MISSION_ACK', self.flight_area_applier)
+        if self.flight_area:
+            self.flight_area.set_device_applier(self.flight_area_applier)
+        logger.info("Flight area device applier wired to MAVLink dispatcher")
 
     def _report_dock_osd_if_due(self, force: bool = False) -> bool:
         """按统一 OSD 周期发布机场/机巢状态到平台。"""
@@ -1289,6 +1307,8 @@ class EdgeGateway:
                 if module:
                     self.nest_dispatcher.add_module(module)
                     self.nest_dispatcher.register_hook('*', module)
+            if not self.mavlink_conn:
+                self._wire_flight_area_applier(self.nest_dispatcher)
             self.nest_dispatcher.add_module(self.nest_module)
             self.nest_dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
             self.nest_dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)

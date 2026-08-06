@@ -67,7 +67,7 @@ class CloudConnectionManager:
 
     # ---- 请求-响应管理 (requests / requests_reply) ----
 
-    def send_request(self, method: str, data: dict,
+    def send_request(self, method: str, data: Optional[dict],
                      callback: Callable = None, timeout: int = 30) -> str:
         """
         发送请求到云端 (requests 通道)
@@ -84,6 +84,8 @@ class CloudConnectionManager:
         tid = str(uuid.uuid4())
         msg = MessageBuilder.build(method, data, self.gateway_sn,
                                    need_reply=True, tid=tid)
+        if data is None:
+            msg['data'] = None
 
         with self._request_lock:
             self._pending_requests[tid] = {
