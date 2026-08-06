@@ -51,7 +51,7 @@ from src.cloud_api.dock3_media import (
 from src.cloud_api.dock3_live import validate_live_start_payload
 from src.media.manager import MediaManager
 from src.utils.config import Config
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 
 
 def base_msg(method, data):
@@ -564,6 +564,73 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(photo_data["trigger"], "live_lens_change")
         self.assertEqual(photo_data["camera_type"], "zoom")
         self.assertEqual(photo_data["video_id"], video_id)
+
+    def test_live_quality_change_reports_failure_when_ffmpeg_restart_fails(self):
+        events = []
+        states = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+        manager.set_state_callback(states.append)
+        manager._live_streaming = True
+        manager._live_session_id = "live-session"
+        manager._live_video_id = "EDGEGW001/0/normal"
+        manager._live_url = "rtmp://cloud.example/live/stream"
+        manager._live_protocol = 1
+        manager._live_quality = 2
+        manager._live_source_key = "normal"
+        manager._live_video_type = "normal"
+
+        def fail_start(*args, **kwargs):
+            manager._live_streaming = False
+            manager._live_pipeline.append({
+                "step": "start_ffmpeg_process",
+                "status": "failed",
+                "reason": "ffmpeg not found",
+            })
+            return False
+
+        manager._start_ffmpeg = fail_start
+
+        reply = manager.handle_live_set_quality(base_msg("live_set_quality", {
+            "video_id": "EDGEGW001/0/normal",
+            "video_quality": 3,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "")
+        self.assertEqual(events[-1]["method"], "live_status_notify")
+        self.assertEqual(events[-1]["data"]["output"]["status"], "failed")
+        self.assertEqual(states[-1]["property"]["live_status"][0]["status"], 0)
+        self.assertEqual(states[-1]["property"]["live_status"][0]["error_status"], 1)
+
+    def test_live_lens_change_reports_failure_when_ffmpeg_restart_fails(self):
+        events = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+        manager._live_streaming = True
+        manager._live_session_id = "live-session"
+        manager._live_video_id = "EDGEGW001/0/normal"
+        manager._live_url = "rtmp://cloud.example/live/stream"
+        manager._live_protocol = 1
+        manager._live_quality = 2
+        manager._live_source_key = "normal"
+        manager._live_video_type = "normal"
+        manager._start_ffmpeg = lambda *args, **kwargs: False
+
+        reply = manager.handle_live_lens_change(base_msg("live_lens_change", {
+            "video_type": "zoom",
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "")
+        self.assertEqual(events[-1]["data"]["output"]["status"], "failed")
+        self.assertEqual(events[-1]["data"]["video_type"], "zoom")
 
     def test_live_capability_includes_official_camera_index(self):
         manager = MediaManager()
