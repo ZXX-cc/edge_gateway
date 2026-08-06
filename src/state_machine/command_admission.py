@@ -59,9 +59,6 @@ class CommandAdmissionEngine:
         "hms_get",
         "device_log_list_get",
         "device_capability_query",
-        "workspace_bind_status",
-        "workspace_get",
-        "airport_bind_status",
         "config_get",
         "wayline_task_query",
         "wayline_mission_query",
@@ -75,12 +72,7 @@ class CommandAdmissionEngine:
     })
 
     BINDING_METHODS = frozenset({
-        "device_binding",
-        "device_unbinding",
         "update_topo",
-        "airport_bind_status",
-        "workspace_bind_status",
-        "workspace_get",
     })
 
     SAFETY_METHODS = frozenset({
