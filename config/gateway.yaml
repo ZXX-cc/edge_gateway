@@ -113,14 +113,14 @@ device:
   nest_command_ack_timeout: 5.0 # services_reply 同步等待机巢 12005 指令 ACK/拒绝的超时时间(s)
   nest_command_state_timeout: 30.0 # services_reply 同步等待机巢 12004 最终状态到位的超时时间(s)
   allow_local_state_reset: false # true 时允许 device_reset 只重置网关本地状态；实机默认 false，避免伪造硬件复位成功
-  auto_bind_on_startup: false # 正式组织绑定启用时关闭本地测试自动绑定
+  auto_bind_on_startup: true # 临时测试：跳过平台组织绑定，本地启动后置为已绑定；联调完成后改回 false
   auto_bind_workspace_id: "local_test_workspace"
   auto_bind_workspace_name: "本地测试工作空间"
 
   # DOCK3 正式组织绑定。启用后，启动时先发 airport_bind_status，
   # 只有平台明确返回未绑定时，才继续 airport_organization_get/bind。
   organization_binding:
-    enabled: true
+    enabled: false # 临时测试：关闭正式 organization requests 绑定链路；联调完成后改回 true
     device_binding_code: "SIM-BIND-CODE"
     organization_id: "flysee"
     device_callsign: "DJI Dock"
