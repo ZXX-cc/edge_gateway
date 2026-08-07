@@ -386,6 +386,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["viewlink_result"]["success"], True)
         self.assertEqual(direct_payload.calls, [("set_record_mode", 1)])
 
+    def test_camera_mode_switch_applies_infrared_camera_type(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_mode_switch(message("camera_mode_switch", {
+            "camera_mode": 0,
+            "camera_type": "ir",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "photo")
+        self.assertEqual(reply["data"]["camera_type"], "ir")
+        self.assertEqual(reply["data"]["camera_type_result"]["image_type"], 2)
+        self.assertEqual(direct_payload.calls, [
+            ("set_record_mode", 1),
+            ("set_image_color", 2, False, 0),
+        ])
+
     def test_aircraft_osd_cameras_use_real_payload_readback(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
