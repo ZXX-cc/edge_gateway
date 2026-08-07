@@ -198,6 +198,33 @@ class CommandAdmissionEngine:
         "air_conditioner_mode_switch",
     })
 
+    PAYLOAD_LOCAL_CONTROL_METHODS = frozenset({
+        "camera_aim",
+        "camera_exposure_mode_set",
+        "camera_exposure_set",
+        "camera_focal_length_set",
+        "camera_focus_mode_set",
+        "camera_focus_value_set",
+        "camera_frame_zoom",
+        "camera_mode_switch",
+        "camera_photo_stop",
+        "camera_photo_take",
+        "camera_point_focus_action",
+        "camera_recording_start",
+        "camera_recording_stop",
+        "camera_screen_drag",
+        "camera_screen_split",
+        "gimbal_reset",
+        "gimbal_rotate",
+        "gimbal_status_query",
+        "ir_color_palette_set",
+        "ir_display_mode_set",
+        "ir_metering_area_set",
+        "ir_metering_mode_set",
+        "ir_metering_point_set",
+        "ir_zoom_set",
+    })
+
     OTA_BUSY_STATES = frozenset({"checking", "downloading", "verifying", "upgrading"})
     MISSION_BUSY_STATES = frozenset({"sent", "in_progress", "paused", "preparing", "running"})
 
@@ -252,7 +279,13 @@ class CommandAdmissionEngine:
                     GLOBAL_STATE_CONFLICT,
                 )
 
-        if snapshot.device == "unbound" and method not in self.BINDING_METHODS and method != "property_set":
+        if (
+            snapshot.device == "unbound"
+            and method not in self.BINDING_METHODS
+            and method != "property_set"
+            and method not in self.PAYLOAD_LOCAL_CONTROL_METHODS
+            and not method.startswith("viewlink_")
+        ):
             return self._reject(
                 snapshot,
                 "device_unbound",

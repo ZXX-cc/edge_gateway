@@ -164,8 +164,10 @@ class MQTTClient:
         """连接到NanoMQ Broker"""
         try:
             self._ensure_background_executor()
+            configured_client_id = str(self.config.get("client_id") or "").strip()
+            client_id = configured_client_id or f"edge_gateway_{self.gateway_sn}"
             self.client = mqtt.Client(
-                client_id=f"edge_gateway_{self.gateway_sn}",
+                client_id=client_id,
                 clean_session=False
             )
             self.client.on_connect = self._on_connect
@@ -183,7 +185,7 @@ class MQTTClient:
                 self.config['host'],
                 self.config['port'],
             )
-            logger.info(f"Connecting to NanoMQ at {host}:{port}...")
+            logger.info("Connecting to NanoMQ at %s:%s with client_id=%s...", host, port, client_id)
             self.client.connect(host, port, keepalive=60)
 
             self.client.loop_start()

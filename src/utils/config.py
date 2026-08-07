@@ -288,6 +288,7 @@ class Config:
             'port': cls.get('nanomq.port', 1883),
             'username': cls.get('nanomq.username', ''),
             'password': cls.get('nanomq.password', ''),
+            'client_id': cls.get('nanomq.client_id', ''),
             'topic_prefix': cls.get('nanomq.topic_prefix', 'thing/product'),
             # 仅用于日志/媒体等明确的本地 IO handler，控制类 method 保持同步执行。
             'background_handler_workers': cls.get('nanomq.background_handler_workers', 4),

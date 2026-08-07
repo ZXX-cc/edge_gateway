@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, result_code  # noqa: E402
-from src.utils.dji_error_codes import INVALID_COMMAND_FORMAT  # noqa: E402
+from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT  # noqa: E402
 from tool_config import add_config_argument, resolve_mqtt_settings  # noqa: E402
 
 
@@ -702,7 +702,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             return {"ok": rc == 0, "quality": state["quality"], "reply": reply}
 
         if path == "/api/frame_zoom":
-            # 框选变焦只调镜头倍率，不启用目标跟踪，避免云台本体跟着画面目标移动。
+            # 真正的框选变焦：页面框选坐标 -> camera_frame_zoom -> ViewLink track center -> zoom_to。
             x = max(0.0, min(1.0, float(data.get("x", 0.0) or 0.0)))
             y = max(0.0, min(1.0, float(data.get("y", 0.0) or 0.0)))
             width = max(0.0, min(1.0 - x, float(data.get("width", 0.0) or 0.0)))
@@ -713,7 +713,10 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
             payload = {
                 "payload_index": args.payload_index,
                 "camera_type": "zoom",
-                "locked": False,
+                "locked": True,
+                "centering_enabled": True,
+                "center_mode": "track",
+                "allow_zoom_without_center": True,
                 "zoom_ratio": state["zoom_ratio"],
                 "x": int(round(x * frame_width)),
                 "y": int(round(y * frame_height)),
@@ -722,7 +725,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
                 "frame_size": {"width": frame_width, "height": frame_height},
             }
-            rc, reply = request_services("camera_frame_zoom", payload)
+            rc, reply = request_services("camera_frame_zoom", payload, allowed={0, DOCK_SYSTEM_ERROR})
             return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "request": payload, "reply": reply}
 
         if path == "/api/aim":

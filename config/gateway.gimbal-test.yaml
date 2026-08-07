@@ -14,6 +14,7 @@ nanomq:
   enabled: true
   host: "127.0.0.1"
   port: 1883
+  client_id: "edge_gateway_EDGEGW001_local_payload_test"
   ws_port: 8083
   max_clients: 100
   keepalive: 60
@@ -147,7 +148,7 @@ payload:
           port: 2000
           connect_timeout: 5
           sdk_dir: "./"
-          register_dev_status_callback: true
+          register_dev_status_callback: false
         video:
           direction: "payload_to_gateway"
           transport: "rtsp"

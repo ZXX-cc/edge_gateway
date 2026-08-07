@@ -63,6 +63,13 @@ class GlobalStateMachineAdmissionTest(unittest.TestCase):
     def test_unbound_rejects_flight_task(self):
         self.check("flighttask_execute", snapshot(device="unbound"), False, "device_unbound")
 
+    def test_unbound_allows_local_payload_controls(self):
+        unbound = snapshot(device="unbound")
+        self.check("camera_screen_drag", unbound, True)
+        self.check("camera_frame_zoom", unbound, True)
+        self.check("camera_focal_length_set", unbound, True)
+        self.check("viewlink_stop_track", unbound, True)
+
     def test_aircraft_offline_rejects_drc_enter(self):
         self.check("drc_mode_enter", snapshot(aircraft="offline"), False, "aircraft_offline")
 
