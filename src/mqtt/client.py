@@ -418,6 +418,11 @@ class MQTTClient:
         because high-rate stick/speed pushes may intentionally omit ACKs.
         """
         method = payload.get('method', '') if isinstance(payload, dict) else ''
+        if (
+            os.getenv('EDGE_GATEWAY_ENABLE_TEST_HOOKS') == '1'
+            and method in {'debug_photo_session_start', 'debug_photo_session_clear'}
+        ):
+            return True
         if method in self._reply_required_methods:
             return True
         if source_topic.endswith('/services') or source_topic.endswith('/property/set'):
@@ -441,6 +446,11 @@ class MQTTClient:
 
     def _validate_allowed_service_method(self, source_topic: str, method: str) -> Optional[str]:
         if not source_topic.endswith('/services'):
+            return None
+        if (
+            os.getenv('EDGE_GATEWAY_ENABLE_TEST_HOOKS') == '1'
+            and method in {'debug_photo_session_start', 'debug_photo_session_clear'}
+        ):
             return None
         if not self._allowed_service_methods:
             return None
