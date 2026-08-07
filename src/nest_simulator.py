@@ -48,10 +48,6 @@ _ORDINARY_COMMAND_LABELS = {
     0x0B01: "飞机上电",
     0x0B02: "飞机下电",
     0x0B03: "备降状态清除",
-    0x0C01: "驻留模式开启",
-    0x0C02: "驻留模式关闭",
-    0x0D01: "地面站链路通电",
-    0x0D02: "地面站链路断电",
 }
 _TAKEOFF_LAND_COMMAND_LABELS = {
     0x01: "起飞流程开始",
@@ -71,7 +67,6 @@ BIT_INIT = 7
 BIT_BUSY = 8
 BIT_FAULT = 9
 BIT_R_AXIS_ZERO = 10
-BIT_RESIDENT_MODE = 12
 BIT_TAKEOFF_IN_PROGRESS = 0
 BIT_LANDING_IN_PROGRESS = 1
 BIT_TAKEOFF_ABORT_PROGRESS = 2
@@ -85,7 +80,6 @@ DEFAULT_HEALTHY_BOOLSTATE1 = (
     | (1 << BIT_PLC_HEARTBEAT)
     | (1 << BIT_READY)
     | (1 << BIT_R_AXIS_ZERO)
-    | (1 << 11)
 )
 DEFAULT_HEALTHY_BOOLSTATE1_V17 = (
     (1 << BIT_NEST_HEARTBEAT)
@@ -94,7 +88,6 @@ DEFAULT_HEALTHY_BOOLSTATE1_V17 = (
     | (1 << BIT_CALIBRATE)
     | (1 << BIT_INIT)
     | (1 << BIT_R_AXIS_ZERO)
-    | (1 << 11)
 )
 DEFAULT_READY_BOOLSTATE2 = 1 << BIT_ALLOW_TAKEOFF
 
@@ -103,9 +96,6 @@ REJECT_PLC_TIMEOUT = 2
 REJECT_DRONE_TIMEOUT = 3
 REJECT_MULTIPLE_TAKEOFF = 4
 REJECT_AIRCRAFT_UNLOCKED_POWER_OFF = 4
-REJECT_RESIDENT_MODE = 5
-REJECT_RESIDENT_MODE_AIRCRAFT_BUSY = 6
-REJECT_RESIDENT_ONLY_ESTOP_ALLOWED = 7
 REJECT_AIRCRAFT_LOW_BATTERY = 5
 
 _REJECT_REASON_LABELS = {
@@ -114,9 +104,6 @@ _REJECT_REASON_LABELS = {
     REJECT_PLC_TIMEOUT: "PLC/机巢状态不允许执行",
     REJECT_DRONE_TIMEOUT: "飞机/起降状态不允许执行",
     REJECT_MULTIPLE_TAKEOFF: "未知或重复起降命令",
-    REJECT_RESIDENT_MODE: "驻留模式中，拒绝其他命令",
-    REJECT_RESIDENT_MODE_AIRCRAFT_BUSY: "不能开启驻留模式：飞机正在执行任务",
-    REJECT_RESIDENT_ONLY_ESTOP_ALLOWED: "驻留中，不能接受其他命令（急停除外）",
 }
 _GATE_STATE_LABELS = {
     0: "未知",
@@ -150,8 +137,6 @@ _BOOLSTATE1_BITS = {
     BIT_BUSY: "系统忙",
     BIT_FAULT: "故障",
     BIT_R_AXIS_ZERO: "R轴归零",
-    11: "大灯关闭",
-    BIT_RESIDENT_MODE: "驻留模式",
 }
 _BOOLSTATE2_BITS = {
     BIT_TAKEOFF_IN_PROGRESS: "起飞中",
@@ -179,7 +164,7 @@ class NestSimulator:
         fault_log='logs/nest_simulator/fault_injection.log',
         mission_file='/home/fenghuolun/zwz/HD.kml',
         mission_upload_timeout=30.0,
-        protocol_version='v1.3',
+        protocol_version='v1.7',
     ):
         self.host = host
         self.port = port
@@ -224,6 +209,7 @@ class NestSimulator:
 
         # 模拟环境数据（单位与 drone_nest.xml 一致）
         self.env_data = {
+            'lumen': 0,
             'ac_temp': 250,
             'nest_temperature': 260,
             'env_temperature': 240,
@@ -234,6 +220,7 @@ class NestSimulator:
             'charge_volt': 2600,
             'charge_current': 0,
             'error_code': 0,
+            'qr_light_current': 0,
             # 默认以健康待命状态模拟可起飞机巢。故障/急停/忙碌分支
             # 仍可由命令和协议专项明确注入，不能让正常 E2E 因全零
             # 状态位被误判为机巢离线。
@@ -268,9 +255,9 @@ class NestSimulator:
 
     @staticmethod
     def _normalize_protocol_version(protocol_version):
-        value = str(protocol_version or "v1.3").strip().lower()
+        value = str(protocol_version or "v1.7").strip().lower()
         value = value[1:] if value.startswith("v") else value
-        return "v1.7" if value == "1.7" else "v1.3"
+        return "v1.3" if value == "1.3" else "v1.7"
 
     def _default_healthy_boolstate1(self):
         if self.protocol_version == "v1.7":
@@ -319,17 +306,12 @@ class NestSimulator:
             initializing = False
             init_done = ready
         r_axis_zero = self._bit(boolstate1, BIT_R_AXIS_ZERO)
-        resident_mode = self.protocol_version == "v1.7" and self._bit(boolstate1, BIT_RESIDENT_MODE)
         allow_takeoff = self._bit(boolstate2, BIT_ALLOW_TAKEOFF)
         takeoff_busy = self._bit(boolstate2, BIT_TAKEOFF_IN_PROGRESS)
         landing_busy = self._bit(boolstate2, BIT_LANDING_IN_PROGRESS)
 
         if ordinary_order and not ordinary_reason:
-            if resident_mode and ordinary_order not in (0x0A01, 0x0C02):
-                ordinary_reason = REJECT_RESIDENT_ONLY_ESTOP_ALLOWED
-            elif self.protocol_version == "v1.7" and ordinary_order == 0x0C01 and (takeoff_busy or landing_busy):
-                ordinary_reason = REJECT_RESIDENT_MODE_AIRCRAFT_BUSY
-            elif estop and ordinary_order not in (0x0A02, 0x0A05):
+            if estop and ordinary_order not in (0x0A02, 0x0A05):
                 ordinary_reason = REJECT_PLC_TIMEOUT
             elif fault and ordinary_order not in (0x0A01, 0x0A05):
                 ordinary_reason = REJECT_PLC_TIMEOUT
@@ -339,8 +321,6 @@ class NestSimulator:
         if takeoff_land_order and not takeoff_reason:
             if takeoff_land_order not in _TAKEOFF_LAND_COMMAND_LABELS:
                 takeoff_reason = REJECT_MULTIPLE_TAKEOFF
-            elif resident_mode:
-                takeoff_reason = REJECT_RESIDENT_MODE
             elif estop or fault:
                 takeoff_reason = REJECT_PLC_TIMEOUT
             elif takeoff_land_order == 0x01 and (
@@ -996,6 +976,7 @@ class NestSimulator:
     def _send_nest_response(self):
         env_data = self._effective_env_data()
         msg = drone_nest.MAVLink_drone_nest_response_message(
+            lumen=env_data.get('lumen', 0),
             ac_temp=env_data['ac_temp'],
             nest_temperature=env_data['nest_temperature'],
             env_temperature=env_data['env_temperature'],
@@ -1006,6 +987,7 @@ class NestSimulator:
             charge_volt=env_data['charge_volt'],
             charge_current=env_data['charge_current'],
             error_code=env_data['error_code'],
+            qr_light_current=env_data.get('qr_light_current', 0),
             boolstate1=env_data['boolstate1'],
             boolstate2=env_data['boolstate2'],
             clamp_state=env_data['clamp_state'],
@@ -1077,11 +1059,9 @@ class NestSimulator:
             print("模拟器：停止充电")
         elif ordinary_order == 0x0A06:
             self.env_data['landing_light_state'] = 1
-            self.env_data['boolstate1'] &= ~(1 << 11)
             print("模拟器：大灯开")
         elif ordinary_order == 0x0A07:
             self.env_data['landing_light_state'] = 2
-            self.env_data['boolstate1'] |= (1 << 11)
             print("模拟器：大灯关")
         elif ordinary_order == 0x0A03:
             self.env_data['boolstate1'] |= (1 << BIT_CALIBRATE)
@@ -1107,18 +1087,6 @@ class NestSimulator:
         elif ordinary_order == 0x0B03:
             self.env_data['boolstate2'] &= ~(1 << BIT_ALTERNATE_LANDING_STATE)
             print("模拟器：备降状态清除")
-        elif ordinary_order == 0x0C01:
-            if self.protocol_version == "v1.7":
-                self.env_data['boolstate1'] |= (1 << BIT_RESIDENT_MODE)
-                print("模拟器：驻留模式开启")
-        elif ordinary_order == 0x0C02:
-            if self.protocol_version == "v1.7":
-                self.env_data['boolstate1'] &= ~(1 << BIT_RESIDENT_MODE)
-                print("模拟器：驻留模式关闭")
-        elif ordinary_order == 0x0D01:
-            print("模拟器：地面站链路通电")
-        elif ordinary_order == 0x0D02:
-            print("模拟器：地面站链路断电")
         elif ordinary_order:
             print(f"模拟器：未识别普通命令 0x{ordinary_order:04X}")
 
@@ -1519,8 +1487,8 @@ if __name__ == '__main__':
     parser.add_argument(
         "--protocol-version",
         choices=["v1.3", "v1.7"],
-        default="v1.3",
-        help="机巢协议位定义版本；测试/模拟默认 v1.3，实机联调用 v1.7",
+        default="v1.7",
+        help="机巢协议位定义版本；默认按客户 v1.7，旧模拟链路可显式传 v1.3",
     )
     args = parser.parse_args()
 

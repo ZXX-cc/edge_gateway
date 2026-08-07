@@ -17,14 +17,12 @@ from protocol import (
     BIT_ESTOP,
     BIT_INITIALIZING,
     BIT_INIT,
-    BIT_HEADLIGHT_OFF,
     BIT_ALTERNATE_LANDING_STATE,
     BIT_LANDING_ABORT_PROGRESS,
     BIT_LANDING_IN_PROGRESS,
     BIT_NEST_HEARTBEAT,
     BIT_PLC_HEARTBEAT,
     BIT_R_AXIS_ZERO,
-    BIT_RESIDENT_MODE,
     BIT_SYSTEM_BUSY,
     BIT_TAKEOFF_ABORT_PROGRESS,
     BIT_TAKEOFF_IN_PROGRESS,
@@ -74,6 +72,8 @@ class NestSimulator:
             "charge_volt": 260,
             "charge_current": 0,
             "error_code": 0,
+            "lumen": 0,
+            "qr_light_current": 0,
             "boolstate1": (
                 (1 << BIT_NEST_HEARTBEAT)
                 | (1 << BIT_DRONE_HEARTBEAT)
@@ -81,7 +81,6 @@ class NestSimulator:
                 | (1 << BIT_CALIBRATE)
                 | (1 << BIT_INIT)
                 | (1 << BIT_R_AXIS_ZERO)
-                | (1 << BIT_HEADLIGHT_OFF)
             ),
             "boolstate2": 0,
             "clamp_state": 2,
@@ -185,12 +184,14 @@ class NestSimulator:
             rainfall=self.env_data["rainfall"],
             charge_volt=self.env_data["charge_volt"],
             charge_current=self.env_data["charge_current"],
-            error_code=self.env_data["error_code"],
-            boolstate1=self.env_data["boolstate1"],
-            boolstate2=self.env_data["boolstate2"],
             clamp_state=self.env_data["clamp_state"],
             gate_state=self.env_data["gate_state"],
             landing_light_state=self.env_data["landing_light_state"],
+            error_code=self.env_data["error_code"],
+            lumen=self.env_data["lumen"],
+            qr_light_current=self.env_data["qr_light_current"],
+            boolstate1=self.env_data["boolstate1"],
+            boolstate2=self.env_data["boolstate2"],
         )
         self._send_raw(msg.pack(self.mav))
         if reason == "command" or self.log_status:
@@ -269,20 +270,14 @@ class NestSimulator:
             self.env_data["boolstate1"] |= (1 << BIT_CALIBRATE) | (1 << BIT_R_AXIS_ZERO)
         elif ordinary_order == NEST_COMMANDS["light-on"][0]:
             self.env_data["landing_light_state"] = 1
-            self.env_data["boolstate1"] &= ~(1 << BIT_HEADLIGHT_OFF)
         elif ordinary_order == NEST_COMMANDS["light-off"][0]:
             self.env_data["landing_light_state"] = 2
-            self.env_data["boolstate1"] |= 1 << BIT_HEADLIGHT_OFF
         elif ordinary_order == NEST_COMMANDS["drone-power-on"][0]:
             self.env_data["boolstate1"] |= 1 << BIT_DRONE_HEARTBEAT
         elif ordinary_order == NEST_COMMANDS["drone-power-off"][0]:
             self.env_data["boolstate1"] &= ~(1 << BIT_DRONE_HEARTBEAT)
         elif ordinary_order == NEST_COMMANDS["alternate-landing-clear"][0]:
             self.env_data["boolstate2"] &= ~(1 << BIT_ALTERNATE_LANDING_STATE)
-        elif ordinary_order == NEST_COMMANDS["resident-mode-on"][0]:
-            self.env_data["boolstate1"] |= 1 << BIT_RESIDENT_MODE
-        elif ordinary_order == NEST_COMMANDS["resident-mode-off"][0]:
-            self.env_data["boolstate1"] &= ~(1 << BIT_RESIDENT_MODE)
 
         if takeoff_land_order == 0x01:
             self.env_data["boolstate2"] |= 1 << BIT_TAKEOFF_IN_PROGRESS

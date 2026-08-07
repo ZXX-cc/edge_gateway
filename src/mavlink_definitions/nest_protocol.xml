@@ -5,7 +5,7 @@
         <!-- 消息 ID 12003: 机巢控制指令 -->
         <message id="12003" name="DRONE_NEST_COMMAND">
             <description>Command sent to drone nest.</description>
-            <field type="uint16_t" name="ordinary_order">Ordinary order: 0x1101 door open, 0x1102 door close, 0x1103 door stop, 0x0F01 charge start, 0x0F02 charge stop, 0x1401 clamp tighten, 0x1402 clamp release, 0x1403 clamp stop, 0x0A01 estop, 0x0A02 estop release, 0x0A03 R-axis calibration, 0x0A04 initialize, 0x0A05 fault recovery, 0x0A06 light on, 0x0A07 light off, 0x0B01 drone power on, 0x0B02 drone power off, 0x0B03 alternate landing state clear, 0x0C01 resident mode on, 0x0C02 resident mode off, 0x0D01 GCS link power on, 0x0D02 GCS link power off</field>
+            <field type="uint16_t" name="ordinary_order">Ordinary order: 0x1101 door open, 0x1102 door close, 0x1103 door stop, 0x0F01 charge start, 0x0F02 charge stop, 0x1401 clamp tighten, 0x1402 clamp release, 0x1403 clamp stop, 0x0A01 estop, 0x0A02 estop release, 0x0A03 R-axis calibration, 0x0A04 initialize, 0x0A05 fault recovery, 0x0A06 light on, 0x0A07 light off, 0x0B01 drone power on, 0x0B02 drone power off, 0x0B03 alternate landing state clear</field>
             <field type="uint8_t" name="takeoff_land_order">Auto takeoff and land order: 0x01 takeoff start, 0x02 takeoff abort, 0x04 landing abort</field>
         </message>
 
@@ -22,7 +22,7 @@
           <field type="uint16_t" name="charge_volt">Charging voltage (×100 V)</field>
           <field type="uint16_t" name="charge_current">Charging current (×100 A)</field>
           <field type="uint16_t" name="error_code">System error code</field>
-          <field type="uint16_t" name="boolstate1">Bitmask state 1: bit0 nest heartbeat, bit1 drone heartbeat, bit2 PLC heartbeat, bit3 estop, bit4 charging, bit5 R-axis calibration, bit6 initializing, bit7 initialized, bit8 busy, bit9 fault, bit10 R-axis zero, bit11 headlight off, bit12 resident mode</field>
+          <field type="uint16_t" name="boolstate1">Bitmask state 1: bit0 nest heartbeat, bit1 drone heartbeat, bit2 PLC heartbeat, bit3 estop, bit4 charging, bit5 R-axis calibration, bit6 initializing, bit7 initialized, bit8 busy, bit9 fault, bit10 R-axis zero</field>
           <field type="uint16_t" name="boolstate2">Bitmask state 2: bit0 takeoff flow in progress, bit1 landing flow in progress, bit2 takeoff aborting, bit3 landing aborting, bit4 alternate landing state, bit5 takeoff allowed</field>
           <field type="uint8_t" name="clamp_state">Clamp mechanism state</field>
           <field type="uint8_t" name="gate_state">Gate/Door state</field>

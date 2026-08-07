@@ -160,7 +160,7 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
             },
         )
 
-    def test_default_protocol_keeps_v13_ready_bit(self):
+    def test_default_protocol_uses_v17_ready_bits(self):
         nest_response = SimpleNamespace(
             ac_temp=250,
             nest_temperature=260,
@@ -172,7 +172,7 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
             charge_volt=2600,
             charge_current=0,
             error_code=0,
-            boolstate1=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 6),
+            boolstate1=(1 << 0) | (1 << 1) | (1 << 2) | (1 << 7),
             boolstate2=(1 << 5),
             clamp_state=2,
             gate_state=2,
@@ -182,7 +182,7 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
         self.module._handle_nest_response(nest_response)
         env = self.module.get_environment_data()
 
-        self.assertEqual(self.module.protocol_version, "v1.3")
+        self.assertEqual(self.module.protocol_version, "v1.7")
         self.assertTrue(env["ready_state"])
         self.assertFalse(env["initializing_state"])
 

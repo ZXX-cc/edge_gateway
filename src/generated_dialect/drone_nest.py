@@ -412,22 +412,22 @@ class MAVLink_drone_nest_response_message(MAVLink_message):
 
     id = MAVLINK_MSG_ID_DRONE_NEST_RESPONSE
     msgname = "DRONE_NEST_RESPONSE"
-    fieldnames = ["ac_temp", "nest_temperature", "env_temperature", "wind_direction", "wind_speed", "atmospheric_pressure", "rainfall", "charge_volt", "charge_current", "error_code", "boolstate1", "boolstate2", "clamp_state", "gate_state", "landing_light_state"]
-    ordered_fieldnames = ["ac_temp", "nest_temperature", "env_temperature", "wind_direction", "wind_speed", "atmospheric_pressure", "rainfall", "charge_volt", "charge_current", "error_code", "boolstate1", "boolstate2", "clamp_state", "gate_state", "landing_light_state"]
-    fieldtypes = ["uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint8_t", "uint8_t", "uint8_t"]
+    fieldnames = ["ac_temp", "nest_temperature", "env_temperature", "wind_direction", "wind_speed", "atmospheric_pressure", "rainfall", "charge_volt", "charge_current", "clamp_state", "gate_state", "landing_light_state", "error_code", "lumen", "qr_light_current", "boolstate1", "boolstate2"]
+    ordered_fieldnames = ["lumen", "ac_temp", "nest_temperature", "env_temperature", "wind_direction", "wind_speed", "atmospheric_pressure", "rainfall", "charge_volt", "charge_current", "error_code", "qr_light_current", "boolstate1", "boolstate2", "clamp_state", "gate_state", "landing_light_state"]
+    fieldtypes = ["uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "uint8_t", "uint8_t", "uint8_t", "uint16_t", "uint32_t", "uint16_t", "uint16_t", "uint16_t"]
     fielddisplays_by_name: Dict[str, str] = {}
     fieldenums_by_name: Dict[str, str] = {}
     fieldunits_by_name: Dict[str, str] = {}
-    native_format = bytearray(b"<HHHHHHHHHHHHBBB")
-    orders = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
-    lengths = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-    array_lengths = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    crc_extra = 134
-    unpacker = struct.Struct("<HHHHHHHHHHHHBBB")
+    native_format = bytearray(b"<IHHHHHHHHHHHHHBBB")
+    orders = [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 10, 0, 11, 12, 13]
+    lengths = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    array_lengths = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    crc_extra = 120
+    unpacker = struct.Struct("<IHHHHHHHHHHHHHBBB")
     instance_field = None
     instance_offset = -1
 
-    def __init__(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, error_code: int, boolstate1: int, boolstate2: int, clamp_state: int, gate_state: int, landing_light_state: int):
+    def __init__(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, clamp_state: int, gate_state: int, landing_light_state: int, error_code: int, lumen: int, qr_light_current: int, boolstate1: int, boolstate2: int):
         MAVLink_message.__init__(self, MAVLink_drone_nest_response_message.id, MAVLink_drone_nest_response_message.msgname)
         self._fieldnames = MAVLink_drone_nest_response_message.fieldnames
         self._instance_field = MAVLink_drone_nest_response_message.instance_field
@@ -441,15 +441,17 @@ class MAVLink_drone_nest_response_message(MAVLink_message):
         self.rainfall = rainfall
         self.charge_volt = charge_volt
         self.charge_current = charge_current
-        self.error_code = error_code
-        self.boolstate1 = boolstate1
-        self.boolstate2 = boolstate2
         self.clamp_state = clamp_state
         self.gate_state = gate_state
         self.landing_light_state = landing_light_state
+        self.error_code = error_code
+        self.lumen = lumen
+        self.qr_light_current = qr_light_current
+        self.boolstate1 = boolstate1
+        self.boolstate2 = boolstate2
 
     def pack(self, mav: "MAVLink", force_mavlink1: bool = False) -> bytes:
-        return self._pack(mav, self.crc_extra, self.unpacker.pack(self.ac_temp, self.nest_temperature, self.env_temperature, self.wind_direction, self.wind_speed, self.atmospheric_pressure, self.rainfall, self.charge_volt, self.charge_current, self.error_code, self.boolstate1, self.boolstate2, self.clamp_state, self.gate_state, self.landing_light_state), force_mavlink1=force_mavlink1)
+        return self._pack(mav, self.crc_extra, self.unpacker.pack(self.lumen, self.ac_temp, self.nest_temperature, self.env_temperature, self.wind_direction, self.wind_speed, self.atmospheric_pressure, self.rainfall, self.charge_volt, self.charge_current, self.error_code, self.qr_light_current, self.boolstate1, self.boolstate2, self.clamp_state, self.gate_state, self.landing_light_state), force_mavlink1=force_mavlink1)
 
 
 # Define name on the class for backwards compatibility (it is now msgname).
@@ -918,7 +920,7 @@ class MAVLink(object):
         """
         self.send(self.drone_nest_command_encode(ordinary_order, takeoff_land_order), force_mavlink1=force_mavlink1)
 
-    def drone_nest_response_encode(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, error_code: int, boolstate1: int, boolstate2: int, clamp_state: int, gate_state: int, landing_light_state: int) -> MAVLink_drone_nest_response_message:
+    def drone_nest_response_encode(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, clamp_state: int, gate_state: int, landing_light_state: int, error_code: int, lumen: int, qr_light_current: int, boolstate1: int, boolstate2: int) -> MAVLink_drone_nest_response_message:
         """
         Status response from drone nest
 
@@ -931,17 +933,19 @@ class MAVLink(object):
         rainfall                  : Rainfall (mm/m²) (type:uint16_t)
         charge_volt               : Charge voltage (×10 V) (type:uint16_t)
         charge_current            : Charge current (×10 A) (type:uint16_t)
-        error_code                : Error code (type:uint16_t)
-        boolstate1                : Boolean state 1 (type:uint16_t)
-        boolstate2                : Boolean state 2 (type:uint16_t)
         clamp_state               : Clamp state (type:uint8_t)
         gate_state                : Gate state (type:uint8_t)
         landing_light_state        : Landing light state (type:uint8_t)
+        error_code                : Error code (type:uint16_t)
+        lumen                     : Illuminance / Lumen field from protocol v1.7 (type:uint32_t)
+        qr_light_current          : QR light current (type:uint16_t)
+        boolstate1                : Boolean state 1 (type:uint16_t)
+        boolstate2                : Boolean state 2 (type:uint16_t)
 
         """
-        return MAVLink_drone_nest_response_message(ac_temp, nest_temperature, env_temperature, wind_direction, wind_speed, atmospheric_pressure, rainfall, charge_volt, charge_current, error_code, boolstate1, boolstate2, clamp_state, gate_state, landing_light_state)
+        return MAVLink_drone_nest_response_message(ac_temp, nest_temperature, env_temperature, wind_direction, wind_speed, atmospheric_pressure, rainfall, charge_volt, charge_current, clamp_state, gate_state, landing_light_state, error_code, lumen, qr_light_current, boolstate1, boolstate2)
 
-    def drone_nest_response_send(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, error_code: int, boolstate1: int, boolstate2: int, clamp_state: int, gate_state: int, landing_light_state: int, force_mavlink1: bool = False) -> None:
+    def drone_nest_response_send(self, ac_temp: int, nest_temperature: int, env_temperature: int, wind_direction: int, wind_speed: int, atmospheric_pressure: int, rainfall: int, charge_volt: int, charge_current: int, clamp_state: int, gate_state: int, landing_light_state: int, error_code: int, lumen: int, qr_light_current: int, boolstate1: int, boolstate2: int, force_mavlink1: bool = False) -> None:
         """
         Status response from drone nest
 
@@ -954,15 +958,17 @@ class MAVLink(object):
         rainfall                  : Rainfall (mm/m²) (type:uint16_t)
         charge_volt               : Charge voltage (×10 V) (type:uint16_t)
         charge_current            : Charge current (×10 A) (type:uint16_t)
-        error_code                : Error code (type:uint16_t)
-        boolstate1                : Boolean state 1 (type:uint16_t)
-        boolstate2                : Boolean state 2 (type:uint16_t)
         clamp_state               : Clamp state (type:uint8_t)
         gate_state                : Gate state (type:uint8_t)
         landing_light_state        : Landing light state (type:uint8_t)
+        error_code                : Error code (type:uint16_t)
+        lumen                     : Illuminance / Lumen field from protocol v1.7 (type:uint32_t)
+        qr_light_current          : QR light current (type:uint16_t)
+        boolstate1                : Boolean state 1 (type:uint16_t)
+        boolstate2                : Boolean state 2 (type:uint16_t)
 
         """
-        self.send(self.drone_nest_response_encode(ac_temp, nest_temperature, env_temperature, wind_direction, wind_speed, atmospheric_pressure, rainfall, charge_volt, charge_current, error_code, boolstate1, boolstate2, clamp_state, gate_state, landing_light_state), force_mavlink1=force_mavlink1)
+        self.send(self.drone_nest_response_encode(ac_temp, nest_temperature, env_temperature, wind_direction, wind_speed, atmospheric_pressure, rainfall, charge_volt, charge_current, clamp_state, gate_state, landing_light_state, error_code, lumen, qr_light_current, boolstate1, boolstate2), force_mavlink1=force_mavlink1)
 
     def drone_nest_order_response_encode(self, ordinary_order_response: int, takeoff_land_order_response: int) -> MAVLink_drone_nest_order_response_message:
         """

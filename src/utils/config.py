@@ -343,7 +343,7 @@ class Config:
     @classmethod
     def get_nest_mavlink_config(cls):
         """获取机巢MAVLink配置"""
-        default_protocol_version = 'v1.7' if str(cls.get('runtime.mode', 'test')).lower() == 'production' else 'v1.3'
+        default_protocol_version = 'v1.7'
         return {
             'enabled': cls.get('nest_mavlink.enabled', False),
             'connection_type': cls.get('nest_mavlink.connection.type', 'udp'),

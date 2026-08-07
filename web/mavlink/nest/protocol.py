@@ -28,8 +28,6 @@ BIT_INIT = 7
 BIT_SYSTEM_BUSY = 8
 BIT_FAULT = 9
 BIT_R_AXIS_ZERO = 10
-BIT_HEADLIGHT_OFF = 11
-BIT_RESIDENT_MODE = 12
 BIT_TAKEOFF_IN_PROGRESS = 0
 BIT_LANDING_IN_PROGRESS = 1
 BIT_TAKEOFF_ABORT_PROGRESS = 2
@@ -62,10 +60,6 @@ NEST_COMMANDS = {
     "drone-power-on": (GCSCommand.DRONE_POWER_ON.value, 0),
     "drone-power-off": (GCSCommand.DRONE_POWER_OFF.value, 0),
     "alternate-landing-clear": (GCSCommand.DRONE_ALTERNATE_LANDING_CLEAR.value, 0),
-    "resident-mode-on": (GCSCommand.RESIDENT_MODE_ON.value, 0),
-    "resident-mode-off": (GCSCommand.RESIDENT_MODE_OFF.value, 0),
-    "gcs-link-power-on": (GCSCommand.GCS_LINK_POWER_ON.value, 0),
-    "gcs-link-power-off": (GCSCommand.GCS_LINK_POWER_OFF.value, 0),
 }
 
 
@@ -91,10 +85,6 @@ ORDINARY_COMMAND_LABELS = {
     GCSCommand.DRONE_POWER_ON.value: "飞机上电",
     GCSCommand.DRONE_POWER_OFF.value: "飞机下电",
     GCSCommand.DRONE_ALTERNATE_LANDING_CLEAR.value: "备降状态清除",
-    GCSCommand.RESIDENT_MODE_ON.value: "驻留模式开启",
-    GCSCommand.RESIDENT_MODE_OFF.value: "驻留模式关闭",
-    GCSCommand.GCS_LINK_POWER_ON.value: "地面站链路通电",
-    GCSCommand.GCS_LINK_POWER_OFF.value: "地面站链路断电",
 }
 
 

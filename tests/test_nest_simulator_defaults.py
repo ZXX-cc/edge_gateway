@@ -26,7 +26,6 @@ from src.nest_simulator import (
     BIT_R_AXIS_ZERO,
     BIT_CALIBRATE,
     BIT_INIT,
-    BIT_READY,
     NestSimulator,
 )
 from src.generated_dialect.gcs_order_protocol import GCSCommand
@@ -42,13 +41,22 @@ class NestSimulatorDefaultStateTest(unittest.TestCase):
             BIT_NEST_HEARTBEAT,
             BIT_DRONE_HEARTBEAT,
             BIT_PLC_HEARTBEAT,
-            BIT_READY,
+            BIT_CALIBRATE,
+            BIT_INIT,
             BIT_R_AXIS_ZERO,
         ):
             self.assertTrue(status1 & (1 << bit))
         self.assertTrue(status2 & (1 << BIT_ALLOW_TAKEOFF))
 
         ordinary, takeoff = simulator._evaluate_command_response(0, GCSCommand.TAKEOFF_START.value)
+        self.assertEqual((ordinary, takeoff), (0, 0))
+
+    def test_v17_ignores_removed_boolstate1_bits_11_and_12(self):
+        simulator = NestSimulator(command_log="", protocol_version="v1.7")
+        simulator.env_data["boolstate1"] |= (1 << 11) | (1 << 12)
+
+        ordinary, takeoff = simulator._evaluate_command_response(0, GCSCommand.TAKEOFF_START.value)
+
         self.assertEqual((ordinary, takeoff), (0, 0))
 
     def test_v17_state_is_healthy_when_explicitly_enabled(self):

@@ -91,7 +91,7 @@ mavlink:
 # --- 机巢MAVLink配置（独立机巢链路） ---
 nest_mavlink:
   enabled: true # 网关通过 14551 与机巢/机巢模拟器交换自定义机巢 MAVLink
-  protocol_version: "v1.3" # 真实机巢按客户《机巢协议v1.7》解析；旧模拟器需单独覆盖为 "v1.3"。
+  protocol_version: "v1.7" # 真实机巢按客户《机巢协议v1.7》解析；旧模拟器需单独覆盖为 "v1.3"。
   # UDP 需要空指令注册对端地址；TCP 长连接默认不发空轮询，避免对端按非法命令断开。
   status_poll_enabled: false
   status_poll_interval: 2.0

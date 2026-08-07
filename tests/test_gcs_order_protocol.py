@@ -51,6 +51,16 @@ class GCSOrderProtocolTest(unittest.TestCase):
             self.assertEqual(encoded & 0xFF, 0)
             self.assertEqual(NEST_COMMANDS[name], (expected_value, 0))
 
+    def test_current_firmware_commands_exclude_resident_and_0d_series(self):
+        self.assertFalse(hasattr(GCSCommand, "RESIDENT_MODE_ON"))
+        self.assertFalse(hasattr(GCSCommand, "RESIDENT_MODE_OFF"))
+        self.assertFalse(hasattr(GCSCommand, "GCS_LINK_POWER_ON"))
+        self.assertFalse(hasattr(GCSCommand, "GCS_LINK_POWER_OFF"))
+        self.assertNotIn("resident-mode-on", NEST_COMMANDS)
+        self.assertNotIn("resident-mode-off", NEST_COMMANDS)
+        self.assertNotIn("gcs-link-power-on", NEST_COMMANDS)
+        self.assertNotIn("gcs-link-power-off", NEST_COMMANDS)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

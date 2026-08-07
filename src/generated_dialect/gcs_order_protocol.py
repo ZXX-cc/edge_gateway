@@ -43,13 +43,6 @@ class GCSCommand(IntEnum):
     DRONE_POWER_OFF = 0x0B02  # 飞机下电
     DRONE_ALTERNATE_LANDING_CLEAR = 0x0B03  # 备降点/备降状态清除
 
-    RESIDENT_MODE_ON = 0x0C01  # 驻留模式开启
-    RESIDENT_MODE_OFF = 0x0C02  # 驻留模式关闭
-
-    GCS_LINK_POWER_ON = 0x0D01  # 地面站链路通电
-    GCS_LINK_POWER_OFF = 0x0D02  # 地面站链路断电
-
-
 # ==================== 机巢主控 → 地面站（状态位） ====================
 class DoorState(IntEnum):
     """舱门状态（位0-2的组合值）"""
@@ -211,9 +204,6 @@ REJECT_REASONS = {
         2: "PLC超时",
         3: "飞机超时",
         4: "飞机不具备下电条件：已解锁",
-        5: "驻留模式中，拒绝其他命令",
-        6: "不能开启驻留模式：飞机正在执行任务",
-        7: "驻留中，不能接受其他命令（急停除外）",
     },
     15: {  # 字节15（起降命令拒绝原因）
         1: "起降命令与一般命令冲突",
@@ -221,7 +211,6 @@ REJECT_REASONS = {
         3: "飞机超时",
         4: "出现多条起降命令",
         5: "飞机电量不足",
-        6: "驻留模式中，拒绝其他命令",
     }
 }
 

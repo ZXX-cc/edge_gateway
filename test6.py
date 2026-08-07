@@ -118,7 +118,9 @@ class MockDroneNest:
                     boolstate2=boolstate2,
                     clamp_state=self.clamp_state,
                     gate_state=self.gate_state,
-                    landing_light_state=2
+                    landing_light_state=2,
+                    lumen=0,
+                    qr_light_current=0
                 )
             except Exception:
                 self.running = False

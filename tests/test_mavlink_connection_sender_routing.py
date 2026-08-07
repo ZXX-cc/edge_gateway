@@ -9,7 +9,13 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
-from src.core.connection import MAVLinkConnection
+if "src.utils.command_trace" not in sys.modules:
+    command_trace = types.ModuleType("src.utils.command_trace")
+    command_trace.trace_command = lambda *_args, **_kwargs: None
+    sys.modules["src.utils.command_trace"] = command_trace
+
+from src.core.connection import MAVLinkConnection, _coerce_real_drone_nest_response
+from src.generated_dialect import drone_nest
 
 
 class FakeSender:
@@ -29,6 +35,20 @@ class FakeMessage:
 
     def get_msgId(self):
         return self._msg_id
+
+
+class FakeRawMessage:
+    def __init__(self, raw_hex):
+        self._raw = bytes.fromhex(raw_hex)
+
+    def get_msgbuf(self):
+        return self._raw
+
+    def get_type(self):
+        return "UNKNOWN_12004"
+
+    def get_msgId(self):
+        return -2
 
 
 class MAVLinkConnectionSenderRoutingTest(unittest.TestCase):
@@ -51,6 +71,71 @@ class MAVLinkConnectionSenderRoutingTest(unittest.TestCase):
         sender = conn._select_sender_for_message(FakeMessage(12003))
 
         self.assertEqual(sender.name, "custom")
+
+    def test_real_33_byte_nest_status_frame_is_coerced(self):
+        raw_hex = (
+            "fd2100006a6501e42e00"
+            "fe7201001f0100000801b4141400de030000000000000000000005050000020202"
+            "8b18"
+        )
+
+        msg = _coerce_real_drone_nest_response(FakeRawMessage(raw_hex))
+
+        self.assertEqual(msg.get_type(), "DRONE_NEST_RESPONSE")
+        self.assertEqual(msg.get_msgId(), 12004)
+        self.assertEqual(msg.get_srcSystem(), 0x65)
+        self.assertEqual(msg.lumen, 0x000172FE)
+        self.assertEqual(msg.ac_temp, 0x011F)
+        self.assertEqual(msg.env_temperature, 0x0108)
+        self.assertEqual(msg.wind_direction, 0x14B4)
+        self.assertEqual(msg.atmospheric_pressure, 0x03DE)
+        self.assertEqual(msg.qr_light_current, 0)
+        self.assertEqual(msg.boolstate1, 0x0505)
+        self.assertEqual(msg.boolstate2, 0)
+        self.assertEqual(msg.clamp_state, 2)
+        self.assertEqual(msg.gate_state, 2)
+        self.assertEqual(msg.landing_light_state, 2)
+
+    def test_generated_v17_dialect_decodes_real_33_byte_nest_status_frame(self):
+        raw = bytes.fromhex(
+            "fd2100006a6501e42e00"
+            "fe7201001f0100000801b4141400de030000000000000000000005050000020202"
+            "8b18"
+        )
+
+        msg = drone_nest.MAVLink(None).decode(bytearray(raw))
+
+        self.assertEqual(msg.get_type(), "DRONE_NEST_RESPONSE")
+        self.assertEqual(msg.get_msgId(), 12004)
+        self.assertEqual(msg.lumen, 0x000172FE)
+        self.assertEqual(msg.qr_light_current, 0)
+        self.assertEqual(msg.boolstate1, 0x0505)
+        self.assertEqual(msg.gate_state, 2)
+
+    def test_generated_v17_dialect_uses_firmware_field_order(self):
+        self.assertEqual(
+            drone_nest.MAVLink_drone_nest_response_message.fieldnames,
+            [
+                "ac_temp",
+                "nest_temperature",
+                "env_temperature",
+                "wind_direction",
+                "wind_speed",
+                "atmospheric_pressure",
+                "rainfall",
+                "charge_volt",
+                "charge_current",
+                "clamp_state",
+                "gate_state",
+                "landing_light_state",
+                "error_code",
+                "lumen",
+                "qr_light_current",
+                "boolstate1",
+                "boolstate2",
+            ],
+        )
+        self.assertEqual(drone_nest.MAVLink_drone_nest_response_message.crc_extra, 120)
 
 
 if __name__ == "__main__":

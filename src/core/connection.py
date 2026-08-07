@@ -107,6 +107,97 @@ def _raw_frame_hex(msg) -> str:
     return "unavailable"
 
 
+def _mavlink2_frame_parts(frame: bytes):
+    if len(frame) < 12 or frame[0] != 0xFD:
+        return None
+    payload_len = frame[1]
+    frame_len = 10 + payload_len + 2
+    if len(frame) < frame_len:
+        return None
+    msg_id = frame[7] | (frame[8] << 8) | (frame[9] << 16)
+    payload = frame[10:10 + payload_len]
+    crc = struct.unpack("<H", frame[10 + payload_len:12 + payload_len])[0]
+    return payload_len, msg_id, frame[5], frame[6], payload, crc
+
+
+def _mavlink2_crc_matches(frame: bytes, crc_extra: int) -> bool:
+    parts = _mavlink2_frame_parts(frame)
+    if not parts:
+        return False
+    payload_len, _msg_id, _sysid, _compid, _payload, crc = parts
+    return _x25_checksum(frame[1:10 + payload_len], crc_extra) == crc
+
+
+class _ManualDroneNestResponseMessage:
+    """Compatibility object for real 33-byte DRONE_NEST_RESPONSE frames."""
+
+    id = 12004
+    msgname = "DRONE_NEST_RESPONSE"
+
+    def __init__(self, frame: bytes, sysid: int, compid: int, payload: bytes):
+        self._frame = bytes(frame)
+        self._payload = bytes(payload)
+        self._sysid = sysid
+        self._compid = compid
+
+        # Real v1.7 controllers observed in docs/mavlink_raw_2026-08-07.log.###
+        # send a 33-byte 12004 frame with a 4-byte leading Lumen field and a
+        # 2-byte qr_light_current field before boolstate1. Keep this fallback for logs
+        # or stale generated dialects that still surface the frame as UNKNOWN.
+        self.lumen = struct.unpack_from("<I", payload, 0)[0]
+        self.status_counter = self.lumen
+        self.ac_temp = struct.unpack_from("<H", payload, 4)[0]
+        self.nest_temperature = struct.unpack_from("<H", payload, 6)[0]
+        self.env_temperature = struct.unpack_from("<H", payload, 8)[0]
+        self.wind_direction = struct.unpack_from("<H", payload, 10)[0]
+        self.wind_speed = struct.unpack_from("<H", payload, 12)[0]
+        self.atmospheric_pressure = struct.unpack_from("<H", payload, 14)[0]
+        self.rainfall = struct.unpack_from("<H", payload, 16)[0]
+        self.charge_volt = struct.unpack_from("<H", payload, 18)[0]
+        self.charge_current = struct.unpack_from("<H", payload, 20)[0]
+        self.error_code = struct.unpack_from("<H", payload, 22)[0]
+        self.qr_light_current = struct.unpack_from("<H", payload, 24)[0]
+        self.reserved = self.qr_light_current
+        self.boolstate1 = struct.unpack_from("<H", payload, 26)[0]
+        self.boolstate2 = struct.unpack_from("<H", payload, 28)[0]
+        self.clamp_state = payload[30]
+        self.gate_state = payload[31]
+        self.landing_light_state = payload[32]
+
+    def get_type(self):
+        return self.msgname
+
+    def get_msgId(self):
+        return self.id
+
+    def get_srcSystem(self):
+        return self._sysid
+
+    def get_srcComponent(self):
+        return self._compid
+
+    def get_msgbuf(self):
+        return self._frame
+
+    def get_payload(self):
+        return self._payload
+
+
+def _coerce_real_drone_nest_response(msg):
+    """Convert real 33-byte 12004 frames if the active dialect marks them UNKNOWN."""
+    try:
+        frame = bytes(msg.get_msgbuf()) if hasattr(msg, "get_msgbuf") else b""
+    except Exception:
+        return msg
+    parts = _mavlink2_frame_parts(frame)
+    if not parts:
+        return msg
+    payload_len, msg_id, sysid, compid, payload, _crc = parts
+    if msg_id == 12004 and payload_len == 33 and _mavlink2_crc_matches(frame, 120):
+        return _ManualDroneNestResponseMessage(frame, sysid, compid, payload)
+    return msg
+
+
 def _log_raw_mavlink(direction: str, connection_string: str, msg) -> None:
     """记录 MAVLink 原始收发帧，供协议级故障回放。"""
     try:
@@ -643,6 +734,8 @@ class MAVLinkConnection:
         try:
             msg = self.master.recv_match(blocking=True, timeout=timeout)
             if msg is not None:
+                if self.use_custom_dialect:
+                    msg = _coerce_real_drone_nest_response(msg)
                 _log_raw_mavlink("RX", self.connection_string, msg)
             return msg
         except Exception as e:

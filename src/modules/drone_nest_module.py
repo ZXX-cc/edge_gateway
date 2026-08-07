@@ -38,7 +38,7 @@ class DroneNestModule(BaseModule):
     - 提供数据查询接口
     """
 
-    def __init__(self, target_system: int = 101, target_component: int = 1, protocol_version: str = "v1.3"):
+    def __init__(self, target_system: int = 101, target_component: int = 1, protocol_version: str = "v1.7"):
         """初始化机巢遥测模块"""
         super().__init__("DroneNestModule")
         self.target_system = target_system
@@ -112,9 +112,9 @@ class DroneNestModule(BaseModule):
 
     @staticmethod
     def _normalize_protocol_version(protocol_version: str) -> str:
-        value = str(protocol_version or "v1.3").strip().lower()
+        value = str(protocol_version or "v1.7").strip().lower()
         value = value[1:] if value.startswith("v") else value
-        return "v1.7" if value == "1.7" else "v1.3"
+        return "v1.3" if value == "1.3" else "v1.7"
 
     def set_protocol_version(self, protocol_version: str):
         self.protocol_version = self._normalize_protocol_version(protocol_version)
@@ -407,6 +407,8 @@ class DroneNestModule(BaseModule):
                 "charge_volt": msg.charge_volt / 100.0,  # 充电电压 (V)
                 "charge_current": msg.charge_current / 100.0,  # 充电电流 (A)
                 "error_code": msg.error_code,  # 故障码
+                "lumen": getattr(msg, "lumen", 0),
+                "qr_light_current": getattr(msg, "qr_light_current", 0),
                 "last_update": time.time(),
                 "data_valid": True
             })
@@ -426,16 +428,13 @@ class DroneNestModule(BaseModule):
                 initializing_state = bool(boolstate1 & (1 << 6))
                 ready_state = init_state = bool(boolstate1 & (1 << 7))
                 ready_state = ready_state and not initializing_state
-                resident_mode = bool(boolstate1 & (1 << 12))
             else:
                 initializing_state = False
                 ready_state = bool(boolstate1 & (1 << 6))
                 init_state = bool(boolstate1 & (1 << 7))
-                resident_mode = False
             system_busy = bool(boolstate1 & (1 << 8))
             fault_state = bool(boolstate1 & (1 << 9))
             r_axis_zero = bool(boolstate1 & (1 << 10))
-            headlight_off = bool(boolstate1 & (1 << 11))
 
             # boolstate2: 流程状态
             takeoff_in_progress = bool(boolstate2 & (1 << 0))
@@ -468,8 +467,6 @@ class DroneNestModule(BaseModule):
                 "system_busy": system_busy,
                 "fault_state": fault_state,
                 "r_axis_zero": r_axis_zero,
-                "headlight_off": headlight_off,
-                "resident_mode": resident_mode,
                 "takeoff_in_progress": takeoff_in_progress,
                 "landing_in_progress": landing_in_progress,
                 "takeoff_abort_progress": takeoff_abort_progress,
@@ -490,6 +487,7 @@ class DroneNestModule(BaseModule):
                 f"boolstate2={self._fmt_hex(boolstate2, 4)}({boolstate2}), "
                 f"gate_state={msg.gate_state}, clamp_state={msg.clamp_state}, "
                 f"landing_light_state={msg.landing_light_state}, error_code={msg.error_code}, "
+                f"lumen={getattr(msg, 'lumen', 0)}, qr_light_current={getattr(msg, 'qr_light_current', 0)}, "
                 f"heartbeat(nest={int(nest_heartbeat)}, drone={int(drone_heartbeat)}, plc={int(plc_heartbeat)}), "
                 f"ready={int(ready_state)}, init={int(init_state)}, initializing={int(initializing_state)}, "
                 f"busy={int(system_busy)}, fault={int(fault_state)}, estop={int(estop_state)}, "
@@ -549,15 +547,15 @@ class DroneNestModule(BaseModule):
                 "initializing_state": initializing_state,
                 "init_state": init_state,
                 "calibrate_state": calibrate_state,
-                "resident_mode": resident_mode,
                 "system_busy": system_busy,
                 "fault_state": fault_state,
                 "r_axis_zero": r_axis_zero,
-                "headlight_off": headlight_off,
                 "clamp_state": msg.clamp_state,
                 "gate_state": msg.gate_state,
                 "landing_light_state": msg.landing_light_state,
                 "error_code": msg.error_code,
+                "lumen": getattr(msg, "lumen", 0),
+                "qr_light_current": getattr(msg, "qr_light_current", 0),
                 "last_update": time.time(),
                 "data_valid": True
             })
@@ -804,6 +802,18 @@ class DroneNestModule(BaseModule):
 
     def send_gcs_command(self, *commands: GCSCommand):
         """向机巢发送地面站命令"""
+        unsupported_values = {0x0C01, 0x0C02, 0x0D01, 0x0D02}
+        unsupported_commands = [cmd for cmd in commands if int(cmd) in unsupported_values]
+        if unsupported_commands:
+            names = [getattr(cmd, "name", f"0x{int(cmd):04X}") for cmd in unsupported_commands]
+            self.log(f"⚠️ 当前固件不支持命令，已阻止下发: {names}", "WARNING")
+            self._report_operation_event(
+                'failed',
+                'gcs_command',
+                {'commands': names, 'error': 'unsupported by current firmware'},
+            )
+            return False
+
         if not self.dispatcher or not self.dispatcher.connection:
             self.log("⚠️ 机巢连接未就绪，无法发送命令", "WARNING")
             self._report_operation_event('failed', 'gcs_command',
@@ -1013,20 +1023,24 @@ class DroneNestModule(BaseModule):
         return self.send_gcs_command(GCSCommand.DRONE_ALTERNATE_LANDING_CLEAR)
 
     def resident_mode_on(self):
-        """开启驻留模式"""
-        return self.send_gcs_command(GCSCommand.RESIDENT_MODE_ON)
+        """当前固件不支持驻留模式开启。"""
+        self.log("⚠️ 当前固件不支持驻留模式开启，未下发 0x0C01", "WARNING")
+        return False
 
     def resident_mode_off(self):
-        """关闭驻留模式"""
-        return self.send_gcs_command(GCSCommand.RESIDENT_MODE_OFF)
+        """当前固件不支持驻留模式关闭。"""
+        self.log("⚠️ 当前固件不支持驻留模式关闭，未下发 0x0C02", "WARNING")
+        return False
 
     def gcs_link_power_on(self):
-        """地面站链路通电"""
-        return self.send_gcs_command(GCSCommand.GCS_LINK_POWER_ON)
+        """当前固件不支持地面站链路通电。"""
+        self.log("⚠️ 当前固件不支持地面站链路通电，未下发 0x0D01", "WARNING")
+        return False
 
     def gcs_link_power_off(self):
-        """地面站链路断电"""
-        return self.send_gcs_command(GCSCommand.GCS_LINK_POWER_OFF)
+        """当前固件不支持地面站链路断电。"""
+        self.log("⚠️ 当前固件不支持地面站链路断电，未下发 0x0D02", "WARNING")
+        return False
 
     # ========== 回调管理 ==========
 
