@@ -23,6 +23,7 @@ import time
 import signal
 import threading
 import asyncio
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1905,6 +1906,13 @@ class EdgeGateway:
             'ir_metering_point_set': self.gimbal.handle_ir_metering_point_set,
             'ir_metering_area_set': self.gimbal.handle_ir_metering_area_set,
         }, category='payload')
+
+        if os.getenv('EDGE_GATEWAY_ENABLE_TEST_HOOKS') == '1':
+            self.router.register_batch({
+                'debug_photo_session_start': self.camera.handle_debug_photo_session_start,
+                'debug_photo_session_clear': self.camera.handle_debug_photo_session_clear,
+            }, category='payload')
+            logger.warning("EDGE_GATEWAY_ENABLE_TEST_HOOKS=1: debug MQTT test hooks registered")
 
         # ---- 日志管理API ----
         self.router.register_batch({

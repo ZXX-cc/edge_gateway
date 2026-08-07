@@ -81,6 +81,7 @@ class CameraController:
         self._photo_session_thread = None
         self._photo_session_stop = threading.Event()
         self._photo_session_lock = threading.Lock()
+        self._debug_photo_session_force_stop = threading.Event()
         self._zoom_level = 1.0
         self._last_real_zoom_factor = None
         self._last_ir_zoom_factor = 1.0
@@ -1189,6 +1190,67 @@ class CameraController:
             "running": False,
             "already_stopped": True,
         })
+
+    def handle_debug_photo_session_start(self, msg: dict) -> dict:
+        """测试专用：在真实网关进程内挂载一个模拟连拍线程。"""
+        data = msg.get("data", {})
+        stuck = bool(data.get("stuck", True))
+        interval = data.get("interval", 0.2)
+        try:
+            interval = max(0.05, float(interval))
+        except (TypeError, ValueError):
+            interval = 0.2
+
+        with self._photo_session_lock:
+            thread = self._photo_session_thread
+            if thread and thread.is_alive():
+                return MessageBuilder.build_reply(msg, result=-1, data={
+                    "running": True,
+                    "thread_name": thread.name,
+                }, msg_str="Photo session already running")
+
+            self._photo_session_stop.clear()
+            self._debug_photo_session_force_stop.clear()
+
+            def run_debug_session():
+                while not self._debug_photo_session_force_stop.is_set():
+                    if not stuck and self._photo_session_stop.is_set():
+                        break
+                    self._debug_photo_session_force_stop.wait(interval)
+
+            self._photo_session_thread = threading.Thread(
+                target=run_debug_session,
+                name="debug-photo-session-stuck" if stuck else "debug-photo-session",
+                daemon=True,
+            )
+            self._photo_session_thread.start()
+
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "photo_source": "debug_simulated",
+            "running": True,
+            "stuck": stuck,
+            "interval": interval,
+            "thread_name": self._photo_session_thread.name,
+        })
+
+    def handle_debug_photo_session_clear(self, msg: dict) -> dict:
+        """测试专用：清理真实网关进程内的模拟连拍线程。"""
+        with self._photo_session_lock:
+            thread = self._photo_session_thread
+            self._photo_session_stop.set()
+            self._debug_photo_session_force_stop.set()
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+            running = bool(thread and thread.is_alive())
+            if not running:
+                self._photo_session_thread = None
+                self._photo_session_stop.clear()
+
+        return MessageBuilder.build_reply(msg, result=0 if not running else DOCK_SYSTEM_ERROR, data={
+            "photo_source": "debug_simulated",
+            "cleared": not running,
+            "running": running,
+        }, msg_str="" if not running else "Debug photo session cleanup timed out")
 
     # ---- 录像API ----
 

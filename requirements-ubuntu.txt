@@ -1,7 +1,5 @@
 # Ubuntu deployment dependency set.
-# Keep this file UTF-8. The cloned requirements.txt is UTF-16 and contains
-# a Windows-local setuptools wheel reference, so Ubuntu installs should use
-# this file unless requirements.txt has been cleaned.
+# Keep this file UTF-8. It is intentionally aligned with requirements.txt.
 aiosqlite==0.22.1
 bcrypt==5.0.0
 blinker==1.9.0

@@ -1,6 +1,7 @@
 """Command admission rules for platform-to-gateway commands."""
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -235,6 +236,12 @@ class CommandAdmissionEngine:
         request = request or {}
         snapshot = self.reducer.snapshot()
         method = str(method or request.get("method") or "")
+
+        if (
+            os.getenv("EDGE_GATEWAY_ENABLE_TEST_HOOKS") == "1"
+            and method in {"debug_photo_session_start", "debug_photo_session_clear"}
+        ):
+            return self._accept(snapshot)
 
         if method in self.QUERY_METHODS:
             return self._accept(snapshot)
