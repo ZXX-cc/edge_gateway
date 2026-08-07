@@ -656,9 +656,16 @@ class ThirdPartyController:
         return None
 
     def _speaker_reply(self, msg: dict, result: JzSpeakerResult) -> dict:
+        error_code = DOCK_SYSTEM_ERROR
+        if not result.ok and (
+            "not configured" in result.message
+            or "not installed" in result.message
+            or "not wired" in result.message
+        ):
+            error_code = DEVICE_STATE_UNSUPPORTED
         return MessageBuilder.build_reply(
             msg,
-            result=0 if result.ok else DOCK_SYSTEM_ERROR,
+            result=0 if result.ok else error_code,
             data={'output': result.as_output()},
             msg_str="" if result.ok else result.message,
         )

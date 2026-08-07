@@ -163,6 +163,36 @@ class ConsoleVisibilityFilter(logging.Filter):
         return not bool(getattr(record, "console_silent", False))
 
 
+class SafeConsoleStreamHandler(logging.StreamHandler):
+    """控制台编码兜底，避免 Windows GBK 输出遇到特殊字符时报错。"""
+
+    @staticmethod
+    def _safe_message_for_stream(message: str, stream) -> str:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            message.encode(encoding)
+            return message
+        except (LookupError, UnicodeEncodeError):
+            return message.encode(encoding, errors="backslashreplace").decode(
+                encoding,
+                errors="replace",
+            )
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                stream.write(self._safe_message_for_stream(msg, stream) + self.terminator)
+            self.flush()
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
+
+
 class StreamToLogger:
     """把 print/stdout/stderr 按行转成日志，避免旧模块 print 丢失。"""
 
@@ -257,7 +287,7 @@ def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], li
 
     handlers: list[logging.Handler] = []
     if _parse_bool(config.get("console"), True):
-        console = logging.StreamHandler(_ORIGINAL_STDOUT)
+        console = SafeConsoleStreamHandler(_ORIGINAL_STDOUT)
         console.setLevel(level)
         console.setFormatter(formatter)
         console.addFilter(ConsoleVisibilityFilter())

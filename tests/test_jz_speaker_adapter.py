@@ -16,6 +16,7 @@ from src.payload.jz_speaker import MAX_OPUS_FRAME_BYTES, JzSpeakerAdapter, build
 from src.payload.third_party import ThirdPartyController
 from src.payload.topology import PayloadTopology
 from src.utils.config import Config
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED
 
 
 def message(method, data=None):
@@ -95,7 +96,7 @@ class JzSpeakerAdapterTest(unittest.TestCase):
         self.assertEqual(parsed["files"], ["01.wav", "02.wav"])
         self.assertTrue(parsed["complete"])
 
-    def test_unconfigured_speaker_tts_keeps_simulated_success(self):
+    def test_unconfigured_speaker_tts_returns_real_failure(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
         controller = ThirdPartyController()
         controller.set_payload_topology(topology)
@@ -104,24 +105,24 @@ class JzSpeakerAdapterTest(unittest.TestCase):
             message("speaker_tts_play_start", {"text": "测试喊话", "volume": "88"})
         )
 
-        self.assertEqual(reply["data"]["result"], 0)
-        self.assertEqual(reply["data"]["output"]["status"], "ok")
-        self.assertTrue(reply["data"]["output"]["simulated"])
-        self.assertTrue(controller.handle_speaker_status_query(message("speaker_status_query"))["data"]["playing"])
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(reply["data"]["output"]["simulated"])
+        self.assertFalse(controller.handle_speaker_status_query(message("speaker_status_query"))["data"]["playing"])
 
-    def test_unconfigured_speaker_file_list_query_reports_empty_simulated_list(self):
+    def test_unconfigured_speaker_file_list_query_returns_failure(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
         controller = ThirdPartyController()
         controller.set_payload_topology(topology)
 
         reply = controller.handle_speaker_audio_file_list_get(message("speaker_audio_file_list_get"))
 
-        self.assertEqual(reply["data"]["result"], 0)
-        self.assertTrue(reply["data"]["output"]["simulated"])
-        self.assertEqual(reply["data"]["output"]["files"], [])
-        self.assertEqual(reply["data"]["output"]["count"], 0)
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertFalse(reply["data"]["output"]["simulated"])
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(reply["data"]["output"]["query_supported"])
 
-    def test_fixed_text_loop_start_and_stop_can_update_text(self):
+    def test_unconfigured_fixed_text_loop_does_not_start(self):
         topology = PayloadTopology(Config.get_payload_config()["devices"])
         controller = ThirdPartyController()
         controller.set_payload_topology(topology)
@@ -129,15 +130,9 @@ class JzSpeakerAdapterTest(unittest.TestCase):
         start = controller.handle_speaker_fixed_text_loop_start(
             message("speaker_fixed_text_loop_start", {"text": "固定文本A", "interval_seconds": 60, "volume": 30})
         )
-        update = controller.handle_speaker_fixed_text_loop_start(
-            message("speaker_fixed_text_loop_start", {"text": "固定文本B", "interval_seconds": 60, "volume": 25})
-        )
-        stop = controller.handle_speaker_fixed_text_loop_stop(message("speaker_fixed_text_loop_stop"))
 
-        self.assertEqual(start["data"]["result"], 0)
-        self.assertEqual(update["data"]["result"], 0)
-        self.assertEqual(update["data"]["output"]["fixed_text_loop"]["text"], "固定文本B")
-        self.assertEqual(stop["data"]["result"], 0)
+        self.assertEqual(start["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertFalse(controller.handle_speaker_status_query(message("speaker_status_query"))["data"]["playing"])
 
     def test_empty_tts_text_is_rejected(self):
         controller = ThirdPartyController()

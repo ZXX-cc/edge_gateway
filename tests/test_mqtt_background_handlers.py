@@ -183,6 +183,29 @@ class MQTTBackgroundHandlerTest(unittest.TestCase):
         self.assertEqual(reply["method"], payload["method"])
         self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
 
+    def test_services_allowlist_blocks_legacy_flighttask_return_alias(self):
+        calls = []
+
+        def handler(msg):
+            calls.append(msg["tid"])
+            return MessageBuilder.build_reply(msg, result=0)
+
+        self.client.set_allowed_service_methods({"return_home", "return_home_cancel", "flighttask_stop"})
+        self.client.register_handler("flighttask_return", handler, reply_required=True)
+        payload = {
+            "tid": "services-flighttask-return-not-allowed",
+            "method": "flighttask_return",
+            "data": {"flight_id": "flight-1", "return_type": 0},
+        }
+
+        self.client._on_message(None, None, mqtt_message(self.topic, payload))
+
+        self.assertEqual(calls, [])
+        reply_topic, reply, _ = self.client.client.published[0]
+        self.assertEqual(reply_topic, TopicBuilder.services_reply(self.client.gateway_sn))
+        self.assertEqual(reply["method"], "flighttask_return")
+        self.assertEqual(reply["data"], {"result": DEVICE_STATE_UNSUPPORTED})
+
     def test_services_allowlist_ignores_known_non_services_method_without_reply(self):
         calls = []
 

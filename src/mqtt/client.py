@@ -28,6 +28,7 @@ from src.utils.mqtt_security import MqttSecurityValidator
 from src.utils.request_trace import get_request_trace_recorder
 from src.state_machine.command_admission import CommandAdmissionEngine
 from src.cloud_api.dock3_reply_schema import sanitize_services_reply
+from src.cloud_api.dock3_publish_schema import sanitize_upstream_publish
 
 logger = get_logger("mqtt")
 
@@ -274,6 +275,7 @@ class MQTTClient:
             logger.warning(f"Cannot publish, not connected. Topic: {topic}")
             return False
         try:
+            payload = self._sanitize_publish_payload(topic, payload)
             message = json.dumps(payload, ensure_ascii=False)
             result = self.client.publish(topic, message, qos=qos)
             return result.rc == mqtt.MQTT_ERR_SUCCESS
@@ -315,6 +317,7 @@ class MQTTClient:
         """发布OSD定频数据"""
         topic = TopicBuilder.osd(device_sn)
         payload = MessageBuilder.build_osd(self.gateway_sn, data)
+        payload = self._sanitize_publish_payload(topic, payload)
         now = time.time()
         if now - self._last_osd_log_time >= 30:
             self._last_osd_log_time = now
@@ -328,6 +331,7 @@ class MQTTClient:
         """发布状态变更"""
         topic = TopicBuilder.state(device_sn)
         payload = MessageBuilder.build_state(self.gateway_sn, data)
+        payload = self._sanitize_publish_payload(topic, payload)
         logger.info(self._format_log_block("MQTT STATE PUBLISH", [
             ("topic", topic),
             ("data", format_with_labels(payload, max_length=3000)),
@@ -338,6 +342,7 @@ class MQTTClient:
         """发布事件上报"""
         topic = TopicBuilder.events(self.gateway_sn)
         data = self._normalize_reply_for_publish(topic, data)
+        data = self._sanitize_publish_payload(topic, data)
         if data.get('method') == 'heartbeat':
             logger.debug(
                 "MQTT heartbeat event publish: topic=%s, data=%s",
@@ -354,6 +359,19 @@ class MQTTClient:
         if data.get('method') != 'heartbeat':
             self._trace_publish("mqtt_publish_event", topic, data, ok=ok)
         return ok
+
+    def _sanitize_publish_payload(self, topic: str, payload: dict) -> dict:
+        sanitized, removed_fields = sanitize_upstream_publish(topic, payload, self.gateway_sn)
+        if removed_fields:
+            method = sanitized.get("method", "") if isinstance(sanitized, dict) else ""
+            logger.warning(
+                "Dock3 upstream publish schema sanitized: topic=%s, method=%s, tid=%s, removed_fields=%s",
+                topic,
+                method,
+                sanitized.get("tid") if isinstance(sanitized, dict) else "",
+                ",".join(removed_fields),
+            )
+        return sanitized
 
     def publish_service_reply(self, data: dict):
         """发布服务响应"""

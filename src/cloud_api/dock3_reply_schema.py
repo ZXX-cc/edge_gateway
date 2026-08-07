@@ -31,7 +31,6 @@ STATUS_ONLY_SERVICE_METHODS = frozenset({
     "flighttask_execute",
     "flighttask_undo",
     "flighttask_stop",
-    "flighttask_return",
     "flighttask_progress",
     "flighttask_progress_get",
     "flighttask_pause",

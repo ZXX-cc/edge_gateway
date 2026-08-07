@@ -165,7 +165,7 @@ ALLOWED_SERVICE_METHODS = frozenset({
     # Dock3 flighttask / wayline services plus project-owned orchestration.
     'one_key_takeoff_flow',
     'flighttask_prepare', 'flighttask_execute', 'flighttask_undo',
-    'flighttask_stop', 'flighttask_return', 'flighttask_progress',
+    'flighttask_stop', 'flighttask_progress',
     'flighttask_progress_get', 'flighttask_pause', 'flighttask_resume',
     'resume_wayline_task', 'flight_setup_abort', 'flighttask_create',
     'flighttask_recovery', 'return_home', 'return_home_cancel',
@@ -1792,7 +1792,6 @@ class EdgeGateway:
             'flighttask_progress_get': self.mission.handle_flighttask_progress_get,
             'flighttask_pause': self.mission.handle_flighttask_pause,
             'flighttask_resume': self.mission.handle_flighttask_resume,
-            'flighttask_return': self.mission.handle_flighttask_return,
             'resume_wayline_task': self.mission.handle_resume_wayline_task,
             'flight_setup_abort': self.mission.handle_flight_setup_abort,
             'flighttask_create': self.mission.handle_flighttask_create,

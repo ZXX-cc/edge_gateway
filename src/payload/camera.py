@@ -1183,9 +1183,12 @@ class CameraController:
                     "timeout_seconds": 2.0,
                 }, msg_str="" if not running else "Photo session stop timed out")
 
-        success, _ = self._send_mapped_camera_command('stop_photo', msg.get('data', {}))
-
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
+        return MessageBuilder.build_reply(msg, result=0, data={
+            "photo_source": "none",
+            "stopped": True,
+            "running": False,
+            "already_stopped": True,
+        })
 
     # ---- 录像API ----
 
@@ -1271,7 +1274,7 @@ class CameraController:
         """
         切换相机模式
 
-        Request: { mode: 'photo'/'video'/'playback' }
+        Request: { mode: 'photo'/'video'/'playback', camera_type: 'zoom'/'ir'/... }
         """
         data = msg.get('data', {})
         mode_str = self._camera_mode_name(data.get('mode', data.get('camera_mode', 'photo')))
@@ -1289,15 +1292,23 @@ class CameraController:
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
-        success = bool(viewlink_result and viewlink_result.get("success"))
+        camera_type_result = None
+        if self._viewlink_connected():
+            camera_type_result = self._set_viewlink_camera_type(data)
+
+        record_success = bool(viewlink_result and viewlink_result.get("success"))
+        camera_type_success = camera_type_result is None or bool(camera_type_result.get("success", False))
+        success = record_success and camera_type_success
         if success:
             self._mode = target_mode
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "camera_mode": self._mode,
             "mode": mode_str,
+            "camera_type": data.get("camera_type", ""),
             "photo_source": "camera_sdk",
             "viewlink_result": viewlink_result,
+            "camera_type_result": camera_type_result,
         })
 
     def _set_exposure_mode(self, msg: dict) -> dict:
@@ -2130,12 +2141,22 @@ class CameraController:
     def report_photo_progress(self, current: int, total: int, storage_path: str = ""):
         """上报拍照进度"""
         if self._event_callback:
+            percent = 100 if total <= 0 else max(0, min(100, int(current * 100 / total)))
             event = MessageBuilder.build_event(
-                'photo_take_progress',
+                'camera_photo_take_progress',
                 {
-                    'current': current,
-                    'total': total,
-                    'storage_path': storage_path
+                    'result': 0,
+                    'output': {
+                        'status': 'ok' if percent >= 100 else 'in_progress',
+                        'progress': {
+                            'percent': percent,
+                            'current': current,
+                            'total': total,
+                        },
+                        'ext': {
+                            'storage_path': storage_path,
+                        },
+                    },
                 },
                 self.gateway_sn
             )
@@ -2200,13 +2221,23 @@ class CameraController:
 
             # 上报拍照结果事件
             if self._event_callback:
+                total = max(1, self._photo_count)
                 event = MessageBuilder.build_event(
-                    'photo_take_progress',
+                    'camera_photo_take_progress',
                     {
-                        'current': self._photo_count,
-                        'total': self._photo_count,
-                        'storage_path': media_data["file_path"],
-                        'metadata': metadata
+                        'result': 0,
+                        'output': {
+                            'status': 'ok',
+                            'progress': {
+                                'percent': 100,
+                                'current': self._photo_count,
+                                'total': total,
+                            },
+                            'ext': {
+                                'storage_path': media_data["file_path"],
+                                'metadata': metadata,
+                            },
+                        },
                     },
                     self.gateway_sn
                 )

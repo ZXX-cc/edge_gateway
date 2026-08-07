@@ -186,7 +186,7 @@ class JzSpeakerAdapter:
 
     def connection_state(self) -> str:
         if not self.enabled:
-            return "simulated"
+            return "not_configured"
         if self._use_tcp:
             return "connected" if self.connected else "tcp_configured"
         if serial is None:
@@ -197,7 +197,7 @@ class JzSpeakerAdapter:
 
     def connect(self) -> JzSpeakerResult:
         if not self.enabled:
-            return JzSpeakerResult(True, simulated=True, message="speaker link is not configured")
+            return JzSpeakerResult(False, message="speaker link is not configured")
         if self._use_tcp:
             if not self.connected:
                 try:
@@ -288,11 +288,10 @@ class JzSpeakerAdapter:
     def query_audio_files(self) -> JzSpeakerResult:
         if not self.enabled:
             return JzSpeakerResult(
-                True,
-                simulated=True,
+                False,
                 message="speaker serial is not configured",
                 frame_hex=build_frame(0x58, 0x01, b"\x00", ack=1, seq=self._next_seq()).hex(" "),
-                output={"count": 0, "files": [], "query_supported": True},
+                output={"query_supported": False},
             )
         result = self.send_command(0x58, 0x01, b"\x00", ack=True, collect_list=True)
         if not result.ok:
@@ -385,7 +384,7 @@ class JzSpeakerAdapter:
         should_wait = self.wait_reply if ack is None else bool(ack)
         frame = build_frame(func1, func2, data, ack=1 if should_wait else 0, seq=self._next_seq())
         if not self.enabled:
-            return JzSpeakerResult(True, simulated=True, message="speaker serial is not configured", frame_hex=frame.hex(" "))
+            return JzSpeakerResult(False, message="speaker serial is not configured", frame_hex=frame.hex(" "))
         if not self._use_tcp and serial is None:
             return JzSpeakerResult(False, message="pyserial is not installed", frame_hex=frame.hex(" "))
         if not self.connected:

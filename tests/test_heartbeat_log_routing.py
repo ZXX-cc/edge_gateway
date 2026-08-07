@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sys
 import unittest
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +15,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.connection import _log_raw_mavlink, mavlink_raw_logger  # noqa: E402
-from src.utils.logger import ConsoleVisibilityFilter  # noqa: E402
+from src.utils.logger import ConsoleVisibilityFilter, SafeConsoleStreamHandler  # noqa: E402
+
+
+class GbkStrictStream(StringIO):
+    """模拟 Windows 默认 GBK 控制台，遇到特殊字符会抛编码异常。"""
+
+    @property
+    def encoding(self):
+        return "gbk"
+
+    def write(self, text):
+        text.encode(self.encoding)
+        return super().write(text)
 
 
 class RawMavlinkLogRoutingTest(unittest.TestCase):
@@ -48,6 +61,19 @@ class RawMavlinkLogRoutingTest(unittest.TestCase):
 
         self.assertFalse(visibility_filter.filter(heartbeat))
         self.assertTrue(visibility_filter.filter(status))
+
+    def test_safe_console_handler_escapes_unsupported_gbk_characters(self):
+        stream = GbkStrictStream()
+        handler = SafeConsoleStreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        record = logging.LogRecord("edge_gateway.test", logging.INFO, "", 0, "启动 🚁 完成 ✅", (), None)
+
+        handler.emit(record)
+
+        output = stream.getvalue()
+        self.assertIn("启动", output)
+        self.assertIn("\\U0001f681", output)
+        self.assertIn("\\u2705", output)
 
 
 if __name__ == "__main__":
