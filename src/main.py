@@ -70,7 +70,6 @@ from src.modules.flysafe_manager import FlySafeManager
 from src.modules.flight_area_manager import FlightAreaManager
 from src.modules.flight_area_device_applier import FlightAreaDeviceApplier
 from src.modules.custom_data_manager import CustomDataManager
-from src.modules.rtk_module import RTKModule
 from src.modules.gimbal_control import GimbalControl
 from src.database.retention_manager import DataRetentionManager
 from src.database.cloud_sync_manager import CloudSyncManager
@@ -308,7 +307,6 @@ class EdgeGateway:
         self.flight_area_applier: FlightAreaDeviceApplier = None
         self.custom_data: CustomDataManager = None
         self.waypoint_manager: WaypointManager = None
-        self.rtk_module: RTKModule = None
         self.global_state: GatewayEventReducer = None
         self.command_admission: CommandAdmissionEngine = None
         self.history_logger: LocalHistoryLogger = None
@@ -915,8 +913,6 @@ class EdgeGateway:
                 self.mode_control = ModeControl()
                 self.telemetry_module = TelemetryModule(mode="real")
                 self.waypoint_manager = WaypointManager()
-                rtk_config = Config.get('rtk', {})
-                self.rtk_module = RTKModule(ntrip_config=rtk_config, telemetry_module=self.telemetry_module)
                 self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7'))
                 if self.mission:
                     self.mission.set_flight_control(self.flight_control)
@@ -972,11 +968,6 @@ class EdgeGateway:
                 self.mode_control = self.mode_control or ModeControl()
                 self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
                 self.waypoint_manager = self.waypoint_manager or WaypointManager()
-                rtk_config = Config.get('rtk', {})
-                self.rtk_module = self.rtk_module or RTKModule(
-                    ntrip_config=rtk_config,
-                    telemetry_module=self.telemetry_module,
-                )
                 self.nest_module = self.nest_module or DroneNestModule(
                     protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
                 )
@@ -1017,19 +1008,11 @@ class EdgeGateway:
                 )
                 self.waypoint_manager = self.waypoint_manager or WaypointManager()
 
-                # 初始化RTK模块（需要telemetry_module）
-                rtk_config = Config.get('rtk', {})
-                self.rtk_module = self.rtk_module or RTKModule(
-                    ntrip_config=rtk_config,
-                    telemetry_module=self.telemetry_module,
-                )
-
                 # 注册模块到分发器（idle_task + on_message）
                 self.dispatcher.add_module(self.flight_control)
                 self.dispatcher.add_module(self.mode_control)
                 self.dispatcher.add_module(self.telemetry_module)
                 self.dispatcher.add_module(self.waypoint_manager)
-                self.dispatcher.add_module(self.rtk_module)
                 if not use_separate_nest_mavlink:
                     self.dispatcher.add_module(self.nest_module)
                     self.nest_module.dispatcher = self.dispatcher
@@ -1039,7 +1022,6 @@ class EdgeGateway:
                 self.dispatcher.register_hook('*', self.mode_control)
                 self.dispatcher.register_hook('*', self.telemetry_module)
                 self.dispatcher.register_hook('*', self.waypoint_manager)
-                self.dispatcher.register_hook('*', self.rtk_module)
                 if not use_separate_nest_mavlink:
                     self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
                     self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
@@ -1342,7 +1324,6 @@ class EdgeGateway:
                 self.mode_control,
                 self.telemetry_module,
                 self.waypoint_manager,
-                self.rtk_module,
             ]
             for module in device_side_modules:
                 if module:
@@ -1406,8 +1387,6 @@ class EdgeGateway:
             self.mqtt.disconnect()
         if self.device:
             self.device.stop()
-        if self.rtk_module:
-            self.rtk_module.stop_ntrip()
         if self.retention_manager:
             self.retention_manager.stop_sync()
         if self.cloud_sync_manager:
@@ -1464,8 +1443,6 @@ class EdgeGateway:
             self.mqtt.disconnect()
         if self.device:
             self.device.stop()
-        if self.rtk_module:
-            self.rtk_module.stop_ntrip()
 
         if self.retention_manager:
             await self.retention_manager.stop()
