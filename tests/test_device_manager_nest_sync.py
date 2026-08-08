@@ -241,6 +241,45 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             }
             self.assertIn("dock3.nest.drone_heartbeat.lost", hms_keys)
 
+    def test_startup_nest_and_plc_heartbeat_false_do_not_report_hms_until_seen_online(self):
+        with (
+            patch.object(self.manager, "_save_alarm_to_db", new=lambda *args, **kwargs: None),
+            patch.object(self.manager, "_clear_alarms_from_db", new=lambda *args, **kwargs: None),
+            patch.object(self.manager, "_schedule_async"),
+        ):
+            self.manager.update_from_nest(nest_snapshot(
+                nest_heartbeat=False,
+                plc_heartbeat=False,
+                drone_heartbeat=False,
+            ))
+
+            hms_events = [event for event in self.events if event["method"] == "hms"]
+            self.assertFalse(hms_events)
+            self.assertFalse(self.manager._nest_heartbeat_alarm_enabled)
+            self.assertFalse(self.manager._nest_plc_heartbeat_alarm_enabled)
+
+            self.manager.update_from_nest(nest_snapshot(
+                nest_heartbeat=True,
+                plc_heartbeat=True,
+                drone_heartbeat=True,
+            ))
+            self.assertTrue(self.manager._nest_heartbeat_alarm_enabled)
+            self.assertTrue(self.manager._nest_plc_heartbeat_alarm_enabled)
+
+            self.manager.update_from_nest(nest_snapshot(
+                nest_heartbeat=False,
+                plc_heartbeat=False,
+                drone_heartbeat=True,
+            ))
+            hms_events = [event for event in self.events if event["method"] == "hms"]
+            self.assertTrue(hms_events)
+            hms_keys = {
+                alarm["hms_key"]
+                for alarm in hms_events[-1]["data"]["alarms"]
+            }
+            self.assertIn("dock3.nest.nest_heartbeat.lost", hms_keys)
+            self.assertIn("dock3.nest.plc_heartbeat.lost", hms_keys)
+
     def test_recent_nest_command_target_ignores_stale_nest_snapshot(self):
         self.manager._nest_module = FakeNestModule()
         self.manager.update_from_nest(nest_snapshot(gate_state=1))

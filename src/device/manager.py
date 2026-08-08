@@ -261,7 +261,11 @@ class DeviceManager:
         self._last_nest_hms_signature = tuple()
         self._pending_nest_command_targets: Dict[str, Dict[str, Any]] = {}
         self._nest_state_condition = threading.Condition()
+        self._last_nest_heartbeat: Optional[bool] = None
+        self._last_nest_plc_heartbeat: Optional[bool] = None
         self._last_nest_drone_heartbeat: Optional[bool] = None
+        self._nest_heartbeat_alarm_enabled = False
+        self._nest_plc_heartbeat_alarm_enabled = False
         self._nest_drone_heartbeat_alarm_enabled = False
         self._nest_command_ack_timeout = max(
             0.1,
@@ -1103,6 +1107,16 @@ class DeviceManager:
                 # 无人机无心跳，可能在舱内或已关机
                 pass
 
+        if 'nest_heartbeat' in nest_data:
+            self._last_nest_heartbeat = bool(nest_data.get('nest_heartbeat'))
+            if self._last_nest_heartbeat:
+                self._nest_heartbeat_alarm_enabled = True
+
+        if 'plc_heartbeat' in nest_data:
+            self._last_nest_plc_heartbeat = bool(nest_data.get('plc_heartbeat'))
+            if self._last_nest_plc_heartbeat:
+                self._nest_plc_heartbeat_alarm_enabled = True
+
         if 'drone_heartbeat' in nest_data:
             self._last_nest_drone_heartbeat = bool(nest_data.get('drone_heartbeat'))
             if self._last_nest_drone_heartbeat:
@@ -1118,6 +1132,10 @@ class DeviceManager:
             self._nest_state_condition.notify_all()
 
         hms_nest_data = dict(nest_data)
+        if not self._nest_heartbeat_alarm_enabled:
+            hms_nest_data["_suppress_nest_heartbeat_alarm"] = True
+        if not self._nest_plc_heartbeat_alarm_enabled:
+            hms_nest_data["_suppress_plc_heartbeat_alarm"] = True
         if not self._nest_drone_heartbeat_alarm_enabled:
             hms_nest_data["_suppress_drone_heartbeat_alarm"] = True
         self._sync_nest_hms_alarms(hms_nest_data)
