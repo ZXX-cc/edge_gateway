@@ -36,6 +36,7 @@ def args(**overrides):
         "camera_index": 0,
         "camera_type": "zoom",
         "focus_distance": 5.0,
+        "focus_values": "",
         "focus_speed": 2,
         "focus_duration": 0.1,
         "focus_x": 0.5,
@@ -55,6 +56,7 @@ def args(**overrides):
         "after_wait": 0.0,
         "ffmpeg": "ffmpeg",
         "snapshot_timeout": 1.0,
+        "observe_wait": 0.0,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -78,27 +80,29 @@ class CameraFocusControlToolTest(unittest.TestCase):
 
     def test_strict_default_requires_absolute_and_point_focus_success(self):
         focus_cases = {
-            case.label: case
+            case.method: case
             for case in build_cases(args())
             if case.method in {"camera_focus_value_set", "camera_point_focus_action"}
+            and case.expect_success
         }
 
-        self.assertTrue(focus_cases["绝对对焦值"].expect_success)
-        self.assertEqual(focus_cases["绝对对焦值"].allowed_results, {0})
-        self.assertTrue(focus_cases["点对焦坐标"].expect_success)
-        self.assertEqual(focus_cases["点对焦坐标"].allowed_results, {0})
+        self.assertTrue(focus_cases["camera_focus_value_set"].expect_success)
+        self.assertEqual(focus_cases["camera_focus_value_set"].allowed_results, {0})
+        self.assertTrue(focus_cases["camera_point_focus_action"].expect_success)
+        self.assertEqual(focus_cases["camera_point_focus_action"].allowed_results, {0})
 
     def test_viewlink_limitation_mode_can_probe_current_unsupported_behavior(self):
         focus_cases = {
-            case.label: case
+            case.method: case
             for case in build_cases(args(allow_viewlink_focus_limitations=True))
             if case.method in {"camera_focus_value_set", "camera_point_focus_action"}
+            and "非法" not in case.label
         }
 
-        self.assertFalse(focus_cases["绝对对焦值"].expect_success)
-        self.assertEqual(focus_cases["绝对对焦值"].allowed_results, {DEVICE_STATE_UNSUPPORTED})
-        self.assertFalse(focus_cases["点对焦坐标"].expect_success)
-        self.assertEqual(focus_cases["点对焦坐标"].allowed_results, {DEVICE_STATE_UNSUPPORTED})
+        self.assertFalse(focus_cases["camera_focus_value_set"].expect_success)
+        self.assertEqual(focus_cases["camera_focus_value_set"].allowed_results, {DEVICE_STATE_UNSUPPORTED})
+        self.assertFalse(focus_cases["camera_point_focus_action"].expect_success)
+        self.assertEqual(focus_cases["camera_point_focus_action"].allowed_results, {DEVICE_STATE_UNSUPPORTED})
 
     def test_run_case_publishes_on_services_channel(self):
         case = next(case for case in build_cases(args()) if case.method == "camera_focus_mode_set")
@@ -118,6 +122,18 @@ class CameraFocusControlToolTest(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("error", detail)
+
+    def test_focus_values_expand_to_visual_sweep_cases_after_manual_mode(self):
+        cases = build_cases(args(focus_values="0,32768,65535"))
+
+        self.assertEqual(cases[0].method, "camera_focus_mode_set")
+        self.assertEqual(cases[0].data["mode"], "manual_focus")
+        sweep = [
+            case
+            for case in cases
+            if case.method == "camera_focus_value_set" and case.label.startswith("绝对对焦值-")
+        ]
+        self.assertEqual([case.data["focus_distance"] for case in sweep], [0.0, 32768.0, 65535.0])
 
 
 if __name__ == "__main__":

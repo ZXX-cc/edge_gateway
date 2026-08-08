@@ -63,6 +63,7 @@ C2_TEMPERATURE_OUTPUT_ONCE = 0x1D
 C2_TEMPERATURE_OUTPUT_INTERVAL = 0x1E
 C2_TEMPERATURE_OUTPUT_STOP = 0x1F
 C2_ZOOM_TO = 0x53
+C2_FOCUS_TO = 0x54
 C2_IR_DZOOM_TO = 0x56
 C2_LASER_CONTROL = 0x74
 
@@ -230,6 +231,21 @@ def build_ir_metering_point_frames(x: int, y: int) -> list[bytes]:
     ]
 
 
+def build_focus_value_frame(value: float | int) -> bytes:
+    """Build C2 visible-light absolute focus frame.
+
+    The V3.4.9 PDF names command 0x54 as setting focus to the command
+    parameter. Treat the cloud focus_distance field as that absolute protocol
+    value so operators can sweep the full lens range during real visual tests.
+    """
+    return build_c2(C2_FOCUS_TO, _clamp_int(round(float(value)), 0, 65535))
+
+
+def build_focus_point_frame(x: int, y: int) -> bytes:
+    """Build E2 visible-light point-focus frame."""
+    return build_e2(E2_FOCUS_POINT, _clamp_int(x, -960, 960), _clamp_int(y, -540, 540))
+
+
 def build_ir_metering_area_frames(left: int, top: int, right: int, bottom: int) -> list[bytes]:
     left = _clamp_int(left, -960, 960)
     right = _clamp_int(right, -960, 960)
@@ -271,6 +287,10 @@ def build_protocol_frame_for_method(method: str, args: dict) -> bytes | None:
         return build_c1(operation=C1_STOP_FOCUS_ZOOM)
     if method == "zoom_to":
         return build_c2(C2_ZOOM_TO, round(float(args.get("magnification", 1.0)) * 10))
+    if method == "focus_to":
+        return build_focus_value_frame(args.get("value", args.get("focus_distance", 0)))
+    if method == "focus_point":
+        return build_focus_point_frame(args.get("x", 0), args.get("y", 0))
     if method == "focus_in":
         return build_c1(operation=C1_FOCUS_IN, operation_param=args.get("speed", 5))
     if method == "focus_out":

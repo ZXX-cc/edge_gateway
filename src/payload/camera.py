@@ -23,7 +23,7 @@ from web.mavlink.camera import (
     build_camera_setting,
     build_media_metadata,
 )
-from web.mavlink.viewlink import build_viewlink_call
+from web.mavlink.viewlink import build_focus_point_frame, build_focus_value_frame, build_viewlink_call, frame_hex
 from src.payload.mapping_camera_ftp import MappingCameraFtpDownloader
 
 logger = get_logger("camera")
@@ -1607,31 +1607,43 @@ class CameraController:
                 result=INVALID_COMMAND_FORMAT,
                 msg_str=f"Invalid focus_distance: {distance}",
             )
-        if not math.isfinite(distance_value) or distance_value < 0 or distance_value > 1000:
+        if not math.isfinite(distance_value) or distance_value < 0 or distance_value > 65535:
             return MessageBuilder.build_reply(
                 msg,
                 result=INVALID_COMMAND_FORMAT,
                 msg_str=f"focus_distance out of supported range: {distance}",
-                data={"focus_distance": distance, "supported_range": [0, 1000]},
+                data={"focus_distance": distance, "supported_range": [0, 65535]},
             )
 
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            return MessageBuilder.build_reply(
-                msg,
-                result=DEVICE_STATE_UNSUPPORTED,
-                msg_str="ViewLink SDK exposes relative focus_in/focus_out only; absolute focus_distance is not supported",
-                data={
-                    "focus_distance": distance_value,
-                    "supported": False,
-                    "available_adapter_actions": ["focus_in", "focus_out", "stop_focus"],
-                },
-            )
-        else:
+        if not self._viewlink_connected():
             return MessageBuilder.build_reply(
                 msg,
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
+
+        protocol_value = max(0, min(65535, int(round(distance_value))))
+        frame = build_focus_value_frame(distance_value)
+        result = self._send_viewlink_protocol_frames([frame])
+        success = bool(result.get("success", False))
+        if success:
+            self._focus_value = distance_value
+        logger.info(
+            "ViewLink focus value frame: focus_distance=%s protocol_value=%s result=%s",
+            distance_value,
+            protocol_value,
+            result,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else result.get("message", "ViewLink focus value command failed"),
+            data={
+                "focus_distance": distance_value,
+                "protocol_value": protocol_value,
+                "viewlink_result": result,
+            },
+        )
 
     def _spot_focus(self, msg: dict) -> dict:
         """
@@ -1662,23 +1674,82 @@ class CameraController:
                 data={"x": x, "y": y, "supported_range": {"x": [0, 1], "y": [0, 1]}},
             )
 
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            return MessageBuilder.build_reply(
-                msg,
-                result=DEVICE_STATE_UNSUPPORTED,
-                msg_str="ViewLink SDK does not expose point focus coordinate control",
-                data={
-                    "x": x_value,
-                    "y": y_value,
-                    "supported": False,
-                },
-            )
-        else:
+        if not self._viewlink_connected():
             return MessageBuilder.build_reply(
                 msg,
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
+
+        protocol_x, protocol_y, frame_size = self._focus_protocol_point(data, x_value, y_value)
+        frame = build_focus_point_frame(protocol_x, protocol_y)
+        result = self._send_viewlink_protocol_frames([frame])
+        success = bool(result.get("success", False))
+        logger.info(
+            "ViewLink point focus frame: point=(%s,%s) protocol=(%s,%s) result=%s",
+            x_value,
+            y_value,
+            protocol_x,
+            protocol_y,
+            result,
+        )
+        return MessageBuilder.build_reply(
+            msg,
+            result=0 if success else -1,
+            msg_str="" if success else result.get("message", "ViewLink point focus command failed"),
+            data={
+                "x": x_value,
+                "y": y_value,
+                "protocol_point": {"x": protocol_x, "y": protocol_y},
+                "frame_size": frame_size,
+                "viewlink_result": result,
+            },
+        )
+
+    def _send_viewlink_protocol_frames(self, frames: list[bytes], timeout: float = 1.0) -> dict:
+        frame_list = [bytes(frame) for frame in frames if frame]
+        payload = {
+            "protocol": "viewlink",
+            "version": "3.4.9",
+            "frame_hex": [frame_hex(frame) for frame in frame_list],
+        }
+        if not frame_list:
+            return {**payload, "success": False, "message": "no protocol frames"}
+        if self._gimbal_control and hasattr(self._gimbal_control, "send_protocol_frames"):
+            result = self._gimbal_control.send_protocol_frames(frame_list, timeout=timeout)
+            return {**payload, **result}
+        if self._gimbal_control and hasattr(self._gimbal_control, "send_protocol_frame"):
+            results = [self._gimbal_control.send_protocol_frame(frame, timeout=timeout) for frame in frame_list]
+            success = all(item.get("success", False) for item in results)
+            return {
+                **payload,
+                "success": success,
+                "message": "协议帧全部发送" if success else "部分协议帧发送失败",
+                "frames": results,
+            }
+        return {
+            **payload,
+            "success": False,
+            "message": "ViewLink raw protocol adapter is not configured",
+        }
+
+    @classmethod
+    def _focus_protocol_point(cls, data: dict, x_value: float, y_value: float) -> tuple[int, int, dict]:
+        frame_size = cls._frame_zoom_frame_size(data)
+        looks_normalized = 0.0 <= x_value <= 1.0 and 0.0 <= y_value <= 1.0
+        if looks_normalized:
+            pixel_x = x_value * frame_size["width"]
+            pixel_y = y_value * frame_size["height"]
+        else:
+            pixel_x = x_value
+            pixel_y = y_value
+        protocol_x = round((pixel_x / frame_size["width"]) * 1920 - 960)
+        protocol_y = round((pixel_y / frame_size["height"]) * 1080 - 540)
+        return (
+            max(-960, min(960, int(protocol_x))),
+            max(-540, min(540, int(protocol_y))),
+            frame_size,
+        )
 
     def handle_photo_storage_set(self, msg: dict) -> dict:
         """

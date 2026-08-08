@@ -63,7 +63,7 @@ KEY_POINT_DEFS = [
     ("sitl_osd", "SITL 飞行遥测", "P0", "飞行器电量、高度、经纬度、GPS、模式"),
     ("real_wayline", "真实航线执行", "P0", "先用 QSTABILIZE/QLAN 前置解锁，再 flighttask_prepare/execute/progress"),
     ("flight_control", "基础飞控控制", "P0", "GUIDED、起飞、返航、降落"),
-    ("dock_v13", "机场机构联动", "P1", "舱盖、推杆、充电、HMS、dock_operation"),
+    ("dock_v13", "机场机构联动", "P1", "舱盖、推杆、充电、HMS"),
     ("drc", "DRC 控制链路", "P1", "进入、心跳、摇杆/指点飞行、退出"),
     ("hms_log", "HMS/运维日志", "P1", "HMS 告警、日志列表和上传"),
     ("trace_nonblock", "Trace/非阻塞", "P2", "tid、异步回包、长任务不卡链路"),
@@ -187,7 +187,7 @@ RETEST_ACTIONS: dict[str, dict[str, Any]] = {
         "category": "机巢",
         "command": [sys.executable, "tools/person2_gap_test.py", "--phase", "nest-gateway", *PERSON2_SCRIPT_ARGS],
         "timeout": 120,
-        "note": "该按钮下发机巢/CMD 动作并要求 dock_operation 或 HMS 事件；无机巢模拟器实跑会失败。",
+        "note": "该按钮下发机巢/CMD 动作并要求 HMS 事件；无机巢模拟器实跑会失败。",
     },
 }
 
@@ -355,8 +355,6 @@ def extract_key_info(item: dict[str, Any]) -> bool:
             event_text = json.dumps(payload, ensure_ascii=False)
             if "hms" in event_text.lower():
                 point_id = "hms_log"
-            elif "dock_operation" in event_text.lower():
-                point_id = "dock_v13"
         if point_id:
             status = "ok" if kind.endswith("reply") and result in {0, "0", True, "ok", "success"} else "active"
             updated |= record_key_point(

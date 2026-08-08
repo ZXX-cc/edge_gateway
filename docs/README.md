@@ -363,9 +363,25 @@ payload:
 
 rtk:
   enabled: false
+  active_source: "auto"
+  min_inject_interval: 0.0
+  sources:
+    F9P:
+      type: "tcp"
+      host: "192.168.1.13"
+      port: 8600
+      priority: 10
+    NTRIP:
+      type: "ntrip"
+      host: "NTRIP服务器地址"
+      port: 8002
+      mountpoint: "NTRIP挂载点"
+      username: "NTRIP用户名"
+      password: "NTRIP密码"
+      priority: 5
 ```
 
-不使用直播时不需要配置 `media.video_sources`，也不要启动直播任务。需要直播时，再把现场提供的真实 RTSP/HTTP 地址写入 `media.video_sources`。不使用 RTK 时保持 `rtk.enabled: false`。
+不使用直播时不需要配置 `media.video_sources`，也不要启动直播任务。需要直播时，再把现场提供的真实 RTSP/HTTP 地址写入 `media.video_sources`。不使用 RTK 时保持 `rtk.enabled: false`。使用 F9P 基准站时配置 `sources.F9P` 的 TCP 地址即可；使用网络差分时配置 `sources.NTRIP` 的挂载点、用户名和密码；`active_source: "auto"` 会按 `priority` 自动选择，数值越大越优先。
 
 ## 6. Windows 真机连接和网络检查
 

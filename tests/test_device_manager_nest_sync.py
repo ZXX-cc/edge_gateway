@@ -151,7 +151,7 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             "data": {},
         }
 
-    def test_nest_status_change_updates_osd_properties_hms_and_operation(self):
+    def test_nest_status_change_updates_osd_properties_and_hms_only(self):
         with (
             patch.object(self.manager, "_save_alarm_to_db", new=lambda *args, **kwargs: None),
             patch.object(self.manager, "_clear_alarms_from_db", new=lambda *args, **kwargs: None),
@@ -183,15 +183,11 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             self.assertIn("dock3.nest.error_code.active", hms_keys)
             self.assertIn("dock3.nest.nest_heartbeat.lost", hms_keys)
 
-            operation_events = [
+            non_standard_operation_events = [
                 event for event in self.events
                 if event["method"] == "dock_operation"
             ]
-            self.assertTrue(operation_events)
-            operation = operation_events[-1]["data"]
-            self.assertEqual(operation["command"], "nest_status_sync")
-            self.assertTrue(operation["nest_status"]["estop_state"])
-            self.assertTrue(operation["nest_status"]["fault_state"])
+            self.assertFalse(non_standard_operation_events)
 
             self.manager.update_from_nest(nest_snapshot())
             cleared_hms = [event for event in self.events if event["method"] == "hms"][-1]

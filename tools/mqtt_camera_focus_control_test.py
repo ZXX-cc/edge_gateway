@@ -131,31 +131,41 @@ def _safe_name(value: str) -> str:
     return "".join(keep).strip("_") or "case"
 
 
+def _focus_values(args: argparse.Namespace) -> list[float]:
+    raw = str(args.focus_values or "").strip()
+    if not raw:
+        return [float(args.focus_distance)]
+    values: list[float] = []
+    for item in raw.split(","):
+        text = item.strip()
+        if text:
+            values.append(float(text))
+    return values or [float(args.focus_distance)]
+
+
 def build_cases(args: argparse.Namespace) -> list[FocusCase]:
     base = _base_payload(args)
     cases: list[FocusCase] = []
 
-    for mode in FOCUS_MODES:
-        payload = {**base, "mode": mode}
+    cases.append(
+        FocusCase(
+            "对焦模式-manual_focus",
+            "camera_focus_mode_set",
+            {**base, "mode": "manual_focus"},
+            expect_success=True,
+            note="先切手动对焦，后续绝对对焦值才容易产生可观察的镜头动作",
+            allowed_results={0},
+        )
+    )
+
+    for value in _focus_values(args):
         cases.append(
             FocusCase(
-                f"对焦模式-{mode}",
-                "camera_focus_mode_set",
-                payload,
-                expect_success=mode != "continuous_auto_focus",
-                note="验证手动/单次自动/连续自动对焦枚举是否被协议接受",
-                allowed_results={0} if mode != "continuous_auto_focus" else {DEVICE_STATE_UNSUPPORTED},
-            )
-        )
-
-    cases.extend(
-        [
-            FocusCase(
-                "绝对对焦值",
+                f"绝对对焦值-{value:g}",
                 "camera_focus_value_set",
                 {
                     **base,
-                    "focus_distance": args.focus_distance,
+                    "focus_distance": value,
                     "focus_speed": args.focus_speed,
                     "focus_duration": args.focus_duration,
                 },
@@ -164,7 +174,22 @@ def build_cases(args: argparse.Namespace) -> list[FocusCase]:
                     "验证绝对对焦值是否真实生效；不允许只做 focus_in/focus_out 方向微调假通过"
                 ),
                 allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
-            ),
+            )
+        )
+
+    cases.append(
+        FocusCase(
+            "对焦模式-auto_focus",
+            "camera_focus_mode_set",
+            {**base, "mode": "auto_focus"},
+            expect_success=True,
+            note="切回自动对焦，后续点对焦坐标才会触发自动聚焦逻辑",
+            allowed_results={0},
+        )
+    )
+
+    cases.extend(
+        [
             FocusCase(
                 "点对焦坐标",
                 "camera_point_focus_action",
@@ -172,6 +197,14 @@ def build_cases(args: argparse.Namespace) -> list[FocusCase]:
                 expect_success=not args.allow_viewlink_focus_limitations,
                 note="验证点对焦坐标是否真正通过上云方法下发到负载",
                 allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
+            ),
+            FocusCase(
+                "对焦模式-continuous_auto_focus",
+                "camera_focus_mode_set",
+                {**base, "mode": "continuous_auto_focus"},
+                expect_success=False,
+                note="验证连续自动对焦枚举；当前 ViewLink 设备无独立 AFC 指令则应明确返回不支持",
+                allowed_results={DEVICE_STATE_UNSUPPORTED},
             ),
             FocusCase(
                 "非法对焦模式",
@@ -269,6 +302,9 @@ def run_case(client: MqttRequestClient, case: FocusCase, args: argparse.Namespac
         print(f"       {case.note}")
     if not ok and not args.verbose:
         print(f"       reply={_compact_reply(reply)}")
+    if args.observe_wait > 0:
+        print(f"       observe real video for {args.observe_wait:.1f}s")
+        time.sleep(args.observe_wait)
     return ok, detail
 
 
@@ -317,6 +353,11 @@ def main() -> int:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-type", default="zoom")
     parser.add_argument("--focus-distance", type=float, default=5.0)
+    parser.add_argument(
+        "--focus-values",
+        default="",
+        help="Comma-separated absolute focus values for visual sweep, e.g. 0,32768,65535. Overrides --focus-distance.",
+    )
     parser.add_argument("--focus-speed", type=int, default=2)
     parser.add_argument("--focus-duration", type=float, default=0.1)
     parser.add_argument("--focus-x", type=float, default=0.5)
@@ -337,6 +378,12 @@ def main() -> int:
     parser.add_argument("--after-wait", type=float, default=0.8)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--snapshot-timeout", type=float, default=20.0)
+    parser.add_argument(
+        "--observe-wait",
+        type=float,
+        default=0.0,
+        help="Sleep after each case so a human can observe the real RTSP picture.",
+    )
     parser.add_argument(
         "--max-elapsed-ms",
         type=int,

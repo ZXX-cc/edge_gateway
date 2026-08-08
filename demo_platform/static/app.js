@@ -93,8 +93,8 @@ const retestItems = [
     title: "机场机构网关联动",
     status: "needs_data",
     command: "python tools/person2_gap_test.py --phase nest-gateway --host 192.168.1.100 --port 1883 --sn EDGEGW001 --drone-sn DRONESIM001",
-    expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 dock_operation 或 HMS 事件。",
-    evidence: "网关日志、机巢模拟器日志、HMS 事件、dock_operation 事件。",
+    expect: "debug/cover/charge/putter/HMS 经网关下发，并观察到 HMS 事件。",
+    evidence: "网关日志、机巢模拟器日志、HMS 事件。",
   },
   {
     id: "retention-records",
