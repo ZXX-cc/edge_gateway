@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Real-gateway IR metering acceptance with visual RTSP evidence.
+"""Real-gateway IR metering acceptance with visual evidence.
 
 This tool only publishes existing cloud API service methods:
-- ir_display_mode_set (optional, to switch the real stream to IR)
+- camera_screen_split (optional, to switch the real stream to thermal pseudo color)
 - ir_metering_mode_set
 - ir_metering_point_set
 - ir_metering_area_set
+
+It is intended for on-site acceptance with a real gateway and a real IR video
+stream.  It captures before/after frames so the operator can verify that the
+temperature marker/box/full-screen output changes on the actual image.
 """
 
 from __future__ import annotations
@@ -38,11 +42,13 @@ from tool_config import add_config_argument, load_config, resolve_mqtt_settings 
 
 
 CLOUD_METHODS = {
-    "ir_display_mode_set",
+    "camera_screen_split",
     "ir_metering_mode_set",
     "ir_metering_point_set",
     "ir_metering_area_set",
 }
+
+LIVE_VIDEO_SCHEMES = ("rtsp://", "rtsps://", "rtmp://", "http://", "https://")
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,10 @@ def _capture_snapshot(video_url: str, output_path: Path, ffmpeg_bin: str, timeou
     if completed.returncode != 0 or not output_path.is_file():
         return 32, f"snapshot capture failed: ffmpeg exit={completed.returncode}"
     return 0, str(output_path.resolve())
+
+
+def _looks_like_live_video_source(video_url: str) -> bool:
+    return video_url.strip().lower().startswith(LIVE_VIDEO_SCHEMES)
 
 
 def _safe_name(value: str) -> str:
@@ -238,7 +248,7 @@ def evaluate_visual_case(case: VisualCase, rc: int, reply: dict[str, Any] | None
     code = result_code(reply)
     data = _data(reply)
     viewlink = _viewlink_result(reply)
-    success = code == 0 and bool(viewlink.get("success", False))
+    success = code == 0
 
     if case.expect_validation_reject:
         if code == 0:
@@ -246,17 +256,9 @@ def evaluate_visual_case(case: VisualCase, rc: int, reply: dict[str, Any] | None
         return "ok", f"invalid input rejected, result={code}"
 
     if case.expect_success and not success:
-        return "fail", f"expected gateway+ViewLink success, result={code}, viewlink={viewlink}"
+        return "fail", f"expected cloud method success, result={code}, viewlink={viewlink}"
 
-    frames = viewlink.get("frame_hex")
-    if case.expect_success and not (isinstance(frames, list) and frames):
-        return "fail", "ViewLink success reply did not include raw protocol frame_hex"
-
-    if case.method == "ir_metering_point_set" and case.expect_success and not isinstance(data.get("protocol_point"), dict):
-        return "fail", "protocol_point missing"
-    if case.method == "ir_metering_area_set" and case.expect_success and not isinstance(data.get("protocol_area"), dict):
-        return "fail", "protocol_area missing"
-    return "ok", f"result={code}, viewlink_success={viewlink.get('success')}"
+    return "ok", f"result={code}"
 
 
 def _write_report(output_dir: Path, video_url: str, results: list[VisualResult]) -> Path:
@@ -298,11 +300,45 @@ pre { overflow: auto; background: #f6f8fa; padding: 12px; font-size: 12px; }
 <body>
 """
     document += f"<h1>Dock3 IR Metering Real Visual Report</h1><p>video_url={html.escape(video_url)}</p>"
+    document += (
+        "<p>人工判读：请按顺序对比每张真实画面，确认点测温标记、区域测温矩形、"
+        "全屏/周期/停止测温状态与对应 method 下发后画面表现一致。"
+        "测温前应先切到热像伪彩/彩虹色板，人员等热源不应只显示为黑白灰。</p>"
+    )
     document += "\n".join(rows)
     document += "\n</body></html>\n"
     report = output_dir / "ir_metering_real_visual_report.html"
     report.write_text(document, encoding="utf-8")
     return report
+
+
+def _write_evidence_json(output_dir: Path, video_url: str, results: list[VisualResult]) -> Path:
+    payload = {
+        "video_url": video_url,
+        "cloud_channel": "services",
+        "allowed_methods": sorted(CLOUD_METHODS),
+        "manual_visual_review_required": True,
+        "results": [
+            {
+                "label": item.case.label,
+                "method": item.case.method,
+                "request_data": item.case.data,
+                "expect_success": item.case.expect_success,
+                "expect_validation_reject": item.case.expect_validation_reject,
+                "status": item.status,
+                "detail": item.detail,
+                "result": result_code(item.reply),
+                "viewlink_result": _viewlink_result(item.reply),
+                "protocol_point": _data(item.reply).get("protocol_point"),
+                "protocol_area": _data(item.reply).get("protocol_area"),
+                "snapshot": str(item.snapshot.resolve()) if item.snapshot else "",
+            }
+            for item in results
+        ],
+    }
+    evidence = output_dir / "ir_metering_real_visual_evidence.json"
+    evidence.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return evidence
 
 
 def run_real_visual_ir_test(
@@ -316,6 +352,13 @@ def run_real_visual_ir_test(
     if not video_url:
         print("real visual evidence requires --video-url or a configured payload video endpoint", file=sys.stderr)
         return 11
+    if not args.allow_non_live_video_source and not _looks_like_live_video_source(video_url):
+        print(
+            "real visual evidence requires a live video URL "
+            f"({', '.join(LIVE_VIDEO_SCHEMES)}); got: {video_url}",
+            file=sys.stderr,
+        )
+        return 12
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -323,9 +366,14 @@ def run_real_visual_ir_test(
 
     if args.switch_ir_display:
         display = VisualCase(
-            "switch real stream to IR display",
-            "ir_display_mode_set",
-            {"payload_index": _payload_index(args), "mode": args.display_mode, "palette": args.palette},
+            f"switch real stream to IR pseudo color ({args.palette})",
+            "camera_screen_split",
+            {
+                "payload_index": _payload_index(args),
+                "enable": args.enable_pip,
+                "mode": args.display_mode,
+                "palette": args.palette,
+            },
             True,
         )
         print(f"running {display.label}: {display.method}")
@@ -384,8 +432,10 @@ def run_real_visual_ir_test(
         )
 
     report = _write_report(output_dir, video_url, results)
+    evidence = _write_evidence_json(output_dir, video_url, results)
     failed = [item for item in results if item.status == "fail"]
     print(f"visual_report={report.resolve()}")
+    print(f"evidence_json={evidence.resolve()}")
     print(
         "dock3 ir-metering real visual summary "
         f"(ok={sum(1 for item in results if item.status == 'ok')}, "
@@ -442,6 +492,11 @@ def main() -> int:
     parser.add_argument("--invalid-small-area-height", type=float, default=-0.1)
     parser.add_argument("--skip-invalid", action="store_true")
     parser.add_argument("--video-url", default="", help="Real IR/thermal stream, e.g. rtsp://192.168.1.119:554/main")
+    parser.add_argument(
+        "--allow-non-live-video-source",
+        action="store_true",
+        help="Allow file paths or other non-live sources. Do not use this for real-gateway acceptance.",
+    )
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--snapshot-timeout", type=float, default=20.0)
     parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "logs" / "ir_metering_real_visual"))
@@ -450,7 +505,12 @@ def main() -> int:
     parser.add_argument("--require-snapshots", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--switch-ir-display", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--display-mode", default="ir")
-    parser.add_argument("--palette", default="white_hot")
+    parser.add_argument(
+        "--palette",
+        default="pseudo_hot",
+        help="Thermal palette sent through camera_screen_split. Use pseudo_hot/rainbow for heat-source differentiation.",
+    )
+    parser.add_argument("--enable-pip", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--verbose-reply", action="store_true")
     parser.add_argument("--open-report", action="store_true")

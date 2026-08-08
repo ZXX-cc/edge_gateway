@@ -12,6 +12,7 @@ from web.mavlink.viewlink import (
     build_ir_dzoom_in_frame,
     build_ir_dzoom_out_frame,
     build_ir_dzoom_stop_frame,
+    build_ir_color_palette_frame,
     build_ir_metering_area_frames,
     build_ir_metering_point_frames,
     build_s1_look_at,
@@ -23,6 +24,7 @@ from web.mavlink.viewlink import (
     frame_hex,
 )
 from web.mavlink.viewlink.protocol import (
+    C1_RAINBOW,
     C1_START_RECORDING,
     C2_DEFOG_ON,
     C2_FOCUS_TO,
@@ -114,16 +116,19 @@ class ViewLinkProtocolV349Test(unittest.TestCase):
 
     def test_screen_split_and_temperature_frames(self):
         split = build_screen_split_frame("visible_ir")
+        rainbow = build_ir_color_palette_frame("pseudo_hot")
         once = build_temperature_output_once_frame()
         interval = build_temperature_output_interval_frame(3)
         stop = build_temperature_output_stop_frame()
 
         self.assertEqual(split[4], 0x1C)
         self.assertEqual(split[5:7], bytes([0x00, 0x03]))
+        self.assertEqual(rainbow[4], 0x1C)
+        self.assertEqual(int.from_bytes(rainbow[5:7], "big"), (C1_RAINBOW << 6) | 0x02)
         self.assertEqual(once[4:8], bytes([0x2C, C2_TEMPERATURE_OUTPUT_ONCE, 0x00, 0x00]))
         self.assertEqual(interval[4:8], bytes([0x2C, C2_TEMPERATURE_OUTPUT_INTERVAL, 0x00, 0x03]))
         self.assertEqual(stop[4:8], bytes([0x2C, C2_TEMPERATURE_OUTPUT_STOP, 0x00, 0x00]))
-        self.assertTrue(all(checksum_ok(frame) for frame in (split, once, interval, stop)))
+        self.assertTrue(all(checksum_ok(frame) for frame in (split, rainbow, once, interval, stop)))
 
     def test_ir_metering_point_and_area_frames(self):
         point_frames = build_ir_metering_point_frames(100, -50)

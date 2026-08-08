@@ -687,7 +687,7 @@ class GimbalControl:
             result["message"] = "SDK 未初始化，请先调用 initialize()"
             return result
 
-        if self._connected:
+        if self._connected and self.is_connected():
             self._ensure_dev_status_callback_registration()
             result["success"] = True
             result["message"] = "已连接到设备"
@@ -760,17 +760,18 @@ class GimbalControl:
 
     def is_connected(self) -> bool:
         """检查是否已连接"""
-        if self._connected:
-            return True
         if not self._lib:
+            self._connected = False
             return False
         try:
             connected = self._call_sdk("VLK_IsConnected") != 0
-            if connected:
-                self._connected = True
+            if self._connected and not connected:
+                self.log("SDK 连接状态已刷新为断开", "WARN")
+            self._connected = connected
             return connected
         except Exception as exc:
             self.log(f"查询连接状态异常: {exc}", "WARN")
+            self._connected = False
         return False
 
     def _require_connected(self) -> dict:
@@ -778,6 +779,15 @@ class GimbalControl:
         if self.is_connected():
             return {"success": True, "message": ""}
         return {"success": False, "message": "未连接到设备"}
+
+    def _confirm_command_sent(self, success_message: str) -> dict:
+        """SDK 控制函数多为 void；发送后刷新连接，避免掉线时误报成功。"""
+        if not self.is_connected():
+            message = f"{success_message}，但 ViewLink 已断开，命令可能未被吊舱执行"
+            self.log(message, "WARN")
+            return {"success": False, "message": message, "connection_lost": True}
+        self.log(success_message)
+        return {"success": True, "message": success_message}
 
     def _connecting_result(self) -> dict:
         return {
@@ -1020,11 +1030,7 @@ class GimbalControl:
         pitch_speed = max(-16383, min(16383, int(pitch_speed or 0)))
 
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
-        result["success"] = True
-        result["message"] = f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}")
 
     def stop(self) -> dict:
         """停止云台移动"""
@@ -1036,11 +1042,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Stop")
-        result["success"] = True
-        result["message"] = "云台已停止"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent("云台已停止")
 
     def home(self) -> dict:
         """云台归位（回到初始位置）"""
@@ -1052,11 +1054,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Home")
-        result["success"] = True
-        result["message"] = "云台正在归位"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent("云台正在归位")
 
     def turn_to(self, yaw: float, pitch: float) -> dict:
         """
@@ -1079,11 +1077,7 @@ class GimbalControl:
         yaw = float(yaw or 0.0)
         pitch = float(pitch or 0.0)
         self._call_sdk("VLK_TurnTo", ctypes.c_double(yaw), ctypes.c_double(pitch))
-        result["success"] = True
-        result["message"] = f"云台转向: yaw={yaw}°, pitch={pitch}°"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"云台转向: yaw={yaw}°, pitch={pitch}°")
 
     # ==================== 变焦控制 ====================
 
@@ -1106,11 +1100,7 @@ class GimbalControl:
 
         speed = max(1, min(8, int(speed or 5)))
         self._call_sdk("VLK_ZoomIn", speed)
-        result["success"] = True
-        result["message"] = f"放大中，速度: {speed}"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"放大中，速度: {speed}")
 
     def zoom_out(self, speed: int = 5) -> dict:
         """
@@ -1131,11 +1121,7 @@ class GimbalControl:
 
         speed = max(1, min(8, int(speed or 5)))
         self._call_sdk("VLK_ZoomOut", speed)
-        result["success"] = True
-        result["message"] = f"缩小中，速度: {speed}"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"缩小中，速度: {speed}")
 
     def stop_zoom(self) -> dict:
         """停止变焦"""
@@ -1147,11 +1133,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_StopZoom")
-        result["success"] = True
-        result["message"] = "变焦已停止"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent("变焦已停止")
 
     def zoom_to(self, magnification: float) -> dict:
         """变焦到指定倍率"""
@@ -1164,11 +1146,7 @@ class GimbalControl:
 
         magnification = max(1.0, float(magnification))
         self._call_sdk("VLK_ZoomTo", ctypes.c_float(magnification))
-        result["success"] = True
-        result["message"] = f"变焦到指定倍率: {magnification}x"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"变焦到指定倍率: {magnification}x")
 
     # ==================== 对焦控制 ====================
 
@@ -1458,11 +1436,7 @@ class GimbalControl:
             ctypes.byref(param), x, y, video_width, video_height
         )
 
-        result["success"] = True
-        result["message"] = f"开始跟踪: 位置({x},{y}), 视频({video_width}x{video_height})"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_command_sent(f"开始跟踪: 位置({x},{y}), 视频({video_width}x{video_height})")
 
     def stop_track(self) -> dict:
         """停止跟踪"""

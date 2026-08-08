@@ -39,6 +39,7 @@ C1_FOCUS_OUT = 0x0A
 C1_FOCUS_IN = 0x0B
 C1_WHITE_HOT = 0x0E
 C1_BLACK_HOT = 0x0F
+C1_RAINBOW = 0x12
 C1_TAKE_PHOTO = 0x13
 C1_START_RECORDING = 0x14
 C1_STOP_RECORDING = 0x15
@@ -54,6 +55,13 @@ C1_EO_DZOOM_STOP = 0x3C
 C1_IR_DZOOM_STOP = 0x3C
 C1_IR_DZOOM_CONTINUOUS_IN = 0x3D
 C1_IR_DZOOM_CONTINUOUS_OUT = 0x3E
+
+C1_IR_COLOR_EXT1 = 0x21
+C1_IR_COLOR_EXT2 = 0x22
+C1_IR_COLOR_EXT3 = 0x23
+C1_IR_COLOR_EXT4 = 0x24
+C1_IR_COLOR_EXT5 = 0x25
+C1_IR_COLOR_EXT6 = 0x26
 
 C2_EO_DZOOM_ON = 0x06
 C2_EO_DZOOM_OFF = 0x07
@@ -188,6 +196,16 @@ def build_screen_split_frame(mode: str | int = "visible_ir") -> bytes:
     return build_c1(image_type=image_type)
 
 
+def build_ir_color_palette_frame(palette: str | int = "rainbow") -> bytes:
+    """Build a V3.4.9 thermal palette frame.
+
+    The protocol names white hot (0x0E), black hot (0x0F), rainbow (0x12),
+    and six IR color extensions (0x21..0x26).  Rainbow/pseudo hot is the
+    default for visual heat-source differentiation during IR metering tests.
+    """
+    return build_c1(image_type=C1_IMAGE_IR, operation=_ir_palette_operation(palette))
+
+
 def build_temperature_output_once_frame() -> bytes:
     return build_c2(C2_TEMPERATURE_OUTPUT_ONCE)
 
@@ -285,6 +303,8 @@ def build_protocol_frame_for_method(method: str, args: dict) -> bytes | None:
         return build_c1(operation=C1_ZOOM_OUT, operation_param=args.get("speed", 5))
     if method == "stop_zoom":
         return build_c1(operation=C1_STOP_FOCUS_ZOOM)
+    if method == "set_ir_color_palette":
+        return build_ir_color_palette_frame(args.get("palette", args.get("ir_color", "rainbow")))
     if method == "zoom_to":
         return build_c2(C2_ZOOM_TO, round(float(args.get("magnification", 1.0)) * 10))
     if method == "focus_to":
@@ -349,6 +369,36 @@ def _screen_split_image_type(mode: str | int) -> int:
         "dual": 3,
         "split": 3,
     }.get(key, 3)
+
+
+def _ir_palette_operation(palette: str | int) -> int:
+    if isinstance(palette, int):
+        return _clamp_int(palette, 0, 0x7F)
+    key = str(palette or "rainbow").strip().lower().replace("-", "_")
+    return {
+        "whitehot": C1_WHITE_HOT,
+        "white_hot": C1_WHITE_HOT,
+        "white": C1_WHITE_HOT,
+        "blackhot": C1_BLACK_HOT,
+        "black_hot": C1_BLACK_HOT,
+        "black": C1_BLACK_HOT,
+        "rainbow": C1_RAINBOW,
+        "pseudo_hot": C1_RAINBOW,
+        "pseudohot": C1_RAINBOW,
+        "pseudo": C1_RAINBOW,
+        "ir_color_ext1": C1_IR_COLOR_EXT1,
+        "ext1": C1_IR_COLOR_EXT1,
+        "ir_color_ext2": C1_IR_COLOR_EXT2,
+        "ext2": C1_IR_COLOR_EXT2,
+        "ir_color_ext3": C1_IR_COLOR_EXT3,
+        "ext3": C1_IR_COLOR_EXT3,
+        "ir_color_ext4": C1_IR_COLOR_EXT4,
+        "ext4": C1_IR_COLOR_EXT4,
+        "ir_color_ext5": C1_IR_COLOR_EXT5,
+        "ext5": C1_IR_COLOR_EXT5,
+        "ir_color_ext6": C1_IR_COLOR_EXT6,
+        "ext6": C1_IR_COLOR_EXT6,
+    }.get(key, C1_RAINBOW)
 
 
 def _speed_to_protocol(value: float, *, signed: bool = True) -> int:

@@ -2075,6 +2075,12 @@ class CameraController:
         """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
         data = msg.get('data', {})
         logger.info(
+            "Payload services method received: method=camera_frame_zoom tid=%s bid=%s payload_index=%s",
+            msg.get("tid", ""),
+            msg.get("bid", ""),
+            data.get("payload_index", ""),
+        )
+        logger.info(
             "Camera frame zoom request received: tid=%s bid=%s raw_data=%s",
             msg.get("tid", ""),
             msg.get("bid", ""),

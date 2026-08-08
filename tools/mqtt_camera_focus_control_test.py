@@ -143,6 +143,12 @@ def _focus_values(args: argparse.Namespace) -> list[float]:
     return values or [float(args.focus_distance)]
 
 
+def _focus_reset_value(args: argparse.Namespace) -> float:
+    if args.focus_reset_distance is None:
+        return float(args.focus_distance)
+    return float(args.focus_reset_distance)
+
+
 def build_cases(args: argparse.Namespace) -> list[FocusCase]:
     base = _base_payload(args)
     cases: list[FocusCase] = []
@@ -176,6 +182,24 @@ def build_cases(args: argparse.Namespace) -> list[FocusCase]:
                 allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
             )
         )
+
+    cases.append(
+        FocusCase(
+            "对焦复位-切换自动前",
+            "camera_focus_value_set",
+            {
+                **base,
+                "focus_distance": _focus_reset_value(args),
+                "focus_speed": args.focus_speed,
+                "focus_duration": args.focus_reset_wait,
+            },
+            expect_success=not args.allow_viewlink_focus_limitations,
+            note=(
+                "手动对焦套件结束后的复位隔离步；不能直接从 manual_focus 切到 auto_focus"
+            ),
+            allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
+        )
+    )
 
     cases.append(
         FocusCase(
@@ -360,6 +384,18 @@ def main() -> int:
     )
     parser.add_argument("--focus-speed", type=int, default=2)
     parser.add_argument("--focus-duration", type=float, default=0.1)
+    parser.add_argument(
+        "--focus-reset-distance",
+        type=float,
+        default=None,
+        help="Focus value used as the reset/isolation step before switching from manual to auto. Defaults to --focus-distance.",
+    )
+    parser.add_argument(
+        "--focus-reset-wait",
+        type=float,
+        default=0.3,
+        help="Duration passed to the reset/isolation focus value command before mode switching.",
+    )
     parser.add_argument("--focus-x", type=float, default=0.5)
     parser.add_argument("--focus-y", type=float, default=0.5)
     parser.add_argument("--invalid-focus-mode", default="bad_focus_mode")
