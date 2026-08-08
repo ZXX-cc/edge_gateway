@@ -254,6 +254,28 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(listed["data"]["result"], 0)
         self.assertEqual(listed["data"]["files"][0]["name"], "Riebo000001.jpg")
 
+    def test_file_list_scans_mapping_camera_nested_photo_folders(self):
+        manager = MediaManager()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "DCIM" / "flight-001"
+            folder.mkdir(parents=True)
+            path = folder / "Riebo000002.jpg"
+            path.write_bytes(b"mapping-photo")
+            manager.storage_path = tmp
+
+            listed = manager.handle_file_list_get(base_msg("file_list_get", {
+                "media_type": "photo",
+                "page": 1,
+                "page_size": 10,
+            }))
+
+        self.assertEqual(listed["data"]["result"], 0)
+        files = listed["data"]["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["name"], "Riebo000002.jpg")
+        self.assertEqual(files[0]["object_key"], "DCIM/flight-001/Riebo000002.jpg")
+
     def test_remote_media_is_cached_before_upload(self):
         class FakeResponse:
             def __init__(self, content):

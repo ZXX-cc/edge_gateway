@@ -397,11 +397,13 @@ class MediaManager:
                 os.makedirs(self.storage_path, exist_ok=True)
                 return files
 
-            # 扫描常见媒体文件格式
-            extensions = ['*.jpg', '*.jpeg', '*.png', '*.mp4', '*.mov', '*.avi']
+            # 扫描常见媒体文件格式；正射相机 FTP 会保留 DCIM 下的架次子目录。
+            extensions = ['**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.dng', '**/*.mp4', '**/*.mov', '**/*.avi', '**/*.mkv']
             for ext in extensions:
                 pattern = os.path.join(self.storage_path, ext)
-                for filepath in glob.glob(pattern):
+                for filepath in glob.glob(pattern, recursive=True):
+                    if f"{os.sep}.remote_cache{os.sep}" in filepath:
+                        continue
                     item = build_media_file(filepath, self.storage_path, self.gateway_sn)
                     item['file_path'] = filepath
                     item['priority'] = self._priority_overrides.get(item['file_id'], 0)

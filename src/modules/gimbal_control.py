@@ -25,6 +25,7 @@ from src.utils.logger import get_logger
 from web.mavlink.viewlink import (
     build_eo_dzoom_stop_frame,
     build_ir_dzoom_stop_frame,
+    build_protocol_frame_for_method,
 )
 
 
@@ -1005,6 +1006,27 @@ class GimbalControl:
             "frames": results,
         }
 
+    def _confirm_and_send_protocol(self, method: str, args: dict, message: str) -> dict:
+        """Confirm SDK connection, then send the matching ViewLink V3.4.9 frame."""
+        confirmed = self._confirm_command_sent(message)
+        if not confirmed.get("success"):
+            return confirmed
+
+        frame = build_protocol_frame_for_method(method, args)
+        if not frame:
+            return confirmed
+
+        protocol_result = self.send_protocol_frame(frame)
+        if not protocol_result.get("success"):
+            return {
+                "success": False,
+                "message": protocol_result.get("message", "协议帧发送失败"),
+                "protocol_result": protocol_result,
+            }
+
+        confirmed["protocol_result"] = protocol_result
+        return confirmed
+
     # ==================== 云台控制 ====================
 
     def move(self, yaw_speed: int, pitch_speed: int) -> dict:
@@ -1030,7 +1052,11 @@ class GimbalControl:
         pitch_speed = max(-16383, min(16383, int(pitch_speed or 0)))
 
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
-        return self._confirm_command_sent(f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}")
+        return self._confirm_and_send_protocol(
+            "move",
+            {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed},
+            f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}",
+        )
 
     def stop(self) -> dict:
         """停止云台移动"""
@@ -1042,7 +1068,11 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Stop")
-        return self._confirm_command_sent("云台已停止")
+        return self._confirm_and_send_protocol(
+            "move",
+            {"yaw_speed": 0, "pitch_speed": 0},
+            "云台已停止",
+        )
 
     def home(self) -> dict:
         """云台归位（回到初始位置）"""
@@ -1054,7 +1084,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Home")
-        return self._confirm_command_sent("云台正在归位")
+        return self._confirm_and_send_protocol("home", {}, "云台正在归位")
 
     def turn_to(self, yaw: float, pitch: float) -> dict:
         """
@@ -1077,7 +1107,11 @@ class GimbalControl:
         yaw = float(yaw or 0.0)
         pitch = float(pitch or 0.0)
         self._call_sdk("VLK_TurnTo", ctypes.c_double(yaw), ctypes.c_double(pitch))
-        return self._confirm_command_sent(f"云台转向: yaw={yaw}°, pitch={pitch}°")
+        return self._confirm_and_send_protocol(
+            "turn_to",
+            {"yaw": yaw, "pitch": pitch},
+            f"云台转向: yaw={yaw}°, pitch={pitch}°",
+        )
 
     # ==================== 变焦控制 ====================
 
@@ -1100,7 +1134,7 @@ class GimbalControl:
 
         speed = max(1, min(8, int(speed or 5)))
         self._call_sdk("VLK_ZoomIn", speed)
-        return self._confirm_command_sent(f"放大中，速度: {speed}")
+        return self._confirm_and_send_protocol("zoom_in", {"speed": speed}, f"放大中，速度: {speed}")
 
     def zoom_out(self, speed: int = 5) -> dict:
         """
@@ -1121,7 +1155,7 @@ class GimbalControl:
 
         speed = max(1, min(8, int(speed or 5)))
         self._call_sdk("VLK_ZoomOut", speed)
-        return self._confirm_command_sent(f"缩小中，速度: {speed}")
+        return self._confirm_and_send_protocol("zoom_out", {"speed": speed}, f"缩小中，速度: {speed}")
 
     def stop_zoom(self) -> dict:
         """停止变焦"""
@@ -1133,7 +1167,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_StopZoom")
-        return self._confirm_command_sent("变焦已停止")
+        return self._confirm_and_send_protocol("stop_zoom", {}, "变焦已停止")
 
     def zoom_to(self, magnification: float) -> dict:
         """变焦到指定倍率"""
@@ -1146,7 +1180,11 @@ class GimbalControl:
 
         magnification = max(1.0, float(magnification))
         self._call_sdk("VLK_ZoomTo", ctypes.c_float(magnification))
-        return self._confirm_command_sent(f"变焦到指定倍率: {magnification}x")
+        return self._confirm_and_send_protocol(
+            "zoom_to",
+            {"magnification": magnification},
+            f"变焦到指定倍率: {magnification}x",
+        )
 
     # ==================== 对焦控制 ====================
 
@@ -1234,7 +1272,20 @@ class GimbalControl:
 
     def switch_eo_digital_zoom(self, on: bool) -> dict:
         """开启或关闭可见光电子变焦"""
-        return self._switch_int("VLK_SwitchEODigitalZoom", bool(on), "EO电子变焦")
+        result = {"success": False, "message": ""}
+
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
+            return result
+
+        enabled = bool(on)
+        self._call_sdk("VLK_SwitchEODigitalZoom", 1 if enabled else 0)
+        return self._confirm_and_send_protocol(
+            "switch_eo_digital_zoom",
+            {"on": enabled},
+            f"EO电子变焦{'开启' if enabled else '关闭'}",
+        )
 
     def eo_digital_zoom_stop(self) -> dict:
         """停止可见光电子变焦。"""
@@ -1436,22 +1487,23 @@ class GimbalControl:
             ctypes.byref(param), x, y, video_width, video_height
         )
 
-        return self._confirm_command_sent(f"开始跟踪: 位置({x},{y}), 视频({video_width}x{video_height})")
+        return self._confirm_and_send_protocol(
+            "start_track",
+            {"sensor": int(sensor)},
+            f"开始跟踪: 位置({x},{y}), 视频({video_width}x{video_height})",
+        )
 
     def stop_track(self) -> dict:
         """停止跟踪"""
         result = {"success": False, "message": ""}
 
-        if not self._connected:
-            result["message"] = "未连接到设备"
+        connected = self._require_connected()
+        if not connected["success"]:
+            result["message"] = connected["message"]
             return result
 
         self._call_sdk("VLK_DisableTrackMode")
-        result["success"] = True
-        result["message"] = "跟踪已停止"
-        self.log(result["message"])
-
-        return result
+        return self._confirm_and_send_protocol("stop_track", {}, "跟踪已停止")
 
     # ==================== 拍摄控制 ====================
 
