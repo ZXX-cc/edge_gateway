@@ -3,8 +3,10 @@ DJI Dock 机场管理模块
 
 维护机巢状态缓存和 HMS 告警桥接。
 
-历史的 dock_status_query / dock_control 等 Dock/Dock1 风格 services 入口
-已从 MQTT 路由移除；云端对接以 Dock3 properties、CMD、HMS 等官方方法为准。
+项目历史中 dock_status_query / dock_control 等聚合 services 入口已从
+MQTT 路由移除或未注册同名 handler；这不表示 DOCK/Dock3 官方没有同名或
+等价能力。云端对接以 Dock3 properties、CMD、DRC、HMS 等链路为准，若平台
+按 DOCK 文档调用 dock_control，应补 adapter 拆到具体 CMD 方法。
 """
 import time
 from typing import Dict, Any, Optional, Callable

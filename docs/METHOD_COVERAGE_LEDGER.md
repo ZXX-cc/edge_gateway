@@ -39,7 +39,7 @@
 | media | 17 | P1/P2 | 媒体文件、上传、直播、镜头、质量 | P1 必补专项 |
 | services | 3 | P0/P1 | DRC services 控制权 | Dock3 services topic 下的跨域入口 |
 | drc | 4 | P0/P1/P2 | DRC 建链后心跳、杆量、飞行控制、急停 | 仅保留 Dock3 DRC 官方方法；项目自定义控制别名已从公开路由移除 |
-| dock | 0 | Removed legacy | 机场状态、控制、告警、调度、天气 | 旧 Dock/Dock1 services 入口已移除；改走 Dock3 properties/CMD/HMS |
+| dock | 0 | Needs Field Audit / Adapter | 机场状态、控制、告警、调度、天气 | 当前项目无独立 `dock` Router 分组；Dock 相关能力分散在 Dock3 CMD、DRC、properties、HMS 等链路，不能理解为 DJI Dock/Dock3 官方没有这些方法 |
 | log | 3 | P1 | 远程日志 | P1 必补专项 |
 | flysafe | 3 | P2 | 远程解禁 | P2 adapter |
 | flight_area | 1 | P2 | 自定义飞行区 | P2/P1 边界，基础缓存和回包需补 |
@@ -144,11 +144,28 @@ heart_beat, stick_control, drone_control, drone_emergency_stop
 ### 4.6 dock：0
 
 ```text
-2026-08-05 已移除旧 Dock/Dock1 风格 services 入口：
+这里的 0 只表示 src/main.py 当前没有以 category="dock" 注册的独立 Router
+分组，不表示 DJI Dock/Dock3 官方没有 dock 类 method。
+
+当前项目已实现或保留的 Dock 相关官方链路分散在其他分组：
+- CMD/services: cover_open, cover_close, cover_force_close, charge_open,
+  charge_close, drone_open, drone_close, debug_mode_open, debug_mode_close,
+  battery_maintenance_switch, air_conditioner_mode_switch,
+  alarm_state_switch, battery_store_mode_switch 等。
+- DRC/down: heart_beat, stick_control, drone_control, drone_emergency_stop。
+- properties/HMS/status: emergency_stop_state、机巢状态属性、HMS 告警、
+  update_topo/gateway_state_query 等。
+
+当前项目没有注册同名 handler、需要继续按 DOCK/Dock3 文档核对或补 adapter
+的聚合/查询入口：
 dock_status_query, dock_control, dock_alarm_query,
 dock_task_schedule_query, dock_task_schedule_set, dock_emergency_stop,
 dock_reset, dock_weather_query。
-当前云端验收应使用 Dock3 properties、CMD、HMS、gateway_state_query。
+
+其中 dock_control 不能简单标成“官方无用/旧版无用”。如果平台按 DOCK 文档
+调用同名 method，需要补一个云端 adapter，把 action 拆到 cover_open/
+cover_close/charge_open/charge_close/drone_open/drone_close/debug_mode_*
+或其他 Dock3 CMD 方法；当前项目只是没有同名公开 handler。
 ```
 
 ### 4.7 log：3
@@ -178,7 +195,7 @@ custom_data_transmission_from_psdk, custom_data_transmission_to_psdk
 
 ### 4.11 services 公开边界
 
-`src/main.py::ALLOWED_SERVICE_METHODS` 当前允许 131 个 method 进入 `thing/product/{sn}/services`。下列 Router 已注册入口不在默认 services 白名单内，保留为内部兼容、专项工具或非 services topic 口径；平台侧 Dock3 验收不要直接调用这些旧入口：
+`src/main.py::ALLOWED_SERVICE_METHODS` 当前允许 131 个 method 进入 `thing/product/{sn}/services`。下列 Router 已注册入口不在默认 services 白名单内，保留为内部兼容、专项工具或非 services topic 口径；平台侧 Dock3 验收不要把它们当作 `/services` 公开入口直接调用：
 
 ```text
 firmware_upgrade, firmware_upgrade_cancel, format_sd_card,
@@ -194,9 +211,10 @@ wayline_task_pause, wayline_task_resume, wayline_task_cancel,
 wayline_task_query, wayline_mission_upload, wayline_mission_download,
 wayline_mission_delete, wayline_mission_query, job_create,
 job_delete, job_query, download_media, set_livestream_lens,
-set_livestream_quality, heart_beat, stick_control,
-drone_control, drone_emergency_stop
+set_livestream_quality
 ```
+
+`heart_beat`、`stick_control`、`drone_control`、`drone_emergency_stop` 是 Dock3 DRC 官方链路方法，当前注册在 Router 的 `drc` 分组；它们不在 `/services` 白名单是正常的，云端应通过 `thing/product/{sn}/drc/down` 调用，并通过 `drc/up` 回包，不能归为旧版无用方法。
 
 另外，`airport_bind_status`、`airport_organization_get`、`airport_organization_bind`、`device_binding`、`device_unbinding`、`workspace_bind_status`、`workspace_get`、`storage_config_get`、`flight_areas_get`、`device_capability_query`、`update_topo` 是 requests/status/internal 或非 services 口径；如果误发到 `/services`，当前 MQTT 层会按已知非 services method 忽略或拒绝，避免把它们伪装成公开云端 services。
 
