@@ -68,7 +68,7 @@ nest_mavlink:
 | 飞行器身份 | 真实飞行器 SN、domain、type、sub_type、index、密钥、nonce       | `device.sub_devices`          |
 | 飞控       | 固件类型、连接方式、COM 口或 IP/端口、波特率、目标 sysid/compid | `mavlink` 及飞控模块          |
 | 机巢       | 真机 IP、TCP 端口、协议版本、MAVLink XML/头文件                 | `nest_mavlink` 及机巢协议代码 |
-| MQTT       | Broker 地址、端口、用户名、密码、是否使用 TLS                   | `nanomq`                      |
+| MQTT       | Broker 地址、端口、用户名、密码、是否使用 TLS、是否桥接云端     | `mqtt`，旧配置兼容 `nanomq`   |
 | MongoDB    | 地址、端口、数据库、用户名、密码、authSource                    | `database.mongodb`            |
 | ViewLink   | SDK 目录、负载 IP、端口、连接类型                               | 负载代码；当前尚未完整配置化  |
 | 直播       | RTSP/HTTP 视频源、推流地址、FFmpeg                              | `media.video_sources`         |
@@ -135,7 +135,7 @@ C:\Project\edge_gateway\config\gateway.windows.yaml
 | 生产模式     | `runtime.mode`                                           |
 | 网关 SN      | `gateway.sn`                                             |
 | MongoDB      | `database.mongodb`                                       |
-| MQTT         | `nanomq`                                                 |
+| MQTT         | `mqtt.mode`、`mqtt.nano`、`mqtt.cloud`、`mqtt.bridge`     |
 | 飞控连接     | `mavlink.connection`                                     |
 | 机巢连接     | `nest_mavlink.connection`                                |
 | 网关拓扑密钥 | `device.topology`                                        |
@@ -168,31 +168,38 @@ database:
 
 ### 5.2 MQTT
 
-如果网关和 Mosquitto 安装在同一台电脑：
+主程序支持三种 MQTT 模式，统一由 `mqtt.mode` 选择：
 
 ```yaml
-nanomq:
-  enabled: true
-  host: "127.0.0.1"
-  port: 1883
-  username: ""
-  password: ""
+mqtt:
+  # nano：直连本机 Broker；cloud：直连平台/云端；bridge：生产推荐，本机 Broker 桥接云端。
+  mode: "bridge"
   topic_prefix: "thing/product"
 ```
 
-如果连接远端 Broker：
+Windows 现场生产推荐 `bridge`。网关进程只连接本机 Broker，平台/云端地址写在 `mqtt.bridge.remote`，由本机 Mosquitto、NanoMQ 或 EMQX 的桥接配置负责转发：
 
 ```yaml
-nanomq:
-  enabled: true
-  host: "CHANGE_ME_MQTT_HOST"
-  port: 1883
-  username: "CHANGE_ME_MQTT_USERNAME"
-  password: "CHANGE_ME_MQTT_PASSWORD"
-  topic_prefix: "thing/product"
+mqtt:
+  mode: "bridge"
+  bridge:
+    local:
+      host: "127.0.0.1"
+      port: 1883
+      username: ""
+      password: ""
+    remote:
+      host: "tcp://CHANGE_ME_CLOUD_MQTT_HOST"
+      port: 11883
+      username: "CHANGE_ME_MQTT_USERNAME"
+      password: "CHANGE_ME_MQTT_PASSWORD"
+      clean_start: false
+      qos: 1
 ```
 
-主程序已经支持 MQTT 用户名和密码。当前 `nanomq.ssl` 尚未接入 `src/mqtt/client.py`，需要 TLS/8883 时必须先完成第 10.4 节的代码修改，不能只修改端口。
+如果只做本机联调，可使用 `mode: "nano"` 并配置 `mqtt.nano.host/port`。如果确认网络稳定且需要网关直接上云，可使用 `mode: "cloud"` 并配置 `mqtt.cloud.host/port/username/password`。
+
+主程序已经支持 MQTT 用户名和密码。当前 `mqtt.*.ssl` 尚未接入 `src/mqtt/client.py`，需要 TLS/8883 时必须先完成第 10.4 节的代码修改，不能只修改端口。
 
 ### 5.3 飞控连接：`mavlink`
 
@@ -450,7 +457,7 @@ Test-NetConnection 127.0.0.1 -Port 27017
 Test-NetConnection 127.0.0.1 -Port 1883
 ```
 
-MongoDB 始终需要启动。只有使用本机 Broker 时才需要启动 Mosquitto；使用远端 MQTT 时，本机 Mosquitto 可以不启动，并将连通性检查地址替换为真实 Broker 地址和端口。
+MongoDB 始终需要启动。`mqtt.mode=nano` 或 `mqtt.mode=bridge` 时需要本机 Broker；`mqtt.mode=cloud` 时本机 Mosquitto 可以不启动，并将连通性检查地址替换为云端 Broker 地址和端口。
 
 ### 7.2 检查 YAML 和 Python 环境
 
@@ -547,7 +554,11 @@ Get-ChildItem .\logs\mavlink_raw -Recurse -File |
 
 ## 8. MQTT 平台连接
 
-客户平台和 Edge Gateway 必须连接同一个 MQTT Broker，并使用与 `gateway.sn` 完全一致的 topic：
+客户平台和 Edge Gateway 必须进入同一条 MQTT 消息链路，并使用与 `gateway.sn` 完全一致的 topic：
+
+- `nano`：平台测试客户端和网关都连接本机 Broker。
+- `cloud`：平台和网关都连接云端 Broker。
+- `bridge`：网关连接本机 Broker，平台连接云端 Broker，本机 Broker 负责桥接两端 topic。
 
 | 方向              | Topic                                                   |
 | ----------------- | ------------------------------------------------------- |
@@ -792,7 +803,7 @@ python src\mavlink_definitions\generate_dialect.py
 | ------------------------------ | -------------------------------------------------------------------- |
 | YAML 报 `expected <block end>` | 引号是否成对、缩进是否一致、是否重复粘贴同名节点                     |
 | MongoDB 初始化失败             | 服务、账号、密码、`auth_source` 和 27017                             |
-| MQTT 离线                      | `nanomq.host/port`、账号密码、1883、是否错误使用 TLS 端口            |
+| MQTT 离线                      | `mqtt.mode`、对应模式的 host/port、账号密码、1883/11883、是否错误使用 TLS 端口 |
 | 网关启动但平台没有设备         | 真实 SN、requests_reply、status_reply、拓扑密钥和平台绑定            |
 | 飞控心跳超时                   | COM 占用、波特率、UDP 目标 IP/端口、TCP listener 和飞控 MAVLink 输出 |
 | 飞控有心跳但动作无 ACK         | 飞控目标 sysid/compid 是否为当前默认 `1/1`                           |

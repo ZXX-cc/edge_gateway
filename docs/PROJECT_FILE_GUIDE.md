@@ -9,8 +9,8 @@
 | `README.md` | 项目入口、当前目标、人员分工和文档索引 |
 | `ARCHITECTURE_DESIGN.md` | 系统架构设计说明 |
 | `DJI_CLOUD_API_INTERFACES.md` | 当前 MQTT method 分组和 Dock3 验收状态 |
-| `config/gateway.yaml` | 网关运行配置，包含 gateway、MQTT、cloud、MAVLink、media、logging、retention 等配置 |
-| `nanomq.conf` | NanoMQ 配置模板；Ubuntu 22.04 当前可用 Mosquitto 替代 |
+| `config/gateway.yaml` | 网关运行配置，包含 gateway、mqtt 三模式、cloud 兼容配置、MAVLink、media、logging、retention 等配置 |
+| `nanomq.conf` | NanoMQ 配置模板；Ubuntu 22.04 当前可用 Mosquitto 替代；主网关连接入口以 `mqtt.mode` 为准 |
 | `requirements-ubuntu.txt` | Ubuntu 部署使用的 Python 依赖 |
 | `requirements.txt` | 原依赖文件，存在历史编码风险，Ubuntu 默认不用它 |
 | `start.sh` | 生产/半自动启动脚本，当前仍偏 NanoMQ 和服务化部署 |
@@ -66,13 +66,21 @@ MAVLink，只创建连接对象和业务模块；主飞控 MAVLink 会在 `drone
 
 | 路径 | 职责 |
 |---|---|
-| `src/mqtt/client.py` | MQTT 客户端，连接本地 broker，订阅下行 topic，发布 osd/state/events/reply/requests/drc_up |
+| `src/mqtt/client.py` | MQTT 客户端，按 `mqtt.mode` 连接本机、云端或桥接本机 broker，订阅下行 topic，发布 osd/state/events/reply/requests/drc_up |
 | `src/mqtt/topic_router.py` | 根据 `method` 路由到对应 handler，并维护 method 到 category 的映射 |
 | `src/utils/message.py` | 构造 DJI Cloud API 风格消息体和 MQTT topic |
 | `src/cloud_api/connection_manager.py` | 设备上线、心跳、绑定、requests/requests_reply 请求匹配和超时清理 |
 | `src/cloud_api/telemetry_reporter.py` | OSD、state、events 上报和 MQTT 断线缓存 |
 | `src/cloud_api/capability_reporter.py` | 能力集上报 |
 | `src/cloud_api/dock_manager.py` | 机巢状态缓存和 HMS 告警桥接；旧 `dock_status_query`、`dock_control` 等 Dock/Dock1 风格 services 入口已移除 |
+
+MQTT 连接配置统一使用 `config/gateway.yaml` 的 `mqtt.mode`：
+
+- `nano`：网关直连本机或指定的本地 Broker，用于单机联调。
+- `cloud`：网关直连平台/云端 Broker，用于确认网络稳定后的直连场景。
+- `bridge`：生产推荐，网关连接 `mqtt.bridge.local` 本机 Broker，本机 Broker 再桥接 `mqtt.bridge.remote` 云端 Broker。
+
+旧 `nanomq.*` 和 `cloud.*` 仅作为兼容入口，新代码和新脚本应优先读取 `mqtt.*`。
 
 易混点：
 

@@ -71,6 +71,8 @@ Edge Gateway 是一个适配 DJI Dock 3 上云 API 的 Python 边缘网关项目
 
 Ubuntu 服务器启动、依赖和故障处理见 `docs/UBUNTU_SERVER_STARTUP_GUIDE.md`。完整验收顺序、证据目录和脚本参数以 `docs/FULL_CHAIN_ACCEPTANCE_RUNBOOK.md` 为准。日常联调时按以下顺序启动：
 
+MQTT 默认使用 `mqtt.mode=bridge`：网关连接本机 Broker，Broker 再桥接平台/云端；单机联调用 `nano`，网关直连云端才用 `cloud`。
+
 ```bash
 # 1. MQTT Broker
 sudo systemctl restart mosquitto

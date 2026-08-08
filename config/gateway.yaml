@@ -1,5 +1,5 @@
 # ============================================================
-# 边缘网关配置 - 树莓派 + NanoMQ + MAVLink
+# 边缘网关配置 - 树莓派/Windows + MQTT三模式 + MAVLink
 # ============================================================
 
 # --- 网关身份 ---
@@ -24,18 +24,78 @@ database:
     auth_source: "admin"
     connect_timeout_ms: 5000
 
-# --- NanoMQ 本地Broker配置 ---
+# --- MQTT 主连接模式 ---
+mqtt:
+  # MQTT 连接模式：
+  # - nano：网关直连本机或指定的本地 Broker，适合纯本地联调。
+  # - cloud：网关绕过本机 Broker，直接连接平台/云端 Broker，链路最短但受广域网稳定性影响。
+  # - bridge：生产推荐。网关只连接本机 Broker，本机 Broker 再桥接平台/云端；
+  #   云端断链时网关和本地业务仍可继续发布/订阅本机消息，Broker 负责断线重连和缓存转发。
+  mode: "bridge"
+  topic_prefix: "thing/product" # 控制信令 Topic 前缀，Dock3 默认 thing/product
+  background_handler_workers: 4 # 文件/日志/媒体等本地 IO handler 后台线程数
+  dedup_ttl_seconds: 300 # 下行请求去重缓存保留秒数
+  dedup_max_entries: 1024 # 下行请求去重缓存最大条数
+
+  nano:
+    # nano 模式：网关直连本机或指定 Broker；不经过云端桥接。
+    host: "127.0.0.1"
+    port: 1883
+    client_id: "edge_gateway_BXD020120260727_nano"
+    keepalive: 60
+    username: ""
+    password: ""
+
+  cloud:
+    # cloud 模式：网关直接连接平台/云端 Broker；生产中只有确认网络稳定时使用。
+    host: "tcp://39.185.72.155"
+    port: 11883
+    client_id: "edge_gateway_BXD020120260727_cloud"
+    keepalive: 60
+    username: "admin"
+    password: "sys@mqtt.2022"
+    ssl:
+      enabled: false # 当前主程序尚未启用 TLS；需要 8883 时必须先接入 tls_set
+      cert_file: ""
+      key_file: ""
+      ca_file: ""
+
+  bridge:
+    local:
+      # bridge 模式下网关实际连接这个本机 Broker。
+      # 本机 Broker 可以是 NanoMQ、Mosquitto 或 EMQX；云端桥接由 Broker 配置负责。
+      host: "127.0.0.1"
+      port: 1883
+      client_id: "edge_gateway_BXD020120260727_bridge"
+      keepalive: 60
+      username: ""
+      password: ""
+    remote:
+      # 本段仅作为生成/核对 Broker bridge 配置的云端参数，网关进程不会直接连接这里。
+      host: "tcp://39.185.72.155"
+      port: 11883
+      username: "admin"
+      password: "sys@mqtt.2022"
+      client_id: "edge_gateway_BXD020120260727_bridge_remote"
+      clean_start: false # 建议桥接保持持久会话，减少云端断链期间的消息丢失
+      qos: 1 # 建议桥接业务 Topic 使用 QoS1，兼顾可靠性和实时性
+      bridge_topics:
+        - "thing/product/BXD020120260727/#"
+        - "sys/product/BXD020120260727/#"
+
+# --- NanoMQ 本地Broker兼容配置 ---
+# 旧代码和部分脚本仍会读取 nanomq.*；新主网关优先读取上方 mqtt.mode 配置。
 nanomq:
   enabled: true
   type: "tcp"
-  host: "39.185.72.155"
-  port: 11883
-  client_id: "edge_gateway_BXD020120260727_local_payload_test"
+  host: "127.0.0.1"
+  port: 1883
+  client_id: "edge_gateway_BXD020120260727_legacy"
   ws_port: 8083 # WebSocket端口(视频流分离)
   max_clients: 100
   keepalive: 60
-  username: "admin"
-  password: "sys@mqtt.2022"
+  username: ""
+  password: ""
 
   # 控制信令Topic前缀
   topic_prefix: "thing/product"
@@ -48,7 +108,8 @@ nanomq:
     key_file: ""
     ca_file: ""
 
-# --- 云端MQTT配置 ---
+# --- 云端MQTT兼容配置 ---
+# 旧工具和直连云端模式可读取 cloud.*；bridge 生产模式下由本机 Broker 使用这些信息做桥接。
 cloud:
   enabled: false # 默认关闭，配置后启用
   broker_host: "tcp://39.185.72.155"

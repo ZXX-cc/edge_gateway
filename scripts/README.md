@@ -2,7 +2,7 @@
 
 这些脚本只启动网关外围组件，不启动 `src/main.py`，也不管理 Docker 启动的飞控/云平台。
 
-默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`nanomq.host/port`、`mavlink.connection.port` 和 `nest_mavlink.connection.port`。当前端口流向为：SITL/飞控标准 MAVLink 直接输出到网关 `14550`，网关通过独立 `14551` 与机巢/机巢模拟器交换自定义机巢 MAVLink。`nest_mavlink.sitl.port=14552` 只作为旧串联代理兼容端口。
+默认读取 `config/gateway.yaml` 中的 `gateway.sn`、`mqtt.mode` 生效 MQTT 地址、`mavlink.connection.port` 和 `nest_mavlink.connection.port`。`mqtt.mode=bridge` 时脚本默认连接 `mqtt.bridge.local` 本机 Broker；`mqtt.mode=cloud` 时连接云端 Broker；`mqtt.mode=nano` 时连接本地直连 Broker。旧 `nanomq.host/port` 只作为兼容回退。当前端口流向为：SITL/飞控标准 MAVLink 直接输出到网关 `14550`，网关通过独立 `14551` 与机巢/机巢模拟器交换自定义机巢 MAVLink。`nest_mavlink.sitl.port=14552` 只作为旧串联代理兼容端口。
 
 ## 日志分工
 

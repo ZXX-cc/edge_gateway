@@ -57,11 +57,76 @@ gateway_sn() {
 }
 
 mqtt_host() {
-  config_value "nanomq.host" "127.0.0.1"
+  mqtt_endpoint_value "host" "127.0.0.1"
 }
 
 mqtt_port() {
-  config_value "nanomq.port" "1883"
+  mqtt_endpoint_value "port" "1883"
+}
+
+mqtt_endpoint_value() {
+  local field="$1"
+  local default_value="${2:-}"
+
+  "${PROJECT_PYTHON}" - "${CONFIG_FILE}" "${field}" "${default_value}" <<'PY' 2>/dev/null || printf '%s\n' "${default_value}"
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+config_path = Path(sys.argv[1])
+field = sys.argv[2]
+default = sys.argv[3]
+
+try:
+    import yaml
+except Exception:
+    print(default)
+    raise SystemExit(0)
+
+try:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+except Exception:
+    print(default)
+    raise SystemExit(0)
+
+
+def get(path, fallback=None):
+    value = data
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return fallback
+        value = value[part]
+    return fallback if value in (None, "") else value
+
+
+mode = str(get("mqtt.mode", get("nanomq.mode", "nano")) or "nano").strip().lower()
+if mode not in {"nano", "cloud", "bridge"}:
+    mode = "nano"
+
+if mode == "cloud":
+    host = get("mqtt.cloud.host", get("cloud.broker_host", "127.0.0.1"))
+    port = get("mqtt.cloud.port", get("cloud.broker_port", "1883"))
+elif mode == "bridge":
+    host = get("mqtt.bridge.local.host", get("nanomq.host", "127.0.0.1"))
+    port = get("mqtt.bridge.local.port", get("nanomq.port", "1883"))
+else:
+    host = get("mqtt.nano.host", get("nanomq.host", "127.0.0.1"))
+    port = get("mqtt.nano.port", get("nanomq.port", "1883"))
+
+if "://" in str(host):
+    parsed = urlparse(str(host))
+    if parsed.hostname:
+        host = parsed.hostname
+    if parsed.port:
+        port = parsed.port
+
+if field == "host":
+    print(host)
+elif field == "port":
+    print(port)
+else:
+    print(default)
+PY
 }
 
 mavlink_port() {

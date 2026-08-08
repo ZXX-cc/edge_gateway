@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 边缘网关主程序入口
-树莓派 + NanoMQ + MAVLink 架构
+树莓派/Windows + MQTT Broker + MAVLink 架构
 
 架构说明:
-- MQTT: 通过paho-mqtt连接本地NanoMQ Broker
+- MQTT: 通过paho-mqtt按配置连接本机/云端/桥接 Broker
 - MAVLink: 通过pymavlink连接飞控
 - 控制信令与视频流物理分离
 - 各业务模块通过TopicRouter注册API处理器
@@ -12,8 +12,8 @@
 启动流程:
 1. 加载配置文件
 2. 初始化日志
-3. 连接NanoMQ
-4. 连接MAVLink飞控
+3. 按 mqtt.mode 连接 MQTT Broker
+4. 准备MAVLink飞控，按业务指令按需连接
 5. 注册API处理器
 6. 启动主循环
 """
@@ -997,8 +997,8 @@ class EdgeGateway:
             if self.camera:
                 self.camera.set_event_loop(self.loop)
 
-            # 连接NanoMQ
-            logger.info("Connecting to NanoMQ...")
+            # 连接 MQTT Broker
+            logger.info("Connecting to MQTT broker...")
             if self.mqtt.connect():
                 self.mqtt.set_allowed_service_methods(ALLOWED_SERVICE_METHODS)
                 self.mqtt.set_ignored_service_methods(IGNORED_NON_SERVICE_METHODS)

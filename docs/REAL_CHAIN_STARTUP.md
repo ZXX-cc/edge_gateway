@@ -1,8 +1,14 @@
 # 真实链路启动说明（EMQX MQTT）
 
-本文面向“无 DJI 云端 MQTT 客户端、由 EMQX 接收/转发 MQTT 消息”的部署口径。
+本文面向“无 DJI 云端 MQTT 客户端、由本机 Broker 接收/转发 MQTT 消息”的部署口径。
 
-当前网关仍连接 `config/gateway.yaml` 中的 `nanomq.host/port`。这里的 `nanomq` 可以指向本机 NanoMQ、Mosquitto 或生产 EMQX；`cloud.*` 不作为当前启动链路的 MQTT 连接配置。
+当前网关按 `config/gateway.yaml` 的 `mqtt.mode` 选择 MQTT 连接架构：
+
+- `nano`：网关直连本机或指定的本地 Broker，适合 Windows/Ubuntu 单机联调。
+- `cloud`：网关直连平台/云端 Broker，链路短，但云端网络抖动会直接影响网关 MQTT 会话。
+- `bridge`：生产推荐。网关只连接本机 Broker；本机 Broker 再桥接平台/云端。云端断链时，本机 topic 仍可收发，本机 Broker 负责重连、缓存和恢复转发。
+
+旧 `nanomq.*` 和 `cloud.*` 仅保留兼容；主网关优先使用 `mqtt.*`。
 
 ## 生产模式原则
 
@@ -52,11 +58,21 @@ runtime:
 gateway:
   sn: "REALDOCK001"
 
-nanomq:
-  host: "10.0.0.10"
-  port: 1883
-  username: "edge_gateway"
-  password: "********"
+mqtt:
+  mode: "bridge"
+  bridge:
+    local:
+      host: "127.0.0.1"
+      port: 1883
+      username: ""
+      password: ""
+    remote:
+      host: "tcp://平台MQTT地址"
+      port: 11883
+      username: "平台用户名"
+      password: "平台密码"
+      clean_start: false
+      qos: 1
 
 device:
   topology:

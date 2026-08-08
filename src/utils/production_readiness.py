@@ -1,8 +1,7 @@
-"""Runtime checks for real-chain operation.
+"""真实链路运行前检查。
 
-Production mode still uses the configured EMQX/MQTT broker. These checks only
-prevent test identities or fabricated topology credentials from being reported
-as real device data.
+生产模式根据 mqtt.mode 选择 nano/cloud/bridge 三种 MQTT 连接架构。
+这里主要防止测试身份或伪造拓扑凭据被当成真实设备数据上报。
 """
 from __future__ import annotations
 
@@ -40,7 +39,9 @@ def validate_production_config(config: Dict[str, Any]) -> List[str]:
     gateway = config.get("gateway") or {}
     device = config.get("device") or {}
     topology = device.get("topology") or {}
+    mqtt_root = config.get("mqtt") or {}
     mqtt_cfg = config.get("nanomq") or {}
+    cloud_cfg = config.get("cloud") or {}
     security = config.get("security") or {}
     mqtt_security = security.get("mqtt") or {}
 
@@ -55,8 +56,22 @@ def validate_production_config(config: Dict[str, Any]) -> List[str]:
     if not _text(topology.get("nonce")):
         errors.append("device.topology.nonce is required in production mode")
 
-    if not _text(mqtt_cfg.get("host")):
-        errors.append("nanomq.host / EMQX host is required in production mode")
+    mqtt_mode = _text(mqtt_root.get("mode") or mqtt_cfg.get("mode") or "nano").lower()
+    if mqtt_mode not in {"nano", "cloud", "bridge"}:
+        errors.append(f"mqtt.mode must be one of nano/cloud/bridge in production mode: {mqtt_mode}")
+    if mqtt_mode == "bridge":
+        local_cfg = ((mqtt_root.get("bridge") or {}).get("local") or {})
+        remote_cfg = ((mqtt_root.get("bridge") or {}).get("remote") or {})
+        if not _text(local_cfg.get("host") or mqtt_cfg.get("host")):
+            errors.append("mqtt.bridge.local.host is required in production bridge mode")
+        if not _text(remote_cfg.get("host") or cloud_cfg.get("broker_host")):
+            errors.append("mqtt.bridge.remote.host is required in production bridge mode")
+    elif mqtt_mode == "cloud":
+        direct_cloud = mqtt_root.get("cloud") or {}
+        if not _text(direct_cloud.get("host") or cloud_cfg.get("broker_host")):
+            errors.append("mqtt.cloud.host / cloud.broker_host is required in production cloud mode")
+    elif not _text((mqtt_root.get("nano") or {}).get("host") or mqtt_cfg.get("host")):
+        errors.append("mqtt.nano.host / nanomq.host is required in production nano mode")
 
     if not bool(mqtt_security.get("downstream_auth_enabled")):
         errors.append("security.mqtt.downstream_auth_enabled must be true in production mode")

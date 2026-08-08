@@ -1,6 +1,6 @@
 """
 MQTT客户端模块
-连接NanoMQ本地Broker，处理消息发布/订阅
+按 mqtt.mode 连接 MQTT Broker，处理消息发布/订阅
 """
 import json
 import os
@@ -35,10 +35,10 @@ logger = get_logger("mqtt")
 
 class MQTTClient:
     """
-    MQTT客户端 - 连接NanoMQ本地Broker
+    MQTT客户端 - 按 mqtt.mode 连接本机 Broker、云端 Broker 或桥接本机 Broker
 
     职责:
-    1. 维护与NanoMQ的连接(含自动重连)
+    1. 维护与 MQTT Broker 的连接(含自动重连)
     2. 订阅下行Topic(services, property/set, drc/down)
     3. 发布上行数据(osd, state, events, replies)
     4. 消息路由到对应处理器
@@ -199,7 +199,7 @@ class MQTTClient:
         logger.info("Command admission engine attached to MQTT client")
 
     def connect(self) -> bool:
-        """连接到NanoMQ Broker"""
+        """按配置模式连接 MQTT Broker。"""
         try:
             self._ensure_background_executor()
             configured_client_id = str(self.config.get("client_id") or "").strip()
@@ -223,8 +223,18 @@ class MQTTClient:
                 self.config['host'],
                 self.config['port'],
             )
-            logger.info("Connecting to NanoMQ at %s:%s with client_id=%s...", host, port, client_id)
-            self.client.connect(host, port, keepalive=60)
+            mode = self.config.get("mode", "nano")
+            label = self.config.get("connection_label", mode)
+            keepalive = int(self.config.get("keepalive", 60) or 60)
+            logger.info(
+                "Connecting to MQTT broker: mode=%s, target=%s, address=%s:%s, client_id=%s...",
+                mode,
+                label,
+                host,
+                port,
+                client_id,
+            )
+            self.client.connect(host, port, keepalive=keepalive)
 
             self.client.loop_start()
             self._running = True

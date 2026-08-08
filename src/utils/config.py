@@ -282,18 +282,60 @@ class Config:
 
     @classmethod
     def get_mqtt_config(cls):
-        """获取MQTT配置"""
+        """获取主网关 MQTT 连接配置，支持 nano/cloud/bridge 三种模式。"""
+        mode = str(cls.get('mqtt.mode', cls.get('nanomq.mode', 'nano')) or 'nano').strip().lower()
+        if mode not in {'nano', 'cloud', 'bridge'}:
+            mode = 'nano'
+
+        def pick(*keys, default=None):
+            for key in keys:
+                value = cls.get(key, None)
+                if value not in (None, ''):
+                    return value
+            return default
+
+        if mode == 'cloud':
+            host = pick('mqtt.cloud.host', 'cloud.broker_host', default='127.0.0.1')
+            port = pick('mqtt.cloud.port', 'cloud.broker_port', default=1883)
+            username = pick('mqtt.cloud.username', 'cloud.username', default='')
+            password = pick('mqtt.cloud.password', 'cloud.password', default='')
+            client_id = pick('mqtt.cloud.client_id', 'cloud.client_id', 'nanomq.client_id', default='')
+            keepalive = pick('mqtt.cloud.keepalive', 'cloud.keepalive', 'nanomq.keepalive', default=60)
+            connection_label = 'cloud'
+        elif mode == 'bridge':
+            # bridge 模式下网关只连本机 Broker；本机 Broker 到云端的桥接由
+            # Mosquitto/NanoMQ/EMQX 配置完成，网关进程不直接连云端。
+            host = pick('mqtt.bridge.local.host', 'nanomq.host', default='127.0.0.1')
+            port = pick('mqtt.bridge.local.port', 'nanomq.port', default=1883)
+            username = pick('mqtt.bridge.local.username', 'nanomq.username', default='')
+            password = pick('mqtt.bridge.local.password', 'nanomq.password', default='')
+            client_id = pick('mqtt.bridge.local.client_id', 'nanomq.client_id', default='')
+            keepalive = pick('mqtt.bridge.local.keepalive', 'nanomq.keepalive', default=60)
+            connection_label = 'bridge-local'
+        else:
+            host = pick('mqtt.nano.host', 'nanomq.host', default='127.0.0.1')
+            port = pick('mqtt.nano.port', 'nanomq.port', default=1883)
+            username = pick('mqtt.nano.username', 'nanomq.username', default='')
+            password = pick('mqtt.nano.password', 'nanomq.password', default='')
+            client_id = pick('mqtt.nano.client_id', 'nanomq.client_id', default='')
+            keepalive = pick('mqtt.nano.keepalive', 'nanomq.keepalive', default=60)
+            connection_label = 'nano'
+
         return {
-            'host': cls.get('nanomq.host', '127.0.0.1'),
-            'port': cls.get('nanomq.port', 1883),
-            'username': cls.get('nanomq.username', ''),
-            'password': cls.get('nanomq.password', ''),
-            'client_id': cls.get('nanomq.client_id', ''),
-            'topic_prefix': cls.get('nanomq.topic_prefix', 'thing/product'),
+            'mode': mode,
+            'connection_label': connection_label,
+            'host': host,
+            'port': port,
+            'username': username,
+            'password': password,
+            'client_id': client_id,
+            'keepalive': keepalive,
+            'topic_prefix': pick('mqtt.topic_prefix', 'nanomq.topic_prefix', default='thing/product'),
             # 仅用于日志/媒体等明确的本地 IO handler，控制类 method 保持同步执行。
-            'background_handler_workers': cls.get('nanomq.background_handler_workers', 4),
-            'dedup_ttl_seconds': cls.get('nanomq.dedup_ttl_seconds', 300),
-            'dedup_max_entries': cls.get('nanomq.dedup_max_entries', 1024),
+            'background_handler_workers': pick('mqtt.background_handler_workers', 'nanomq.background_handler_workers', default=4),
+            'dedup_ttl_seconds': pick('mqtt.dedup_ttl_seconds', 'nanomq.dedup_ttl_seconds', default=300),
+            'dedup_max_entries': pick('mqtt.dedup_max_entries', 'nanomq.dedup_max_entries', default=1024),
+            'bridge_remote': cls.get('mqtt.bridge.remote', {}) or {},
         }
 
     @classmethod

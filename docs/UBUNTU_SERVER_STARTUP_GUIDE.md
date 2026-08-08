@@ -33,7 +33,7 @@
 | ArduPilot | 已部署 | `~/lxz/ardupilot` | 是 | SITL 模拟飞控 |
 | `sim_vehicle.py` | 已可用 | `~/lxz/ardupilot/Tools/autotest/sim_vehicle.py` | 是 | 启动 ArduCopter SITL |
 | MAVProxy | 已可用 | `~/.local/bin/mavproxy.py` | 是 | SITL 手动飞控命令行 |
-| 网关配置 | 已可用 | `config/gateway.yaml` | 是 | 默认 MQTT `1883`，MAVLink UDP `14550` |
+| 网关配置 | 已可用 | `config/gateway.yaml` | 是 | 默认 `mqtt.mode=bridge`，网关连接本机 MQTT `1883` |
 | MQTT 冒烟脚本 | 已可用 | `tools/mqtt_smoke_test.py` | 是 | 验证 services/property/drc topic 和 reply |
 | Web 调试台 | 已可用 | `web/app.py`，端口 `8090` | 是 | 独立程序，用于看 MQTT、发测试命令、启动 SITL |
 | 机巢模拟器 | 有脚本 | `src/nest_simulator.py`，默认 `14550` | 需单独模式使用 | 不能和 SITL 同时直接占用同一个 MAVLink 端口 |
@@ -42,7 +42,7 @@
 
 | 端口/地址 | 用途 | 当前配置来源 |
 |---|---|---|
-| `127.0.0.1:1883` | MQTT Broker | `config/gateway.yaml` 的 `nanomq.host/port`，实际由 Mosquitto 提供 |
+| `127.0.0.1:1883` | 本机 MQTT Broker | `config/gateway.yaml` 的 `mqtt.bridge.local.host/port` 或兼容 `nanomq.host/port`，实际可由 Mosquitto 提供 |
 | `127.0.0.1:14551` | 网关与机巢模拟器自定义 MAVLink | `nest_mavlink.connection.port` |
 | `127.0.0.1:14552` | SITL 标准 MAVLink 输入到机巢模拟器 | `nest_mavlink.sitl.port` |
 | `127.0.0.1:14550` | 已关闭的网关主飞控直连兼容端口 | `mavlink.enabled=false` 时不使用 |
@@ -50,7 +50,7 @@
 | `thing/product/EDGE-GW-001/#` | 网关 MQTT 业务 topic | `config/gateway.yaml` 的 `gateway.sn` |
 | `sys/product/EDGE-GW-001/#` | 网关系统 topic | `config/gateway.yaml` 的 `gateway.sn` |
 
-注意：项目日志里可能仍写着 `Connecting to NanoMQ`，这是代码里的命名历史。只要连接的是 `127.0.0.1:1883`，当前实际 Broker 可以是 Mosquitto。
+注意：当前网关日志会输出 `Connecting to MQTT broker: mode=..., target=..., address=...`。默认 `bridge` 模式下，网关连接的是本机 Broker；云端桥接由 Broker 配置完成，不由网关进程直接连接云端。
 
 ## 三、日志落盘规则
 
@@ -304,7 +304,8 @@ python src/main.py -c config/gateway.yaml
 正常启动时应看到：
 
 ```text
-MQTT connected to NanoMQ
+Connecting to MQTT broker: mode=bridge, target=bridge-local, address=127.0.0.1:1883
+MQTT connected to broker
 Preparing MAVLink runtime...
 Main aircraft MAVLink prepared for lazy connect
 Edge Gateway started successfully
@@ -362,6 +363,8 @@ http://Ubuntu服务器IP:8090
 ```bash
 mosquitto_sub -h 127.0.0.1 -p 1883 -t 'thing/product/EDGE-GW-001/#' -v
 ```
+
+如果把 `mqtt.mode` 临时改为 `cloud`，命令行观察端和验收脚本也应连接云端 Broker；默认 `bridge` 模式继续连接本机 `127.0.0.1:1883`。
 
 正常时会持续看到：
 
