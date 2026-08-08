@@ -534,29 +534,20 @@ payload:
 
 # --- RTK / RTCM 差分注入配置 ---
 rtk:
-  enabled: false # 默认关闭；开启后随飞机主 MAVLink 按需连接启动
-  active_source: "auto" # auto=按 priority 自动选源；也可填 F9P/NTRIP 等源名
-  min_inject_interval: 0.0 # RTCM 注入最小间隔秒数，0 表示不降频
+  enabled: true # 与 RTKF9P/config.yaml 参考项目保持一致，启用 F9P 基准站 RTCM 数据源
+  active_source: "F9P" # 固定使用 F9P；auto=按 priority 自动选源，也可填其它源名
+  min_inject_interval: 0.0 # RTCM 注入最小间隔秒数，0 表示不降频；对应参考项目不降频转发
   sources:
     F9P:
-      type: "tcp" # ZED-F9P 串口转 TCP 输出 RTCM3
-      host: ""
-      port: 8600
+      type: "tcp" # ZED-F9P 串口转 TCP 输出 RTCM3，对应参考项目 base_station
+      host: "192.168.1.13" # 与 RTKF9P/config.yaml base_station.host 相同
+      port: 8600 # 与 RTKF9P/config.yaml base_station.port 相同
       priority: 10
-      connect_timeout: 10.0
-    NTRIP:
-      type: "ntrip"
-      host: ""
-      port: 8002
-      mountpoint: ""
-      username: ""
-      password: ""
-      priority: 5
-      connect_timeout: 15.0
+      connect_timeout: 10.0 # 与 RTKF9P/config.yaml base_station.connect_timeout 相同
   auto_switch:
-    enabled: false # true 时按距离/返航模式在起降源和巡航源之间切换
+    enabled: false # 参考项目仅配置单 F9P 源，因此默认关闭距离/返航自动切源
     takeoff_landing_rtk: ["F9P"]
-    cruise_rtk: ["NTRIP"]
+    cruise_rtk: ["F9P"]
 
 # --- 数据保留策略 ---
 retention:
