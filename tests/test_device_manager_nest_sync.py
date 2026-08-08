@@ -221,6 +221,30 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertEqual(by_key["dock3.nest.plc_heartbeat.lost"]["alarm_id"], "nest-plc-heartbeat-lost")
         self.assertTrue(all(is_nest_hms_alarm(alarm) for alarm in alarms))
 
+    def test_startup_drone_heartbeat_false_does_not_report_hms_until_seen_online(self):
+        with (
+            patch.object(self.manager, "_save_alarm_to_db", new=lambda *args, **kwargs: None),
+            patch.object(self.manager, "_clear_alarms_from_db", new=lambda *args, **kwargs: None),
+            patch.object(self.manager, "_schedule_async"),
+        ):
+            self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+
+            hms_events = [event for event in self.events if event["method"] == "hms"]
+            self.assertFalse(hms_events)
+            self.assertFalse(self.manager._nest_drone_heartbeat_alarm_enabled)
+
+            self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+            self.assertTrue(self.manager._nest_drone_heartbeat_alarm_enabled)
+
+            self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+            hms_events = [event for event in self.events if event["method"] == "hms"]
+            self.assertTrue(hms_events)
+            hms_keys = {
+                alarm["hms_key"]
+                for alarm in hms_events[-1]["data"]["alarms"]
+            }
+            self.assertIn("dock3.nest.drone_heartbeat.lost", hms_keys)
+
     def test_recent_nest_command_target_ignores_stale_nest_snapshot(self):
         self.manager._nest_module = FakeNestModule()
         self.manager.update_from_nest(nest_snapshot(gate_state=1))

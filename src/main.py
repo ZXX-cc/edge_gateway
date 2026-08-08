@@ -966,20 +966,63 @@ class EdgeGateway:
                     baudrate=mavlink_config['baudrate']
                 )
 
+            if use_main_mavlink and use_separate_nest_mavlink:
+                logger.info("Starting nest MAVLink before aircraft MAVLink; aircraft link will connect last")
+                self.flight_control = self.flight_control or FlightControl()
+                self.mode_control = self.mode_control or ModeControl()
+                self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
+                self.waypoint_manager = self.waypoint_manager or WaypointManager()
+                rtk_config = Config.get('rtk', {})
+                self.rtk_module = self.rtk_module or RTKModule(
+                    ntrip_config=rtk_config,
+                    telemetry_module=self.telemetry_module,
+                )
+                self.nest_module = self.nest_module or DroneNestModule(
+                    protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
+                )
+                if self.mission:
+                    self.mission.set_flight_control(self.flight_control)
+                    self.mission.set_mode_control(self.mode_control)
+                    self.mission.set_waypoint_manager(self.waypoint_manager)
+                    self.mission.set_nest_module(self.nest_module)
+                    self.mission.set_gimbal_control(self.gimbal)
+                    self.mission.set_camera_controller(self.camera)
+                    self.mission.set_telemetry_module(self.telemetry_module)
+                    self.mission.set_telemetry_reporter(self.telemetry_reporter)
+                if self.camera:
+                    self.camera.set_flight_control(self.flight_control)
+                if self.telemetry_module and self.telemetry:
+                    self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
+                if self.drc:
+                    self.drc.set_flight_control(self.flight_control)
+                    self.drc.set_mode_control(self.mode_control)
+                    self.drc.set_mission_manager(self.mission)
+                    self.drc.set_telemetry_module(self.telemetry_module)
+                if self.device:
+                    self.device.set_telemetry_processor(self.telemetry)
+                    self.device.set_dock_manager(self.dock)
+                self._wire_nest_module_to_business()
+                self._start_nest_mavlink(nest_mavlink_config)
+
             if use_main_mavlink and self.mavlink_conn.connect():
                 # 创建消息分发器
                 self.dispatcher = MessageDispatcher(self.mavlink_conn)
 
                 # 初始化功能模块
-                self.flight_control = FlightControl()
-                self.mode_control = ModeControl()
-                self.telemetry_module = TelemetryModule(mode="real")
-                self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7'))
-                self.waypoint_manager = WaypointManager()
+                self.flight_control = self.flight_control or FlightControl()
+                self.mode_control = self.mode_control or ModeControl()
+                self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
+                self.nest_module = self.nest_module or DroneNestModule(
+                    protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
+                )
+                self.waypoint_manager = self.waypoint_manager or WaypointManager()
 
                 # 初始化RTK模块（需要telemetry_module）
                 rtk_config = Config.get('rtk', {})
-                self.rtk_module = RTKModule(ntrip_config=rtk_config, telemetry_module=self.telemetry_module)
+                self.rtk_module = self.rtk_module or RTKModule(
+                    ntrip_config=rtk_config,
+                    telemetry_module=self.telemetry_module,
+                )
 
                 # 注册模块到分发器（idle_task + on_message）
                 self.dispatcher.add_module(self.flight_control)
@@ -1043,7 +1086,7 @@ class EdgeGateway:
                 self._wire_nest_module_to_business()
                 self._wire_flight_area_applier(self.dispatcher)
 
-                if use_separate_nest_mavlink:
+                if use_separate_nest_mavlink and not self.nest_dispatcher:
                     self._start_nest_mavlink(nest_mavlink_config)
 
                 # 启动分发器
@@ -1052,7 +1095,7 @@ class EdgeGateway:
             elif use_main_mavlink:
                 logger.warning("Failed to connect to MAVLink, retrying...")
                 # 主飞控 MAVLink 连接失败不阻塞机巢链路测试。
-                if use_separate_nest_mavlink:
+                if use_separate_nest_mavlink and not self.nest_dispatcher:
                     logger.info("Starting standalone nest MAVLink without main MAVLink")
                     self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7'))
                     self._wire_nest_module_to_business()

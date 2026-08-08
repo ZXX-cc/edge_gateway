@@ -264,6 +264,7 @@ class DeviceManager:
         self._pending_nest_command_targets: Dict[str, Dict[str, Any]] = {}
         self._nest_state_condition = threading.Condition()
         self._last_nest_drone_heartbeat: Optional[bool] = None
+        self._nest_drone_heartbeat_alarm_enabled = False
         self._nest_command_ack_timeout = max(
             0.1,
             float(Config.get('device.nest_command_ack_timeout', 5.0) or 5.0),
@@ -1101,6 +1102,8 @@ class DeviceManager:
 
         if 'drone_heartbeat' in nest_data:
             self._last_nest_drone_heartbeat = bool(nest_data.get('drone_heartbeat'))
+            if self._last_nest_drone_heartbeat:
+                self._nest_drone_heartbeat_alarm_enabled = True
             self._sync_sub_device_online_from_nest(bool(nest_data.get('drone_heartbeat')))
 
         if updates:
@@ -1111,7 +1114,10 @@ class DeviceManager:
         with self._nest_state_condition:
             self._nest_state_condition.notify_all()
 
-        self._sync_nest_hms_alarms(nest_data)
+        hms_nest_data = dict(nest_data)
+        if not self._nest_drone_heartbeat_alarm_enabled:
+            hms_nest_data["_suppress_drone_heartbeat_alarm"] = True
+        self._sync_nest_hms_alarms(hms_nest_data)
         self._notify_nest_operation_if_needed(nest_data, changed_state)
 
     def _sync_sub_device_online_from_nest(self, online: bool):
@@ -3250,6 +3256,7 @@ class DeviceManager:
             final_waiter=lambda: self._wait_for_drone_heartbeat(True, self._nest_command_state_timeout),
         )
         if reply.get("data", {}).get("result") == 0:
+            self._nest_drone_heartbeat_alarm_enabled = True
             self.report_update_topo()
         return reply
 
@@ -3260,6 +3267,8 @@ class DeviceManager:
         logger.info("Drone power OFF")
         from src.generated_dialect.gcs_order_protocol import GCSCommand
 
+        previous_alarm_enabled = self._nest_drone_heartbeat_alarm_enabled
+        self._nest_drone_heartbeat_alarm_enabled = False
         reply = self._execute_nest_ack_command_sync(
             msg,
             'drone_close',
@@ -3268,6 +3277,8 @@ class DeviceManager:
         )
         if reply.get("data", {}).get("result") == 0:
             self.report_update_topo()
+        else:
+            self._nest_drone_heartbeat_alarm_enabled = previous_alarm_enabled
         return reply
 
     def handle_drone_format(self, msg: dict) -> dict:

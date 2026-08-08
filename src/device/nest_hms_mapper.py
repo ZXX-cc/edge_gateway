@@ -141,7 +141,10 @@ def build_nest_hms_alarms(nest_data: Dict[str, Any], device_sn: str) -> List[Dic
         "plc_heartbeat": "PLC 心跳丢失",
         "drone_heartbeat": "机巢侧飞行器心跳丢失",
     }
+    suppress_drone_heartbeat_alarm = bool(nest_data.get("_suppress_drone_heartbeat_alarm"))
     for key, content in heartbeat_labels.items():
+        if key == "drone_heartbeat" and suppress_drone_heartbeat_alarm:
+            continue
         if _has_false_flag(nest_data, key):
             add(
                 f"nest-{key.replace('_', '-')}-lost",
