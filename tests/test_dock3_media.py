@@ -377,6 +377,34 @@ class Dock3MediaManagerTest(unittest.TestCase):
         callbacks = [event for event in events if event.get("method") == "file_upload_callback"]
         self.assertEqual(callbacks[0]["data"]["file"]["object_key"], "djidock/sample.jpg")
 
+    def test_upload_callback_does_not_use_upload_url_as_object_key(self):
+        manager = MediaManager()
+        events = []
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "upload_url": "http://oss.local/bucket/path/sample.jpg"
+            }
+            manager._upload_file_http = lambda filepath, upload_url: True
+            manager._upload_queue = [{
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        callbacks = [event for event in events if event.get("method") == "file_upload_callback"]
+        file_data = callbacks[0]["data"]["file"]
+        self.assertEqual(file_data["object_key"], "bucket/path/sample.jpg")
+        self.assertEqual(file_data["path"], "http://oss.local/bucket/path/sample.jpg")
+
     def test_file_download_caches_remote_media_without_upload(self):
         class FakeResponse:
             def __init__(self, content):
@@ -901,6 +929,29 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(normalized["video_type"], "gimbal")
 
+    def test_live_start_ffmpeg_failure_resets_request_state(self):
+        Config.merge({"livestream": {"default_video_type": "gimbal"}})
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager._start_ffmpeg = lambda *args, **kwargs: False
+
+        reply = manager.handle_live_start_push(base_msg("live_start_push", {
+            "url": "rtmp://cloud.example/live/stream",
+            "url_type": 1,
+            "video_id": "EDGEGW001/0/ir",
+            "video_quality": 3,
+        }))
+
+        self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertFalse(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "")
+        self.assertEqual(manager._live_video_id, "")
+        self.assertEqual(manager._live_url, "")
+        self.assertEqual(manager._live_protocol, 4)
+        self.assertEqual(manager._live_quality, 0)
+        self.assertEqual(manager._live_video_type, "gimbal")
+        self.assertEqual(manager._live_source_key, "gimbal")
+
     def test_production_rejects_mock_live_url(self):
         Config.merge({"runtime": {"mode": "production"}})
         try:
@@ -941,6 +992,21 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("create_time", file_data["metadata"])
         self.assertIn("lat", file_data["metadata"]["shoot_position"])
         self.assertIn("lng", file_data["metadata"]["shoot_position"])
+
+    def test_report_upload_complete_normalizes_url_object_key(self):
+        events = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        manager.report_upload_complete({
+            "object_key": "http://oss.local/bucket/path/sample.jpg",
+            "name": "sample.jpg",
+        })
+
+        file_data = events[0]["data"]["file"]
+        self.assertEqual(file_data["object_key"], "bucket/path/sample.jpg")
+        self.assertEqual(file_data["path"], "http://oss.local/bucket/path/sample.jpg")
 
     def test_live_start_rejects_invalid_payload(self):
         ok, _, errors = validate_live_start_payload({"url": "", "video_id": ""})

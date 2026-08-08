@@ -117,7 +117,7 @@ class MediaManager:
         self._live_quality = 0   # 默认自适应
         self._live_video_id = ""
         self._live_url = ""
-        self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+        self._live_video_type = self._default_live_video_type()
         self._live_source_key = self._live_video_type
         self._live_camera_position = 0
         self._live_pipeline: List[Dict[str, Any]] = []
@@ -143,6 +143,23 @@ class MediaManager:
 
         # 上传重试配置
         self._max_retry_count = 3
+
+    @staticmethod
+    def _default_live_video_type() -> str:
+        """读取默认直播镜头类型。"""
+        return str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+
+    def _reset_live_start_state(self):
+        """清理一次未成功开始的直播会话状态。"""
+        default_video_type = self._default_live_video_type()
+        self._live_streaming = False
+        self._live_session_id = ""
+        self._live_protocol = 4
+        self._live_quality = 0
+        self._live_video_id = ""
+        self._live_url = ""
+        self._live_video_type = default_video_type
+        self._live_source_key = default_video_type
 
     @staticmethod
     def _resolve_storage_path(configured_path: str) -> str:
@@ -302,6 +319,7 @@ class MediaManager:
                 {uploaded_file_count, expected_file_count, flight_type}
         """
         if self._event_callback:
+            object_key, file_path = self._normalize_upload_callback_object_key(file_info)
             ext = {
                 'flight_id': '',
                 'drone_model_key': '',
@@ -321,8 +339,8 @@ class MediaManager:
             metadata['shoot_position'] = {'lat': None, 'lng': None, **shoot_position}
             payload = {
                 'file': {
-                    'object_key': file_info.get('object_key', ''),
-                    'path': file_info.get('path', ''),
+                    'object_key': object_key,
+                    'path': file_path,
                     'name': file_info.get('name', ''),
                     'ext': ext,
                     'metadata': metadata,
@@ -338,6 +356,21 @@ class MediaManager:
                 self.gateway_sn
             )
             self._event_callback(event)
+
+    @staticmethod
+    def _normalize_upload_callback_object_key(file_info: dict) -> tuple[str, str]:
+        """规范化上传完成事件的对象键，避免把完整 upload_url 当 object_key。"""
+        raw_object_key = str(file_info.get('object_key') or file_info.get('key') or '').strip()
+        file_path = str(file_info.get('path') or file_info.get('upload_url') or '').strip()
+
+        if '://' not in raw_object_key:
+            return raw_object_key, file_path
+
+        if not file_path:
+            file_path = raw_object_key
+        parsed = urllib.parse.urlparse(raw_object_key)
+        object_key = urllib.parse.unquote(parsed.path or '').lstrip('/')
+        return object_key, file_path
 
     def report_priority_media(self, flight_id: str):
         """
@@ -641,6 +674,12 @@ class MediaManager:
         return f"{prefix}/{safe_name}" if prefix else safe_name
 
     @staticmethod
+    def _object_key_from_upload_url(upload_url: str) -> str:
+        """从预签名上传 URL 中提取 path 作为兜底对象键，不返回完整 URL。"""
+        parsed = urllib.parse.urlparse(str(upload_url or ""))
+        return urllib.parse.unquote(parsed.path or "").lstrip("/")
+
+    @staticmethod
     def _quote_s3_path(path: str) -> str:
         return "/" + "/".join(
             urllib.parse.quote(part, safe="")
@@ -848,12 +887,16 @@ class MediaManager:
             storage_config = self._storage_config_from_credentials(credentials)
             upload_url = storage_config.get('upload_url', '')
             uploaded_path = upload_url
-            object_key = storage_config.get("object_key") or upload_url
+            object_key = (
+                storage_config.get("object_key")
+                or file_info.get("object_key")
+                or self._object_key_from_upload_url(upload_url)
+                or self._object_key_from_storage(storage_config, file_name)
+            )
             success = False
             for retry in range(self._max_retry_count):
                 if upload_url:
                     success = self._upload_file_http(filepath, upload_url)
-                    object_key = storage_config.get("object_key") or upload_url
                     uploaded_path = upload_url
                 else:
                     success, uploaded_path, object_key = self._upload_file_s3(
@@ -1223,13 +1266,15 @@ class MediaManager:
         video_quality = data["video_quality"]
         requested_video_type = data.get("video_type") or self._video_type_from_video_id(video_id)
         requested_source_key = self._live_source_key_from_video_id(video_id)
+        live_source_key = self._live_source_key
+        live_video_type = self._live_video_type
         if requested_source_key:
-            self._live_source_key = requested_source_key
-            self._live_video_type = requested_video_type or requested_source_key
+            live_source_key = requested_source_key
+            live_video_type = requested_video_type or requested_source_key
         elif requested_video_type:
-            self._live_video_type = requested_video_type
-            self._live_source_key = requested_video_type
-        selected_source = self._get_video_source(self._live_source_key)
+            live_video_type = requested_video_type
+            live_source_key = requested_video_type
+        selected_source = self._get_video_source(live_source_key)
         self._live_pipeline = [
             {
                 "step": "validate_live_start",
@@ -1241,8 +1286,8 @@ class MediaManager:
             {
                 "step": "select_video_source",
                 "status": "ok",
-                "video_type": self._live_video_type,
-                "source_key": self._live_source_key,
+                "video_type": live_video_type,
+                "source_key": live_source_key,
                 "source": selected_source,
             },
         ]
@@ -1261,12 +1306,14 @@ class MediaManager:
         self._live_quality = video_quality
         self._live_video_id = video_id
         self._live_url = url
+        self._live_video_type = live_video_type
+        self._live_source_key = live_source_key
 
         logger.info(f"Live start: url_type={url_type}, video_id={video_id}, "
                    f"quality={video_quality}, url={url}")
 
         if is_mock_live_url(url) and str(Config.get('runtime.mode', 'test')).lower() == 'production':
-            self._live_streaming = False
+            self._reset_live_start_state()
             return MessageBuilder.build_reply(
                 msg,
                 result=INVALID_COMMAND_FORMAT,
@@ -1282,10 +1329,8 @@ class MediaManager:
                 "url": url,
             })
         else:
-            if not self._start_ffmpeg(url, url_type, video_quality, self._live_source_key):
-                self._live_session_id = ""
-                self._live_video_id = ""
-                self._live_url = ""
+            if not self._start_ffmpeg(url, url_type, video_quality, live_source_key):
+                self._reset_live_start_state()
                 return MessageBuilder.build_reply(
                     msg,
                     result=INVALID_COMMAND_FORMAT,
