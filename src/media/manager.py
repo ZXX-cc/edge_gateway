@@ -1438,17 +1438,26 @@ class MediaManager:
             logger.warning("Live lens changed but camera controller is not available for direct photo")
             return {"status": "skipped", "reason": "camera_controller_unavailable"}
 
+        source_data = msg.get("data", {}) if isinstance(msg.get("data"), dict) else {}
+        photo_data = {
+            "camera_index": 0,
+            "video_id": video_id,
+            "video_type": video_type,
+            "live_lens_type": video_type,
+            "trigger": "live_lens_change",
+        }
+        # video_type 是直播镜头类型，不等同于底层拍照相机类型。品灵/ViewLink
+        # 拍照命令本身固定调用 Photograph；只有平台显式传 camera_type 时才透传。
+        explicit_camera_type = str(source_data.get("camera_type") or "").strip()
+        if explicit_camera_type:
+            photo_data["camera_type"] = explicit_camera_type
+
         photo_msg = {
             "tid": msg.get("tid"),
             "bid": msg.get("bid"),
             "gateway": msg.get("gateway", self.gateway_sn),
             "method": "camera_photo_take",
-            "data": {
-                "camera_index": 0,
-                "camera_type": video_type,
-                "video_id": video_id,
-                "trigger": "live_lens_change",
-            },
+            "data": photo_data,
         }
         logger.info(
             "Live lens change triggers direct photo: video_id=%s, video_type=%s",

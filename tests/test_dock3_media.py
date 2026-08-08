@@ -553,6 +553,25 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertNotIn("photo", lens["data"])
         self.assertEqual(camera.calls, [])
 
+    def test_photo_after_lens_change_does_not_pass_video_type_as_camera_type(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        camera = FakeCameraController()
+        manager.set_camera_controller(camera)
+
+        result = manager._take_photo_after_lens_change(
+            base_msg("live_lens_change", {"video_type": "gimbal"}),
+            "EDGEGW001/0/gimbal",
+            "gimbal",
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(camera.calls), 1)
+        photo_data = camera.calls[0][1]["data"]
+        self.assertNotIn("camera_type", photo_data)
+        self.assertEqual(photo_data["video_type"], "gimbal")
+        self.assertEqual(photo_data["live_lens_type"], "gimbal")
+
     def test_live_quality_change_reports_failure_when_ffmpeg_restart_fails(self):
         events = []
         states = []
