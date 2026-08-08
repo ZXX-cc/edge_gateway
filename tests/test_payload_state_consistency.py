@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import sys
 import types
 import os
@@ -748,6 +749,57 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)
+
+    def test_viewlink_library_resolution_prefers_configured_sdk_dir(self):
+        with tempfile.TemporaryDirectory() as sdk_dir:
+            library_name = GimbalControl._platform_library_names()[0]
+            library_path = os.path.join(sdk_dir, library_name)
+            with open(library_path, "wb") as handle:
+                handle.write(b"")
+
+            self.assertEqual(GimbalControl._resolve_library_path(sdk_dir), library_path)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux SDK fallback is only valid on Linux")
+    def test_viewlink_library_resolution_falls_back_to_project_arch_dir(self):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        expected = os.path.join(project_root, "ViewLink", "bin", "linux-x86_64", "libViewLink.so")
+
+        if os.uname().machine in {"x86_64", "amd64"}:
+            self.assertEqual(GimbalControl._resolve_library_path(project_root), expected)
+        else:
+            self.assertIn("ViewLink", GimbalControl._resolve_library_path(project_root))
+
+    def test_viewlink_initialize_uses_library_parent_as_runtime_dir(self):
+        with tempfile.TemporaryDirectory() as sdk_dir:
+            library_name = GimbalControl._platform_library_names()[0]
+            library_path = os.path.join(sdk_dir, library_name)
+            with open(library_path, "wb") as handle:
+                handle.write(b"")
+            runtime_dir = os.path.realpath(os.path.dirname(os.path.abspath(library_path)))
+            original_cwd = os.getcwd()
+
+            class FakeLoadedViewLinkLib:
+                def __init__(self):
+                    self.version_cwd = None
+
+                def GetSDKVersion(self):
+                    self.version_cwd = os.getcwd()
+                    return b"test-viewlink"
+
+                def VLK_Init(self):
+                    return 0
+
+            fake_lib = FakeLoadedViewLinkLib()
+            direct_payload = GimbalControl(sdk_dir, "127.0.0.1", 37260)
+
+            with mock.patch.object(GimbalControl, "_define_function_signatures", return_value=None), \
+                    mock.patch("src.modules.gimbal_control.ctypes.CDLL", return_value=fake_lib):
+                result = direct_payload.initialize()
+
+            self.assertTrue(result["success"])
+            self.assertEqual(os.path.realpath(direct_payload._sdk_runtime_dir), runtime_dir)
+            self.assertEqual(os.path.realpath(fake_lib.version_cwd), runtime_dir)
+            self.assertEqual(os.getcwd(), original_cwd)
 
     def test_viewlink_connect_can_enable_device_status_callback_explicitly(self):
         direct_payload = GimbalControl(

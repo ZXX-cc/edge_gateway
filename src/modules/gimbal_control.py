@@ -10,6 +10,7 @@ modules/gimbal_control.py
 - 拍摄控制（拍照、录像）
 """
 import ctypes
+import platform
 from ctypes import c_char, c_int, c_short, c_void_p, c_char_p, CFUNCTYPE, Structure, Union, POINTER
 import os
 import shutil
@@ -202,6 +203,7 @@ class GimbalControl:
             raise ValueError("ViewLink port must be configured in payload.devices.gimbal.channels.control.port")
 
         self.sdk_dir = self._resolve_sdk_dir(sdk_dir)
+        self._sdk_runtime_dir = self.sdk_dir
         self.gimbal_ip = gimbal_ip
         self.gimbal_port = int(gimbal_port)
         self.register_dev_status_callback = self._bool_config(register_dev_status_callback)
@@ -269,11 +271,49 @@ class GimbalControl:
         project_root = Path(__file__).resolve().parents[2]
         return str((project_root / path).resolve())
 
+    @staticmethod
+    def _platform_library_names() -> list[str]:
+        """Return ViewLink library filenames for the current OS."""
+        if os.name == "nt":
+            return ["ViewLink.dll"]
+        system = platform.system().lower()
+        if system == "darwin":
+            return ["libViewLink.dylib", "libViewLink.so", "ViewLink.dll"]
+        return ["libViewLink.so", "ViewLink.dll"]
+
+    @classmethod
+    def _resolve_library_path(cls, sdk_dir: str) -> str:
+        """Find a ViewLink dynamic library without changing public config keys."""
+        root = Path(sdk_dir)
+        candidates: list[Path] = []
+        for name in cls._platform_library_names():
+            candidates.append(root / name)
+
+        if platform.system().lower() == "linux":
+            machine = platform.machine().lower()
+            if machine in {"x86_64", "amd64"}:
+                arch_dirs = ["linux-x86_64"]
+            elif machine in {"aarch64", "arm64"}:
+                arch_dirs = ["linux-aarch64", "linux-arm64"]
+            else:
+                arch_dirs = []
+            project_root = Path(__file__).resolve().parents[2]
+            for arch_dir in arch_dirs:
+                for name in cls._platform_library_names():
+                    candidates.append(root / "bin" / arch_dir / name)
+                    candidates.append(project_root / "ViewLink" / "bin" / arch_dir / name)
+
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        names = ", ".join(cls._platform_library_names())
+        raise FileNotFoundError(f"ViewLink library not found under {sdk_dir}; expected one of: {names}")
+
     def _call_sdk(self, function_name: str, *args):
         """从 SDK 目录调用依赖 cwd 的 ViewLink SDK 函数。"""
         if not self._lib:
             raise RuntimeError("SDK 未加载")
-        with _sdk_working_directory(self.sdk_dir):
+        with _sdk_working_directory(self._sdk_runtime_dir):
             return getattr(self._lib, function_name)(*args)
 
     def log(self, message: str, level: str = "INFO"):
@@ -302,19 +342,22 @@ class GimbalControl:
             return result
 
         try:
-            # 切换到 SDK 目录
-            with _sdk_working_directory(self.sdk_dir):
-                self.log(f"切换到 SDK 目录: {self.sdk_dir}")
+            library_path = self._resolve_library_path(self.sdk_dir)
+            self._sdk_runtime_dir = str(Path(library_path).resolve().parent)
+
+            # 切换到 SDK 运行目录
+            with _sdk_working_directory(self._sdk_runtime_dir):
+                self.log(f"切换到 SDK 运行目录: {self._sdk_runtime_dir}")
 
                 # 清理 VLKLog 目录
-                vlklog_path = os.path.join(self.sdk_dir, "VLKLog")
+                vlklog_path = os.path.join(self._sdk_runtime_dir, "VLKLog")
                 if os.path.exists(vlklog_path):
                     shutil.rmtree(vlklog_path)
                     self.log("清理 VLKLog 目录")
 
                 # 加载库
-                self._lib = ctypes.WinDLL("./ViewLink.dll") if os.name == "nt" else ctypes.CDLL("./ViewLink.dll")
-                self.log("加载 ViewLink.dll 成功")
+                self._lib = ctypes.WinDLL(library_path) if os.name == "nt" else ctypes.CDLL(library_path)
+                self.log(f"加载 ViewLink SDK 库成功: {library_path}")
 
                 # 定义函数签名
                 self._define_function_signatures()

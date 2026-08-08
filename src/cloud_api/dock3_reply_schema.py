@@ -120,6 +120,48 @@ RESULT_ONLY_SERVICE_METHODS = frozenset({
     "hms_clear",
 })
 
+PAYLOAD_RESULT_ONLY_SERVICE_METHODS = frozenset({
+    "gimbalRotate",
+    "camera_screen_drag",
+    "drc_light_calibration",
+    "drc_light_fine_tuning_set",
+    "drc_speaker_tts_set",
+    "drc_speaker_play_volume_set",
+    "payload_authority_grab",
+    "payload_authority_release",
+    "psdk_ui_resource_upload_result",
+    "psdk_floating_window_text",
+    "psdk_widget_value_set",
+    "psdk_input_box_text_set",
+    "speaker_replay",
+    "speaker_play_mode_set",
+    "speaker_play_stop",
+    "speaker_audio_play_start",
+    "speaker_tts_play_start",
+    "speaker_play_volume_set",
+    "camera_frame_zoom",
+    "camera_mode_switch",
+    "camera_photo_take",
+    "camera_photo_stop",
+    "camera_recording_start",
+    "camera_recording_stop",
+    "camera_focal_length_set",
+    "camera_exposure_set",
+    "camera_focus_mode_set",
+    "camera_focus_value_set",
+    "camera_point_focus_action",
+    "camera_exposure_mode_set",
+    "camera_aim",
+    "camera_screen_split",
+    "gimbal_reset",
+    "camera_look_at",
+    "photo_storage_set",
+    "video_storage_set",
+    "ir_metering_mode_set",
+    "ir_metering_point_set",
+    "ir_metering_area_set",
+})
+
 TOP_LEVEL_FIELD_ALLOWLIST_BY_METHOD: Dict[str, Set[str]] = {
     "gateway_state_query": {"state", "ready"},
     "fileupload_list": {"total", "page", "page_size", "module_list", "logs", "list"},
@@ -172,6 +214,18 @@ def _sanitize_status_output(output: Any) -> Dict[str, Any]:
     return sanitized
 
 
+def _payload_failure_output(reply: dict, data: Dict[str, Any]) -> Dict[str, Any]:
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    status = output.get("status") or ("ok" if _result(data) == 0 else TASK_STATUS_FAILED)
+    if status not in CMD_TASK_STATUSES:
+        status = TASK_STATUS_FAILED
+    sanitized: Dict[str, Any] = {"status": status}
+    reason = output.get("reason") or output.get("message") or reply.get("msg") or data.get("reason")
+    if isinstance(reason, str) and reason:
+        sanitized["reason"] = reason[:240]
+    return sanitized
+
+
 def _sanitize_allowlisted_data(
     method: str,
     data: Dict[str, Any],
@@ -221,7 +275,10 @@ def sanitize_services_reply(reply: dict) -> Tuple[dict, List[str]]:
     top_level_allowlist = _top_level_allowlist_for_method(method)
 
     if method in RESULT_ONLY_SERVICE_METHODS:
-        sanitized["data"] = {"result": _result(data)}
+        sanitized_data = {"result": _result(data)}
+        if method in PAYLOAD_RESULT_ONLY_SERVICE_METHODS and _result(data) != 0:
+            sanitized_data["output"] = _payload_failure_output(reply, data)
+        sanitized["data"] = sanitized_data
     elif method in CMD_STATUS_REPLY_METHODS or method in STATUS_ONLY_SERVICE_METHODS:
         sanitized["data"] = {
             "output": _sanitize_status_output(data.get("output")),
