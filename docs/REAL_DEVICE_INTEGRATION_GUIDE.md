@@ -383,6 +383,13 @@ rtk:
 
 不使用直播时不需要配置 `media.video_sources`，也不要启动直播任务。需要直播时，再把现场提供的真实 RTSP/HTTP 地址写入 `media.video_sources`。不使用 RTK 时保持 `rtk.enabled: false`。使用 F9P 基准站时配置 `sources.F9P` 的 TCP 地址即可；使用网络差分时配置 `sources.NTRIP` 的挂载点、用户名和密码；`active_source: "auto"` 会按 `priority` 自动选择，数值越大越优先。
 
+RTK 逻辑已内置在当前项目：
+
+- `src/modules/rtk_module.py` 负责 RTK 状态、GGA 生成、源切换和 MAVLink RTCM 注入。
+- `src/modules/rtk_forwarder/` 负责 F9P TCP/NTRIP 连接、RTCM3 帧解析、CRC 校验和多源热备。
+- `RTKF9P/` 目录仅作为历史参考，不参与当前项目运行时导入。
+- 主飞控 MAVLink 当前为按需连接；RTK 模块随飞机主 MAVLink dispatcher 启动，`rtk.enabled=false` 时不会连接 F9P 或 NTRIP。
+
 ## 6. Windows 真机连接和网络检查
 
 ### 6.1 连接机巢

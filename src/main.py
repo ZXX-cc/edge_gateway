@@ -50,6 +50,7 @@ from src.modules.mode_control import ModeControl
 from src.modules.telemetry_module import TelemetryModule
 from src.modules.drone_nest_module import DroneNestModule
 from src.modules.waypoint_manager import WaypointManager
+from src.modules.rtk_module import RTKModule
 from src.mavlink.telemetry import TelemetryProcessor
 from src.device.manager import DeviceManager
 from src.mission.manager import MissionManager
@@ -277,6 +278,7 @@ class EdgeGateway:
         self.mode_control = None
         self.telemetry_module = None
         self.nest_module = None
+        self.rtk_module = None
         self.gimbal_control = None
         self.spectral_camera = None
         self.payload_config = None
@@ -886,6 +888,10 @@ class EdgeGateway:
         self.mode_control = self.mode_control or ModeControl()
         self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
         self.waypoint_manager = self.waypoint_manager or WaypointManager()
+        self.rtk_module = self.rtk_module or RTKModule(
+            Config.get('rtk', {}) or {},
+            telemetry_module=self.telemetry_module,
+        )
         self.nest_module = self.nest_module or DroneNestModule(
             protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
         )
@@ -906,6 +912,8 @@ class EdgeGateway:
             self.camera.set_telemetry_module(self.telemetry_module)
         if self.telemetry_module and self.telemetry:
             self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
+        if self.rtk_module:
+            self.rtk_module.set_telemetry_module(self.telemetry_module)
         if self.drc:
             self.drc.set_flight_control(self.flight_control)
             self.drc.set_mode_control(self.mode_control)
@@ -942,6 +950,7 @@ class EdgeGateway:
                 self.dispatcher.add_module(self.mode_control)
                 self.dispatcher.add_module(self.telemetry_module)
                 self.dispatcher.add_module(self.waypoint_manager)
+                self.dispatcher.add_module(self.rtk_module)
                 if not use_separate_nest_mavlink:
                     self.dispatcher.add_module(self.nest_module)
                     self.nest_module.dispatcher = self.dispatcher
@@ -950,6 +959,7 @@ class EdgeGateway:
                 self.dispatcher.register_hook('*', self.mode_control)
                 self.dispatcher.register_hook('*', self.telemetry_module)
                 self.dispatcher.register_hook('*', self.waypoint_manager)
+                self.dispatcher.register_hook('*', self.rtk_module)
                 if not use_separate_nest_mavlink:
                     self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
                     self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
@@ -1282,6 +1292,7 @@ class EdgeGateway:
                 self.mode_control,
                 self.telemetry_module,
                 self.waypoint_manager,
+                self.rtk_module,
             ]
             for module in device_side_modules:
                 if module:

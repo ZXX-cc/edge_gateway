@@ -471,6 +471,32 @@ payload:
             frame_duration_ms: 20
             volume: 40
 
+# --- RTK / RTCM 差分注入配置 ---
+rtk:
+  enabled: false # 默认关闭；开启后随飞机主 MAVLink 按需连接启动
+  active_source: "auto" # auto=按 priority 自动选源；也可填 F9P/NTRIP 等源名
+  min_inject_interval: 0.0 # RTCM 注入最小间隔秒数，0 表示不降频
+  sources:
+    F9P:
+      type: "tcp" # ZED-F9P 串口转 TCP 输出 RTCM3
+      host: ""
+      port: 8600
+      priority: 10
+      connect_timeout: 10.0
+    NTRIP:
+      type: "ntrip"
+      host: ""
+      port: 8002
+      mountpoint: ""
+      username: ""
+      password: ""
+      priority: 5
+      connect_timeout: 15.0
+  auto_switch:
+    enabled: false # true 时按距离/返航模式在起降源和巡航源之间切换
+    takeoff_landing_rtk: ["F9P"]
+    cruise_rtk: ["NTRIP"]
+
 # --- 数据保留策略 ---
 retention:
   telemetry_hours: 2 # 遥测数据保留时长(小时)

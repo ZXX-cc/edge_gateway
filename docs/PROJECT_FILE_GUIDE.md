@@ -127,7 +127,8 @@ src/core/connection.py
 | `src/modules/mode_control.py` | 模式管理和 GUIDED 位置控制，当前模式表偏 ArduPlane/QuadPlane |
 | `src/modules/drone_nest_module.py` | 自定义机巢 MAVLink 消息解析、状态回调和机巢命令发送 |
 | `src/modules/waypoint_manager.py` | MAVLink 航点上传、下载、校验、状态和数据库集成 |
-| `src/modules/rtk_module.py` | NTRIP、RTCM 注入和 RTK 状态 |
+| `src/modules/rtk_module.py` | RTK 多源热备、F9P TCP/NTRIP 差分源、RTCM3 解析、MAVLink RTCM 注入和 RTK 状态 |
+| `src/modules/rtk_forwarder/` | 从 `RTKF9P` 参考工程迁入的主项目内置 RTK 数据源池，不依赖 `RTKF9P/` 独立目录 |
 | `src/modules/gimbal_control.py` | ViewLink 云台 SDK 封装，偏真实云台控制 |
 | `src/modules/log_manager.py` | 设备日志接口 |
 | `src/modules/flysafe_manager.py` | 解禁证书缓存和开关 |
