@@ -474,11 +474,23 @@ payload:
 # --- RTK/NTRIP配置 ---
 rtk:
   enabled: false # 是否启用RTK差分定位
-  host: "" # NTRIP服务器地址
-  port: 8002 # NTRIP服务器端口
-  mountpoint: "" # NTRIP挂载点
-  username: "" # NTRIP用户名
-  password: "" # NTRIP密码
+  active_source: "auto" # auto=按priority自动选择，也可指定 F9P/NTRIP
+  min_inject_interval: 0.0 # RTCM注入最小间隔(秒)，0=不降频
+  sources:
+    F9P:
+      type: "tcp" # F9P基准站串转网TCP源，只需要host/port
+      host: "" # 示例: "192.168.1.13"
+      port: 8600
+      priority: 10
+      connect_timeout: 10.0
+    NTRIP:
+      type: "ntrip"
+      host: "" # NTRIP服务器地址
+      port: 8002 # NTRIP服务器端口
+      mountpoint: "" # NTRIP挂载点
+      username: "" # NTRIP用户名
+      password: "" # NTRIP密码
+      priority: 5
 
 # --- 数据保留策略 ---
 retention:

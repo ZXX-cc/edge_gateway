@@ -71,6 +71,78 @@ DEFAULT_GGA = generate_gga(BEIJING_LAT, BEIJING_LON, BEIJING_ALT)
 TIMEOUT_INTERVAL = 30
 
 
+def _normalize_rtk_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """将旧扁平 RTK 配置转换为参考 RTKF9P 的命名源配置。"""
+    cfg = dict(cfg or {})
+    if "sources" in cfg and isinstance(cfg.get("sources"), dict):
+        normalized = dict(cfg)
+        normalized["enabled"] = bool(cfg.get("enabled", False))
+        normalized["active_source"] = cfg.get("active_source", "auto") or "auto"
+        normalized["min_inject_interval"] = float(cfg.get("min_inject_interval", 0.0) or 0.0)
+        normalized["sources"] = {
+            str(name): _normalize_source_config(source_cfg)
+            for name, source_cfg in cfg.get("sources", {}).items()
+            if isinstance(source_cfg, dict)
+        }
+        return normalized
+
+    source_mode = str(cfg.get("rtk_source", cfg.get("source", "ntrip")) or "ntrip").lower()
+    primary = str(cfg.get("failover_primary", source_mode) or source_mode).lower()
+    sources: Dict[str, Dict[str, Any]] = {}
+
+    if source_mode in ("f9p", "tcp", "auto"):
+        f9p_hosts = str(cfg.get("f9p_hosts") or cfg.get("f9p_host") or "").strip()
+        f9p_ports = str(cfg.get("f9p_ports") or cfg.get("f9p_port") or 8600).strip()
+        host_list = [item.strip() for item in f9p_hosts.split(",") if item.strip()]
+        port_list = [item.strip() for item in f9p_ports.split(",") if item.strip()]
+        if len(port_list) == 1 and len(host_list) > 1:
+            port_list = port_list * len(host_list)
+        for index, (host, port_text) in enumerate(zip(host_list, port_list)):
+            name = f"F9P-{index + 1}" if len(host_list) > 1 else "F9P"
+            priority = 10 if primary in ("f9p", "tcp") else 5 if source_mode == "auto" else 10
+            sources[name] = {
+                "type": "tcp",
+                "host": host,
+                "port": int(port_text),
+                "priority": priority,
+            }
+
+    if source_mode in ("ntrip", "auto"):
+        priority = 10 if primary == "ntrip" else 5 if source_mode == "auto" else 10
+        sources["NTRIP"] = {
+            "type": "ntrip",
+            "host": cfg.get("host", ""),
+            "port": int(cfg.get("port", 0) or 0),
+            "mountpoint": cfg.get("mountpoint", ""),
+            "username": cfg.get("username", ""),
+            "password": cfg.get("password", ""),
+            "priority": priority,
+        }
+
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "active_source": cfg.get("active_source", "auto") or "auto",
+        "rtk_source": source_mode,
+        "sources": sources,
+        "min_inject_interval": float(cfg.get("min_inject_interval", 0.0) or 0.0),
+        "auto_switch": cfg.get("auto_switch", {}) or {},
+    }
+
+
+def _normalize_source_config(source_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """统一单个 RTK 源字段，便于后续启动和状态展示。"""
+    normalized = dict(source_cfg or {})
+    normalized["type"] = str(normalized.get("type", "ntrip") or "ntrip").lower()
+    normalized["host"] = str(normalized.get("host", "") or "")
+    normalized["port"] = int(normalized.get("port", 0) or 0)
+    normalized["priority"] = int(normalized.get("priority", 0) or 0)
+    if normalized["type"] == "ntrip":
+        normalized["mountpoint"] = str(normalized.get("mountpoint", "") or "")
+        normalized["username"] = str(normalized.get("username", "") or "")
+        normalized["password"] = str(normalized.get("password", "") or "")
+    return normalized
+
+
 class NTRIPClient:
     """NTRIP 客户端(支持实时位置更新)"""
 
@@ -271,6 +343,105 @@ class NTRIPClient:
         print("[RTK] 已断开连接")
 
 
+class TcpRTCMClient:
+    """F9P/TCP RTCM 客户端，直接接收基准站输出的 RTCM3 字节流。"""
+
+    def __init__(self, host: str, port: int, connect_timeout: float = 10.0):
+        self.host = host
+        self.port = port
+        self.connect_timeout = float(connect_timeout or 10.0)
+        self.socket: Optional[socket.socket] = None
+        self.connected = False
+        self.running = False
+        self.error = False
+        self.received_packets = 0
+        self.total_bytes = 0
+        self._disconnect_reason = None
+
+    def connect(self) -> bool:
+        """连接到 F9P TCP RTCM 数据源。"""
+        try:
+            self.connected = False
+            self.error = False
+            self.received_packets = 0
+            self.total_bytes = 0
+            if self.socket:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(self.connect_timeout)
+            print(f"[RTK] 正在连接 F9P {self.host}:{self.port}...")
+            self.socket.connect((self.host, self.port))
+            self.socket.setblocking(False)
+            self.connected = True
+            print("[RTK] ✅ F9P TCP 连接成功")
+            return True
+        except Exception as e:
+            self.error = True
+            self._disconnect_reason = f"F9P TCP连接失败: {e}"
+            print(f"[RTK] ✗ {self._disconnect_reason}")
+            return False
+
+    def receive_data(self) -> Optional[bytes]:
+        """接收 F9P 输出的 RTCM 数据。"""
+        if not self.connected or not self.socket:
+            return None
+
+        try:
+            data = self.socket.recv(4096)
+            if data:
+                self.received_packets += 1
+                self.total_bytes += len(data)
+                return data
+            self.connected = False
+            self._disconnect_reason = "F9P TCP连接已关闭"
+            print("[RTK] 🔴 F9P TCP连接已关闭")
+            return None
+        except socket.error as e:
+            if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
+                return None
+            self.connected = False
+            self._disconnect_reason = f"F9P TCP接收错误: {e}"
+            print(f"[RTK] ❌ {self._disconnect_reason}")
+            return None
+        except Exception as e:
+            self.connected = False
+            self._disconnect_reason = f"F9P TCP接收循环错误: {e}"
+            print(f"[RTK] ❌ {self._disconnect_reason}")
+            return None
+
+    def receive_loop(self, callback: Callable[[bytes], None]):
+        """接收循环。"""
+        print("[RTK] 开始接收 F9P RTCM 数据...")
+        while self.running and self.connected:
+            try:
+                data = self.receive_data()
+                if data:
+                    callback(data)
+                time.sleep(0.01)
+            except Exception as e:
+                self.connected = False
+                self._disconnect_reason = f"F9P TCP接收循环错误: {e}"
+                print(f"[RTK] ❌ {self._disconnect_reason}")
+                break
+        print("[RTK] F9P 接收循环结束")
+
+    def disconnect(self):
+        """断开 F9P TCP 连接。"""
+        self.connected = False
+        self.running = False
+        if self.socket:
+            try:
+                self.socket.close()
+            except Exception:
+                pass
+            self.socket = None
+        print(f"[RTK] F9P接收结束,总计: {self.total_bytes} bytes, {self.received_packets} 个数据包")
+
+
 class RTKModule(BaseModule):
     """RTK 定位模块 - 支持实时GPS和测试模式"""
 
@@ -278,8 +449,8 @@ class RTKModule(BaseModule):
                  telemetry_module=None):
         super().__init__("RTKModule")
 
-        self.ntrip_config = ntrip_config or {}
-        self.ntrip_client: Optional[NTRIPClient] = None
+        self.ntrip_config = _normalize_rtk_config(ntrip_config or {})
+        self.ntrip_client: Optional[Any] = None
         self.receive_thread: Optional[Thread] = None
 
         # ⭐ 关键：保存telemetry_module引用
@@ -299,17 +470,26 @@ class RTKModule(BaseModule):
             'rtcm_packets_received': 0,
             'rtcm_packets_sent': 0,
             'last_rtcm_time': 0.0,
-            'enabled': self.ntrip_config.get('enabled', False)
+            'enabled': self.ntrip_config.get('enabled', False),
+            'rtk_source': None,
+            'active_source': self.ntrip_config.get('active_source', 'auto'),
         }
 
         self.total_rtcm_bytes = 0
         self.start_time = 0.0
+        self._min_inject_interval = float(self.ntrip_config.get("min_inject_interval", 0.0) or 0.0)
+        self._last_inject_time = 0.0
+        self._active_source_name: Optional[str] = None
 
         # ⭐ 根据是否有telemetry_module判断模式
         if self.telemetry_module:
             self.log(f"🚁 生产模式:使用实时GPS位置（来自TelemetryModule）")
         else:
             self.log(f"🧪 测试模式:使用固定北京坐标 ({BEIJING_LAT:.4f}, {BEIJING_LON:.4f})")
+
+        sources = self.ntrip_config.get("sources", {})
+        if sources:
+            self.log(f"📡 RTK数据源配置: {len(sources)} 个——{', '.join(sources.keys())}")
 
     def set_telemetry_module(self, telemetry_module):
         """设置TelemetryModule引用（可选，构造函数已支持）"""
@@ -329,7 +509,7 @@ class RTKModule(BaseModule):
         super().on_stop()
 
     def start_ntrip(self) -> bool:
-        """启动 NTRIP 客户端"""
+        """启动 RTK 数据源，支持 F9P TCP 和 NTRIP。"""
         with self.lock:
             self.rtk_status['connection_error'] = None
             self.rtk_status['last_error'] = None
@@ -343,16 +523,17 @@ class RTKModule(BaseModule):
                 self.rtk_status['connection_error'] = error_msg
             return False
 
-        required_keys = ['host', 'port', 'mountpoint', 'username', 'password']
-        if not all(k in self.ntrip_config for k in required_keys):
-            error_msg = f"NTRIP配置缺少必要字段"
+        source_name, source_config = self._select_source_config()
+        if not source_name or not source_config:
+            error_msg = "RTK配置缺少可用数据源"
             self.log(error_msg, "ERROR")
             with self.lock:
                 self.rtk_status['connection_error'] = error_msg
             return False
 
         try:
-            self.log("正在启动 NTRIP 客户端...")
+            source_type = source_config.get("type", "ntrip")
+            self.log(f"正在启动 RTK 数据源: {source_name} ({source_type})...")
 
             # ⭐ 关键修改：获取初始位置（实时或固定）
             position = self._get_current_position()
@@ -365,19 +546,12 @@ class RTKModule(BaseModule):
             self.log(f"📍 使用GPS位置: 纬度={position['lat']:.6f}, "
                      f"经度={position['lon']:.6f}, 高度={position['alt']:.1f}m")
 
-            self.ntrip_client = NTRIPClient(
-                host=self.ntrip_config['host'],
-                port=self.ntrip_config['port'],
-                mountpoint=self.ntrip_config['mountpoint'],
-                username=self.ntrip_config['username'],
-                password=self.ntrip_config['password'],
-                gga=initial_gga
-            )
-
-            self.ntrip_client.set_gga_update_callback(self._get_current_gga)
+            self.ntrip_client = self._create_source_client(source_name, source_config, initial_gga)
+            if isinstance(self.ntrip_client, NTRIPClient):
+                self.ntrip_client.set_gga_update_callback(self._get_current_gga)
 
             if not self.ntrip_client.connect():
-                error_msg = "NTRIP连接失败"
+                error_msg = f"RTK数据源连接失败: {source_name}"
                 self.log(error_msg, "ERROR")
 
                 with self.lock:
@@ -389,6 +563,8 @@ class RTKModule(BaseModule):
             with self.lock:
                 self.rtk_status['authenticated'] = True
                 self.rtk_status['connection_error'] = None
+                self.rtk_status['rtk_source'] = source_name
+                self.rtk_status['active_source'] = source_name
 
             self.ntrip_client.running = True
             self.receive_thread = Thread(
@@ -402,17 +578,18 @@ class RTKModule(BaseModule):
                 self.rtk_status['connected'] = True
 
             self.start_time = time.time()
+            self._active_source_name = source_name
 
             # ⭐ 根据模式显示不同消息
             if self.telemetry_module:
-                self.log("✅ NTRIP 客户端已启动（使用实时GPS位置）")
+                self.log(f"✅ RTK数据源已启动: {source_name}（使用实时GPS位置）")
             else:
-                self.log("✅ NTRIP 客户端已启动（🧪 测试模式:固定北京坐标）")
+                self.log(f"✅ RTK数据源已启动: {source_name}（🧪 测试模式:固定北京坐标）")
 
             return True
 
         except Exception as e:
-            error_msg = f"启动 NTRIP 失败: {e}"
+            error_msg = f"启动 RTK 数据源失败: {e}"
             self.log(error_msg, "ERROR")
 
             with self.lock:
@@ -420,6 +597,69 @@ class RTKModule(BaseModule):
                 self.rtk_status['last_error'] = str(e)
 
             return False
+
+    def _select_source_config(self) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """按 active_source 或 priority 选择 RTK 数据源。"""
+        sources = self.ntrip_config.get("sources", {}) or {}
+        active_source = str(self.ntrip_config.get("active_source", "auto") or "auto")
+
+        if active_source != "auto":
+            source_config = sources.get(active_source)
+            if source_config and self._source_has_required_fields(active_source, source_config):
+                return active_source, source_config
+            if source_config:
+                self.log(f"⚠️ 指定RTK源配置不完整: {active_source}，回退到自动选择", "WARNING")
+            else:
+                self.log(f"⚠️ 指定RTK源不存在: {active_source}，回退到自动选择", "WARNING")
+
+        valid_sources = [
+            (name, cfg)
+            for name, cfg in sources.items()
+            if self._source_has_required_fields(name, cfg)
+        ]
+        if not valid_sources:
+            return None, None
+        valid_sources.sort(key=lambda item: int(item[1].get("priority", 0)), reverse=True)
+        return valid_sources[0]
+
+    def _source_has_required_fields(self, name: str, source_config: Dict[str, Any]) -> bool:
+        """检查源配置是否具备启动所需字段。"""
+        source_type = source_config.get("type", "ntrip")
+        if source_type == "tcp":
+            ok = bool(source_config.get("host") and source_config.get("port"))
+        elif source_type == "ntrip":
+            ok = all(source_config.get(k) for k in ("host", "port", "mountpoint", "username", "password"))
+        else:
+            self.log(f"RTK源 {name} 类型不支持: {source_type}", "ERROR")
+            return False
+        if not ok:
+            self.log(f"RTK源 {name} 配置不完整，已跳过", "WARNING")
+        return ok
+
+    def _create_source_client(
+        self,
+        source_name: str,
+        source_config: Dict[str, Any],
+        initial_gga: str,
+    ):
+        """按源类型创建 RTK 客户端。"""
+        source_type = source_config.get("type", "ntrip")
+        if source_type == "tcp":
+            return TcpRTCMClient(
+                host=source_config["host"],
+                port=source_config["port"],
+                connect_timeout=float(source_config.get("connect_timeout", 10.0) or 10.0),
+            )
+        if source_type == "ntrip":
+            return NTRIPClient(
+                host=source_config["host"],
+                port=source_config["port"],
+                mountpoint=source_config["mountpoint"],
+                username=source_config["username"],
+                password=source_config["password"],
+                gga=initial_gga,
+            )
+        raise ValueError(f"RTK源 {source_name} 类型不支持: {source_type}")
 
     def _get_current_position(self) -> Dict[str, float]:
         """
@@ -483,20 +723,25 @@ class RTKModule(BaseModule):
         return gga
 
     def stop_ntrip(self, reason: str = "用户手动停止"):
-        """停止 NTRIP 客户端"""
+        """停止当前 RTK 数据源客户端。"""
         if self.ntrip_client:
             self.ntrip_client.running = False
             self.ntrip_client.disconnect()
 
             if self.receive_thread:
                 self.receive_thread.join(timeout=2)
+                self.receive_thread = None
 
             with self.lock:
                 self.rtk_status['connected'] = False
                 self.rtk_status['authenticated'] = False
                 self.rtk_status['disconnect_reason'] = reason
+                self.rtk_status['rtk_source'] = None
+                self.rtk_status['active_source'] = self.ntrip_config.get("active_source", "auto")
 
-            self.log(f"NTRIP 客户端已停止: {reason}")
+            self.ntrip_client = None
+            self._active_source_name = None
+            self.log(f"RTK数据源客户端已停止: {reason}")
 
     def _on_rtcm_data(self, data: bytes):
         """接收到 RTCM 数据的回调"""
@@ -504,10 +749,17 @@ class RTKModule(BaseModule):
             self.total_rtcm_bytes += len(data)
             self.rtk_status['rtcm_packets_received'] += 1
             self.rtk_status['last_rtcm_time'] = time.time()
+            pkt_count = self.rtk_status['rtcm_packets_received']
 
         # ⭐ 添加日志：确认回调被触发
-        if self.rtk_status['rtcm_packets_received'] % 10 == 0:
-            self.log(f"📥 收到RTCM数据包 #{self.rtk_status['rtcm_packets_received']} ({len(data)} bytes)", "DEBUG")
+        if pkt_count % 10 == 0:
+            self.log(f"📥 收到RTCM数据包 #{pkt_count} ({len(data)} bytes)", "DEBUG")
+
+        if self._min_inject_interval > 0:
+            now = time.time()
+            if now - self._last_inject_time < self._min_inject_interval:
+                return
+            self._last_inject_time = now
 
         # 注入到飞控
         self._inject_rtcm_to_mavlink(data)
@@ -646,6 +898,8 @@ class RTKModule(BaseModule):
 
         diagnostics = {
             "timestamp": time.time(),
+            "connected": status['connected'],
+            "rtk_source": status.get("active_source"),
             "ntrip_connected": status['connected'],
             "rtcm_flow": {
                 "receiving": status['rtcm_packets_received'] > 0,
@@ -672,15 +926,15 @@ class RTKModule(BaseModule):
         if not status['connected']:
             diagnostics['possible_issues'].append({
                 "level": "ERROR",
-                "message": "NTRIP未连接",
-                "suggestion": "检查网络和账号配置"
+                "message": "RTK数据源未连接",
+                "suggestion": "检查F9P TCP地址或NTRIP账号配置"
             })
 
         if status['rtcm_packets_received'] == 0:
             diagnostics['possible_issues'].append({
                 "level": "ERROR",
                 "message": "未接收到RTCM数据",
-                "suggestion": "检查挂载点和GGA坐标"
+                "suggestion": "F9P源检查基准站RTCM3输出；NTRIP源检查挂载点和GGA坐标"
             })
 
         if status['rtcm_packets_sent'] == 0 and status['rtcm_packets_received'] > 0:
@@ -724,6 +978,8 @@ class RTKModule(BaseModule):
             status['rtcm_rate_bps'] = 0
 
         status['total_rtcm_bytes'] = self.total_rtcm_bytes
+        status['active_source'] = self._active_source_name or self.ntrip_config.get('active_source', 'auto')
+        status['sources'] = self._sources_status()
 
         # GPS定位类型
         fix_type_map = {
@@ -753,9 +1009,109 @@ class RTKModule(BaseModule):
 
         return status
 
+    def _sources_status(self) -> list[Dict[str, Any]]:
+        """返回所有 RTK 源的配置摘要，不暴露密码。"""
+        result = []
+        for name, source_config in (self.ntrip_config.get("sources", {}) or {}).items():
+            item = {
+                "name": name,
+                "type": source_config.get("type", ""),
+                "host": source_config.get("host", ""),
+                "port": source_config.get("port", 0),
+                "priority": source_config.get("priority", 0),
+                "active": name == self._active_source_name,
+                "configured": self._source_configured(source_config),
+            }
+            if source_config.get("type") == "ntrip":
+                item["mountpoint"] = source_config.get("mountpoint", "")
+                item["username"] = source_config.get("username", "")
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _source_configured(source_config: Dict[str, Any]) -> bool:
+        """静默判断源配置是否完整，用于状态查询。"""
+        source_type = source_config.get("type", "ntrip")
+        if source_type == "tcp":
+            return bool(source_config.get("host") and source_config.get("port"))
+        if source_type == "ntrip":
+            return all(source_config.get(k) for k in ("host", "port", "mountpoint", "username", "password"))
+        return False
+
+    def get_rtk_source(self) -> str:
+        """获取当前活跃 RTK 源名。"""
+        return self._active_source_name or self.rtk_status.get("rtk_source") or self.ntrip_config.get("active_source", "auto")
+
+    def switch_to(self, name: str) -> bool:
+        """手动切换到指定 RTK 源。"""
+        sources = self.ntrip_config.get("sources", {}) or {}
+        if name not in sources:
+            self.log(f"RTK源不存在: {name}", "ERROR")
+            return False
+
+        old_active_source = self.ntrip_config.get("active_source", "auto")
+        was_connected = bool(self.rtk_status.get("connected"))
+        if was_connected:
+            self.stop_ntrip(f"切换RTK源到 {name}")
+
+        self.ntrip_config["active_source"] = name
+        self.rtk_status["active_source"] = name
+        if self.rtk_status.get("enabled", False):
+            if self.start_ntrip():
+                self.log(f"✅ 已切换到RTK源: {name}")
+                return True
+            self.ntrip_config["active_source"] = old_active_source
+            self.rtk_status["active_source"] = old_active_source
+            self.log(f"RTK源切换失败，已恢复配置: {old_active_source}", "ERROR")
+            return False
+
+        self.log(f"RTK未启用，已记录下次启动源: {name}")
+        return True
+
+    def switch_to_f9p(self) -> bool:
+        """切换到第一个 F9P/TCP 源。"""
+        for name, cfg in (self.ntrip_config.get("sources", {}) or {}).items():
+            if cfg.get("type") == "tcp" or "F9P" in name.upper():
+                return self.switch_to(name)
+        self.log("未找到 F9P/TCP RTK源", "ERROR")
+        return False
+
+    def switch_to_ntrip(self) -> bool:
+        """切换到第一个 NTRIP 源。"""
+        for name, cfg in (self.ntrip_config.get("sources", {}) or {}).items():
+            if cfg.get("type") == "ntrip":
+                return self.switch_to(name)
+        self.log("未找到 NTRIP RTK源", "ERROR")
+        return False
+
+    def is_rtk_ready(self) -> Dict[str, Any]:
+        """起飞前 RTK 状态检查。"""
+        status = self.get_rtk_status()
+        enabled = status.get("enabled", False)
+        receiving = status.get("rtcm_packets_received", 0) > 0
+        connected = status.get("connected", False)
+        success = bool(enabled and connected and receiving)
+        reasons = []
+        if not enabled:
+            reasons.append("RTK未启用")
+        if enabled and not connected:
+            reasons.append("RTK数据源未连接")
+        if connected and not receiving:
+            reasons.append("未收到RTCM差分数据")
+        return {
+            "success": success,
+            "message": "RTK就绪" if success else "；".join(reasons),
+            "data": {
+                "active_source": status.get("active_source"),
+                "connected": connected,
+                "receiving": receiving,
+                "rtcm_packets_received": status.get("rtcm_packets_received", 0),
+            },
+        }
+
     def set_config(self, config: Dict[str, Any]) -> bool:
         """
-        更新 NTRIP 配置
+        更新 RTK 配置，支持命名源 sources 和旧扁平 NTRIP 字段。
 
         Args:
             config: 新的配置字典
@@ -766,8 +1122,12 @@ class RTKModule(BaseModule):
         if self.rtk_status['connected']:
             self.stop_ntrip("配置更新")
 
-        self.ntrip_config.update(config)
-        self.rtk_status['enabled'] = config.get('enabled', False)
+        merged_config = dict(self.ntrip_config)
+        merged_config.update(config or {})
+        self.ntrip_config = _normalize_rtk_config(merged_config)
+        self.rtk_status['enabled'] = self.ntrip_config.get('enabled', False)
+        self.rtk_status['active_source'] = self.ntrip_config.get('active_source', 'auto')
+        self._min_inject_interval = float(self.ntrip_config.get("min_inject_interval", 0.0) or 0.0)
 
         if self.rtk_status['enabled']:
             return self.start_ntrip()
@@ -775,7 +1135,7 @@ class RTKModule(BaseModule):
         return True
 
     def get_config(self) -> Dict[str, Any]:
-        """获取当前NTRIP配置"""
+        """获取当前 RTK 配置。"""
         return self.ntrip_config.copy()
 
     def idle_task(self, dispatcher):
@@ -785,16 +1145,15 @@ class RTKModule(BaseModule):
         Args:
             dispatcher: MessageDispatcher实例
         """
-        if self.ntrip_client:
-            if not self.ntrip_client.connected:
-                with self.lock:
-                    if self.rtk_status['connected']:
-                        disconnect_reason = getattr(self.ntrip_client, '_disconnect_reason', '连接异常断开')
-                        self.rtk_status['connected'] = False
-                        self.rtk_status['authenticated'] = False
-                        self.rtk_status['connection_error'] = disconnect_reason
-                        self.rtk_status['disconnect_reason'] = disconnect_reason
-                        self.log(f"⚠️ RTK异常断开: {disconnect_reason}", "WARNING")
+        if self.ntrip_client and not self.ntrip_client.connected:
+            with self.lock:
+                if self.rtk_status['connected']:
+                    disconnect_reason = getattr(self.ntrip_client, '_disconnect_reason', '连接异常断开')
+                    self.rtk_status['connected'] = False
+                    self.rtk_status['authenticated'] = False
+                    self.rtk_status['connection_error'] = disconnect_reason
+                    self.rtk_status['disconnect_reason'] = disconnect_reason
+                    self.log(f"⚠️ RTK异常断开: {disconnect_reason}", "WARNING")
 
 
 # ==================== 工具函数 ====================
