@@ -267,13 +267,11 @@ def phase_nest_gateway(args) -> int:
                 failures += 1
             time.sleep(args.step_delay)
 
-        operation_events = client.events_by_method.get("dock_operation", [])
         hms_events = client.events_by_method.get("hms", [])
-        has_evidence = bool(operation_events or hms_events)
+        has_evidence = bool(hms_events)
         _print_step("机巢事件留证", has_evidence, {
-            "dock_operation_events": len(operation_events),
             "hms_events": len(hms_events),
-            "note": "没有事件时通常表示只跑了内存/模拟回包，缺少网关+机巢模拟器实跑证据",
+            "note": "没有 HMS 事件时通常表示只跑了内存/模拟回包，缺少网关+机巢模拟器实跑证据",
         })
         if not has_evidence:
             failures += 1

@@ -6,6 +6,8 @@ from web.mavlink.viewlink import (
     build_c1,
     build_c2,
     build_eo_dzoom_stop_frame,
+    build_focus_point_frame,
+    build_focus_value_frame,
     build_frame,
     build_ir_dzoom_in_frame,
     build_ir_dzoom_out_frame,
@@ -23,6 +25,7 @@ from web.mavlink.viewlink import (
 from web.mavlink.viewlink.protocol import (
     C1_START_RECORDING,
     C2_DEFOG_ON,
+    C2_FOCUS_TO,
     C2_TEMPERATURE_OUTPUT_INTERVAL,
     C2_TEMPERATURE_OUTPUT_ONCE,
     C2_TEMPERATURE_OUTPUT_STOP,
@@ -68,15 +71,24 @@ class ViewLinkProtocolV349Test(unittest.TestCase):
     def test_c1_and_c2_optical_control_frames(self):
         c1 = build_c1(operation=C1_START_RECORDING)
         c2 = build_c2(C2_ZOOM_TO, 42)
+        focus = build_focus_value_frame(5.0)
         defog = build_c2(C2_DEFOG_ON)
 
         self.assertEqual(c1[4], 0x1C)
         self.assertEqual(int.from_bytes(c1[5:7], "big"), C1_START_RECORDING << 6)
         self.assertEqual(c2[4:8], bytes([0x2C, C2_ZOOM_TO, 0x00, 0x2A]))
+        self.assertEqual(focus[4:8], bytes([0x2C, C2_FOCUS_TO, 0x00, 0x05]))
         self.assertEqual(defog[4:8], bytes([0x2C, C2_DEFOG_ON, 0x00, 0x00]))
         self.assertTrue(checksum_ok(c1))
         self.assertTrue(checksum_ok(c2))
+        self.assertTrue(checksum_ok(focus))
         self.assertTrue(checksum_ok(defog))
+
+    def test_visible_point_focus_frame_uses_e2_focus_point_command(self):
+        frame = build_focus_point_frame(100, -50)
+
+        self.assertEqual(frame[4:10], bytes([0x2E, 0x0D, 0x00, 0x64, 0xFF, 0xCE]))
+        self.assertTrue(checksum_ok(frame))
 
     def test_digital_zoom_frames_select_sensor_for_shared_stop_opcode(self):
         eo_stop = build_eo_dzoom_stop_frame()

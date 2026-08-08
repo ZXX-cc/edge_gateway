@@ -60,6 +60,7 @@ from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from web.mavlink.camera.mapping import build_camera_setting
+from web.mavlink.viewlink import build_focus_point_frame, build_focus_value_frame, frame_hex
 
 
 def message(method, data=None):
@@ -951,7 +952,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(reply["data"]["running"])
         self.assertFalse(reply["data"]["stopped"])
 
-    def test_camera_zoom_and_focus_mode_use_direct_payload_sdk_when_connected(self):
+    def test_camera_zoom_and_focus_controls_use_direct_payload_when_connected(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -963,13 +964,20 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             "focus_speed": 2,
             "focus_duration": 0,
         }))
+        point_focus = camera.handle_camera_point_focus_action(message("camera_point_focus_action", {
+            "x": 0.5,
+            "y": 0.5,
+        }))
 
         self.assertEqual(zoom["data"]["result"], 0)
         self.assertEqual(focus_mode["data"]["result"], 0)
-        self.assertEqual(focus_value["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(focus_value["data"]["result"], 0)
+        self.assertEqual(point_focus["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [
             ("zoom_to", 3.5),
             ("set_focus_mode", 1),
+            ("send_protocol_frames", [frame_hex(build_focus_value_frame(5))], 1.0),
+            ("send_protocol_frames", [frame_hex(build_focus_point_frame(0, 0))], 1.0),
         ])
 
     def test_camera_focus_rejects_invalid_mode_value_and_point_coordinates(self):
@@ -993,7 +1001,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(bad_point["data"]["result"], INVALID_COMMAND_FORMAT)
         self.assertEqual(direct_payload.calls, [])
 
-    def test_camera_point_focus_reports_unsupported_instead_of_auto_focus_fallback(self):
+    def test_camera_point_focus_uses_viewlink_focus_point_frame(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -1003,8 +1011,11 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             "y": 0.5,
         }))
 
-        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
-        self.assertEqual(direct_payload.calls, [])
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["protocol_point"], {"x": 0, "y": 0})
+        self.assertEqual(direct_payload.calls, [
+            ("send_protocol_frames", [frame_hex(build_focus_point_frame(0, 0))], 1.0),
+        ])
 
     def test_camera_focal_length_set_enables_eo_digital_zoom_before_zoom_to(self):
         camera = CameraController()

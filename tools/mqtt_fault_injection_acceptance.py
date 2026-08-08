@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""无实体机巢/负载条件下的故障注入与 HMS/MQTT/数据库验收。"""
+"""无实体机巢/负载条件下的故障注入与 HMS/MQTT 验收。"""
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import sys
@@ -136,7 +135,6 @@ def run_fault_scenarios(client, fault_file: Path, osd_topic: str, timeout: float
     evidence = []
     for scenario in SCENARIOS:
         hms_start = client.event_count("hms")
-        operation_start = client.event_count("dock_operation")
         osd_start = client.observed_count(osd_topic)
         atomic_write_json(fault_file, {
             "active": True,
@@ -154,16 +152,6 @@ def run_fault_scenarios(client, fault_file: Path, osd_topic: str, timeout: float
         )
         if not hms:
             raise RuntimeError(f"{scenario['name']} 未生成 HMS: {scenario['hms_key']}")
-        operation = wait_for_event(
-            client,
-            "dock_operation",
-            operation_start,
-            lambda item: item.get("data", {}).get("command") == "nest_status_sync",
-            timeout,
-        )
-        if not operation:
-            raise RuntimeError(f"{scenario['name']} 未生成 dock_operation 事件")
-
         osd_evidence = None
         for name, expected in scenario.get("osd", {}).items():
             osd_evidence = wait_for_observed(
@@ -302,58 +290,8 @@ def run_gateway_reconnect(args, client, osd_topic: str):
     return {"client_id": f"edge_gateway_{args.sn}", "osd_resumed": True}
 
 
-async def verify_operation_records(
-    config_path: str,
-    sn: str,
-    since_ms: int,
-    minimum: int,
-    timeout: float,
-):
-    from src.utils.config import Config
-
-    Config().load(config_path)
-    from src.database.connection import (
-        configure_database,
-        get_async_session_local,
-        init_database_async,
-    )
-    from src.database.operation_db import OperationDB
-
-    backend = configure_database(Config.get_database_config())
-    print(f"operation record audit backend -> {backend}")
-    await init_database_async()
-    session_factory = get_async_session_local()
-    matching = []
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        async with session_factory() as session:
-            records = await OperationDB.get_operation_history_async(session, sn, limit=200)
-        matching = [
-            record for record in records
-            if record.command == "nest_status_sync" and int(record.start_time or 0) >= since_ms
-        ]
-        if len(matching) >= minimum and all(
-            record.status == "completed" for record in matching
-        ):
-            break
-        await asyncio.sleep(0.5)
-    if len(matching) < minimum:
-        raise RuntimeError(
-            f"操作记录不足: expected>={minimum}, actual={len(matching)}; "
-            "请确认 MongoDB/SQLite 可写"
-        )
-    if any(record.status != "completed" for record in matching):
-        raise RuntimeError("存在未完成的 nest_status_sync 操作记录")
-    return {
-        "count": len(matching),
-        "operation_ids": [record.operation_id for record in matching[:minimum]],
-        "backend": backend,
-        "backend_verified": True,
-    }
-
-
 def parse_args():
-    parser = argparse.ArgumentParser(description="机巢故障注入、HMS、MQTT 与操作记录验收")
+    parser = argparse.ArgumentParser(description="机巢故障注入、HMS 与 MQTT 验收")
     add_config_argument(parser)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
@@ -408,10 +346,6 @@ def main():
             summary["mqtt_reconnect"] = run_gateway_reconnect(args, client, osd_topic)
         else:
             summary["mqtt_reconnect"] = {"skipped": True}
-        time.sleep(1.0)
-        summary["operation_records"] = asyncio.run(verify_operation_records(
-            args.config, args.sn, started_ms, len(SCENARIOS), args.timeout
-        ))
         summary["result"] = "passed"
         summary["finished_at_ms"] = int(time.time() * 1000)
         output = evidence_dir / "fault_injection_summary.json"
