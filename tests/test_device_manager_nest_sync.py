@@ -290,23 +290,20 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             target=lambda: result.setdefault("reply", self.manager.handle_cover_close(self._cover_msg("cover_close")))
         )
         worker.start()
-        time.sleep(0.05)
+        worker.join(timeout=1.0)
 
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result["reply"]["data"]["result"], 0)
+        self.assertEqual(result["reply"]["data"]["output"]["status"], "ok")
         self.assertTrue(self.manager._nest_module.commands)
         self.assertEqual(self.manager.get_property("cover_state"), 1)
         self.assertIn("cover_state", self.manager._pending_nest_command_targets)
-        self.assertNotIn("reply", result)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=1))
         self.assertEqual(self.manager.get_property("cover_state"), 1)
         self.assertIn("cover_state", self.manager._pending_nest_command_targets)
-        self.assertNotIn("reply", result)
 
         self.manager.update_from_nest(nest_snapshot(gate_state=0))
-        worker.join(timeout=1.0)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(result["reply"]["data"]["result"], 0)
-        self.assertEqual(result["reply"]["data"]["output"]["status"], "ok")
         self.assertEqual(self.manager.get_property("cover_state"), 0)
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
@@ -348,7 +345,22 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertNotIn("action", reply["data"])
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
-    def test_cover_open_times_out_when_12004_target_state_never_arrives(self):
+    def test_cover_open_returns_ok_after_12005_when_12004_target_state_never_arrives(self):
+        self.manager._nest_command_state_timeout = 0.05
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
+
+        reply = self.manager.handle_cover_open(self._cover_msg())
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+        self.assertNotIn("ack", reply["data"])
+        self.assertNotIn("action", reply["data"])
+        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_strict_mode_times_out_when_12004_target_state_never_arrives(self):
+        self.manager._nest_command_require_final_state = True
         self.manager._nest_command_state_timeout = 0.05
         self.manager._nest_module = FakeNestModule()
         self.manager.update_from_nest(nest_snapshot(gate_state=0))
@@ -357,12 +369,11 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
         self.assertEqual(reply["data"]["output"]["status"], "timeout")
-        self.assertNotIn("ack", reply["data"])
-        self.assertNotIn("action", reply["data"])
-        self.assertEqual(self.manager.get_property("cover_state"), 0)
+        self.assertIn("timeout waiting for cover_state=1 from 12004", reply.get("msg", ""))
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
-    def test_cover_open_returns_ok_only_after_12005_and_12004_target_state(self):
+    def test_cover_open_strict_mode_returns_ok_only_after_12005_and_12004_target_state(self):
+        self.manager._nest_command_require_final_state = True
         self.manager._nest_module = FakeNestModule()
         self.manager.update_from_nest(nest_snapshot(gate_state=0))
 

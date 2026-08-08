@@ -102,6 +102,22 @@ nest_plc_logger = get_logger("nest_plc")
 NEST_COMMAND_TARGET_HOLD_SECONDS = 5.0
 
 
+def _config_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
 class SubDevice:
     """子设备信息"""
 
@@ -274,6 +290,10 @@ class DeviceManager:
         self._nest_command_state_timeout = max(
             0.1,
             float(Config.get('device.nest_command_state_timeout', 30.0) or 30.0),
+        )
+        self._nest_command_require_final_state = _config_bool(
+            Config.get('device.nest_command_require_final_state', False),
+            False,
         )
         self._topo_lock = threading.Lock()
         self._pending_update_topo: Dict[str, Dict[str, Any]] = {}
@@ -1079,11 +1099,17 @@ class DeviceManager:
         updates = build_dock3_properties_from_nest(nest_data)
         nest_plc_logger.info(
             "Nest PLC state received: heartbeat=%s plc_heartbeat=%s drone_heartbeat=%s "
-            "gate_state=%s error_code=%s",
+            "gate_state=%s clamp_state=%s charging_state=%s -> cover_state=%s "
+            "putter_state=%s mapped_charging_state=%s error_code=%s",
             nest_data.get("nest_heartbeat"),
             nest_data.get("plc_heartbeat"),
             nest_data.get("drone_heartbeat"),
             nest_data.get("gate_state"),
+            nest_data.get("clamp_state"),
+            nest_data.get("charging_state"),
+            updates.get("cover_state"),
+            updates.get("putter_state"),
+            updates.get("charging_state"),
             nest_data.get("error_code"),
         )
         updates = self._merge_updates_with_current(updates)
@@ -2660,6 +2686,35 @@ class DeviceManager:
                 result=result,
                 status=status,
                 msg_str=message,
+            )
+
+        if not self._nest_command_require_final_state:
+            current = self._properties.get(prop_name)
+            if current == prop_value:
+                self._clear_nest_command_target(prop_name)
+            else:
+                logger.warning(
+                    "%s: 12005 ACK success, reply ok before 12004 target state; "
+                    "waiting asynchronously for %s=%s, current=%s, timeout_hint=%ss",
+                    command_name,
+                    prop_name,
+                    prop_value,
+                    current,
+                    self._nest_command_state_timeout,
+                )
+                trace_command(
+                    "gateway_nest_command_state_pending",
+                    method=command_name,
+                    property=prop_name,
+                    target=prop_value,
+                    current=current,
+                    timeout_hint=self._nest_command_state_timeout,
+                )
+            self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
+            return self._build_cmd_reply(
+                msg,
+                result=0,
+                status=TASK_STATUS_OK,
             )
 
         if not self._wait_for_nest_property(prop_name, prop_value, self._nest_command_state_timeout):

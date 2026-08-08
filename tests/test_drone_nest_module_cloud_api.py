@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -21,7 +22,7 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
-from src.modules.drone_nest_module import DroneNestModule  # noqa: E402
+from src.modules.drone_nest_module import HEARTBEAT_PULSE_GRACE_SECONDS, DroneNestModule  # noqa: E402
 
 
 class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
@@ -212,6 +213,15 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
         self.assertEqual(self.module.environment_data["nest_heartbeat_toggle_count"], 2)
         self.assertEqual(self.module.environment_data["drone_heartbeat_toggle_count"], 2)
         self.assertEqual(self.module.environment_data["plc_heartbeat_toggle_count"], 2)
+
+        stale_toggle = time.time() - HEARTBEAT_PULSE_GRACE_SECONDS - 1
+        self.module.environment_data["nest_heartbeat_last_toggle"] = stale_toggle
+        self.module.environment_data["drone_heartbeat_last_toggle"] = stale_toggle
+        self.module.environment_data["plc_heartbeat_last_toggle"] = stale_toggle
+        self.module._handle_nest_response(self._nest_response(0))
+        self.assertFalse(self.module.environment_data["nest_heartbeat"])
+        self.assertFalse(self.module.environment_data["drone_heartbeat"])
+        self.assertFalse(self.module.environment_data["plc_heartbeat"])
 
     def test_order_response_maps_resident_mode_rejection_reason(self):
         rejected_reply = SimpleNamespace(

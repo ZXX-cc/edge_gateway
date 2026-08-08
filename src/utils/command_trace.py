@@ -23,6 +23,7 @@ _EVENT_LABELS = {
     "gateway_nest_command_send": "网关下发机巢",
     "gateway_nest_command_fallback": "网关模拟机巢",
     "gateway_nest_command_unmapped": "网关机巢命令未映射",
+    "gateway_nest_command_state_pending": "机巢状态异步等待",
     "nest_command_encoded": "网关编码机巢命令",
     "nest_command_mavlink_sent": "网关发送MAVLink",
     "nest_order_response_received": "网关收到机巢回复",
@@ -399,6 +400,10 @@ def _format_trace_line(timestamp: str, event: str, label: str, fields: dict[str,
     if event == "gateway_nest_command_unmapped":
         details = _format_details(fields, ("method", "property", "value"))
         return f"{timestamp} {_color('[网关]', 'error')} 找不到机巢命令映射：{action}，{details}"
+
+    if event == "gateway_nest_command_state_pending":
+        details = _format_details(fields, ("method", "property", "target", "current", "timeout_hint"))
+        return f"{timestamp} {_color('[网关]', 'warn')} 机巢命令已ACK，等待12004状态异步到位：{action}，{details}"
 
     if event == "mqtt_no_handler":
         details = _format_details(fields, ("method", "tid", "topic", "error"))

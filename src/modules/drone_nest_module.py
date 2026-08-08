@@ -25,7 +25,7 @@ from src.generated_dialect.gcs_order_protocol import (
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 
-HEARTBEAT_PULSE_GRACE_SECONDS = 5.0
+HEARTBEAT_PULSE_GRACE_SECONDS = 30.0
 
 
 class DroneNestModule(BaseModule):
