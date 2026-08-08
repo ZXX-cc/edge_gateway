@@ -188,6 +188,7 @@ class DeviceManager:
         self._dock_manager = None          # DockManager - 机场管理
         self._cloud_conn = None            # CloudConnectionManager - 云端请求
         self._payload_state_provider = None # Direct payload state provider
+        self._aircraft_link_provider: Optional[Callable[[str], bool]] = None
 
         # ===== 组织绑定信息持久化 =====
         self._org_data_path = os.path.join(
@@ -519,6 +520,11 @@ class DeviceManager:
         """注入云端连接管理器（用于发起 requests/requests_reply）"""
         self._cloud_conn = cloud_conn
         logger.info("DeviceManager: Cloud connection manager injected")
+
+    def set_aircraft_link_provider(self, provider: Callable[[str], bool]):
+        """注入按需连接飞机 MAVLink 的回调。"""
+        self._aircraft_link_provider = provider
+        logger.info("DeviceManager: Aircraft MAVLink lazy link provider injected")
 
     def set_payload_state_provider(self, provider: Callable):
         """Inject direct payload state provider for Dock3 payload properties."""
@@ -3167,6 +3173,12 @@ class DeviceManager:
         )
         if reply.get("data", {}).get("result") == 0:
             self._nest_drone_heartbeat_alarm_enabled = True
+            if self._aircraft_link_provider:
+                try:
+                    if not self._aircraft_link_provider("drone_open"):
+                        logger.warning("drone_open: Aircraft MAVLink lazy connect failed after power on")
+                except Exception as exc:
+                    logger.error("drone_open: Aircraft MAVLink lazy connect error: %s", exc, exc_info=True)
             self.report_update_topo()
         return reply
 

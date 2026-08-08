@@ -305,11 +305,27 @@ python src/main.py -c config/gateway.yaml
 
 ```text
 MQTT connected to NanoMQ
-[Connection] 已连接到系统 1
-[Dispatcher] 消息分发器已启动
-MAVLink dispatcher started
+Preparing MAVLink runtime...
+Main aircraft MAVLink prepared for lazy connect
 Edge Gateway started successfully
 Entering async main loop
+```
+
+2026-08-08 后，网关启动阶段不再主动连接飞机主 MAVLink。启动时只准备
+FlightControl、TelemetryModule、WaypointManager 等业务对象，并继续按配置连接
+机巢 MAVLink；真正的飞机主 MAVLink 连接会在以下业务触发时按需建立：
+
+- 平台下发 `drone_open` 飞行器上电。
+- 平台下发 `flighttask_prepare`，且机巢飞机上电命令发送成功后。
+- 平台下发 `flighttask_execute`。
+- 平台下发 `one_key_takeoff_flow`。
+
+触发后成功日志应出现：
+
+```text
+Starting main aircraft MAVLink on demand: reason=...
+[Connection] 已连接到系统 1
+Main aircraft MAVLink dispatcher started on demand: reason=...
 ```
 
 如果看到：
@@ -319,7 +335,7 @@ Entering async main loop
 Failed to connect to MAVLink
 ```
 
-通常表示终端 2 的 SITL 没启动、端口不一致，或 SITL 没有输出到 `127.0.0.1:14550`。
+通常表示已经触发了按需连接，但终端 2 的 SITL 没启动、端口不一致，或 SITL 没有输出到 `127.0.0.1:14550`。
 
 ### 终端 4：启动 Web 调试台或命令行监控
 

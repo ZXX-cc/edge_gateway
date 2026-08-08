@@ -306,6 +306,7 @@ class MissionManager:
         self._mode_control = None
         self._mavlink_conn = None  # MAVLinkConnection 引用
         self._waypoint_manager = None  # WaypointManager 引用
+        self._aircraft_link_provider: Optional[Callable[[str], bool]] = None
 
         # 回调
         self._event_callback: Optional[Callable] = None
@@ -349,6 +350,10 @@ class MissionManager:
     def set_mavlink_connection(self, mavlink_conn):
         """注入MAVLink连接"""
         self._mavlink_conn = mavlink_conn
+
+    def set_aircraft_link_provider(self, provider: Callable[[str], bool]):
+        """注入按需连接飞机 MAVLink 的回调。"""
+        self._aircraft_link_provider = provider
 
     def set_waypoint_manager(self, waypoint_manager):
         """注入航点管理模块"""
@@ -1967,6 +1972,21 @@ class MissionManager:
             takeoff_land_order="0x00",
         )
         return True, ""
+
+    def _ensure_aircraft_link_for_action(self, reason: str) -> Tuple[bool, str]:
+        """在真实航线/起飞动作前按需连接飞机 MAVLink。"""
+        if self._aircraft_link_provider:
+            try:
+                if self._aircraft_link_provider(reason):
+                    return True, ""
+                return False, "飞机 MAVLink 按需连接失败"
+            except Exception as exc:
+                logger.error("Ensure aircraft MAVLink link failed: reason=%s error=%s", reason, exc, exc_info=True)
+                return False, f"飞机 MAVLink 按需连接异常: {exc}"
+
+        if self._flight_control or self._mavlink_conn:
+            return True, ""
+        return False, "飞机 MAVLink 连接回调未配置"
 
     def _wait_prepare_aircraft_connected(self, timeout: float = 30.0) -> Tuple[bool, str, Dict[str, Any]]:
         deadline = time.monotonic() + max(timeout, 0.0)
@@ -3600,6 +3620,22 @@ class MissionManager:
                 msg_str='nest_takeoff_request failed',
             )
 
+        link_start_ok, link_start_reason = self._ensure_aircraft_link_for_action("one_key_takeoff_flow")
+        if not link_start_ok:
+            self._record_takeoff_flow_step(
+                steps,
+                'aircraft_link_start',
+                status=STATUS_FAILED,
+                result=DEVICE_STATE_UNSUPPORTED,
+                detail={'success': False, 'message': link_start_reason},
+            )
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                data={'output': {'status': STATUS_FAILED, 'steps': steps, 'flight_id': flight_id}},
+                msg_str=link_start_reason,
+            )
+
         if not self._run_takeoff_flow_flight_step(steps, 'flight_takeoff', 'takeoff', takeoff_height):
             return MessageBuilder.build_reply(
                 msg,
@@ -4984,6 +5020,17 @@ class MissionManager:
                 {"aircraft_power_on": power_reason},
             )
 
+        link_start_ok, link_start_reason = self._ensure_aircraft_link_for_action("flighttask_prepare_aircraft_power_on")
+        if not link_start_ok:
+            self._status = self.MISSION_FAILED
+            self._wayline_mission_state = 1
+            return self._fail_prepare_self_check(
+                msg,
+                flight_id,
+                ["aircraft_link_start"],
+                {"aircraft_link_start": link_start_reason},
+            )
+
         link_ok, link_reason, link_details = self._wait_prepare_aircraft_connected(30.0)
         if not link_ok:
             self._status = self.MISSION_FAILED
@@ -5210,6 +5257,15 @@ class MissionManager:
                 flight_id,
                 DEVICE_STATE_UNSUPPORTED,
                 time_reason,
+            )
+
+        link_start_ok, link_start_reason = self._ensure_aircraft_link_for_action("flighttask_execute")
+        if not link_start_ok:
+            return self._reject_flighttask_request(
+                msg,
+                flight_id,
+                DEVICE_STATE_UNSUPPORTED,
+                link_start_reason,
             )
 
         self._current_task_id = flight_id

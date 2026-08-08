@@ -40,6 +40,12 @@
 |---|---|
 | `src/main.py` | `EdgeGateway` 主入口，负责加载配置、初始化 MQTT、TopicRouter、TelemetryProcessor、业务模块、MAVLink 连接和 Dispatcher，并注册全部 MQTT method |
 
+启动策略补充：2026-08-08 起，`src/main.py` 启动网关时不再主动连接飞机主
+MAVLink，只创建连接对象和业务模块；主飞控 MAVLink 会在 `drone_open`、
+`flighttask_prepare`、`flighttask_execute` 或 `one_key_takeoff_flow` 触发时
+按需连接并启动 dispatcher。机巢 MAVLink 仍按 `nest_mavlink.enabled` 在启动期
+连接，用于机场状态、机巢指令和飞机上电前置流程。
+
 `src/main.py` 当前注册 method 分组：
 
 | 分组 | 数量 | 主要职责 |

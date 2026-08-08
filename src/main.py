@@ -311,6 +311,10 @@ class EdgeGateway:
         self.command_admission: CommandAdmissionEngine = None
         self.history_logger: LocalHistoryLogger = None
         self._startup_connections_ready = False
+        self._main_mavlink_lazy_connect = False
+        self._main_mavlink_start_lock = threading.Lock()
+        self._main_mavlink_config = None
+        self._nest_mavlink_config = None
         self._organization_binding_retry_timer = None
         self._organization_binding_retry_attempt = 0
         self._organization_binding_pending_tid = ""
@@ -862,6 +866,106 @@ class EdgeGateway:
         except Exception as exc:
             logger.warning("Failed to close direct gimbal adapter: %s", exc)
 
+    @staticmethod
+    def _build_main_mavlink_connection_string(mavlink_config: dict) -> str:
+        """根据配置生成主飞控 MAVLink 连接字符串。"""
+        conn_type = mavlink_config['connection_type']
+        if conn_type == 'serial':
+            return mavlink_config['port']
+        if conn_type in ('udp', 'udpin'):
+            return f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+        if conn_type == 'udpout':
+            return f"udpout:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+        if conn_type == 'tcp':
+            return f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
+        return f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
+
+    def _prepare_aircraft_runtime_modules(self, nest_mavlink_config: dict):
+        """启动期只创建业务对象和依赖，不主动连接飞机。"""
+        self.flight_control = self.flight_control or FlightControl()
+        self.mode_control = self.mode_control or ModeControl()
+        self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
+        self.waypoint_manager = self.waypoint_manager or WaypointManager()
+        self.nest_module = self.nest_module or DroneNestModule(
+            protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
+        )
+
+        if self.mission:
+            self.mission.set_flight_control(self.flight_control)
+            self.mission.set_mode_control(self.mode_control)
+            self.mission.set_mavlink_connection(self.mavlink_conn)
+            self.mission.set_waypoint_manager(self.waypoint_manager)
+            self.mission.set_nest_module(self.nest_module)
+            self.mission.set_gimbal_control(self.gimbal)
+            self.mission.set_camera_controller(self.camera)
+            self.mission.set_telemetry_module(self.telemetry_module)
+            self.mission.set_telemetry_reporter(self.telemetry_reporter)
+            self.mission.set_aircraft_link_provider(self._ensure_aircraft_mavlink_started)
+        if self.camera:
+            self.camera.set_flight_control(self.flight_control)
+            self.camera.set_telemetry_module(self.telemetry_module)
+        if self.telemetry_module and self.telemetry:
+            self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
+        if self.drc:
+            self.drc.set_flight_control(self.flight_control)
+            self.drc.set_mode_control(self.mode_control)
+            self.drc.set_mission_manager(self.mission)
+            self.drc.set_telemetry_module(self.telemetry_module)
+            self.drc.set_event_callback(self._handle_drc_event)
+        if self.device:
+            self.device.set_nest_module(self.nest_module)
+            self.device.set_telemetry_processor(self.telemetry)
+            self.device.set_dock_manager(self.dock)
+            self.device.set_aircraft_link_provider(self._ensure_aircraft_mavlink_started)
+        if self.nest_module:
+            self.nest_module.set_flight_control(self.flight_control)
+        self._wire_nest_module_to_business()
+
+    def _ensure_aircraft_mavlink_started(self, reason: str = "") -> bool:
+        """按需启动主飞控 MAVLink；启动网关时不会主动调用。"""
+        with self._main_mavlink_start_lock:
+            if not self.mavlink_conn:
+                logger.warning("Main MAVLink lazy connect skipped: connection object not configured, reason=%s", reason)
+                return False
+            if self.mavlink_conn.is_connected() and self.dispatcher:
+                return True
+
+            logger.info("Starting main aircraft MAVLink on demand: reason=%s", reason or "unspecified")
+            if not self.mavlink_conn.is_connected() and not self.mavlink_conn.connect():
+                logger.warning("Main aircraft MAVLink lazy connect failed: reason=%s", reason)
+                return False
+
+            use_separate_nest_mavlink = bool((self._nest_mavlink_config or {}).get('enabled'))
+            if not self.dispatcher:
+                self.dispatcher = MessageDispatcher(self.mavlink_conn)
+                self.dispatcher.add_module(self.flight_control)
+                self.dispatcher.add_module(self.mode_control)
+                self.dispatcher.add_module(self.telemetry_module)
+                self.dispatcher.add_module(self.waypoint_manager)
+                if not use_separate_nest_mavlink:
+                    self.dispatcher.add_module(self.nest_module)
+                    self.nest_module.dispatcher = self.dispatcher
+
+                self.dispatcher.register_hook('*', self.flight_control)
+                self.dispatcher.register_hook('*', self.mode_control)
+                self.dispatcher.register_hook('*', self.telemetry_module)
+                self.dispatcher.register_hook('*', self.waypoint_manager)
+                if not use_separate_nest_mavlink:
+                    self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
+                    self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
+
+                if self.mission:
+                    self.mission.set_mavlink_connection(self.mavlink_conn)
+                if self.camera:
+                    self.camera.set_mapping_camera_flight_controller_connection(self.mavlink_conn)
+                self._enable_payload_flight_controller_fallback(self.mavlink_conn)
+                self._wire_flight_area_applier(self.dispatcher)
+
+            self.dispatcher.start()
+            self._refresh_state_machine_sources()
+            logger.info("Main aircraft MAVLink dispatcher started on demand: reason=%s", reason)
+            return True
+
     def start(self) -> bool:
         """启动网关"""
         try:
@@ -899,43 +1003,18 @@ class EdgeGateway:
             else:
                 logger.warning("MQTT not connected, running in offline mode")
 
-            # 连接MAVLink（新架构：Connection + Dispatcher + Modules）
-            logger.info("Connecting to MAVLink...")
+            # 连接MAVLink（机巢链路启动即连；主飞控链路按需连接）
+            logger.info("Preparing MAVLink runtime...")
             mavlink_config = Config.get_mavlink_config()
             nest_mavlink_config = Config.get_nest_mavlink_config()
+            self._main_mavlink_config = mavlink_config
+            self._nest_mavlink_config = nest_mavlink_config
             use_separate_nest_mavlink = bool(nest_mavlink_config.get('enabled'))
             use_main_mavlink = bool(mavlink_config.get('enabled', True))
-            conn_type = mavlink_config['connection_type']
 
             if not use_main_mavlink:
                 logger.info("Main MAVLink disabled; using nest MAVLink as the device-side link")
-                self.flight_control = FlightControl()
-                self.mode_control = ModeControl()
-                self.telemetry_module = TelemetryModule(mode="real")
-                self.waypoint_manager = WaypointManager()
-                self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7'))
-                if self.mission:
-                    self.mission.set_flight_control(self.flight_control)
-                    self.mission.set_mode_control(self.mode_control)
-                    self.mission.set_waypoint_manager(self.waypoint_manager)
-                    self.mission.set_nest_module(self.nest_module)
-                    self.mission.set_gimbal_control(self.gimbal)
-                    self.mission.set_camera_controller(self.camera)
-                    self.mission.set_telemetry_module(self.telemetry_module)
-                    self.mission.set_telemetry_reporter(self.telemetry_reporter)
-                if self.camera:
-                    self.camera.set_flight_control(self.flight_control)
-                if self.telemetry_module and self.telemetry:
-                    self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
-                if self.drc:
-                    self.drc.set_flight_control(self.flight_control)
-                    self.drc.set_mode_control(self.mode_control)
-                    self.drc.set_mission_manager(self.mission)
-                    self.drc.set_telemetry_module(self.telemetry_module)
-                if self.device:
-                    self.device.set_telemetry_processor(self.telemetry)
-                    self.device.set_dock_manager(self.dock)
-                self._wire_nest_module_to_business()
+                self._prepare_aircraft_runtime_modules(nest_mavlink_config)
                 if use_separate_nest_mavlink:
                     if self._start_nest_mavlink(nest_mavlink_config):
                         if self.mission:
@@ -943,145 +1022,24 @@ class EdgeGateway:
                 else:
                     logger.warning("Main MAVLink disabled but nest_mavlink.enabled is false")
 
-            elif conn_type == 'serial':
-                conn_str = mavlink_config['port']
-            elif conn_type in ('udp', 'udpin'):
-                conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
-            elif conn_type == 'udpout':
-                conn_str = f"udpout:{mavlink_config['host']}:{mavlink_config['udp_port']}"
-            elif conn_type == 'tcp':
-                conn_str = f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
-            elif use_main_mavlink:
-                conn_str = f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
-
             if use_main_mavlink:
+                conn_str = self._build_main_mavlink_connection_string(mavlink_config)
                 self.mavlink_conn = MAVLinkConnection(
                     connection_string=conn_str,
                     source_system=mavlink_config['system_id'],
                     source_component=mavlink_config['component_id'],
                     baudrate=mavlink_config['baudrate']
                 )
-
-            if use_main_mavlink and use_separate_nest_mavlink:
-                logger.info("Starting nest MAVLink before aircraft MAVLink; aircraft link will connect last")
-                self.flight_control = self.flight_control or FlightControl()
-                self.mode_control = self.mode_control or ModeControl()
-                self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
-                self.waypoint_manager = self.waypoint_manager or WaypointManager()
-                self.nest_module = self.nest_module or DroneNestModule(
-                    protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
-                )
-                if self.mission:
-                    self.mission.set_flight_control(self.flight_control)
-                    self.mission.set_mode_control(self.mode_control)
-                    self.mission.set_waypoint_manager(self.waypoint_manager)
-                    self.mission.set_nest_module(self.nest_module)
-                    self.mission.set_gimbal_control(self.gimbal)
-                    self.mission.set_camera_controller(self.camera)
-                    self.mission.set_telemetry_module(self.telemetry_module)
-                    self.mission.set_telemetry_reporter(self.telemetry_reporter)
-                if self.camera:
-                    self.camera.set_flight_control(self.flight_control)
-                if self.telemetry_module and self.telemetry:
-                    self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
-                if self.drc:
-                    self.drc.set_flight_control(self.flight_control)
-                    self.drc.set_mode_control(self.mode_control)
-                    self.drc.set_mission_manager(self.mission)
-                    self.drc.set_telemetry_module(self.telemetry_module)
-                if self.device:
-                    self.device.set_telemetry_processor(self.telemetry)
-                    self.device.set_dock_manager(self.dock)
-                self._wire_nest_module_to_business()
-                self._start_nest_mavlink(nest_mavlink_config)
-
-            if use_main_mavlink and self.mavlink_conn.connect():
-                # 创建消息分发器
-                self.dispatcher = MessageDispatcher(self.mavlink_conn)
-
-                # 初始化功能模块
-                self.flight_control = self.flight_control or FlightControl()
-                self.mode_control = self.mode_control or ModeControl()
-                self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
-                self.nest_module = self.nest_module or DroneNestModule(
-                    protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7')
-                )
-                self.waypoint_manager = self.waypoint_manager or WaypointManager()
-
-                # 注册模块到分发器（idle_task + on_message）
-                self.dispatcher.add_module(self.flight_control)
-                self.dispatcher.add_module(self.mode_control)
-                self.dispatcher.add_module(self.telemetry_module)
-                self.dispatcher.add_module(self.waypoint_manager)
-                if not use_separate_nest_mavlink:
-                    self.dispatcher.add_module(self.nest_module)
-                    self.nest_module.dispatcher = self.dispatcher
-
-                # 注册消息钩子：功能模块通过 on_message 接收消息
-                self.dispatcher.register_hook('*', self.flight_control)
-                self.dispatcher.register_hook('*', self.mode_control)
-                self.dispatcher.register_hook('*', self.telemetry_module)
-                self.dispatcher.register_hook('*', self.waypoint_manager)
-                if not use_separate_nest_mavlink:
-                    self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
-                    self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
-
-                # 连接TelemetryModule到TelemetryProcessor（统一数据流）
-                # TelemetryModule已通过通配符'*'订阅所有消息，无需单独注册钩子
-                self.telemetry_module.add_callback(self.telemetry.on_telemetry_update)
-
-                # 设置TelemetryProcessor回调到TelemetryReporter（上报出口）
-                # 注意：完整回调已在 _setup_callbacks() 中设置，此处仅确保 reporter 已初始化
-
-                # 注入模块依赖到业务层
-                self.mission.set_flight_control(self.flight_control)
-                self.mission.set_mode_control(self.mode_control)
-                self.mission.set_mavlink_connection(self.mavlink_conn)
-                self.mission.set_waypoint_manager(self.waypoint_manager)
-                self.mission.set_nest_module(self.nest_module)
-                self.mission.set_gimbal_control(self.gimbal)
-                self.mission.set_camera_controller(self.camera)
-                self.mission.set_telemetry_module(self.telemetry_module)
-                self.mission.set_telemetry_reporter(self.telemetry_reporter)
-
-                # 恢复上次中断的任务
-                self.mission.recover_missions()
-                self.drc.set_flight_control(self.flight_control)
-                self.drc.set_mode_control(self.mode_control)
-                self._enable_payload_flight_controller_fallback(self.mavlink_conn)
-                self.nest_module.set_flight_control(self.flight_control)
-
-                self.camera.set_flight_control(self.flight_control)
-                self.camera.set_mapping_camera_flight_controller_connection(self.mavlink_conn)
-                self.camera.set_telemetry_module(self.telemetry_module)
-
-                # DRC 模块依赖注入
-                self.drc.set_mission_manager(self.mission)
-                self.drc.set_telemetry_module(self.telemetry_module)
-                self.drc.set_event_callback(self._handle_drc_event)
-
-                # 注入 DeviceManager 依赖（数据源联动）
-                self.device.set_nest_module(self.nest_module)
-                self.device.set_telemetry_processor(self.telemetry)
-                self.device.set_dock_manager(self.dock)
-
-                self._wire_nest_module_to_business()
-                self._wire_flight_area_applier(self.dispatcher)
-
-                if use_separate_nest_mavlink and not self.nest_dispatcher:
+                self._main_mavlink_lazy_connect = True
+                self._prepare_aircraft_runtime_modules(nest_mavlink_config)
+                if use_separate_nest_mavlink:
                     self._start_nest_mavlink(nest_mavlink_config)
-
-                # 启动分发器
-                self.dispatcher.start()
-                logger.info("MAVLink dispatcher started")
-            elif use_main_mavlink:
-                logger.warning("Failed to connect to MAVLink, retrying...")
-                # 主飞控 MAVLink 连接失败不阻塞机巢链路测试。
-                if use_separate_nest_mavlink and not self.nest_dispatcher:
-                    logger.info("Starting standalone nest MAVLink without main MAVLink")
-                    self.nest_module = DroneNestModule(protocol_version=nest_mavlink_config.get('protocol_version', 'v1.7'))
-                    self._wire_nest_module_to_business()
-                    self._start_nest_mavlink(nest_mavlink_config)
+                else:
+                    logger.info("Nest MAVLink disabled; nest module will use main aircraft link after lazy connect")
+                logger.info(
+                    "Main aircraft MAVLink prepared for lazy connect: connection=%s",
+                    conn_str,
+                )
 
             self._refresh_state_machine_sources()
 
