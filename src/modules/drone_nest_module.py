@@ -25,6 +25,9 @@ from src.generated_dialect.gcs_order_protocol import (
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 
+HEARTBEAT_PULSE_GRACE_SECONDS = 5.0
+
+
 class DroneNestModule(BaseModule):
     """
     机巢遥测模块
@@ -119,6 +122,29 @@ class DroneNestModule(BaseModule):
     def set_protocol_version(self, protocol_version: str):
         self.protocol_version = self._normalize_protocol_version(protocol_version)
         self.log(f"✅ 机巢协议版本: {self.protocol_version}")
+
+    def _update_heartbeat_pulse(self, name: str, raw_value: bool, now: float) -> bool:
+        """Treat v1.7 heartbeat bits as pulse bits: a recent 0/1 toggle means alive."""
+        raw_key = f"{name}_raw"
+        last_toggle_key = f"{name}_last_toggle"
+        toggle_count_key = f"{name}_toggle_count"
+
+        raw_value = bool(raw_value)
+        previous_value = self.environment_data.get(raw_key)
+        if previous_value is not None and bool(previous_value) != raw_value:
+            self.environment_data[last_toggle_key] = now
+            self.environment_data[toggle_count_key] = (
+                int(self.environment_data.get(toggle_count_key) or 0) + 1
+            )
+
+        self.environment_data[raw_key] = raw_value
+
+        last_toggle = self.environment_data.get(last_toggle_key)
+        if self.protocol_version != "v1.7":
+            return raw_value
+        if last_toggle is None:
+            return False
+        return now - float(last_toggle) <= HEARTBEAT_PULSE_GRACE_SECONDS
 
     # ========== 模块关联 ==========
 
@@ -417,10 +443,15 @@ class DroneNestModule(BaseModule):
             boolstate1 = msg.boolstate1
             boolstate2 = msg.boolstate2
 
-            # boolstate1: 心跳状态
-            nest_heartbeat = bool(boolstate1 & (1 << 0))
-            drone_heartbeat = bool(boolstate1 & (1 << 1))
-            plc_heartbeat = bool(boolstate1 & (1 << 2))
+            now = time.time()
+
+            # boolstate1: 心跳状态。v1.7 实机心跳位按周期 0/1 翻转，短时间内的 0 仍表示链路正常。
+            nest_heartbeat_raw = bool(boolstate1 & (1 << 0))
+            drone_heartbeat_raw = bool(boolstate1 & (1 << 1))
+            plc_heartbeat_raw = bool(boolstate1 & (1 << 2))
+            nest_heartbeat = self._update_heartbeat_pulse("nest_heartbeat", nest_heartbeat_raw, now)
+            drone_heartbeat = self._update_heartbeat_pulse("drone_heartbeat", drone_heartbeat_raw, now)
+            plc_heartbeat = self._update_heartbeat_pulse("plc_heartbeat", plc_heartbeat_raw, now)
             estop_state = bool(boolstate1 & (1 << 3))
             charging_state = bool(boolstate1 & (1 << 4))
             calibrate_state = bool(boolstate1 & (1 << 5))
@@ -443,15 +474,6 @@ class DroneNestModule(BaseModule):
             landing_abort_progress = bool(boolstate2 & (1 << 3))
             alternate_landing_state = bool(boolstate2 & (1 << 4))
             takeoff_allowed = bool(boolstate2 & (1 << 5))
-
-            # 飞机心跳位按协议周期翻转，prepare 阶段用最近翻转时间确认机巢侧链路。
-            now = time.time()
-            previous_drone_heartbeat = self.environment_data.get("drone_heartbeat")
-            if previous_drone_heartbeat is not None and previous_drone_heartbeat != drone_heartbeat:
-                self.environment_data["drone_heartbeat_last_toggle"] = now
-                self.environment_data["drone_heartbeat_toggle_count"] = (
-                    int(self.environment_data.get("drone_heartbeat_toggle_count") or 0) + 1
-                )
 
             # 更新状态数据
             self.environment_data.update({
@@ -488,7 +510,9 @@ class DroneNestModule(BaseModule):
                 f"gate_state={msg.gate_state}, clamp_state={msg.clamp_state}, "
                 f"landing_light_state={msg.landing_light_state}, error_code={msg.error_code}, "
                 f"lumen={getattr(msg, 'lumen', 0)}, qr_light_current={getattr(msg, 'qr_light_current', 0)}, "
-                f"heartbeat(nest={int(nest_heartbeat)}, drone={int(drone_heartbeat)}, plc={int(plc_heartbeat)}), "
+                f"heartbeat(nest={int(nest_heartbeat)}/raw={int(nest_heartbeat_raw)}, "
+                f"drone={int(drone_heartbeat)}/raw={int(drone_heartbeat_raw)}, "
+                f"plc={int(plc_heartbeat)}/raw={int(plc_heartbeat_raw)}), "
                 f"ready={int(ready_state)}, init={int(init_state)}, initializing={int(initializing_state)}, "
                 f"busy={int(system_busy)}, fault={int(fault_state)}, estop={int(estop_state)}, "
                 f"takeoff_allowed={int(takeoff_allowed)}",

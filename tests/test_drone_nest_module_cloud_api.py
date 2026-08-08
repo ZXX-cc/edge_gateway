@@ -29,6 +29,25 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
         self.module = DroneNestModule()
         self.results = {"passed": 0, "failed": 0}
 
+    def _nest_response(self, boolstate1: int, boolstate2: int = 0):
+        return SimpleNamespace(
+            ac_temp=250,
+            nest_temperature=260,
+            env_temperature=240,
+            wind_direction=1800,
+            wind_speed=30,
+            atmospheric_pressure=1013,
+            rainfall=30,
+            charge_volt=2600,
+            charge_current=50,
+            error_code=0,
+            boolstate1=boolstate1,
+            boolstate2=boolstate2,
+            clamp_state=2,
+            gate_state=1,
+            landing_light_state=1,
+        )
+
     def _step(self, title: str):
         print("\n" + "=" * 60)
         print(title)
@@ -159,6 +178,40 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
                 "reason": "PLC超时",
             },
         )
+
+    def test_v17_heartbeat_zero_after_toggle_stays_online_for_all_pulse_bits(self):
+        self.module.set_protocol_version("v1.7")
+
+        self.module._handle_nest_response(self._nest_response(0))
+        self.assertFalse(self.module.environment_data["nest_heartbeat"])
+        self.assertFalse(self.module.environment_data["drone_heartbeat"])
+        self.assertFalse(self.module.environment_data["plc_heartbeat"])
+        self.assertFalse(self.module.environment_data["nest_heartbeat_raw"])
+        self.assertFalse(self.module.environment_data["drone_heartbeat_raw"])
+        self.assertFalse(self.module.environment_data["plc_heartbeat_raw"])
+
+        heartbeat_bits = (1 << 0) | (1 << 1) | (1 << 2)
+        self.module._handle_nest_response(self._nest_response(heartbeat_bits))
+        self.assertTrue(self.module.environment_data["nest_heartbeat"])
+        self.assertTrue(self.module.environment_data["drone_heartbeat"])
+        self.assertTrue(self.module.environment_data["plc_heartbeat"])
+        self.assertTrue(self.module.environment_data["nest_heartbeat_raw"])
+        self.assertTrue(self.module.environment_data["drone_heartbeat_raw"])
+        self.assertTrue(self.module.environment_data["plc_heartbeat_raw"])
+        self.assertEqual(self.module.environment_data["nest_heartbeat_toggle_count"], 1)
+        self.assertEqual(self.module.environment_data["drone_heartbeat_toggle_count"], 1)
+        self.assertEqual(self.module.environment_data["plc_heartbeat_toggle_count"], 1)
+
+        self.module._handle_nest_response(self._nest_response(0))
+        self.assertTrue(self.module.environment_data["nest_heartbeat"])
+        self.assertTrue(self.module.environment_data["drone_heartbeat"])
+        self.assertTrue(self.module.environment_data["plc_heartbeat"])
+        self.assertFalse(self.module.environment_data["nest_heartbeat_raw"])
+        self.assertFalse(self.module.environment_data["drone_heartbeat_raw"])
+        self.assertFalse(self.module.environment_data["plc_heartbeat_raw"])
+        self.assertEqual(self.module.environment_data["nest_heartbeat_toggle_count"], 2)
+        self.assertEqual(self.module.environment_data["drone_heartbeat_toggle_count"], 2)
+        self.assertEqual(self.module.environment_data["plc_heartbeat_toggle_count"], 2)
 
     def test_order_response_maps_resident_mode_rejection_reason(self):
         rejected_reply = SimpleNamespace(
