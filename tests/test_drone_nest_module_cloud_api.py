@@ -160,6 +160,25 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
             },
         )
 
+    def test_order_response_maps_resident_mode_rejection_reason(self):
+        rejected_reply = SimpleNamespace(
+            ordinary_order_response=0x0B010524,
+            takeoff_land_order_response=0,
+        )
+
+        self.module._handle_order_response(rejected_reply)
+        rejected_fields = self.module.get_cloud_order_response()
+        ordinary = rejected_fields.get("ordinary_order_response", {})
+        first_rejection = (rejected_fields.get("rejections") or [{}])[0]
+
+        self.assertEqual(rejected_fields.get("status"), "rejected")
+        self.assertEqual(rejected_fields.get("result"), 5)
+        self.assertEqual(ordinary.get("reply_status"), 0x24)
+        self.assertEqual(ordinary.get("reject_reason_code"), 5)
+        self.assertEqual(ordinary.get("command_code"), 0x01)
+        self.assertEqual(ordinary.get("device_code"), 0x0B)
+        self.assertEqual(first_rejection.get("reason"), "驻留模式中-拒绝其他命令")
+
     def test_default_protocol_uses_v17_ready_bits(self):
         nest_response = SimpleNamespace(
             ac_temp=250,
