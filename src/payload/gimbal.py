@@ -821,8 +821,10 @@ class GimbalController:
                 'set_focus_mode',
                 'get_focus_mode',
                 'switch_eo_digital_zoom',
+                'eo_digital_zoom_stop',
                 'ir_digital_zoom_in',
                 'ir_digital_zoom_out',
+                'ir_digital_zoom_stop',
                 'switch_defog',
                 'is_defog_on',
                 'switch_laser',
@@ -1102,7 +1104,13 @@ class GimbalController:
             elif zooming_out:
                 result = self._gimbal_control.ir_digital_zoom_out(speed)
             else:
-                result = {"success": True, "message": "IR zoom unchanged", "skipped": True}
+                if hasattr(self._gimbal_control, "ir_digital_zoom_stop"):
+                    result = self._gimbal_control.ir_digital_zoom_stop()
+                else:
+                    result = {
+                        "success": False,
+                        "message": "IR digital zoom stop is not exposed by this adapter",
+                    }
 
         success = bool(result.get("success", False))
         if success:

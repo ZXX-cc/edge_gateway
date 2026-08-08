@@ -2,6 +2,7 @@
 相机控制模块
 处理拍照、录像、相机参数设置
 """
+import math
 import time
 import os
 import socket
@@ -13,7 +14,7 @@ from uuid import UUID
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from src.modules.gimbal_control import VLKFocusMode, VLKImageType, VLKIrColor, VLKRecordMode
 from src.database.connection import get_async_session_local, init_database_async
 from src.database.media_db import MediaDB
@@ -1481,7 +1482,13 @@ class CameraController:
                     elif zooming_out:
                         result = self._gimbal_control.ir_digital_zoom_out(int(speed))
                     else:
-                        result = {"success": True, "message": "IR zoom stop is not exposed by ViewLink SDK", "skipped": True}
+                        if hasattr(self._gimbal_control, "ir_digital_zoom_stop"):
+                            result = self._gimbal_control.ir_digital_zoom_stop()
+                        else:
+                            result = {
+                                "success": False,
+                                "message": "IR digital zoom stop is not exposed by this adapter",
+                            }
                 else:
                     if zooming_in or zooming_out:
                         eo_digital_zoom_result = self._enable_viewlink_eo_digital_zoom_for_zoom(data)
@@ -1520,24 +1527,49 @@ class CameraController:
         """
         设置对焦模式
 
-        Request: { mode: auto_focus/manual_focus/AFC }
+        Request: { mode: auto_focus/manual_focus/single_auto_focus/continuous_auto_focus }
         """
         data = msg.get('data', {})
         mode = data.get('mode', 'auto_focus')
         self._log_camera_setting_mapping('set_focus_mode', data)
 
         logger.info(f"Focus mode: {mode}")
-        self._focus_mode = mode
+        normalized = str(mode).strip().lower()
+        manual_modes = {"manual", "manual_focus", "mf"}
+        single_auto_modes = {"auto", "auto_focus", "af", "single_auto_focus", "single_af", "afs"}
+        continuous_auto_modes = {"continuous_auto_focus", "continuous_af", "afc"}
+        valid_modes = manual_modes | single_auto_modes | continuous_auto_modes
+        if normalized not in valid_modes:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=f"Invalid focus mode: {mode}",
+                data={
+                    "mode": mode,
+                    "supported_modes": sorted(valid_modes),
+                },
+            )
 
         success = False
         viewlink_attempted = False
         if self._gimbal_control and self._gimbal_control.is_connected():
             viewlink_attempted = True
-            normalized = str(mode).lower()
-            focus_mode = VLKFocusMode.MANUAL if normalized in {"manual", "manual_focus", "mf"} else VLKFocusMode.AUTO
+            if normalized in continuous_auto_modes:
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_STATE_UNSUPPORTED,
+                    msg_str="ViewLink SDK exposes auto/manual focus only; continuous auto focus is not a distinct device command",
+                    data={
+                        "mode": mode,
+                        "supported_by_adapter": ["manual_focus", "auto_focus", "single_auto_focus"],
+                    },
+                )
+            focus_mode = VLKFocusMode.MANUAL if normalized in manual_modes else VLKFocusMode.AUTO
             result = self._gimbal_control.set_focus_mode(focus_mode)
             success = result.get('success', False)
             logger.info(f"ViewLink focus mode: {result}")
+            if success:
+                self._focus_mode = mode
 
         if not viewlink_attempted:
             return MessageBuilder.build_reply(
@@ -1545,7 +1577,10 @@ class CameraController:
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
+        return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
+            "mode": mode,
+            "effective_mode": "manual_focus" if normalized in manual_modes else "auto_focus",
+        })
 
     def _set_focus_value(self, msg: dict) -> dict:
         """
@@ -1554,44 +1589,49 @@ class CameraController:
         Request: { focus_distance }
         """
         data = msg.get('data', {})
-        distance = data.get('focus_distance', 0)
+        if 'focus_distance' not in data:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str="focus_distance is required",
+            )
+        distance = data.get('focus_distance')
         self._log_camera_setting_mapping('set_focus_value', data)
 
         logger.info(f"Focus distance: {distance}")
-        self._focus_value = distance
+        try:
+            distance_value = float(distance)
+        except (TypeError, ValueError):
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=f"Invalid focus_distance: {distance}",
+            )
+        if not math.isfinite(distance_value) or distance_value < 0 or distance_value > 1000:
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=f"focus_distance out of supported range: {distance}",
+                data={"focus_distance": distance, "supported_range": [0, 1000]},
+            )
 
-        success = False
-        viewlink_attempted = False
         if self._gimbal_control and self._gimbal_control.is_connected():
-            viewlink_attempted = True
-            speed = int(data.get('speed', data.get('focus_speed', 3)) or 3)
-            raw_duration = data.get('duration', data.get('focus_duration', 0.3))
-            duration = float(0.3 if raw_duration is None else raw_duration)
-            try:
-                distance_value = float(distance)
-            except (TypeError, ValueError):
-                distance_value = 0.0
-            if distance_value > 0:
-                result = self._gimbal_control.focus_out(speed)
-            elif distance_value < 0:
-                result = self._gimbal_control.focus_in(speed)
-            else:
-                result = self._gimbal_control.stop_focus()
-            success = result.get('success', False)
-            logger.info(f"ViewLink focus value: {result}")
-            if success and distance_value != 0:
-                time.sleep(max(0.0, min(2.0, duration)))
-                stop_result = self._gimbal_control.stop_focus()
-                success = stop_result.get('success', False)
-                logger.info(f"ViewLink stop focus: {stop_result}")
-
-        if not viewlink_attempted:
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink SDK exposes relative focus_in/focus_out only; absolute focus_distance is not supported",
+                data={
+                    "focus_distance": distance_value,
+                    "supported": False,
+                    "available_adapter_actions": ["focus_in", "focus_out", "stop_focus"],
+                },
+            )
+        else:
             return MessageBuilder.build_reply(
                 msg,
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def _spot_focus(self, msg: dict) -> dict:
         """
@@ -1605,21 +1645,40 @@ class CameraController:
         self._log_camera_setting_mapping('spot_focus', data)
 
         logger.info(f"Spot focus: ({x}, {y})")
-        success = False
-        viewlink_attempted = False
-        if self._gimbal_control and self._gimbal_control.is_connected():
-            viewlink_attempted = True
-            result = self._gimbal_control.set_focus_mode(VLKFocusMode.AUTO)
-            success = result.get('success', False)
-            logger.info(f"ViewLink point focus fallback to auto focus: {result}")
+        try:
+            x_value = float(x)
+            y_value = float(y)
+        except (TypeError, ValueError):
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=f"Invalid point focus coordinate: x={x}, y={y}",
+            )
+        if not math.isfinite(x_value) or not math.isfinite(y_value) or not (0.0 <= x_value <= 1.0) or not (0.0 <= y_value <= 1.0):
+            return MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str=f"point focus coordinate out of range: x={x}, y={y}",
+                data={"x": x, "y": y, "supported_range": {"x": [0, 1], "y": [0, 1]}},
+            )
 
-        if not viewlink_attempted:
+        if self._gimbal_control and self._gimbal_control.is_connected():
+            return MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="ViewLink SDK does not expose point focus coordinate control",
+                data={
+                    "x": x_value,
+                    "y": y_value,
+                    "supported": False,
+                },
+            )
+        else:
             return MessageBuilder.build_reply(
                 msg,
                 result=DEVICE_STATE_UNSUPPORTED,
                 msg_str="ViewLink control is not connected",
             )
-        return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
     def handle_photo_storage_set(self, msg: dict) -> dict:
         """
@@ -1944,6 +2003,12 @@ class CameraController:
     def handle_camera_frame_zoom(self, msg: dict) -> dict:
         """框选变焦 (camera_frame_zoom)，属于 services 负载控制。"""
         data = msg.get('data', {})
+        logger.info(
+            "Camera frame zoom request received: tid=%s bid=%s raw_data=%s",
+            msg.get("tid", ""),
+            msg.get("bid", ""),
+            data,
+        )
         normalized_box, pixel_box, frame_size = self._normalize_frame_zoom_box(data)
         x = pixel_box["x"]
         y = pixel_box["y"]

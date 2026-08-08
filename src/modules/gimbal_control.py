@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Optional, Callable
 from enum import IntEnum
 from src.utils.logger import get_logger
+from web.mavlink.viewlink import (
+    build_eo_dzoom_stop_frame,
+    build_ir_dzoom_stop_frame,
+)
 
 
 logger = get_logger("payload.gimbal_control")
@@ -1211,6 +1215,17 @@ class GimbalControl:
         """开启或关闭可见光电子变焦"""
         return self._switch_int("VLK_SwitchEODigitalZoom", bool(on), "EO电子变焦")
 
+    def eo_digital_zoom_stop(self) -> dict:
+        """停止可见光电子变焦。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "message": connected["message"]}
+        result = self.send_protocol_frame(build_eo_dzoom_stop_frame())
+        if result.get("success"):
+            result["message"] = "可见光电子变焦已停止"
+            self.log(result["message"])
+        return result
+
     def ir_digital_zoom_in(self, speed: int = 0) -> dict:
         """红外电子变焦放大一级"""
         result = {"success": False, "message": ""}
@@ -1233,6 +1248,17 @@ class GimbalControl:
         result["success"] = True
         result["message"] = "红外电子变焦缩小"
         self.log(result["message"])
+        return result
+
+    def ir_digital_zoom_stop(self) -> dict:
+        """停止红外连续电子变焦。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "message": connected["message"]}
+        result = self.send_protocol_frame(build_ir_dzoom_stop_frame())
+        if result.get("success"):
+            result["message"] = "红外电子变焦已停止"
+            self.log(result["message"])
         return result
 
     def switch_defog(self, on: bool) -> dict:

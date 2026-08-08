@@ -28,6 +28,10 @@ A1_ABSOLUTE_ANGLE = 0x0B
 A1_POINT_MOVE = 0x0E
 A1_ABSOLUTE_ANGLE_720 = 0x1B
 
+C1_IMAGE_NONE = 0x00
+C1_IMAGE_EO = 0x01
+C1_IMAGE_IR = 0x02
+
 C1_STOP_FOCUS_ZOOM = 0x01
 C1_ZOOM_OUT = 0x08
 C1_ZOOM_IN = 0x09
@@ -195,6 +199,30 @@ def build_temperature_output_stop_frame() -> bytes:
     return build_c2(C2_TEMPERATURE_OUTPUT_STOP)
 
 
+def build_eo_dzoom_stop_frame() -> bytes:
+    return build_c1(image_type=C1_IMAGE_EO, operation=C1_EO_DZOOM_STOP)
+
+
+def build_ir_dzoom_stop_frame() -> bytes:
+    return build_c1(image_type=C1_IMAGE_IR, operation=C1_IR_DZOOM_STOP)
+
+
+def build_ir_dzoom_in_frame(speed: int = 5) -> bytes:
+    return build_c1(
+        image_type=C1_IMAGE_IR,
+        operation=C1_IR_DZOOM_CONTINUOUS_IN,
+        operation_param=speed,
+    )
+
+
+def build_ir_dzoom_out_frame(speed: int = 5) -> bytes:
+    return build_c1(
+        image_type=C1_IMAGE_IR,
+        operation=C1_IR_DZOOM_CONTINUOUS_OUT,
+        operation_param=speed,
+    )
+
+
 def build_ir_metering_point_frames(x: int, y: int) -> list[bytes]:
     return [
         build_e2(E2_TRACK_POINT, _clamp_int(x, -960, 960), _clamp_int(y, -540, 540)),
@@ -253,10 +281,14 @@ def build_protocol_frame_for_method(method: str, args: dict) -> bytes | None:
         return build_c1(operation=C1_MANUAL_FOCUS if int(args.get("mode", 0)) == 1 else C1_AUTO_FOCUS)
     if method == "switch_eo_digital_zoom":
         return build_c2(C2_EO_DZOOM_ON if args.get("on") else C2_EO_DZOOM_OFF)
+    if method == "eo_digital_zoom_stop":
+        return build_eo_dzoom_stop_frame()
     if method == "ir_digital_zoom_in":
-        return build_c1(operation=C1_IR_DZOOM_CONTINUOUS_IN, operation_param=args.get("speed", 5))
+        return build_ir_dzoom_in_frame(args.get("speed", 5))
     if method == "ir_digital_zoom_out":
-        return build_c1(operation=C1_IR_DZOOM_CONTINUOUS_OUT, operation_param=args.get("speed", 5))
+        return build_ir_dzoom_out_frame(args.get("speed", 5))
+    if method == "ir_digital_zoom_stop":
+        return build_ir_dzoom_stop_frame()
     if method == "switch_defog":
         return build_c2(C2_DEFOG_ON if args.get("on") else C2_DEFOG_OFF)
     if method == "switch_laser":

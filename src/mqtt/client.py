@@ -85,6 +85,44 @@ class MQTTClient:
         self._command_admission: Optional[CommandAdmissionEngine] = None
         self._security_validator = MqttSecurityValidator()
 
+    def _downstream_device_sns(self) -> List[str]:
+        """Return gateway plus configured payload device SNs for cloud-down topics."""
+        sns: List[str] = []
+
+        def add_sn(value):
+            sn = str(value or "").strip()
+            if sn and sn not in sns:
+                sns.append(sn)
+
+        add_sn(self.gateway_sn)
+        extra_sns = Config.get("nanomq.extra_downstream_sns", []) or []
+        if isinstance(extra_sns, (list, tuple, set)):
+            for sn in extra_sns:
+                add_sn(sn)
+
+        devices = Config.get("payload.devices", {}) or {}
+        if isinstance(devices, dict):
+            for device in devices.values():
+                if not isinstance(device, dict) or device.get("enabled", True) is False:
+                    continue
+                add_sn(device.get("sn"))
+                cloud_api = device.get("cloud_api", {})
+                if isinstance(cloud_api, dict):
+                    add_sn(cloud_api.get("device_sn"))
+        return sns
+
+    @staticmethod
+    def _topic_device_sn(source_topic: str) -> str:
+        parts = str(source_topic or "").split("/")
+        if len(parts) >= 3 and parts[0] in {"thing", "sys"} and parts[1] == "product":
+            return parts[2]
+        return ""
+
+    def _topic_for_source_device(self, source_topic: str, suffix: str) -> str:
+        device_sn = self._topic_device_sn(source_topic) or self.gateway_sn
+        prefix = "sys/product" if str(source_topic or "").startswith("sys/product/") else "thing/product"
+        return TopicBuilder.topic(prefix, self.gateway_sn, suffix, device_sn=device_sn)
+
     @staticmethod
     def _dedup_key(source_topic: str, payload: dict):
         tid = str(payload.get("tid") or "").strip()
@@ -247,29 +285,43 @@ class MQTTClient:
         # clean_session=False 会保留旧版本曾经订阅过的上行 topic。若不显式
         # 清理，网关重连后可能收到自己的 events/osd/state，尤其 status 会
         # 触发 update_topo -> status 的反馈循环。
-        upstream_only_topics = [
-            TopicBuilder.events(self.gateway_sn),
-            TopicBuilder.osd(self.gateway_sn),
-            TopicBuilder.state(self.gateway_sn),
-            TopicBuilder.status(self.gateway_sn),
-        ]
+        downstream_sns = self._downstream_device_sns()
+        upstream_only_topics = []
+        for sn in downstream_sns:
+            upstream_only_topics.extend([
+                TopicBuilder.events(sn),
+                TopicBuilder.osd(sn),
+                TopicBuilder.state(sn),
+                TopicBuilder.status(sn),
+            ])
         for topic in upstream_only_topics:
             self.client.unsubscribe(topic)
             logger.info(f"Removed stale upstream-only subscription: {topic}")
 
-        topics = [
-            TopicBuilder.services(self.gateway_sn),
-            TopicBuilder.property_set(self.gateway_sn),
-            TopicBuilder.drc_down(self.gateway_sn),
-            TopicBuilder.events_reply(self.gateway_sn),
-            TopicBuilder.requests_reply(self.gateway_sn),
-            TopicBuilder.services_reply(self.gateway_sn),
-            TopicBuilder.status_reply(self.gateway_sn),
-            TopicBuilder.requests(self.gateway_sn),
-        ]
+        topics = []
+        for sn in downstream_sns:
+            topics.extend([
+                TopicBuilder.services(sn),
+                TopicBuilder.property_set(sn),
+                TopicBuilder.drc_down(sn),
+                TopicBuilder.events_reply(sn),
+                TopicBuilder.requests_reply(sn),
+                TopicBuilder.services_reply(sn),
+                TopicBuilder.status_reply(sn),
+            ])
+        topics.append(TopicBuilder.requests(self.gateway_sn))
+        seen_topics = set()
         for topic in topics:
+            if topic in seen_topics:
+                continue
+            seen_topics.add(topic)
             self.client.subscribe(topic, qos=1)
             logger.info(f"Subscribed: {topic}")
+        logger.info(
+            "Subscribed downstream device SNs: gateway=%s sns=%s",
+            self.gateway_sn,
+            ",".join(downstream_sns),
+        )
 
     def publish(self, topic: str, payload: dict, qos: int = 1) -> bool:
         """发布消息到指定Topic"""
@@ -528,13 +580,13 @@ class MQTTClient:
         data = self._normalize_reply_for_publish(source_topic, data)
         method = data.get('method', '')
         if self._is_service_reply_method(method):
-            reply_topic = TopicBuilder.services_reply(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "services_reply")
         elif source_topic.endswith('/property/set'):
-            reply_topic = TopicBuilder.property_set_reply(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "property/set_reply")
         elif source_topic.endswith('/drc/down'):
-            reply_topic = TopicBuilder.drc_up(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "drc/up")
         else:
-            reply_topic = TopicBuilder.services_reply(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "services_reply")
 
         ok = self.publish(reply_topic, data, qos=1)
         trace_command(
@@ -568,11 +620,11 @@ class MQTTClient:
         """按来源topic原样选择响应topic，用于错误提示避免测试端超时。"""
         data = self._normalize_reply_for_publish(source_topic, data)
         if source_topic.endswith('/property/set'):
-            reply_topic = TopicBuilder.property_set_reply(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "property/set_reply")
         elif source_topic.endswith('/drc/down'):
-            reply_topic = TopicBuilder.drc_up(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "drc/up")
         else:
-            reply_topic = TopicBuilder.services_reply(self.gateway_sn)
+            reply_topic = self._topic_for_source_device(source_topic, "services_reply")
 
         ok = self.publish(reply_topic, data, qos=1)
         trace_command(

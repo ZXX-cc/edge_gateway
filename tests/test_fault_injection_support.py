@@ -1,10 +1,13 @@
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from src.device.nest_hms_mapper import build_nest_hms_alarms
 from src.mqtt.client import MQTTClient
+from src.utils.config import Config
+from src.utils.message import MessageBuilder
 from src.nest_simulator import (
     BIT_BUSY,
     BIT_CHARGING,
@@ -41,6 +44,69 @@ class FaultInjectionSupportTest(unittest.TestCase):
             ("thing/product/EDGEGW001/services", 1),
             client.client.subscribed,
         )
+
+    def test_mqtt_subscribes_configured_payload_device_services(self):
+        original_config = deepcopy(Config._data)
+        try:
+            Config._data = {
+                "gateway": {"sn": "EDGEGW001"},
+                "payload": {
+                    "devices": {
+                        "gimbal": {
+                            "enabled": True,
+                            "cloud_api": {"device_sn": "PAYLOAD001"},
+                        }
+                    }
+                },
+            }
+
+            class FakePahoClient:
+                def __init__(self):
+                    self.subscribed = []
+                    self.unsubscribed = []
+
+                def subscribe(self, topic, qos=0):
+                    self.subscribed.append((topic, qos))
+
+                def unsubscribe(self, topic):
+                    self.unsubscribed.append(topic)
+
+            client = MQTTClient()
+            client.client = FakePahoClient()
+            client.subscribe_downstream()
+
+            self.assertIn(("thing/product/EDGEGW001/services", 1), client.client.subscribed)
+            self.assertIn(("thing/product/PAYLOAD001/services", 1), client.client.subscribed)
+            self.assertIn("thing/product/PAYLOAD001/events", client.client.unsubscribed)
+        finally:
+            Config._data = original_config
+
+    def test_mqtt_replies_to_source_device_sn_for_payload_services(self):
+        class FakePahoClient:
+            def __init__(self):
+                self.published = []
+
+            def publish(self, topic, payload, qos=1):
+                self.published.append((topic, json.loads(payload), qos))
+                return type("PublishInfo", (), {"rc": 0})()
+
+        client = MQTTClient()
+        client.gateway_sn = "EDGEGW001"
+        client.connected = True
+        client.client = FakePahoClient()
+        request = {
+            "tid": "frame-zoom-1",
+            "method": "camera_frame_zoom",
+            "data": {"payload_index": "52-0-0"},
+        }
+        reply = MessageBuilder.build_reply(request, result=0)
+
+        client._publish_reply_for_downstream_topic(
+            "thing/product/PAYLOAD001/services",
+            reply,
+        )
+
+        self.assertEqual(client.client.published[0][0], "thing/product/PAYLOAD001/services_reply")
 
     def test_acceptance_reads_osd_value_wrapper_and_state_raw_value(self):
         self.assertEqual(

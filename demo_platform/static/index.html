@@ -172,6 +172,7 @@
           </div>
           <div class="live-stage">
             <img id="gimbalStream" alt="云台实时画面" />
+            <div id="frameZoomSelection" class="frame-zoom-selection"></div>
             <div id="livePlaceholder">点击开始预览</div>
           </div>
           <div class="live-controls">
@@ -193,6 +194,48 @@
             <button id="startDockLiveBtn" class="primary">开始推流</button>
             <button id="stopDockLiveBtn">停止推流</button>
           </div>
+        </section>
+        <section class="panel live-zoom-panel">
+          <div class="section-title">
+            <h2>变焦控制实测</h2>
+            <span id="frameZoomBoxText">未框选</span>
+          </div>
+          <div class="zoom-form-grid">
+            <label>
+              Payload Index
+              <input id="zoomPayloadIndex" value="52-0-0" />
+            </label>
+            <label>
+              Camera Type
+              <select id="zoomCameraType">
+                <option value="zoom">zoom 可见光变焦</option>
+                <option value="wide">wide 可见光广角</option>
+                <option value="normal">normal 可见光</option>
+                <option value="ir">ir 红外</option>
+                <option value="infrared">infrared 红外</option>
+              </select>
+            </label>
+            <label>
+              倍率 / 焦距
+              <input id="zoomRatioInput" type="number" min="1" max="30" step="0.1" value="4" />
+            </label>
+            <label>
+              Camera Index
+              <input id="zoomCameraIndex" type="number" min="0" step="1" value="0" />
+            </label>
+          </div>
+          <div class="zoom-options">
+            <label><input id="frameZoomLocked" type="checkbox" checked /> 锁定框选目标</label>
+            <label><input id="frameZoomCentering" type="checkbox" checked /> 参与云台指向</label>
+            <label><input id="frameZoomAllowZoom" type="checkbox" checked /> 居中失败仍允许变焦</label>
+          </div>
+          <div class="live-controls">
+            <button id="sendFocalLengthBtn" class="primary">设置倍率</button>
+            <button id="sendFrameZoomBtn">发送框选变焦</button>
+            <button id="sendOverRangeZoomBtn">超范围倍率测试</button>
+            <button id="clearFrameZoomBtn">清除框选</button>
+          </div>
+          <pre id="zoomCommandResult" class="result-box">{}</pre>
         </section>
       </section>
 

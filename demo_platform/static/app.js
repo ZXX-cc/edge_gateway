@@ -5,6 +5,8 @@ let workflows = [];
 let activeView = "dashboard";
 let lastCommandResult = null;
 let retestLogs = [];
+let frameZoomDragStart = null;
+let frameZoomBox = null;
 
 const keyStatusLabels = {
   waiting: "待验证",
@@ -848,13 +850,146 @@ async function sendCommandPayload(channel, method, data, title) {
     lastCommandResult = {title, method, status: payload.ok ? "success" : "failed", result: record};
     $("commandResult").textContent = fmtJson(payload);
     renderLastResult();
+    return payload;
   } catch (err) {
     lastCommandResult = {title, method, status: "error", result: {error: err.message}};
     $("commandResult").textContent = err.message;
     renderLastResult();
+    return {ok: false, error: err.message};
   } finally {
     buttons.forEach((button) => button.disabled = false);
   }
+}
+
+function liveImageRect() {
+  const stage = document.querySelector(".live-stage");
+  const img = $("gimbalStream");
+  const rect = stage.getBoundingClientRect();
+  const naturalWidth = img.naturalWidth || 0;
+  const naturalHeight = img.naturalHeight || 0;
+  if (!naturalWidth || !naturalHeight) return rect;
+  const scale = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+  return new DOMRect(
+    rect.left + (rect.width - width) / 2,
+    rect.top + (rect.height - height) / 2,
+    width,
+    height,
+  );
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function pointerInImage(event) {
+  const rect = liveImageRect();
+  return {
+    x: clamp(event.clientX - rect.left, 0, rect.width),
+    y: clamp(event.clientY - rect.top, 0, rect.height),
+    rect,
+  };
+}
+
+function updateFrameZoomSelection(start, current) {
+  const rect = current.rect;
+  const stageRect = document.querySelector(".live-stage").getBoundingClientRect();
+  const left = Math.min(start.x, current.x);
+  const top = Math.min(start.y, current.y);
+  const width = Math.abs(current.x - start.x);
+  const height = Math.abs(current.y - start.y);
+  const normalized = {
+    x: rect.width ? left / rect.width : 0,
+    y: rect.height ? top / rect.height : 0,
+    width: rect.width ? width / rect.width : 0,
+    height: rect.height ? height / rect.height : 0,
+  };
+  frameZoomBox = normalized;
+
+  const selection = $("frameZoomSelection");
+  selection.style.left = `${rect.left - stageRect.left + left}px`;
+  selection.style.top = `${rect.top - stageRect.top + top}px`;
+  selection.style.width = `${width}px`;
+  selection.style.height = `${height}px`;
+  selection.classList.toggle("active", width >= 8 && height >= 8);
+  setText(
+    "frameZoomBoxText",
+    width >= 8 && height >= 8
+      ? `x=${normalized.x.toFixed(3)}, y=${normalized.y.toFixed(3)}, w=${normalized.width.toFixed(3)}, h=${normalized.height.toFixed(3)}`
+      : "框选太小",
+  );
+}
+
+function clearFrameZoomSelection() {
+  frameZoomDragStart = null;
+  frameZoomBox = null;
+  const selection = $("frameZoomSelection");
+  selection.classList.remove("active");
+  selection.removeAttribute("style");
+  setText("frameZoomBoxText", "未框选");
+}
+
+function setupFrameZoomSelection() {
+  const stage = document.querySelector(".live-stage");
+  if (!stage) return;
+  stage.addEventListener("pointerdown", (event) => {
+    if (!$("gimbalStream").classList.contains("active")) return;
+    frameZoomDragStart = pointerInImage(event);
+    updateFrameZoomSelection(frameZoomDragStart, frameZoomDragStart);
+    stage.setPointerCapture(event.pointerId);
+  });
+  stage.addEventListener("pointermove", (event) => {
+    if (!frameZoomDragStart) return;
+    updateFrameZoomSelection(frameZoomDragStart, pointerInImage(event));
+  });
+  stage.addEventListener("pointerup", (event) => {
+    if (!frameZoomDragStart) return;
+    updateFrameZoomSelection(frameZoomDragStart, pointerInImage(event));
+    frameZoomDragStart = null;
+  });
+  stage.addEventListener("pointercancel", () => {
+    frameZoomDragStart = null;
+  });
+}
+
+function zoomCommandBaseData() {
+  return {
+    payload_index: $("zoomPayloadIndex").value.trim() || "52-0-0",
+    camera_index: Number($("zoomCameraIndex").value || 0),
+    camera_type: $("zoomCameraType").value,
+  };
+}
+
+function zoomRatioValue() {
+  const value = Number($("zoomRatioInput").value || 1);
+  return Number.isFinite(value) ? value : 1;
+}
+
+async function sendFocalLengthCommand(overrideRatio = null, title = "设置倍率 / 焦距") {
+  const ratio = overrideRatio ?? zoomRatioValue();
+  const payload = await sendCommandPayload("services", "camera_focal_length_set", {
+    ...zoomCommandBaseData(),
+    zoom_factor: ratio,
+    zoom_ratio: ratio,
+  }, title);
+  $("zoomCommandResult").textContent = fmtJson(payload);
+}
+
+async function sendFrameZoomCommand() {
+  if (!frameZoomBox || frameZoomBox.width <= 0.005 || frameZoomBox.height <= 0.005) {
+    $("zoomCommandResult").textContent = "请先在实时画面上拖动框选区域。";
+    return;
+  }
+  const payload = await sendCommandPayload("services", "camera_frame_zoom", {
+    ...zoomCommandBaseData(),
+    normalized_box: frameZoomBox,
+    locked: $("frameZoomLocked").checked,
+    zoom_ratio: zoomRatioValue(),
+    centering_enabled: $("frameZoomCentering").checked,
+    allow_zoom_without_center: $("frameZoomAllowZoom").checked,
+  }, "框选变焦");
+  $("zoomCommandResult").textContent = fmtJson(payload);
 }
 
 async function startGimbalPreview() {
@@ -898,6 +1033,7 @@ function stopGimbalPreview() {
   placeholder.classList.remove("hidden");
   placeholder.textContent = "点击开始预览";
   setText("liveSource", snapshot?.live?.gimbal_rtsp_url || "--");
+  clearFrameZoomSelection();
 }
 
 async function startDockLivePush() {
@@ -1037,7 +1173,12 @@ $("stopPreviewBtn").addEventListener("click", stopGimbalPreview);
 $("reloadPreviewBtn").addEventListener("click", startGimbalPreview);
 $("startDockLiveBtn").addEventListener("click", startDockLivePush);
 $("stopDockLiveBtn").addEventListener("click", stopDockLivePush);
+$("sendFocalLengthBtn").addEventListener("click", () => sendFocalLengthCommand());
+$("sendFrameZoomBtn").addEventListener("click", sendFrameZoomCommand);
+$("sendOverRangeZoomBtn").addEventListener("click", () => sendFocalLengthCommand(999, "超范围倍率测试"));
+$("clearFrameZoomBtn").addEventListener("click", clearFrameZoomSelection);
 
+setupFrameZoomSelection();
 renderActionCards();
 loadStatus();
 loadWorkflows();

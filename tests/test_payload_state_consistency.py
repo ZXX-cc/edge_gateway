@@ -58,7 +58,7 @@ from src.payload.third_party import ThirdPartyController
 from src.modules.gimbal_control import DevStatusCallback, GimbalControl
 from src.payload.spectral_camera import SpectralCameraAdapter
 from src.utils.config import Config
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from web.mavlink.camera.mapping import build_camera_setting
 
 
@@ -145,12 +145,20 @@ class FakeDirectPayload:
         self.calls.append(("stop_zoom",))
         return {"success": True}
 
+    def eo_digital_zoom_stop(self):
+        self.calls.append(("eo_digital_zoom_stop",))
+        return {"success": True}
+
     def ir_digital_zoom_in(self, speed=0):
         self.calls.append(("ir_digital_zoom_in", speed))
         return {"success": True}
 
     def ir_digital_zoom_out(self, speed=0):
         self.calls.append(("ir_digital_zoom_out", speed))
+        return {"success": True}
+
+    def ir_digital_zoom_stop(self):
+        self.calls.append(("ir_digital_zoom_stop",))
         return {"success": True}
 
     def set_focus_mode(self, mode):
@@ -943,7 +951,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(reply["data"]["running"])
         self.assertFalse(reply["data"]["stopped"])
 
-    def test_camera_zoom_and_focus_use_direct_payload_sdk_when_connected(self):
+    def test_camera_zoom_and_focus_mode_use_direct_payload_sdk_when_connected(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -951,20 +959,52 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         zoom = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {"zoom_factor": 3.5}))
         focus_mode = camera.handle_camera_focus_mode_set(message("camera_focus_mode_set", {"mode": "manual_focus"}))
         focus_value = camera.handle_camera_focus_value_set(message("camera_focus_value_set", {
-            "focus_distance": -1,
+            "focus_distance": 5,
             "focus_speed": 2,
             "focus_duration": 0,
         }))
 
         self.assertEqual(zoom["data"]["result"], 0)
         self.assertEqual(focus_mode["data"]["result"], 0)
-        self.assertEqual(focus_value["data"]["result"], 0)
+        self.assertEqual(focus_value["data"]["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertEqual(direct_payload.calls, [
             ("zoom_to", 3.5),
             ("set_focus_mode", 1),
-            ("focus_in", 2),
-            ("stop_focus",),
         ])
+
+    def test_camera_focus_rejects_invalid_mode_value_and_point_coordinates(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        bad_mode = camera.handle_camera_focus_mode_set(message("camera_focus_mode_set", {
+            "mode": "bad_focus_mode",
+        }))
+        bad_value = camera.handle_camera_focus_value_set(message("camera_focus_value_set", {
+            "focus_distance": 1000000,
+        }))
+        bad_point = camera.handle_camera_point_focus_action(message("camera_point_focus_action", {
+            "x": 1.5,
+            "y": 0.5,
+        }))
+
+        self.assertEqual(bad_mode["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(bad_value["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(bad_point["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(direct_payload.calls, [])
+
+    def test_camera_point_focus_reports_unsupported_instead_of_auto_focus_fallback(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_point_focus_action(message("camera_point_focus_action", {
+            "x": 0.5,
+            "y": 0.5,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertEqual(direct_payload.calls, [])
 
     def test_camera_focal_length_set_enables_eo_digital_zoom_before_zoom_to(self):
         camera = CameraController()
@@ -1012,6 +1052,21 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [
             ("ir_digital_zoom_out", 2),
+        ])
+
+    def test_camera_focal_length_set_stops_infrared_digital_zoom(self):
+        camera = CameraController()
+        direct_payload = FakeDirectPayloadWithEODigitalZoom()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_focal_length_set(message("camera_focal_length_set", {
+            "camera_type": "infrared",
+            "zoom_direction": 0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [
+            ("ir_digital_zoom_stop",),
         ])
 
     def test_camera_focal_length_set_keeps_legacy_zoom_ratio_compatibility(self):
@@ -1089,6 +1144,19 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(reply["data"]["zoom_ratio"], 2.0)
         self.assertEqual(direct_payload.calls, [("ir_digital_zoom_in", 4)])
+
+    def test_ir_zoom_set_stops_viewlink_ir_digital_zoom(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_ir_zoom_set(message("ir_zoom_set", {
+            "zoom_ratio": 1.0,
+            "zoom_direction": 0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("ir_digital_zoom_stop",)])
 
     def test_screen_split_uses_sdk_when_connected(self):
         gimbal = GimbalController()

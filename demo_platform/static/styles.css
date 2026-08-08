@@ -505,7 +505,8 @@ button:disabled {
 }
 
 .live-panel,
-.live-control-panel {
+.live-control-panel,
+.live-zoom-panel {
   margin-top: 14px;
 }
 
@@ -517,6 +518,8 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #0b1220;
+  cursor: crosshair;
+  user-select: none;
 }
 
 .live-stage img {
@@ -547,6 +550,19 @@ button:disabled {
   display: none;
 }
 
+.frame-zoom-selection {
+  position: absolute;
+  display: none;
+  border: 2px solid #48d597;
+  background: rgba(72, 213, 151, 0.16);
+  box-shadow: 0 0 0 9999px rgba(4, 12, 24, 0.18);
+  pointer-events: none;
+}
+
+.frame-zoom-selection.active {
+  display: block;
+}
+
 .live-controls {
   display: flex;
   gap: 10px;
@@ -564,6 +580,34 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 9px 10px;
+}
+
+.zoom-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.zoom-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 12px;
+}
+
+.zoom-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.zoom-options input {
+  width: auto;
+  margin: 0;
+}
+
+.live-zoom-panel .result-box {
+  max-height: 260px;
 }
 
 .timeline-panel {
@@ -1068,6 +1112,7 @@ textarea {
   .retest-grid,
   .retest-summary,
   .key-point-grid,
+  .zoom-form-grid,
   .telemetry-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1107,6 +1152,7 @@ textarea {
   .retest-grid,
   .retest-summary,
   .key-point-grid,
+  .zoom-form-grid,
   .telemetry-grid,
   .form-grid {
     grid-template-columns: 1fr;

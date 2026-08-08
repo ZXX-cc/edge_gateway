@@ -19,11 +19,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from mqtt_test_client import MqttRequestClient, result_code
 from src.payload.dock3_payload import payload_index_from_config
-from src.utils.dji_error_codes import DOCK_COMMUNICATION_ERROR, DOCK_SYSTEM_ERROR
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_COMMUNICATION_ERROR, DOCK_SYSTEM_ERROR
 from tool_config import add_config_argument, load_config, resolve_mqtt_settings
 
 
-ADAPTER_UNAVAILABLE_RESULTS = {DOCK_COMMUNICATION_ERROR, DOCK_SYSTEM_ERROR}
+ADAPTER_UNAVAILABLE_RESULTS = {DEVICE_STATE_UNSUPPORTED, DOCK_COMMUNICATION_ERROR, DOCK_SYSTEM_ERROR}
 
 
 @dataclass(frozen=True)

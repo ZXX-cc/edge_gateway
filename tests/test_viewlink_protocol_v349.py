@@ -5,7 +5,11 @@ from web.mavlink.viewlink import (
     build_a1_speed,
     build_c1,
     build_c2,
+    build_eo_dzoom_stop_frame,
     build_frame,
+    build_ir_dzoom_in_frame,
+    build_ir_dzoom_out_frame,
+    build_ir_dzoom_stop_frame,
     build_ir_metering_area_frames,
     build_ir_metering_point_frames,
     build_s1_look_at,
@@ -73,6 +77,18 @@ class ViewLinkProtocolV349Test(unittest.TestCase):
         self.assertTrue(checksum_ok(c1))
         self.assertTrue(checksum_ok(c2))
         self.assertTrue(checksum_ok(defog))
+
+    def test_digital_zoom_frames_select_sensor_for_shared_stop_opcode(self):
+        eo_stop = build_eo_dzoom_stop_frame()
+        ir_stop = build_ir_dzoom_stop_frame()
+        ir_in = build_ir_dzoom_in_frame(5)
+        ir_out = build_ir_dzoom_out_frame(5)
+
+        self.assertEqual(eo_stop[5:7], bytes([0x0F, 0x01]))
+        self.assertEqual(ir_stop[5:7], bytes([0x0F, 0x02]))
+        self.assertEqual(ir_in[5:7], bytes([0x0F, 0x6A]))
+        self.assertEqual(ir_out[5:7], bytes([0x0F, 0xAA]))
+        self.assertTrue(all(checksum_ok(frame) for frame in (eo_stop, ir_stop, ir_in, ir_out)))
 
     def test_s1_look_at_scales_lat_lon_altitude(self):
         frame = build_s1_look_at(latitude=31.1234567, longitude=121.7654321, altitude=88.125)
