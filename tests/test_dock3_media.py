@@ -727,6 +727,27 @@ class Dock3MediaManagerTest(unittest.TestCase):
         finally:
             requests.get = old_get
 
+    def test_file_download_resolves_nested_payload_media_object_key(self):
+        manager = MediaManager()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "DCIM" / "flight-001"
+            folder.mkdir(parents=True)
+            path = folder / "Riebo000003.jpg"
+            path.write_bytes(b"nested-mapping-photo")
+            manager.storage_path = tmp
+
+            reply = manager.handle_file_download(base_msg("file_download", {
+                "file_ids": ["DCIM/flight-001/Riebo000003.jpg"],
+            }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        files = reply["data"]["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["result"], 0)
+        self.assertEqual(files[0]["name"], "Riebo000003.jpg")
+        self.assertEqual(Path(files[0]["cache_path"]), path)
+
     def test_file_download_url_uses_structured_missing_id_error_code(self):
         old_normalize = media_manager_module.normalize_delete_ids_with_codes
         media_manager_module.normalize_delete_ids_with_codes = lambda data: (
