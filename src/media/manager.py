@@ -654,10 +654,62 @@ class MediaManager:
         item["priority"] = priority
         return item
 
-    async def _get_pending_files_for_upload(self, flight_id: str = "") -> List[dict]:
+    @staticmethod
+    def _normalize_upload_target_names(data: dict) -> set[str]:
+        """Extract optional target file identities from an upload trigger payload."""
+        if not isinstance(data, dict):
+            return set()
+        targets: set[str] = set()
+        raw_files = data.get("files", [])
+        if isinstance(raw_files, list):
+            for item in raw_files:
+                if isinstance(item, str):
+                    value = item
+                    if value:
+                        targets.add(value)
+                        targets.add(os.path.basename(value))
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                for key in ("file_id", "fingerprint", "name", "file_name", "object_key", "path"):
+                    value = str(item.get(key) or "")
+                    if value:
+                        targets.add(value)
+                        targets.add(os.path.basename(value))
+        for key in ("file_id", "fingerprint", "name", "file_name", "object_key", "path"):
+            value = str(data.get(key) or "")
+            if value:
+                targets.add(value)
+                targets.add(os.path.basename(value))
+        return {target for target in targets if target}
+
+    @staticmethod
+    def _upload_item_matches_targets(item: dict, targets: set[str]) -> bool:
+        if not targets:
+            return True
+        identities = [
+            item.get("file_id"),
+            item.get("fingerprint"),
+            item.get("name"),
+            item.get("file_name"),
+            item.get("object_key"),
+            item.get("path"),
+            item.get("file_path"),
+            item.get("download_url"),
+        ]
+        for identity in identities:
+            value = str(identity or "")
+            if not value:
+                continue
+            if value in targets or os.path.basename(value) in targets:
+                return True
+        return False
+
+    async def _get_pending_files_for_upload(self, flight_id: str = "", target_names: set[str] | None = None) -> List[dict]:
         """获取待上传的文件列表（与数据库比对）"""
         await self._init_database()
         AsyncSessionLocal = get_async_session_local()
+        target_names = set(target_names or set())
 
         async with AsyncSessionLocal() as session:
             db_files = await MediaDB.get_pending_uploads(session, self.gateway_sn)
@@ -668,9 +720,12 @@ class MediaManager:
                     if str(getattr(item, "mission_id", "") or "") == flight_id
                 ]
             pending_files = []
-            pending_files.extend([self._apply_upload_priority(self._db_media_to_upload_item(item)) for item in db_files])
+            for item in db_files:
+                upload_item = self._apply_upload_priority(self._db_media_to_upload_item(item))
+                if self._upload_item_matches_targets(upload_item, target_names):
+                    pending_files.append(upload_item)
 
-            if not flight_id:
+            if not flight_id or target_names:
                 # 扫描本地/远端媒体可能访问文件系统或 HTTP 目录，不能阻塞主事件循环。
                 local_files = await self._scan_media_files_async()
                 db_paths = {str(getattr(f, "file_path", "") or "") for f in db_files}
@@ -679,6 +734,8 @@ class MediaManager:
                     file_path = str(local_file.get("file_path", "") or "")
                     file_name = str(local_file.get("file_name", "") or "")
                     if file_path in db_paths or file_name in db_file_names:
+                        continue
+                    if not self._upload_item_matches_targets(local_file, target_names):
                         continue
                     pending_files.append(self._apply_upload_priority(local_file))
 
@@ -1152,19 +1209,29 @@ class MediaManager:
                 logger.error(f"Upload failed after {self._max_retry_count} attempts: {file_name}")
                 self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
 
-    def start_upload(self, flight_id: str = None):
+    def start_upload(self, flight_id: str = None, target_names: set[str] | None = None):
         """开始上传任务（异步触发）"""
-        self._run_db_coroutine(self._async_start_upload(flight_id or ""))
+        self._run_db_coroutine(self._async_start_upload(flight_id or "", target_names or set()))
 
-    async def _async_start_upload(self, flight_id: str = ""):
+    async def _async_start_upload(self, flight_id: str = "", target_names: set[str] | None = None):
         """异步获取待上传文件并启动上传"""
-        pending_files = await self._get_pending_files_for_upload(flight_id)
+        target_names = set(target_names or set())
+        pending_files = await self._get_pending_files_for_upload(flight_id, target_names)
 
         if not pending_files:
-            logger.info("No pending files to upload: flight_id=%s", flight_id or "<all>")
+            logger.info(
+                "No pending files to upload: flight_id=%s targets=%s",
+                flight_id or "<all>",
+                sorted(target_names) or "<all>",
+            )
             return
 
-        logger.info("Found %s pending files for upload: flight_id=%s", len(pending_files), flight_id or "<all>")
+        logger.info(
+            "Found %s pending files for upload: flight_id=%s targets=%s",
+            len(pending_files),
+            flight_id or "<all>",
+            sorted(target_names) or "<all>",
+        )
 
         upload_worker_running = False
         with self._upload_lock:
@@ -1193,13 +1260,15 @@ class MediaManager:
         """
         data = msg.get('data', {})
         flight_id = data.get('flight_id') or data.get('flighttask_id', '')
-        logger.info(f"Upload flighttask media prioritize: {flight_id}")
+        target_names = self._normalize_upload_target_names(data)
+        logger.info("Upload flighttask media prioritize: %s targets=%s", flight_id, sorted(target_names) or "<all>")
 
         # 开始上传
-        self.start_upload(flight_id)
+        self.start_upload(flight_id, target_names)
 
         return MessageBuilder.build_reply(msg, result=0, data=media_task_output("sent", {
             "flight_id": flight_id,
+            "targets": sorted(target_names),
         }))
 
     # ---- 直播控制 ----

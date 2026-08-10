@@ -574,7 +574,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         manager._upload_thread = FakeAliveThread()
         manager._uploading = True
 
-        async def fake_pending_files(flight_id):
+        async def fake_pending_files(flight_id, target_names=None):
             return [{
                 "file_id": "media-id",
                 "fingerprint": "media-id",
@@ -616,7 +616,7 @@ class Dock3MediaManagerTest(unittest.TestCase):
         manager._upload_thread = FakeStoppingThread()
         manager._uploading = False
 
-        async def fake_pending_files(flight_id):
+        async def fake_pending_files(flight_id, target_names=None):
             return [{
                 "file_id": "media-id",
                 "fingerprint": "media-id",
@@ -663,6 +663,27 @@ class Dock3MediaManagerTest(unittest.TestCase):
             manager._upload_files()
 
         self.assertEqual(uploaded, ["high.jpg", "low.jpg"])
+
+    def test_upload_target_filter_matches_prepared_folder_zip_only(self):
+        manager = MediaManager()
+        target = "folder-upload-retest-0702.zip"
+        targets = manager._normalize_upload_target_names({
+            "files": [{"name": target, "file_name": target}],
+        })
+
+        zip_item = {
+            "file_id": "zip-id",
+            "file_path": str(Path("data") / "media" / target),
+            "file_name": target,
+            "name": target,
+        }
+        remote_jpeg = build_remote_media_file(
+            "http://payload.local/download/2048-00-00T00-00-00-116.jpeg",
+            "EDGEGW001",
+        )
+
+        self.assertTrue(manager._upload_item_matches_targets(zip_item, targets))
+        self.assertFalse(manager._upload_item_matches_targets(remote_jpeg, targets))
 
     def test_file_download_caches_remote_media_without_upload(self):
         class FakeResponse:

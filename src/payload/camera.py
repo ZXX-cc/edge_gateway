@@ -1536,9 +1536,10 @@ class CameraController:
         logger.info(f"Focus mode: {mode}")
         normalized = str(mode).strip().lower()
         manual_modes = {"manual", "manual_focus", "mf"}
-        single_auto_modes = {"auto", "auto_focus", "af", "single_auto_focus", "single_af", "afs"}
+        auto_modes = {"auto", "auto_focus", "af"}
+        single_auto_modes = {"single_auto_focus", "single_af", "afs"}
         continuous_auto_modes = {"continuous_auto_focus", "continuous_af", "afc"}
-        valid_modes = manual_modes | single_auto_modes | continuous_auto_modes
+        valid_modes = manual_modes | auto_modes | single_auto_modes | continuous_auto_modes
         if normalized not in valid_modes:
             return MessageBuilder.build_reply(
                 msg,
@@ -1554,6 +1555,18 @@ class CameraController:
         viewlink_attempted = False
         if self._gimbal_control and self._gimbal_control.is_connected():
             viewlink_attempted = True
+            if normalized in single_auto_modes:
+                return MessageBuilder.build_reply(
+                    msg,
+                    result=DEVICE_STATE_UNSUPPORTED,
+                    msg_str="ViewLink SDK does not expose a single auto-focus trigger; VLK_SetFocusMode(AUTO) only changes focus mode",
+                    data={
+                        "mode": mode,
+                        "supported_by_adapter": ["manual_focus", "auto_focus"],
+                        "mode_change_only": False,
+                        "visual_focus_triggered": False,
+                    },
+                )
             if normalized in continuous_auto_modes:
                 return MessageBuilder.build_reply(
                     msg,
@@ -1561,7 +1574,9 @@ class CameraController:
                     msg_str="ViewLink SDK exposes auto/manual focus only; continuous auto focus is not a distinct device command",
                     data={
                         "mode": mode,
-                        "supported_by_adapter": ["manual_focus", "auto_focus", "single_auto_focus"],
+                        "supported_by_adapter": ["manual_focus", "auto_focus"],
+                        "mode_change_only": False,
+                        "visual_focus_triggered": False,
                     },
                 )
             focus_mode = VLKFocusMode.MANUAL if normalized in manual_modes else VLKFocusMode.AUTO
@@ -1580,6 +1595,10 @@ class CameraController:
         return MessageBuilder.build_reply(msg, result=0 if success else -1, data={
             "mode": mode,
             "effective_mode": "manual_focus" if normalized in manual_modes else "auto_focus",
+            "sdk_method": "VLK_SetFocusMode",
+            "mode_change_only": True,
+            "visual_focus_triggered": False,
+            "note": "This command changes focus mode only; it does not move the lens or trigger visible autofocus.",
         })
 
     def _set_focus_value(self, msg: dict) -> dict:

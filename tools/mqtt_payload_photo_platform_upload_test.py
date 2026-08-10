@@ -650,11 +650,13 @@ def wait_target_callbacks(
     raise TimeoutError(f"timeout waiting target file_upload_callback events, missing={missing}")
 
 
-def trigger_upload_queue(client: MqttRequestClient, args: argparse.Namespace) -> None:
+def trigger_upload_queue(client: MqttRequestClient, args: argparse.Namespace, target_names: set[str] | None = None) -> None:
     if args.skip_upload_trigger:
         print("skip upload trigger by --skip-upload-trigger")
         return
     payload = {"flight_id": args.flight_id}
+    if target_names:
+        payload["files"] = [{"name": name, "file_name": name} for name in sorted(target_names)]
     reply = request_service(client, args.upload_trigger_method, payload, args.timeout)
     print("upload trigger accepted:")
     print(json.dumps(reply, ensure_ascii=False, indent=2))
@@ -719,7 +721,7 @@ def run(args: argparse.Namespace) -> int:
         trigger_photo(client, args)
         if args.photo_wait > 0:
             time.sleep(args.photo_wait)
-        trigger_upload_queue(client, args)
+        trigger_upload_queue(client, args, target_names)
         if target_names:
             print(f"waiting target file_upload_callback for: {sorted(target_names)}")
             storage_requests = []
