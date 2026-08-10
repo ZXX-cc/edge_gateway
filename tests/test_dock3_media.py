@@ -1317,6 +1317,133 @@ class Dock3MediaManagerTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             manager._ffmpeg_monitor()
 
+    def test_stop_ffmpeg_lets_monitor_thread_own_communicate(self):
+        class FakeProcess:
+            pid = 321
+
+            def __init__(self):
+                self.terminated = False
+                self.killed = False
+                self.wait_called = False
+                self.communicate_called = False
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+            def wait(self, timeout=None):
+                self.wait_called = True
+                raise AssertionError("stop_ffmpeg should not call wait while monitor owns communicate")
+
+            def communicate(self, timeout=None):
+                self.communicate_called = True
+                raise AssertionError("stop_ffmpeg should not call communicate while monitor thread is registered")
+
+        class FakeMonitorThread:
+            def __init__(self):
+                self.alive = True
+                self.ident = 1
+                self.join_calls = []
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout=None):
+                self.join_calls.append(timeout)
+                self.alive = False
+
+        manager = MediaManager()
+        process = FakeProcess()
+        monitor_thread = FakeMonitorThread()
+        manager._ffmpeg_process = process
+        manager._ffmpeg_monitor_thread = monitor_thread
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertFalse(process.wait_called)
+        self.assertFalse(process.communicate_called)
+        self.assertEqual(monitor_thread.join_calls, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+        self.assertIsNone(manager._ffmpeg_monitor_thread)
+
+    def test_stop_ffmpeg_without_monitor_uses_communicate(self):
+        class FakeProcess:
+            pid = 654
+
+            def __init__(self):
+                self.terminated = False
+                self.wait_called = False
+                self.communicate_timeouts = []
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                raise AssertionError("stop_ffmpeg should not kill when communicate exits")
+
+            def wait(self, timeout=None):
+                self.wait_called = True
+                raise AssertionError("stop_ffmpeg should not call wait")
+
+            def communicate(self, timeout=None):
+                self.communicate_timeouts.append(timeout)
+                return b"", b""
+
+        manager = MediaManager()
+        process = FakeProcess()
+        manager._ffmpeg_process = process
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.wait_called)
+        self.assertEqual(process.communicate_timeouts, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+
+    def test_stop_ffmpeg_with_unstarted_monitor_uses_communicate(self):
+        class FakeProcess:
+            pid = 655
+
+            def __init__(self):
+                self.terminated = False
+                self.communicate_timeouts = []
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                raise AssertionError("stop_ffmpeg should not kill when communicate exits")
+
+            def communicate(self, timeout=None):
+                self.communicate_timeouts.append(timeout)
+                return b"", b""
+
+        class FakeUnstartedMonitorThread:
+            ident = None
+
+            def is_alive(self):
+                return False
+
+            def join(self, timeout=None):
+                raise AssertionError("unstarted monitor thread should not be joined")
+
+        manager = MediaManager()
+        process = FakeProcess()
+        monitor_thread = FakeUnstartedMonitorThread()
+        manager._ffmpeg_process = process
+        manager._ffmpeg_monitor_thread = monitor_thread
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertEqual(process.communicate_timeouts, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+        self.assertIsNone(manager._ffmpeg_monitor_thread)
+
     def test_live_start_accepts_gimbal_video_type(self):
         ok, normalized, errors = validate_live_start_payload({
             "url": "rtmp://cloud.example/live/stream",
