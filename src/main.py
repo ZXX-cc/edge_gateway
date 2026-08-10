@@ -1309,7 +1309,9 @@ class EdgeGateway:
         if return_home_power is None:
             return_home_power = _bounded_percent(Config.get("device.limits.return_home_power"))
         if return_home_power is not None:
-            osd_data["return_home_power"] = return_home_power
+            battery = osd_data.setdefault("battery", {})
+            if isinstance(battery, dict):
+                battery["return_home_power"] = return_home_power
 
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""

@@ -206,7 +206,7 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     check_field(data, "gear", int, errors, allowed={0, 1})
     check_field(data, "flight_time", int, errors, min_value=0)
     check_field(data, "timestamp", int, errors, min_value=0)
-    check_field(data, "return_home_power", int, errors, min_value=0, max_value=100)
+    check_field(data, "battery.return_home_power", int, errors, min_value=0, max_value=100)
 
     cameras = data.get("cameras")
     if cameras is not None:

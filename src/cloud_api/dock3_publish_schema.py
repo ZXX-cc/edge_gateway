@@ -39,7 +39,6 @@ AIRCRAFT_OSD_FIELDS = frozenset({
     "mode_code",
     "height_limit",
     "distance_limit",
-    "return_home_power",
     "cameras",
 })
 

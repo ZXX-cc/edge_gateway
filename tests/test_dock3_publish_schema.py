@@ -66,7 +66,7 @@ class Dock3PublishSchemaTest(unittest.TestCase):
             "data": {
                 "latitude": 30.0,
                 "longitude": 120.0,
-                "return_home_power": 38,
+                "battery": {"return_home_power": 38},
                 "cameras": [{"payload_index": "0-42-0", "zoom_factor": 2.0}],
                 "cover_state": 1,
                 "viewlink_result": {"success": True},
@@ -79,7 +79,7 @@ class Dock3PublishSchemaTest(unittest.TestCase):
 
         self.assertEqual(
             set(sanitized["data"]),
-            {"latitude", "longitude", "return_home_power", "cameras"},
+            {"latitude", "longitude", "battery", "cameras"},
         )
         self.assertIn("data.cover_state", removed)
         self.assertIn("data.viewlink_result", removed)

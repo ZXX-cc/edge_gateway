@@ -347,7 +347,7 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         telemetry.get("return_home_battery"),
     )
     if return_home_power is not None:
-        osd["return_home_power"] = return_home_power
+        osd["battery"]["return_home_power"] = return_home_power
     if current > 0:
         osd["battery"]["current"] = int(current * 1000)
     return osd
