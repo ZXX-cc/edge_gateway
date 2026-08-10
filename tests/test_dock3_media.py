@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import requests
 import sys
@@ -66,6 +67,28 @@ def base_msg(method, data):
         "method": method,
         "data": data,
     }
+
+
+TEST_LOG_DIR = Path(os.environ.get("EDGE_GATEWAY_TEST_LOG_DIR", Path(PROJECT_ROOT) / "test_logs"))
+TEST_LOG_FILE = Path(
+    os.environ.get(
+        "EDGE_GATEWAY_TEST_LOG_FILE",
+        TEST_LOG_DIR / f"dock3_media_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl",
+    )
+)
+
+
+def write_test_log(case_name, check_name, **fields):
+    """把关键测试证据写入独立测试日志，避免混入业务历史日志。"""
+    TEST_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "case": case_name,
+        "check": check_name,
+        **fields,
+    }
+    with TEST_LOG_FILE.open("a", encoding="utf-8") as fp:
+        fp.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 class FakeCameraController:
@@ -852,6 +875,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]["name"], "sample.jpg")
         self.assertEqual(files[0]["path"], "flight-a/photo/sample.jpg")
+        write_test_log(
+            self.id(),
+            "递归扫描本地媒体路径",
+            expected_path="flight-a/photo/sample.jpg",
+            actual_path=files[0]["path"],
+            file_name=files[0]["name"],
+            result="通过",
+        )
 
     def test_build_media_file_has_stable_dock3_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1565,6 +1596,20 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(manager._live_quality, 0)
         self.assertEqual(manager._live_video_type, "gimbal")
         self.assertEqual(manager._live_source_key, "gimbal")
+        write_test_log(
+            self.id(),
+            "直播启动失败清理状态",
+            expected_result=INVALID_COMMAND_FORMAT,
+            actual_result=reply["data"]["result"],
+            live_streaming=manager._live_streaming,
+            live_session_id=manager._live_session_id,
+            live_video_id=manager._live_video_id,
+            live_protocol=manager._live_protocol,
+            live_quality=manager._live_quality,
+            live_video_type=manager._live_video_type,
+            live_source_key=manager._live_source_key,
+            result="通过",
+        )
 
     def test_production_rejects_mock_live_url(self):
         Config.merge({"runtime": {"mode": "production"}})
@@ -1631,6 +1676,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("create_time", file_data["metadata"])
         self.assertIn("lat", file_data["metadata"]["shoot_position"])
         self.assertIn("lng", file_data["metadata"]["shoot_position"])
+        write_test_log(
+            self.id(),
+            "上传完成回调官方字段",
+            object_key=file_data["object_key"],
+            ext_fields=sorted(file_data["ext"].keys()),
+            metadata_fields=sorted(file_data["metadata"].keys()),
+            result="通过",
+        )
 
     def test_report_upload_complete_normalizes_url_object_key(self):
         events = []
@@ -1646,6 +1699,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         file_data = events[0]["data"]["file"]
         self.assertEqual(file_data["object_key"], "bucket/path/sample.jpg")
         self.assertEqual(file_data["path"], "http://oss.local/bucket/path/sample.jpg")
+        write_test_log(
+            self.id(),
+            "上传完成回调object_key归一化",
+            expected_object_key="bucket/path/sample.jpg",
+            actual_object_key=file_data["object_key"],
+            callback_path=file_data["path"],
+            result="通过",
+        )
 
     def test_live_start_rejects_invalid_payload(self):
         ok, _, errors = validate_live_start_payload({"url": "", "video_id": ""})

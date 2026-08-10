@@ -588,7 +588,7 @@ rtk:
   sources:
     F9P:
       type: "tcp" # ZED-F9P 串口转 TCP 输出 RTCM3，对应参考项目 base_station
-      host: "192.168.1.13" # 与 RTKF9P/config.yaml base_station.host 相同
+      host: "192.168.1.21" # 与 RTKF9P/config.yaml base_station.host 相同
       port: 8600 # 与 RTKF9P/config.yaml base_station.port 相同
       priority: 10
       connect_timeout: 10.0 # 与 RTKF9P/config.yaml base_station.connect_timeout 相同
