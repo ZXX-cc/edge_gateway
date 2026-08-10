@@ -1527,12 +1527,8 @@ class MediaManager:
             "error_status": 0 if task_status in {TASK_STATUS_OK, TASK_STATUS_IN_PROGRESS} else 1,
         }
 
-    def _ffmpeg_monitor(self, process: Optional[subprocess.Popen] = None):
+    def _ffmpeg_monitor(self, process: subprocess.Popen):
         """监控 ffmpeg 进程状态"""
-        process = process or self._ffmpeg_process
-        if not process:
-            return
-
         stdout, stderr = process.communicate()
         returncode = process.returncode
 

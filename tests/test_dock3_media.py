@@ -1286,6 +1286,12 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertTrue(manager._live_streaming)
         self.assertEqual(manager._live_session_id, "new-live")
 
+    def test_ffmpeg_monitor_requires_explicit_process(self):
+        manager = MediaManager()
+
+        with self.assertRaises(TypeError):
+            manager._ffmpeg_monitor()
+
     def test_live_start_accepts_gimbal_video_type(self):
         ok, normalized, errors = validate_live_start_payload({
             "url": "rtmp://cloud.example/live/stream",
