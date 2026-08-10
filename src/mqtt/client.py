@@ -410,7 +410,9 @@ class MQTTClient:
             parts.append(f"ok={ok}")
         if elapsed_ms is not None:
             parts.append(f"elapsed_ms={elapsed_ms}")
-        mqtt_trace_logger.info(" | ".join(parts))
+        line = " | ".join(parts)
+        logger.info(line)
+        mqtt_trace_logger.info(line, extra={"console_silent": True})
 
     def _log_gateway_traffic(
         self,
