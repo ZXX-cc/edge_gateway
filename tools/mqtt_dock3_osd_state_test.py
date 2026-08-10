@@ -199,6 +199,10 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
 
     check_field(data, "battery.capacity_percent", "number", errors, min_value=0, max_value=100)
     check_field(data, "battery.voltage", "number", errors, min_value=0)
+    check_field(data, "battery.remain_flight_time", int, errors, min_value=0)
+    check_field(data, "battery.return_home_power", int, errors, min_value=0, max_value=100)
+    check_field(data, "battery.landing_power", int, errors, min_value=0, max_value=100)
+    check_field(data, "battery.batteries", list, errors)
     check_field(data, "position_state.gps_number", int, errors, min_value=0)
     check_field(data, "position_state.is_fixed", int, errors, allowed={0, 1, 2, 3})
     check_field(data, "position_state.quality", int, errors, min_value=0, max_value=5)
@@ -206,7 +210,17 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     check_field(data, "gear", int, errors, allowed={0, 1})
     check_field(data, "flight_time", int, errors, min_value=0)
     check_field(data, "timestamp", int, errors, min_value=0)
-    check_field(data, "battery.return_home_power", int, errors, min_value=0, max_value=100)
+
+    batteries = data.get("battery", {}).get("batteries", [])
+    if isinstance(batteries, list):
+        for index, item in enumerate(batteries):
+            if not isinstance(item, dict):
+                errors.append(f"data.battery.batteries[{index}] expected object")
+                continue
+            check_field(item, "capacity_percent", int, errors, min_value=0, max_value=100)
+            check_field(item, "index", int, errors, min_value=0)
+            if "sn" in item and not isinstance(item.get("sn"), str):
+                errors.append(f"data.battery.batteries[{index}].sn expected str")
 
     cameras = data.get("cameras")
     if cameras is not None:

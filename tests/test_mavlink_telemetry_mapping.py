@@ -238,13 +238,19 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
             "height_limit": 120,
             "distance_limit": 10000,
             "return_home_power": 35,
+            "remain_flight_time": 600,
+            "landing_power": 18,
+            "batteries": [{"capacity_percent": 88, "index": 1, "sn": "BAT001"}],
         })
 
         osd = build_osd_data(telemetry)
 
         self.assertEqual(osd["height_limit"], 120.0)
         self.assertEqual(osd["distance_limit"], 10000.0)
+        self.assertEqual(osd["battery"]["remain_flight_time"], 600)
         self.assertEqual(osd["battery"]["return_home_power"], 35)
+        self.assertEqual(osd["battery"]["landing_power"], 18)
+        self.assertEqual(osd["battery"]["batteries"], [{"capacity_percent": 88, "index": 1, "sn": "BAT001"}])
 
     def test_osd_return_home_power_accepts_legacy_alias_and_clamps(self):
         telemetry = new_telemetry_state()

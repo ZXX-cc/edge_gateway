@@ -1312,6 +1312,29 @@ class EdgeGateway:
             battery = osd_data.setdefault("battery", {})
             if isinstance(battery, dict):
                 battery["return_home_power"] = return_home_power
+                if "remain_flight_time" not in battery:
+                    remain_flight_time = _finite_non_negative_number(
+                        telemetry.get("remain_flight_time"),
+                        telemetry.get("remaining_flight_time"),
+                        telemetry.get("remainFlightTime"),
+                        0,
+                    )
+                    battery["remain_flight_time"] = int(remain_flight_time or 0)
+                if "landing_power" not in battery:
+                    landing_power = _bounded_percent(
+                        telemetry.get("landing_power"),
+                        telemetry.get("critical_battery_power"),
+                        Config.get("device.limits.critical_battery_power"),
+                        Config.get("mission.safety.critical_battery_power"),
+                        15,
+                    )
+                    battery["landing_power"] = landing_power if landing_power is not None else 15
+                if "batteries" not in battery:
+                    capacity_percent = _bounded_percent(battery.get("capacity_percent"))
+                    battery["batteries"] = [{
+                        "capacity_percent": capacity_percent if capacity_percent is not None else 0,
+                        "index": 0,
+                    }]
 
     def _start_nest_mavlink(self, nest_config: dict) -> bool:
         """启动独立机巢 MAVLink 连接。"""

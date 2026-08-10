@@ -292,6 +292,11 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     current = _finite_number(telemetry.get("current"), 0.0)
     capacity_percent = _bounded_int(telemetry.get("batteryRemaining"), 0, 100)
     gps_fixed = gps_fixed_to_dock3_state(telemetry.get("gps_fixed", 0))
+    battery = {
+        "capacity_percent": capacity_percent,
+        "voltage": int(voltage * 1000),
+    }
+    _apply_battery_osd_fields(battery, telemetry)
     osd = {
         "latitude": max(-90.0, min(90.0, _finite_number(telemetry.get("latitude"), 0.0))),
         "longitude": max(-180.0, min(180.0, _finite_number(telemetry.get("longitude"), 0.0))),
@@ -303,10 +308,7 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         "attitude_pitch": _finite_number(telemetry.get("pitch"), 0.0),
         "attitude_roll": _finite_number(telemetry.get("roll"), 0.0),
         "attitude_head": _finite_number(telemetry.get("yaw"), 0.0) % 360.0,
-        "battery": {
-            "capacity_percent": capacity_percent,
-            "voltage": int(voltage * 1000),
-        },
+        "battery": battery,
         "position_state": {
             "gps_number": _bounded_int(telemetry.get("satelliteNumber"), 0),
             "is_fixed": gps_fixed,
@@ -353,6 +355,54 @@ def build_osd_data(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     return osd
 
 
+def _apply_battery_osd_fields(battery: Dict[str, Any], telemetry: Dict[str, Any]) -> None:
+    capacity_percent = _bounded_int(
+        telemetry.get("batteryRemaining", battery.get("capacity_percent", 0)), 0, 100
+    )
+    remain_flight_time = _non_negative_int(
+        telemetry.get("remain_flight_time"),
+        telemetry.get("remaining_flight_time"),
+        telemetry.get("remainFlightTime"),
+        telemetry.get("flight_time_remaining"),
+    )
+    landing_power = _percent_value(
+        telemetry.get("landing_power"),
+        telemetry.get("critical_battery_power"),
+        telemetry.get("critical_battery"),
+    )
+
+    battery["remain_flight_time"] = remain_flight_time if remain_flight_time is not None else 0
+    battery["landing_power"] = landing_power if landing_power is not None else 15
+    battery["batteries"] = _battery_detail_items(telemetry, capacity_percent)
+
+
+def _battery_detail_items(telemetry: Dict[str, Any], capacity_percent: int) -> list[Dict[str, Any]]:
+    source = telemetry.get("batteries")
+    if isinstance(source, list):
+        items = []
+        for index, item in enumerate(source):
+            if not isinstance(item, dict):
+                continue
+            detail = {
+                "capacity_percent": _bounded_int(
+                    item.get("capacity_percent", item.get("batteryRemaining", capacity_percent)), 0, 100
+                ),
+                "index": _bounded_int(item.get("index", index), 0),
+            }
+            sn = item.get("sn", item.get("serial_number", item.get("serialNumber")))
+            if sn is not None:
+                detail["sn"] = str(sn)
+            items.append(detail)
+        if items:
+            return items
+
+    detail = {"capacity_percent": capacity_percent, "index": 0}
+    sn = telemetry.get("battery_sn", telemetry.get("battery_serial_number", telemetry.get("batterySerialNumber")))
+    if sn is not None:
+        detail["sn"] = str(sn)
+    return [detail]
+
+
 def _limit_value(*values: Any) -> Optional[float]:
     for value in values:
         if value is None:
@@ -370,6 +420,16 @@ def _percent_value(*values: Any) -> Optional[int]:
         parsed = _finite_number(value, None)
         if parsed is not None:
             return max(0, min(100, int(parsed)))
+    return None
+
+
+def _non_negative_int(*values: Any) -> Optional[int]:
+    for value in values:
+        if value is None:
+            continue
+        parsed = _finite_number(value, None)
+        if parsed is not None:
+            return max(0, int(parsed))
     return None
 
 
