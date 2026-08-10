@@ -1200,6 +1200,7 @@ class DeviceManager:
         now = time.time()
         for dev in self._sub_devices.values():
             if dev.online != online:
+                self._log_sub_device_online_change(dev, online, source="nest_drone_heartbeat")
                 dev.online = online
                 changed = True
             if online:
@@ -1208,6 +1209,21 @@ class DeviceManager:
 
         if changed:
             self._refresh_sub_device_property(notify=False)
+
+    @staticmethod
+    def _log_sub_device_online_change(dev: SubDevice, online: bool, *, source: str):
+        state_text = "上线" if online else "离线"
+        state_value = "online" if online else "offline"
+        logger.info(
+            "飞机%s: sn=%s state=%s source=%s paired=%s type=%s sub_type=%s",
+            state_text,
+            dev.sn,
+            state_value,
+            source,
+            dev.paired,
+            dev.type,
+            dev.sub_type,
+        )
 
     def _remember_nest_command_target(self, command_name: str, prop_name: str, prop_value: int):
         """Keep the desired command state ahead of stale nest telemetry snapshots."""
@@ -4014,19 +4030,24 @@ class DeviceManager:
         seen_sns = set()
         for dev_data in incoming_sub_devices:
             sub_dev = SubDevice.from_dict(dev_data)
+            existing = self._sub_devices.get(sub_dev.sn)
+            was_online = bool(existing.online) if existing else False
             sub_dev.online = True
             sub_dev.last_heartbeat = time.time()
-            existing = self._sub_devices.get(sub_dev.sn)
             if existing:
                 sub_dev.paired = existing.paired
             binding = self._get_device_binding_info(sub_dev.sn)
             if binding.get('is_bound'):
                 sub_dev.paired = True
+            if not was_online:
+                self._log_sub_device_online_change(sub_dev, True, source="update_topo")
             self._sub_devices[sub_dev.sn] = sub_dev
             seen_sns.add(sub_dev.sn)
 
         for sn, sub_dev in self._sub_devices.items():
             if sn not in seen_sns:
+                if sub_dev.online:
+                    self._log_sub_device_online_change(sub_dev, False, source="update_topo")
                 sub_dev.online = False
 
         logger.info(f"Topo updated from cloud: domain={self._gateway_domain}, "

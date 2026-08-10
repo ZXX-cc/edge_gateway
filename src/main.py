@@ -323,6 +323,7 @@ class EdgeGateway:
         self._organization_binding_retry_attempt = 0
         self._organization_binding_pending_tid = ""
         self._organization_binding_pending_stage = ""
+        self._aircraft_telemetry_online_logged = False
 
     def initialize(self, config_path: str = "./config/gateway.yaml", runtime_overrides: dict = None) -> bool:
         """初始化网关"""
@@ -1539,6 +1540,18 @@ class EdgeGateway:
             self._apply_real_aircraft_mode_code(osd_data)
             self._apply_aircraft_limit_fields(osd_data)
             aircraft_osd = self._build_aircraft_osd_for_report(osd_data)
+            if not self._aircraft_telemetry_online_logged:
+                battery = aircraft_osd.get("battery", {}) if isinstance(aircraft_osd, dict) else {}
+                logger.info(
+                    "收到飞机遥测: state=online source=flight_controller mode_code=%s "
+                    "lat=%s lon=%s height=%s battery=%s",
+                    aircraft_osd.get("mode_code"),
+                    aircraft_osd.get("latitude"),
+                    aircraft_osd.get("longitude"),
+                    aircraft_osd.get("height"),
+                    battery.get("capacity_percent") if isinstance(battery, dict) else "",
+                )
+                self._aircraft_telemetry_online_logged = True
             drone_report_logger.info(
                 "aircraft_osd source=flight_controller payload=%s",
                 format_with_labels(aircraft_osd, max_length=5000),
