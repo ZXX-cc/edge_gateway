@@ -1715,10 +1715,16 @@ class MediaManager:
                 )
             if not self._start_ffmpeg(url, url_type, video_quality, live_source_key):
                 reason = self._last_live_pipeline_failure_reason("Live video source unavailable")
+                failure_result = DOCK_SYSTEM_ERROR
+                if (
+                    reason == "Live video source unavailable"
+                    or reason.startswith("Unsupported live video source")
+                ):
+                    failure_result = INVALID_COMMAND_FORMAT
                 return self._live_start_failed_reply(
                     msg,
                     reason,
-                    result=DOCK_SYSTEM_ERROR,
+                    result=failure_result,
                 )
 
         self._publish_live_status_event(TASK_STATUS_IN_PROGRESS, live_status=1)
