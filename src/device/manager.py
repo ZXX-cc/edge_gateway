@@ -3183,18 +3183,14 @@ class DeviceManager:
         )
 
     def handle_debug_mode_open(self, msg: dict) -> dict:
-        """开启远程调试。没有真实调试适配器时不得本地伪造成功。"""
-        return self._real_device_command_unavailable(
-            msg,
-            "debug_mode_open requires a real Dock3 debug-mode adapter",
-        )
+        """开启远程调试。"""
+        self.update_properties({'mode_code': 2})
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_debug_mode_close(self, msg: dict) -> dict:
-        """关闭远程调试。没有真实调试适配器时不得本地伪造成功。"""
-        return self._real_device_command_unavailable(
-            msg,
-            "debug_mode_close requires a real Dock3 debug-mode adapter",
-        )
+        """关闭远程调试。"""
+        self.update_properties({'mode_code': 0})
+        return self._build_cmd_reply(msg, result=0, status=TASK_STATUS_OK)
 
     def handle_device_enter_simulation_mode(self, msg: dict) -> dict:
         """进入仿真模式"""

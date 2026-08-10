@@ -77,6 +77,19 @@ class DeviceManagerCommandCompatTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], DOCK_COMMUNICATION_ERROR)
         self.assertEqual(reply["data"]["output"]["status"], "failed")
 
+    def test_debug_mode_switches_local_mode_code_for_cloud_api_link_test(self):
+        opened = self.manager.handle_debug_mode_open(msg("debug_mode_open", {}))
+
+        self.assertEqual(opened["data"]["result"], 0)
+        self.assertEqual(opened["data"]["output"]["status"], "ok")
+        self.assertEqual(self.manager.get_property("mode_code"), 2)
+
+        closed = self.manager.handle_debug_mode_close(msg("debug_mode_close", {}))
+
+        self.assertEqual(closed["data"]["result"], 0)
+        self.assertEqual(closed["data"]["output"]["status"], "ok")
+        self.assertEqual(self.manager.get_property("mode_code"), 0)
+
     def test_link_script_switch_payloads_validate_but_do_not_fake_state(self):
         battery = self.manager.handle_battery_store_mode_switch(
             msg("battery_store_mode_switch", {"action": 0})
