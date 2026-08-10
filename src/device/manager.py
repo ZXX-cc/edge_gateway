@@ -205,6 +205,10 @@ class DeviceManager:
         self._cloud_conn = None            # CloudConnectionManager - 云端请求
         self._payload_state_provider = None # Direct payload state provider
         self._aircraft_link_provider: Optional[Callable[[str], bool]] = None
+        self._aircraft_link_started_from_nest = False
+        self._aircraft_link_starting_from_nest = False
+        self._aircraft_link_last_attempt_monotonic = 0.0
+        self._aircraft_link_retry_interval = 10.0
 
         # ===== 组织绑定信息持久化 =====
         self._org_data_path = os.path.join(
@@ -1141,6 +1145,9 @@ class DeviceManager:
             if self._last_nest_drone_heartbeat:
                 self._drone_heartbeat_has_been_online = True
                 self._nest_drone_heartbeat_alarm_enabled = True
+                self._ensure_aircraft_link_after_nest_drone_online()
+            else:
+                self._aircraft_link_started_from_nest = False
             self._sync_sub_device_online_from_nest(bool(nest_data.get('drone_heartbeat')))
 
         if updates:
@@ -1213,6 +1220,39 @@ class DeviceManager:
 
         if changed:
             self._refresh_sub_device_property(notify=False)
+
+    def _ensure_aircraft_link_after_nest_drone_online(self) -> None:
+        """Start the gateway-owned aircraft MAVLink link after startup sees the drone online.
+
+        A gateway restart may happen while the aircraft is already powered on.
+        In that case no new ``drone_open`` command arrives to trigger lazy
+        connection, so RTK injection would remain stopped until another command
+        touched the aircraft link.
+        """
+        if not self._aircraft_link_provider:
+            return
+        if self._aircraft_link_started_from_nest or self._aircraft_link_starting_from_nest:
+            return
+
+        now = time.monotonic()
+        if now - self._aircraft_link_last_attempt_monotonic < self._aircraft_link_retry_interval:
+            return
+        self._aircraft_link_last_attempt_monotonic = now
+        self._aircraft_link_starting_from_nest = True
+
+        def connect() -> None:
+            try:
+                if self._try_aircraft_lazy_connect("nest_drone_heartbeat_online"):
+                    self._aircraft_link_started_from_nest = True
+            finally:
+                self._aircraft_link_starting_from_nest = False
+
+        thread = threading.Thread(
+            target=connect,
+            name="AircraftLazyConnectFromNest",
+            daemon=True,
+        )
+        thread.start()
 
     @staticmethod
     def _log_sub_device_online_change(dev: SubDevice, online: bool, *, source: str):

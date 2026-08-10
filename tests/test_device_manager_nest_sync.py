@@ -241,6 +241,35 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
             }
             self.assertIn("dock3.nest.drone_heartbeat.lost", hms_keys)
 
+    def test_startup_drone_heartbeat_false_does_not_start_aircraft_link(self):
+        calls = []
+        self.manager.set_aircraft_link_provider(lambda reason: calls.append(reason) or True)
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+        time.sleep(0.05)
+
+        self.assertEqual(calls, [])
+
+    def test_startup_drone_heartbeat_true_starts_aircraft_link_for_rtk(self):
+        calls = []
+        connected = threading.Event()
+
+        def provider(reason):
+            calls.append(reason)
+            connected.set()
+            return True
+
+        self.manager.set_aircraft_link_provider(provider)
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+
+        self.assertTrue(connected.wait(1.0))
+        self.assertEqual(calls, ["nest_drone_heartbeat_online"])
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+        time.sleep(0.05)
+        self.assertEqual(calls, ["nest_drone_heartbeat_online"])
+
     def test_startup_nest_and_plc_heartbeat_false_do_not_report_hms_until_seen_online(self):
         with (
             patch.object(self.manager, "_save_alarm_to_db", new=lambda *args, **kwargs: None),
