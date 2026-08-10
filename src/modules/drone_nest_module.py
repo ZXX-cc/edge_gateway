@@ -811,18 +811,65 @@ class DroneNestModule(BaseModule):
     ) -> Optional[Dict[str, Any]]:
         """等待 12005 指令 ACK/拒绝回复，返回匹配的上层结构。"""
         deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        nest_raw_logger.info(
+            "机巢12005开始等待: after_sequence=%s, expected_ordinary=%s, "
+            "expected_takeoff=%s, timeout=%ss",
+            after_sequence,
+            self._fmt_hex(expected_ordinary_order, 4),
+            self._fmt_hex(expected_takeoff_land_order, 2),
+            timeout,
+            extra={"console_silent": True},
+        )
         with self._order_response_condition:
             while True:
                 if self._order_response_sequence > after_sequence:
                     response = dict(self.last_cloud_order_response or {})
+                    ordinary = response.get("ordinary_order_response") or {}
+                    takeoff = response.get("takeoff_land_order_response") or {}
                     if self._order_response_matches(
                         response,
                         expected_ordinary_order=expected_ordinary_order,
                         expected_takeoff_land_order=expected_takeoff_land_order,
                     ):
+                        nest_raw_logger.info(
+                            "机巢12005匹配成功: sequence=%s, expected_ordinary=%s, "
+                            "expected_takeoff=%s, actual_ordinary_raw=%s, "
+                            "actual_ordinary_command=%s, actual_ordinary_device=%s, "
+                            "actual_takeoff_raw=%s, actual_takeoff_command=%s, "
+                            "status=%s, result=%s, rejections=%s",
+                            self._order_response_sequence,
+                            self._fmt_hex(expected_ordinary_order, 4),
+                            self._fmt_hex(expected_takeoff_land_order, 2),
+                            self._fmt_hex(ordinary.get('raw'), 8),
+                            self._fmt_hex(ordinary.get('command_code'), 2),
+                            self._fmt_hex(ordinary.get('device_code'), 2),
+                            self._fmt_hex(takeoff.get('raw'), 8),
+                            self._fmt_hex(takeoff.get('command_code'), 2),
+                            response.get("status"),
+                            response.get("result"),
+                            response.get("rejections"),
+                            extra={"console_silent": True},
+                        )
                         return response
-                    ordinary = response.get("ordinary_order_response") or {}
-                    takeoff = response.get("takeoff_land_order_response") or {}
+                    nest_raw_logger.warning(
+                        "机巢12005不匹配: sequence=%s, after_sequence=%s, "
+                        "expected_ordinary=%s, expected_takeoff=%s, "
+                        "actual_ordinary_raw=%s, actual_ordinary_command=%s, "
+                        "actual_ordinary_device=%s, actual_takeoff_raw=%s, "
+                        "actual_takeoff_command=%s, status=%s, rejections=%s",
+                        self._order_response_sequence,
+                        after_sequence,
+                        self._fmt_hex(expected_ordinary_order, 4),
+                        self._fmt_hex(expected_takeoff_land_order, 2),
+                        self._fmt_hex(ordinary.get('raw'), 8),
+                        self._fmt_hex(ordinary.get('command_code'), 2),
+                        self._fmt_hex(ordinary.get('device_code'), 2),
+                        self._fmt_hex(takeoff.get('raw'), 8),
+                        self._fmt_hex(takeoff.get('command_code'), 2),
+                        response.get("status"),
+                        response.get("rejections"),
+                        extra={"console_silent": True},
+                    )
                     self.log(
                         "机巢12005不匹配: "
                         f"sequence={self._order_response_sequence}, after_sequence={after_sequence}, "
@@ -842,6 +889,26 @@ class DroneNestModule(BaseModule):
                     response = dict(self.last_cloud_order_response or {})
                     ordinary = response.get("ordinary_order_response") or {}
                     takeoff = response.get("takeoff_land_order_response") or {}
+                    nest_raw_logger.error(
+                        "机巢12005等待超时: timeout=%ss, after_sequence=%s, "
+                        "current_sequence=%s, expected_ordinary=%s, expected_takeoff=%s, "
+                        "last_ordinary_raw=%s, last_ordinary_command=%s, "
+                        "last_ordinary_device=%s, last_takeoff_raw=%s, "
+                        "last_takeoff_command=%s, last_status=%s, last_rejections=%s",
+                        timeout,
+                        after_sequence,
+                        self._order_response_sequence,
+                        self._fmt_hex(expected_ordinary_order, 4),
+                        self._fmt_hex(expected_takeoff_land_order, 2),
+                        self._fmt_hex(ordinary.get('raw'), 8),
+                        self._fmt_hex(ordinary.get('command_code'), 2),
+                        self._fmt_hex(ordinary.get('device_code'), 2),
+                        self._fmt_hex(takeoff.get('raw'), 8),
+                        self._fmt_hex(takeoff.get('command_code'), 2),
+                        response.get("status"),
+                        response.get("rejections"),
+                        extra={"console_silent": True},
+                    )
                     self.log(
                         "机巢12005等待超时: "
                         f"timeout={timeout}s, after_sequence={after_sequence}, "
@@ -896,6 +963,14 @@ class DroneNestModule(BaseModule):
                 commands=self._last_sent_commands,
                 ordinary_order=f"0x{ordinary_order:04X}",
                 takeoff_land_order=f"0x{takeoff_land_order:02X}",
+            )
+            nest_raw_logger.info(
+                "机巢12003命令下发: commands=%s, ordinary_order=0x%04X, "
+                "takeoff_land_order=0x%02X, wait_ack=12005",
+                self._last_sent_commands,
+                ordinary_order,
+                takeoff_land_order,
+                extra={"console_silent": True},
             )
             if self.send_gcs_order_response(ordinary_order, takeoff_land_order) is False:
                 return False
