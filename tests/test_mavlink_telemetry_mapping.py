@@ -197,6 +197,21 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(telemetry["gps_signal_level"], 4)
         self.assertEqual(build_osd_data(telemetry)["position_state"]["quality"], 4)
 
+    def test_gps_raw_int_rtk_fix_sets_aircraft_rtk_flag(self):
+        telemetry = new_telemetry_state()
+
+        apply_mavlink_message(
+            SimpleNamespace(msg_type="GPS_RAW_INT", fix_type=6, satellites_visible=28),
+            telemetry,
+        )
+
+        osd = build_osd_data(telemetry)
+        self.assertEqual(telemetry["gps_fixed"], 1)
+        self.assertEqual(telemetry["rtk_flag"], 1)
+        self.assertEqual(telemetry["rtkNumber"], 28)
+        self.assertEqual(osd["position_state"]["rtk_flag"], 1)
+        self.assertEqual(osd["position_state"]["rtk_number"], 28)
+
     def test_battery_status_uses_extended_voltage_cells_and_clamps_capacity(self):
         telemetry = new_telemetry_state()
 

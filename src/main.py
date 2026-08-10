@@ -905,12 +905,35 @@ class EdgeGateway:
             return f"tcp:{mavlink_config['host']}:{mavlink_config['port']}"
         return f"udpin:{mavlink_config['host']}:{mavlink_config['udp_port']}"
 
-    def _prepare_aircraft_runtime_modules(self, nest_mavlink_config: dict):
+    def _prepare_aircraft_runtime_modules(self, nest_mavlink_config: dict, mavlink_config: Optional[dict] = None):
         """启动期只创建业务对象和依赖，不主动连接飞机。"""
-        self.flight_control = self.flight_control or FlightControl()
-        self.mode_control = self.mode_control or ModeControl()
-        self.telemetry_module = self.telemetry_module or TelemetryModule(mode="real")
-        self.waypoint_manager = self.waypoint_manager or WaypointManager()
+        mavlink_config = mavlink_config or Config.get_mavlink_config()
+        source_system = int(mavlink_config.get('system_id') or 255)
+        source_component = int(mavlink_config.get('component_id') or 191)
+        target_system = int(mavlink_config.get('target_system_id') or 1)
+        target_component = int(mavlink_config.get('target_component_id') or 1)
+        aircraft_system_id = int(mavlink_config.get('aircraft_system_id') or target_system)
+
+        self.flight_control = self.flight_control or FlightControl(
+            target_system=target_system,
+            target_component=target_component,
+            source_system=source_system,
+            source_component=source_component,
+        )
+        self.mode_control = self.mode_control or ModeControl(
+            target_system=target_system,
+            target_component=target_component,
+            source_system=source_system,
+            source_component=source_component,
+        )
+        self.telemetry_module = self.telemetry_module or TelemetryModule(
+            mode="real",
+            aircraft_system_id=aircraft_system_id,
+        )
+        self.waypoint_manager = self.waypoint_manager or WaypointManager(
+            target_system=target_system,
+            target_component=target_component,
+        )
         self.rtk_module = self.rtk_module or RTKModule(
             Config.get('rtk', {}) or {},
             telemetry_module=self.telemetry_module,
@@ -1069,7 +1092,7 @@ class EdgeGateway:
 
             if not use_main_mavlink:
                 logger.info("Main MAVLink disabled; using nest MAVLink as the device-side link")
-                self._prepare_aircraft_runtime_modules(nest_mavlink_config)
+                self._prepare_aircraft_runtime_modules(nest_mavlink_config, mavlink_config)
                 if use_separate_nest_mavlink:
                     if self._start_nest_mavlink(nest_mavlink_config):
                         if self.mission:
@@ -1086,7 +1109,7 @@ class EdgeGateway:
                     baudrate=mavlink_config['baudrate']
                 )
                 self._main_mavlink_lazy_connect = True
-                self._prepare_aircraft_runtime_modules(nest_mavlink_config)
+                self._prepare_aircraft_runtime_modules(nest_mavlink_config, mavlink_config)
                 if use_separate_nest_mavlink:
                     self._start_nest_mavlink(nest_mavlink_config)
                 else:

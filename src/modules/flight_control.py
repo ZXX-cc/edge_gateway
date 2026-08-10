@@ -48,11 +48,19 @@ class FlightControl(BaseModule):
     - 模式切换（支持ArduPlane所有模式）
     """
 
-    def __init__(self, target_system: int = 1, target_component: int = 1):
+    def __init__(
+        self,
+        target_system: int = 1,
+        target_component: int = 1,
+        source_system: Optional[int] = None,
+        source_component: Optional[int] = None,
+    ):
         super().__init__("FlightControl")
 
         self.target_system = target_system
         self.target_component = target_component
+        self.source_system = source_system
+        self.source_component = source_component
         self.dispatcher: Optional[MessageDispatcher] = None
 
         # ✅ 当前状态（明确初始化为None）
@@ -170,7 +178,7 @@ class FlightControl(BaseModule):
 
         if msg_type == 'HEARTBEAT':
             self._handle_heartbeat(msg)
-        elif msg_type == 'COMMAND_ACK':
+        elif msg_type == 'COMMAND_ACK' and self._is_command_ack_for_this_endpoint(msg):
             self._handle_command_ack(msg)
         elif msg_type == 'SYS_STATUS':
             self._handle_sys_status(msg)
@@ -445,6 +453,20 @@ class FlightControl(BaseModule):
             self._command_acks[msg.command] = ack
             self._command_ack_condition.notify_all()
         self.log(f"命令确认: {msg.command} -> {ack['result_text']}")
+
+    def _is_command_ack_for_this_endpoint(self, msg) -> bool:
+        """忽略同一 MAVLink 总线上回给其他 GCS/组件的 COMMAND_ACK。"""
+        ack_target_system = getattr(msg, "target_system", None)
+        if ack_target_system not in (None, 0) and self.source_system is not None:
+            if int(ack_target_system) != int(self.source_system):
+                return False
+
+        ack_target_component = getattr(msg, "target_component", None)
+        if ack_target_component not in (None, 0) and self.source_component is not None:
+            if int(ack_target_component) != int(self.source_component):
+                return False
+
+        return True
 
     def _handle_sys_status(self, msg):
         """缓存 ArduPilot 结构化预解锁检查状态。"""

@@ -139,7 +139,9 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
             data["satelliteNumber"] = getattr(msg, "satellites_visible")
             updated = True
         if hasattr(msg, "fix_type"):
-            data["gps_fixed"] = 1 if getattr(msg, "fix_type") >= 3 else 0
+            fix_type = getattr(msg, "fix_type")
+            data["gps_fixed"] = 1 if fix_type >= 3 else 0
+            data["rtk_flag"] = 1 if fix_type >= 5 else 0
             updated = True
         if hasattr(msg, "eph"):
             data["gps_eph"] = getattr(msg, "eph")
@@ -154,6 +156,8 @@ def apply_mavlink_message(msg: Any, telemetry: Optional[Dict[str, Any]] = None) 
         if hasattr(msg, "epv"):
             data["gps_epv"] = getattr(msg, "epv")
             updated = True
+        if data.get("rtk_flag") and data.get("satelliteNumber"):
+            data["rtkNumber"] = data.get("satelliteNumber")
     elif msg_name == "GPS2_RAW":
         if hasattr(msg, "satellites_visible"):
             data["rtkNumber"] = getattr(msg, "satellites_visible")

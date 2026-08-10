@@ -350,6 +350,9 @@ class Config:
             'udp_port': cls.get('mavlink.connection.port', 14550),
             'system_id': cls.get('mavlink.system_id', 1),
             'component_id': cls.get('mavlink.component_id', 190),
+            'target_system_id': cls.get('mavlink.target_system_id', cls.get('mavlink.aircraft_system_id', 1)),
+            'target_component_id': cls.get('mavlink.target_component_id', 1),
+            'aircraft_system_id': cls.get('mavlink.aircraft_system_id', cls.get('mavlink.target_system_id', 1)),
             'telemetry_rate': cls.get('mavlink.telemetry_rate', {}) or {},
         }
 

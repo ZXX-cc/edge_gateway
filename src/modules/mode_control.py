@@ -26,11 +26,19 @@ class ModeControl(BaseModule):
     - GUIDED模式位置控制
     """
 
-    def __init__(self, target_system: int = 1, target_component: int = 1):
+    def __init__(
+        self,
+        target_system: int = 1,
+        target_component: int = 1,
+        source_system: Optional[int] = None,
+        source_component: Optional[int] = None,
+    ):
         super().__init__("ModeControl")
 
         self.target_system = target_system
         self.target_component = target_component
+        self.source_system = source_system
+        self.source_component = source_component
         self.dispatcher: Optional[MessageDispatcher] = None
 
         # 当前状态
@@ -66,7 +74,7 @@ class ModeControl(BaseModule):
 
         if msg_type == 'HEARTBEAT':
             self._handle_heartbeat(msg)
-        elif msg_type == 'COMMAND_ACK':
+        elif msg_type == 'COMMAND_ACK' and self._is_command_ack_for_this_endpoint(msg):
             self._handle_command_ack(msg)
 
     def idle_task(self, dispatcher: MessageDispatcher):
@@ -128,6 +136,20 @@ class ModeControl(BaseModule):
             'result_text': self._get_ack_result_text(msg.result),
             'timestamp': time.time()
         }
+
+    def _is_command_ack_for_this_endpoint(self, msg) -> bool:
+        """忽略同一 MAVLink 总线上回给其他 GCS/组件的 COMMAND_ACK。"""
+        ack_target_system = getattr(msg, "target_system", None)
+        if ack_target_system not in (None, 0) and self.source_system is not None:
+            if int(ack_target_system) != int(self.source_system):
+                return False
+
+        ack_target_component = getattr(msg, "target_component", None)
+        if ack_target_component not in (None, 0) and self.source_component is not None:
+            if int(ack_target_component) != int(self.source_component):
+                return False
+
+        return True
 
     def _get_ack_result_text(self, result: int) -> str:
         ack_results = {

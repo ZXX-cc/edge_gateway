@@ -82,6 +82,8 @@ mqtt:
       bridge_topics:
         - "thing/product/BXD020120260727/#"
         - "sys/product/BXD020120260727/#"
+        - "thing/product/CG022620260528/#"
+        - "sys/product/CG022620260528/#"
 
 # --- NanoMQ 本地Broker兼容配置 ---
 # 旧代码和部分脚本仍会读取 nanomq.*；新主网关优先读取上方 mqtt.mode 配置。
@@ -139,7 +141,9 @@ mavlink:
 
   # 系统ID
   system_id: 255
-  component_id: 190 # MAV_COMP_ID_MISSIONPLANNER
+  component_id: 191 # MAV_COMP_ID_ONBOARD_COMPUTER；避免和 Mission Planner/QGC 的 255/190 撞源。
+  target_system_id: 1 # 飞控目标 sysid；按 HEARTBEAT/日志里的真实飞机 sysid 修改。
+  target_component_id: 1 # 飞控目标 compid；ArduPilot 飞控通常是 1。
   aircraft_system_id: 1 # 飞机飞控 sysid；TelemetryModule 只用该 sysid 构建无人机 OSD，避免机巢 101 空遥测覆盖。
 
   # 遥测推送频率(Hz)
