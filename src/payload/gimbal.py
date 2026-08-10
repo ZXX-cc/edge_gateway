@@ -177,7 +177,7 @@ class GimbalController:
     @staticmethod
     def _viewlink_speed(value: float) -> int:
         # ViewLink SDK 使用 0.01 degree/s 为单位，Dock3/页面侧使用 degree/s。
-        return max(-16383, min(16383, int(float(value or 0.0) * 100)))
+        return max(-2000, min(2000, int(float(value or 0.0) * 100)))
 
     @staticmethod
     def _move_result_success(result: dict) -> bool:

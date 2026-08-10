@@ -3,12 +3,19 @@
 """
 import math
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from src.modules.base_module import BaseModule
-from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
 from src.mavlink.flight_modes import parse_flight_mode
 from src.utils.config import Config
 from web.mavlink.telemetry.mapping import apply_mavlink_message, new_telemetry_state
+
+if TYPE_CHECKING:
+    from src.core.message_cache import MAVLinkMessage
+    from src.core.message_dispatcher import MessageDispatcher
+else:
+    MAVLinkMessage = Any
+    MessageDispatcher = Any
+
 
 class TelemetryModule(BaseModule):
     """
@@ -20,16 +27,19 @@ class TelemetryModule(BaseModule):
     - 支持模拟数据生成
     """
 
-    def __init__(self, mode: str = "real"):
+    def __init__(self, mode: str = "real", aircraft_system_id: Optional[int] = None):
         """
         初始化遥测模块
 
         Args:
             mode: 数据模式 ('real' 或 'simulated')
+            aircraft_system_id: 飞控系统ID；None 时从配置读取，0 表示不按 sysid 过滤。
         """
         super().__init__("TelemetryModule")
 
         self.mode = mode  # 'real' 或 'simulated'
+        self.aircraft_system_id = self._resolve_aircraft_system_id(aircraft_system_id)
+        self._ignored_source_log_keys = set()
 
         self.telemetry_data = new_telemetry_state()
         self.telemetry_data["data_mode"] = mode
@@ -68,6 +78,8 @@ class TelemetryModule(BaseModule):
         """消息回调（推送机制）"""
         if self.mode != "real":
             return
+        if not self._should_accept_aircraft_message(message):
+            return
 
         msg = message.msg
         if not hasattr(msg, "get_type") and not hasattr(msg, "msg_type") and not hasattr(msg, "_msg_type"):
@@ -87,6 +99,46 @@ class TelemetryModule(BaseModule):
             if current_time - self.last_push_time >= self.push_interval:
                 self._notify_callbacks()
                 self.last_push_time = current_time
+
+    @staticmethod
+    def _resolve_aircraft_system_id(aircraft_system_id: Optional[int]) -> Optional[int]:
+        configured = aircraft_system_id
+        if configured is None:
+            configured = Config.get(
+                'mavlink.aircraft_system_id',
+                Config.get('mavlink.target_system_id', 1),
+            )
+        try:
+            parsed = int(configured)
+        except (TypeError, ValueError):
+            parsed = 1
+        return parsed if parsed > 0 else None
+
+    def _should_accept_aircraft_message(self, message: MAVLinkMessage) -> bool:
+        """只让真实飞控源更新 aircraft OSD，避免机巢/PLC 空遥测覆盖飞机值。"""
+        if self.aircraft_system_id is None:
+            return True
+        sysid = getattr(message, "sysid", None)
+        if sysid is None:
+            return True
+        try:
+            source_sysid = int(sysid)
+        except (TypeError, ValueError):
+            return True
+        if source_sysid == self.aircraft_system_id:
+            return True
+
+        msg_type = getattr(message, "msg_type", "UNKNOWN")
+        key = (source_sysid, msg_type)
+        if key not in self._ignored_source_log_keys:
+            self._ignored_source_log_keys.add(key)
+            self.logger.debug(
+                "Ignore non-aircraft telemetry source: msg_type=%s sysid=%s expected_aircraft_sysid=%s",
+                msg_type,
+                source_sysid,
+                self.aircraft_system_id,
+            )
+        return False
 
     def idle_task(self, dispatcher: MessageDispatcher):
         """

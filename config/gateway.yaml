@@ -140,6 +140,7 @@ mavlink:
   # 系统ID
   system_id: 255
   component_id: 190 # MAV_COMP_ID_MISSIONPLANNER
+  aircraft_system_id: 1 # 飞机飞控 sysid；TelemetryModule 只用该 sysid 构建无人机 OSD，避免机巢 101 空遥测覆盖。
 
   # 遥测推送频率(Hz)
   telemetry_rate:
