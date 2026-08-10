@@ -932,13 +932,53 @@ class EdgeGateway:
             self.nest_module.set_flight_control(self.flight_control)
         self._wire_nest_module_to_business()
 
+    def _wire_aircraft_dispatcher_modules(
+        self,
+        dispatcher,
+        use_separate_nest_mavlink: bool,
+        wire_runtime_dependencies: bool = False,
+    ):
+        """确保飞控侧 MAVLink dispatcher 挂上所有消费飞控报文的模块。"""
+        if not dispatcher:
+            return
+
+        aircraft_modules = (
+            self.flight_control,
+            self.mode_control,
+            self.telemetry_module,
+            self.waypoint_manager,
+            self.rtk_module,
+        )
+        for module in aircraft_modules:
+            if not module:
+                continue
+            dispatcher.add_module(module)
+            dispatcher.register_hook('*', module)
+
+        if not use_separate_nest_mavlink and self.nest_module:
+            dispatcher.add_module(self.nest_module)
+            dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
+            dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
+            self.nest_module.dispatcher = dispatcher
+
+        if wire_runtime_dependencies:
+            if self.mission:
+                self.mission.set_mavlink_connection(self.mavlink_conn)
+            if self.camera:
+                self.camera.set_mapping_camera_flight_controller_connection(self.mavlink_conn)
+            self._enable_payload_flight_controller_fallback(self.mavlink_conn)
+            self._wire_flight_area_applier(dispatcher)
+
     def _ensure_aircraft_mavlink_started(self, reason: str = "") -> bool:
         """按需启动主飞控 MAVLink；启动网关时不会主动调用。"""
         with self._main_mavlink_start_lock:
             if not self.mavlink_conn:
                 logger.warning("Main MAVLink lazy connect skipped: connection object not configured, reason=%s", reason)
                 return False
+            use_separate_nest_mavlink = bool((self._nest_mavlink_config or {}).get('enabled'))
             if self.mavlink_conn.is_connected() and self.dispatcher:
+                self._wire_aircraft_dispatcher_modules(self.dispatcher, use_separate_nest_mavlink)
+                self._refresh_state_machine_sources()
                 return True
 
             logger.info("Starting main aircraft MAVLink on demand: reason=%s", reason or "unspecified")
@@ -946,34 +986,16 @@ class EdgeGateway:
                 logger.warning("Main aircraft MAVLink lazy connect failed: reason=%s", reason)
                 return False
 
-            use_separate_nest_mavlink = bool((self._nest_mavlink_config or {}).get('enabled'))
+            created_dispatcher = False
             if not self.dispatcher:
                 self.dispatcher = MessageDispatcher(self.mavlink_conn)
-                self.dispatcher.add_module(self.flight_control)
-                self.dispatcher.add_module(self.mode_control)
-                self.dispatcher.add_module(self.telemetry_module)
-                self.dispatcher.add_module(self.waypoint_manager)
-                self.dispatcher.add_module(self.rtk_module)
-                if not use_separate_nest_mavlink:
-                    self.dispatcher.add_module(self.nest_module)
-                    self.nest_module.dispatcher = self.dispatcher
+                created_dispatcher = True
 
-                self.dispatcher.register_hook('*', self.flight_control)
-                self.dispatcher.register_hook('*', self.mode_control)
-                self.dispatcher.register_hook('*', self.telemetry_module)
-                self.dispatcher.register_hook('*', self.waypoint_manager)
-                self.dispatcher.register_hook('*', self.rtk_module)
-                if not use_separate_nest_mavlink:
-                    self.dispatcher.register_hook('DRONE_NEST_RESPONSE', self.nest_module)
-                    self.dispatcher.register_hook('DRONE_NEST_ORDER_RESPONSE', self.nest_module)
-
-                if self.mission:
-                    self.mission.set_mavlink_connection(self.mavlink_conn)
-                if self.camera:
-                    self.camera.set_mapping_camera_flight_controller_connection(self.mavlink_conn)
-                self._enable_payload_flight_controller_fallback(self.mavlink_conn)
-                self._wire_flight_area_applier(self.dispatcher)
-
+            self._wire_aircraft_dispatcher_modules(
+                self.dispatcher,
+                use_separate_nest_mavlink,
+                wire_runtime_dependencies=created_dispatcher,
+            )
             self.dispatcher.start()
             self._refresh_state_machine_sources()
             logger.info("Main aircraft MAVLink dispatcher started on demand: reason=%s", reason)
