@@ -387,6 +387,45 @@ class MQTTClient:
     def _payload_tid(payload: dict) -> str:
         return payload.get("tid", "") if isinstance(payload, dict) else ""
 
+    @staticmethod
+    def _redact_for_log(value):
+        sensitive_words = (
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "access_key",
+            "private_key",
+            "credential",
+        )
+        if isinstance(value, dict):
+            redacted = {}
+            for key, item in value.items():
+                key_text = str(key).lower()
+                if any(word in key_text for word in sensitive_words):
+                    redacted[key] = "***"
+                else:
+                    redacted[key] = MQTTClient._redact_for_log(item)
+            return redacted
+        if isinstance(value, list):
+            return [MQTTClient._redact_for_log(item) for item in value]
+        return value
+
+    @staticmethod
+    def _format_json_block(value, max_length: int = 12000) -> str:
+        try:
+            text = json.dumps(
+                MQTTClient._redact_for_log(value),
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+        except Exception:
+            text = str(value)
+        if max_length > 0 and len(text) > max_length:
+            return text[:max_length] + "\n...<truncated>"
+        return text
+
     def _log_mqtt_method_line(
         self,
         label: str,
@@ -422,19 +461,24 @@ class MQTTClient:
         ok: Optional[bool] = None,
         elapsed_ms: Optional[int] = None,
     ) -> None:
-        gateway_traffic_logger.info(
-            "%s topic=%s method=%s tid=%s bid=%s result=%s ok=%s elapsed_ms=%s payload=%s",
-            label,
-            topic,
-            self._payload_method(payload),
-            self._payload_tid(payload),
-            payload.get("bid", "") if isinstance(payload, dict) else "",
-            result,
-            ok,
-            elapsed_ms,
-            format_with_labels(payload, max_length=5000),
-            extra={"console_silent": True},
-        )
+        rows = [
+            ("label", label),
+            ("topic", topic),
+            ("method", self._payload_method(payload)),
+            ("tid", self._payload_tid(payload)),
+            ("bid", payload.get("bid", "") if isinstance(payload, dict) else ""),
+            ("result", result),
+            ("ok", ok),
+            ("elapsed_ms", elapsed_ms),
+        ]
+        width = max(len(key) for key, _ in rows)
+        lines = ["", "========== GATEWAY MQTT TRAFFIC =========="]
+        for key, value in rows:
+            lines.append(f"{key:<{width}} : {value}")
+        lines.append("payload:")
+        lines.append(self._format_json_block(payload, max_length=20000))
+        lines.append("==========================================")
+        gateway_traffic_logger.info("\n".join(lines), extra={"console_silent": True})
 
     def publish_osd(self, device_sn: str, data: dict):
         """发布OSD定频数据"""
@@ -446,7 +490,7 @@ class MQTTClient:
             self._last_osd_log_time = now
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
-                ("data", format_with_labels(payload, max_length=2000)),
+                ("data", self._format_json_block(payload, max_length=8000)),
             ]))
         self.publish(topic, payload, qos=0)
 
@@ -457,8 +501,8 @@ class MQTTClient:
         payload = self._sanitize_publish_payload(topic, payload)
         logger.info(self._format_log_block("MQTT STATE PUBLISH", [
             ("topic", topic),
-            ("data", format_with_labels(payload, max_length=3000)),
-            ]))
+            ("data", self._format_json_block(payload, max_length=12000)),
+        ]))
         self.publish(topic, payload, qos=1)
 
     def publish_event(self, data: dict):
@@ -476,7 +520,7 @@ class MQTTClient:
             logger.info(self._format_log_block("MQTT EVENT PUBLISH", [
                 ("topic", topic),
                 ("method", data.get('method')),
-                ("data", format_with_labels(data, max_length=3000)),
+                ("data", self._format_json_block(data, max_length=12000)),
             ]))
         ok = self.publish(topic, data, qos=1)
         if data.get('method') != 'heartbeat':
@@ -688,7 +732,7 @@ class MQTTClient:
             ("tid", data.get('tid')),
             ("result", self._reply_result(data)),
             ("ok", ok),
-            ("data", format_with_labels(data, max_length=3000)),
+            ("data", self._format_json_block(data, max_length=12000)),
         ]))
         self._log_mqtt_method_line("REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
         self._log_gateway_traffic(
@@ -736,7 +780,7 @@ class MQTTClient:
             ("result", self._reply_result(data)),
             ("msg", data.get('msg')),
             ("ok", ok),
-            ("data", format_with_labels(data, max_length=3000)),
+            ("data", self._format_json_block(data, max_length=12000)),
         ]))
         self._log_mqtt_method_line("ERROR_REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
         self._log_gateway_traffic(
@@ -761,7 +805,7 @@ class MQTTClient:
         topic = TopicBuilder.status(self.gateway_sn)
         logger.info(self._format_log_block("MQTT STATUS PUBLISH", [
             ("topic", topic),
-            ("data", format_with_labels(data, max_length=3000)),
+            ("data", self._format_json_block(data, max_length=12000)),
         ]))
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_status", topic, data, ok=ok)
@@ -773,7 +817,7 @@ class MQTTClient:
         logger.info(self._format_log_block("MQTT REQUEST PUBLISH", [
             ("topic", topic),
             ("method", data.get('method')),
-            ("data", format_with_labels(data, max_length=3000)),
+            ("data", self._format_json_block(data, max_length=12000)),
         ]))
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_request", topic, data, ok=ok)
@@ -843,7 +887,16 @@ class MQTTClient:
         width = max([len(str(key)) for key, _ in rows] + [0])
         lines = ["", f"========== {title} =========="]
         for key, value in rows:
-            lines.append(f"{str(key):<{width}} : {value}")
+            prefix = f"{str(key):<{width}} : "
+            value_text = str(value)
+            if "\n" not in value_text:
+                lines.append(prefix + value_text)
+                continue
+            first_line, *rest_lines = value_text.splitlines()
+            lines.append(prefix + first_line)
+            continuation_prefix = " " * len(prefix)
+            for line in rest_lines:
+                lines.append(continuation_prefix + line)
         lines.append("=" * (22 + len(title)))
         return "\n".join(lines)
 
@@ -956,7 +1009,7 @@ class MQTTClient:
                 ("bid", payload.get('bid')),
                 ("need_reply", payload.get('need_reply')),
                 ("payload_bytes", len(msg.payload or b'')),
-                ("payload", format_with_labels(payload, max_length=3000)),
+                ("payload", self._format_json_block(payload, max_length=12000)),
             ]))
             self._log_mqtt_method_line("CALL <-", msg.topic, payload)
             if is_downstream_command:
@@ -1039,7 +1092,7 @@ class MQTTClient:
                     logger.info(self._format_log_block("MQTT STATUS REPLY", [
                         ("method", method),
                         ("result", result),
-                        ("payload", format_with_labels(payload, max_length=3000)),
+                        ("payload", self._format_json_block(payload, max_length=12000)),
                     ]))
                 self._trace.record(
                     "mqtt_status_reply_received",
@@ -1104,7 +1157,7 @@ class MQTTClient:
                     logger.info(self._format_log_block("MQTT REQUESTS REPLY", [
                         ("method", method),
                         ("result", result),
-                        ("payload", format_with_labels(payload, max_length=3000)),
+                        ("payload", self._format_json_block(payload, max_length=12000)),
                     ]))
                 self._trace.record(
                     "mqtt_requests_reply_received",
@@ -1148,7 +1201,7 @@ class MQTTClient:
                     msg.topic,
                     method,
                     payload.get('tid'),
-                    format_with_labels(payload, max_length=3000),
+                    self._format_json_block(payload, max_length=12000),
                 )
                 return
 
@@ -1168,7 +1221,7 @@ class MQTTClient:
                     ("topic", msg.topic),
                     ("method", method),
                     ("result", result),
-                    ("payload", format_with_labels(payload, max_length=3000)),
+                    ("payload", self._format_json_block(payload, max_length=12000)),
                 ]))
                 self._log_mqtt_method_line(
                     "UPSTREAM_REPLY <-",
@@ -1566,7 +1619,7 @@ class MQTTClient:
                 ("elapsed_ms", elapsed_ms),
                 ("handler_elapsed_ms", handler_elapsed_ms),
                 ("result", self._reply_result(result)),
-                ("reply", format_with_labels(result, max_length=3000)),
+                ("reply", self._format_json_block(result, max_length=12000)),
             ]))
             self._log_mqtt_method_line(
                 "HANDLER OK",
