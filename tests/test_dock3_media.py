@@ -264,6 +264,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         files = listed["data"]["files"]
         self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
         self.assertTrue(all(item["source"] == "remote_http" for item in files))
+        write_test_log(
+            self.id(),
+            "file_list_get远端媒体扫描",
+            expected_names=["a.jpg", "b.mp4"],
+            actual_names=sorted(item["name"] for item in files),
+            sources=sorted({item["source"] for item in files}),
+            result="通过",
+        )
 
     def test_file_delete_uses_same_remote_media_scan_as_list(self):
         class FakeResponse:
@@ -315,6 +323,15 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(item["result"], DEVICE_STATE_UNSUPPORTED)
         self.assertIn("remote media delete unsupported", item["msg"])
         self.assertNotIn("file not found", item["msg"])
+        write_test_log(
+            self.id(),
+            "远端媒体删除返回unsupported",
+            file_id=remote_file["file_id"],
+            source=remote_file["source"],
+            delete_result=item["result"],
+            delete_msg=item["msg"],
+            result="通过",
+        )
 
     def test_file_list_syncs_mapping_camera_before_scan(self):
         manager = MediaManager()
@@ -335,6 +352,13 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(camera.sync_calls, [{"download_all": True}])
         self.assertEqual(listed["data"]["result"], 0)
         self.assertEqual(listed["data"]["files"][0]["name"], "Riebo000001.jpg")
+        write_test_log(
+            self.id(),
+            "file_list_get扫描前同步正射相机",
+            sync_calls=camera.sync_calls,
+            listed_names=[item["name"] for item in listed["data"]["files"]],
+            result="通过",
+        )
 
     def test_file_list_scans_mapping_camera_nested_photo_folders(self):
         manager = MediaManager()
@@ -357,6 +381,14 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]["name"], "Riebo000002.jpg")
         self.assertEqual(files[0]["object_key"], "DCIM/flight-001/Riebo000002.jpg")
+        write_test_log(
+            self.id(),
+            "file_list_get递归扫描正射相机目录",
+            expected_object_key="DCIM/flight-001/Riebo000002.jpg",
+            actual_object_key=files[0]["object_key"],
+            file_name=files[0]["name"],
+            result="通过",
+        )
 
     def test_remote_media_is_cached_before_upload(self):
         class FakeResponse:
@@ -678,6 +710,15 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertTrue(manager._uploading)
         self.assertEqual(len(manager._upload_queue), 1)
         self.assertEqual(manager._upload_queue[0]["file_id"], "media-id")
+        write_test_log(
+            self.id(),
+            "异步上传复用运行中的worker",
+            created_thread_count=len(created_threads),
+            upload_queue_count=len(manager._upload_queue),
+            uploading=manager._uploading,
+            queued_file_ids=[item["file_id"] for item in manager._upload_queue],
+            result="通过",
+        )
 
     def test_async_start_upload_restarts_after_uploading_flag_cleared(self):
         class FakeStoppingThread:
@@ -720,6 +761,15 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIs(started_threads[0].target.__self__, manager)
         self.assertEqual(started_threads[0].target.__name__, "_upload_files")
         self.assertTrue(started_threads[0].daemon)
+        write_test_log(
+            self.id(),
+            "异步上传在标志清理后重启worker",
+            started_thread_count=len(started_threads),
+            uploading=manager._uploading,
+            worker_target=started_threads[0].target.__name__,
+            daemon=started_threads[0].daemon,
+            result="通过",
+        )
 
     def test_upload_queue_uses_priority_order(self):
         manager = MediaManager()
