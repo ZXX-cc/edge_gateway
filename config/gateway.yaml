@@ -173,8 +173,8 @@ device:
   firmware_version: "1.0.0" # 固件版本
   storage_capacity: 64000 # 存储容量(MB)
   nest_command_ack_timeout: 5.0 # services_reply 同步等待机巢 12005 指令 ACK/拒绝的超时时间(s)
-  nest_command_state_timeout: 30.0 # 严格模式/无人机上下电等待 12004 最终状态到位的超时时间(s)
-  nest_command_require_final_state: false # false 时机巢动作类命令 12005 ACK 成功即回复 ok，12004 状态异步同步
+  nest_command_state_timeout: 60.0 # services_reply 同步等待机巢 12004 最终状态到位的超时时间(s)
+  nest_command_require_final_state: true # true 时机巢动作类命令必须等 12004 最终状态到位才回复 ok
   allow_local_state_reset: false # true 时允许 device_reset 只重置网关本地状态；实机默认 false，避免伪造硬件复位成功
   auto_bind_on_startup: true # 本地联调默认置为已绑定，跳过平台 organization 绑定流程
   auto_bind_workspace_id: "local_test_workspace"
@@ -219,7 +219,7 @@ device:
       device_secret: "" # 子设备密钥
       nonce: "" # 子设备 nonce
       thing_version: "1.1.2" # 子设备物模型版本
-      online: true # 是否启动时作为在线子设备上报
+      online: false # 默认不连接无人机；收到机巢侧无人机心跳后再置为在线
       paired: true # 是否标记为已配对子设备
 
   # 飞行限制
@@ -312,6 +312,22 @@ logging:
       enabled: true
       dir: "mqtt"
       filename_prefix: "mqtt"
+    mqtt_trace:
+      enabled: true
+      dir: "mqtt_trace"
+      filename_prefix: "mqtt_trace"
+    gateway_traffic:
+      enabled: true
+      dir: "gateway_traffic"
+      filename_prefix: "gateway_traffic"
+    nest_raw:
+      enabled: true
+      dir: "nest_raw"
+      filename_prefix: "nest_raw"
+    drone_report:
+      enabled: true
+      dir: "drone_report"
+      filename_prefix: "drone_report"
     mavlink_raw:
       enabled: true
       dir: "mavlink_raw"

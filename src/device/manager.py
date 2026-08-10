@@ -99,7 +99,7 @@ logger = get_logger("device")
 alarm_logger = get_logger("alarm")
 nest_plc_logger = get_logger("nest_plc")
 
-NEST_COMMAND_TARGET_HOLD_SECONDS = 5.0
+NEST_COMMAND_TARGET_HOLD_SECONDS = 60.0
 
 
 def _config_bool(value: Any, default: bool = False) -> bool:
@@ -280,6 +280,7 @@ class DeviceManager:
         self._last_nest_heartbeat: Optional[bool] = None
         self._last_nest_plc_heartbeat: Optional[bool] = None
         self._last_nest_drone_heartbeat: Optional[bool] = None
+        self._drone_heartbeat_has_been_online = False
         self._nest_heartbeat_alarm_enabled = False
         self._nest_plc_heartbeat_alarm_enabled = False
         self._nest_drone_heartbeat_alarm_enabled = False
@@ -289,16 +290,18 @@ class DeviceManager:
         )
         self._nest_command_state_timeout = max(
             0.1,
-            float(Config.get('device.nest_command_state_timeout', 30.0) or 30.0),
+            float(Config.get('device.nest_command_state_timeout', 60.0) or 60.0),
         )
         self._nest_command_require_final_state = _config_bool(
-            Config.get('device.nest_command_require_final_state', False),
-            False,
+            Config.get('device.nest_command_require_final_state', True),
+            True,
         )
         self._topo_lock = threading.Lock()
         self._pending_update_topo: Dict[str, Dict[str, Any]] = {}
         self._topo_retry_limit = max(0, int(Config.get('device.topology.retry_limit', 2) or 0))
         self._topo_retry_delay = max(0.5, float(Config.get('device.topology.retry_delay', 3.0) or 3.0))
+        self._last_nest_plc_log_signature = None
+        self._last_nest_plc_log_time = 0.0
 
         # ===== 系统状态定时更新线程 =====
         self._system_update_thread: Optional[threading.Thread] = None
@@ -1097,21 +1100,7 @@ class DeviceManager:
         由 main.py 在 DroneNestModule 收到 DRONE_NEST_RESPONSE 后调用
         """
         updates = build_dock3_properties_from_nest(nest_data)
-        nest_plc_logger.info(
-            "Nest PLC state received: heartbeat=%s plc_heartbeat=%s drone_heartbeat=%s "
-            "gate_state=%s clamp_state=%s charging_state=%s -> cover_state=%s "
-            "putter_state=%s mapped_charging_state=%s error_code=%s",
-            nest_data.get("nest_heartbeat"),
-            nest_data.get("plc_heartbeat"),
-            nest_data.get("drone_heartbeat"),
-            nest_data.get("gate_state"),
-            nest_data.get("clamp_state"),
-            nest_data.get("charging_state"),
-            updates.get("cover_state"),
-            updates.get("putter_state"),
-            updates.get("charging_state"),
-            nest_data.get("error_code"),
-        )
+        self._log_nest_plc_state(nest_data, updates)
         updates = self._merge_updates_with_current(updates)
         updates = self._filter_pending_nest_command_targets(updates)
         state_updates = self._extract_state_updates(updates)
@@ -1146,6 +1135,7 @@ class DeviceManager:
         if 'drone_heartbeat' in nest_data:
             self._last_nest_drone_heartbeat = bool(nest_data.get('drone_heartbeat'))
             if self._last_nest_drone_heartbeat:
+                self._drone_heartbeat_has_been_online = True
                 self._nest_drone_heartbeat_alarm_enabled = True
             self._sync_sub_device_online_from_nest(bool(nest_data.get('drone_heartbeat')))
 
@@ -1162,9 +1152,44 @@ class DeviceManager:
             hms_nest_data["_suppress_nest_heartbeat_alarm"] = True
         if not self._nest_plc_heartbeat_alarm_enabled:
             hms_nest_data["_suppress_plc_heartbeat_alarm"] = True
-        if not self._nest_drone_heartbeat_alarm_enabled:
+        if not self._nest_drone_heartbeat_alarm_enabled or not self._drone_heartbeat_has_been_online:
             hms_nest_data["_suppress_drone_heartbeat_alarm"] = True
         self._sync_nest_hms_alarms(hms_nest_data)
+
+    def _log_nest_plc_state(self, nest_data: dict, updates: dict):
+        signature = (
+            bool(nest_data.get("nest_heartbeat")),
+            bool(nest_data.get("plc_heartbeat")),
+            bool(nest_data.get("drone_heartbeat")),
+            nest_data.get("gate_state"),
+            nest_data.get("clamp_state"),
+            nest_data.get("charging_state"),
+            updates.get("cover_state"),
+            updates.get("putter_state"),
+            updates.get("charging_state"),
+            nest_data.get("error_code"),
+        )
+        now = time.time()
+        if signature == self._last_nest_plc_log_signature and now - self._last_nest_plc_log_time < 30.0:
+            return
+        self._last_nest_plc_log_signature = signature
+        self._last_nest_plc_log_time = now
+        nest_plc_logger.info(
+            "Nest PLC state received: heartbeat=%s plc_heartbeat=%s drone_heartbeat=%s "
+            "gate_state=%s clamp_state=%s charging_state=%s -> cover_state=%s "
+            "putter_state=%s mapped_charging_state=%s error_code=%s",
+            nest_data.get("nest_heartbeat"),
+            nest_data.get("plc_heartbeat"),
+            nest_data.get("drone_heartbeat"),
+            nest_data.get("gate_state"),
+            nest_data.get("clamp_state"),
+            nest_data.get("charging_state"),
+            updates.get("cover_state"),
+            updates.get("putter_state"),
+            updates.get("charging_state"),
+            nest_data.get("error_code"),
+            extra={"console_silent": True},
+        )
 
     def _sync_sub_device_online_from_nest(self, online: bool):
         """Use the nest 12004 aircraft heartbeat as the real child-device state."""
@@ -2536,6 +2561,8 @@ class DeviceManager:
             return True
 
     def _wait_for_drone_heartbeat(self, online: bool, timeout: float) -> bool:
+        if not online and not self._drone_heartbeat_has_been_online:
+            return True
         deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
         with self._nest_state_condition:
             while self._last_nest_drone_heartbeat is not online:

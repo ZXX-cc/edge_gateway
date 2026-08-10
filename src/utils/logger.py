@@ -45,6 +45,18 @@ _CATEGORY_DEFAULTS = {
             "edge_gateway.cloud_conn",
         ),
     },
+    "mqtt_trace": {
+        "prefixes": ("edge_gateway.mqtt.trace",),
+    },
+    "gateway_traffic": {
+        "prefixes": ("edge_gateway.gateway.traffic",),
+    },
+    "nest_raw": {
+        "prefixes": ("edge_gateway.nest.raw",),
+    },
+    "drone_report": {
+        "prefixes": ("edge_gateway.drone.report",),
+    },
     "mavlink_raw": {
         "prefixes": ("edge_gateway.mavlink.raw",),
     },

@@ -13,7 +13,8 @@ TASK_STATUS_IN_PROGRESS = "in_progress"
 TASK_STATUS_OK = "ok"
 TASK_STATUS_REJECTED = "rejected"
 
-SUPPORTED_URL_TYPES = {0, 1, 3, 4}
+SUPPORTED_URL_TYPES = {1, 3, 4}
+REALTIME_FFMPEG_URL_TYPES = {1}
 SUPPORTED_QUALITIES = {0, 1, 2, 3, 4}
 SUPPORTED_VIDEO_TYPES = {"normal", "wide", "zoom", "ir", "fpv", "gimbal"}
 SUPPORTED_CAMERA_POSITIONS = {0, 1}
@@ -43,7 +44,7 @@ def validate_live_start_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[s
     if not video_id:
         errors.append("live_start missing video_id")
     if not _is_int(url_type) or url_type not in SUPPORTED_URL_TYPES:
-        errors.append("live_start.url_type must be int enum 0/1/3/4")
+        errors.append("live_start.url_type must be int enum 1/3/4")
     if not _is_int(video_quality) or video_quality not in SUPPORTED_QUALITIES:
         errors.append("live_start.video_quality must be int enum 0..4")
     if video_type and video_type not in SUPPORTED_VIDEO_TYPES:
@@ -147,8 +148,8 @@ def live_capability_data(payload_states: Dict[str, Any] | None = None) -> Dict[s
     devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
     default_device_sn = _default_live_device_sn()
     return live_task_output(TASK_STATUS_OK, {
-        "supported_protocols": ["webrtc", "rtmp", "rtsp"],
-        "supported_url_types": sorted(SUPPORTED_URL_TYPES),
+        "supported_protocols": ["rtmp"],
+        "supported_url_types": sorted(REALTIME_FFMPEG_URL_TYPES),
         "supported_resolutions": ["720p", "1080p", "4k"],
         "supported_video_sources": sorted(SUPPORTED_VIDEO_TYPES),
         "supported_qualities": sorted(SUPPORTED_QUALITIES),

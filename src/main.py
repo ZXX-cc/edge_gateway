@@ -34,6 +34,7 @@ sys.path.insert(0, str(project_root))
 from src.utils.config import Config, load_config
 from src.utils.logger import init_logger, get_logger
 from src.utils.message import MessageBuilder
+from src.utils.field_labels import format_with_labels
 from src.utils.production_readiness import validate_production_config
 from src.utils.runtime_overrides import build_runtime_overrides
 from src.utils.local_history_logger import LocalHistoryLogger
@@ -87,6 +88,7 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from src.state_machine import CommandAdmissionEngine, GatewayEventReducer, GatewayStateProvider
 
 logger = get_logger("main")
+drone_report_logger = get_logger("drone.report")
 
 
 def _json_safe(value: Any) -> Any:
@@ -1537,6 +1539,11 @@ class EdgeGateway:
             self._apply_real_aircraft_mode_code(osd_data)
             self._apply_aircraft_limit_fields(osd_data)
             aircraft_osd = self._build_aircraft_osd_for_report(osd_data)
+            drone_report_logger.info(
+                "aircraft_osd source=flight_controller payload=%s",
+                format_with_labels(aircraft_osd, max_length=5000),
+                extra={"console_silent": True},
+            )
             if self.flight_area:
                 self.flight_area.update_aircraft_osd(aircraft_osd)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）

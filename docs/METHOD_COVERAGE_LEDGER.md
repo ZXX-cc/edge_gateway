@@ -37,9 +37,9 @@
 | mission | 54 | P0/P1 | 航线、飞控、返航、降落、一键启航、作业 | Wayline 基础已验证，一键启航本地闭环已补；KMZ/SITL/Ubuntu 实证待补 |
 | payload | 39 | P1/P2 | 相机、云台、红外测温、喊话器、探照灯、PSDK、第三方负载 | 仅保留可对照到 DJI 官方 method 或原始兼容入口的公开路由；ViewLink SDK 作为内部实现 |
 | media | 17 | P1/P2 | 媒体文件、上传、直播、镜头、质量 | P1 必补专项 |
-| services | 3 | P0/P1 | DRC services 控制权 | Dock3 services topic 下的跨域入口 |
-| drc | 4 | P0/P1/P2 | DRC 建链后心跳、杆量、飞行控制、急停 | 仅保留 Dock3 DRC 官方方法；项目自定义控制别名已从公开路由移除 |
-| dock | 0 | Needs Field Audit / Adapter | 机场状态、控制、告警、调度、天气 | 当前项目无独立 `dock` Router 分组；Dock 相关能力分散在 Dock3 CMD、DRC、properties、HMS 等链路，不能理解为 DJI Dock/Dock3 官方没有这些方法 |
+| services | 3 | Deferred this phase | DRC services 控制权 | `drc_mode_enter/drc_mode_exit/flight_authority_grab` 已注册但本期暂不接入 DRC 模式远程控制，不计当前缺口 |
+| drc | 4 | Deferred this phase | DRC 建链后心跳、杆量、飞行控制、急停 | Dock3 DRC 官方方法保留在 Router；本期暂不接入 DRC 模式远程控制，不作为当前验收缺口 |
+| dock | 0 | Deprecated / Split to CMD | 机场状态、控制、告警、调度、天气 | 当前项目无独立 `dock` Router 分组；`dock_control` 已废弃不接入，机场能力按 Dock3 CMD、properties、HMS 等具体链路验收 |
 | log | 3 | P1 | 远程日志 | P1 必补专项 |
 | flysafe | 3 | P2 | 远程解禁 | P2 adapter |
 | flight_area | 1 | P2 | 自定义飞行区 | P2/P1 边界，基础缓存和回包需补 |
@@ -52,8 +52,8 @@
 |---|---|---|---|
 | P0 MQTT/属性/拓扑 | `property_set`, `property_get`, `update_topo`；`airport_bind_status/workspace_* / device_binding/device_unbinding` 为 requests/status/internal 兼容口径，不作为 `/services` 公开验收入口 | P0-01 到 P0-05、P1-14 | P0 批量、properties、device、organization 专项 |
 | P0/P1 机巢和 CMD | `cover_open`, `cover_close`, `cover_force_close`, `charge_open`, `charge_close`, `putter_open`, `putter_close`, `drone_open`, `drone_close`, `debug_mode_open`, `debug_mode_close`, `battery_maintenance_switch`, `air_conditioner_mode_switch`, `alarm_state_switch`, `battery_store_mode_switch` | P0-11 到 P0-13、P1-02、P1-15 | CMD 专项、机巢 v1.3 专项 |
-| P0/P1 飞控和航线 | `flighttask_prepare`, `flighttask_execute`, `flighttask_undo`, `flighttask_return`, `flighttask_progress`, `flighttask_pause`, `flighttask_resume`, `resume_wayline_task`, `return_home_cancel`, `take_off`, `landing`, `go_home`, `return_home`, `set_flight_mode`, `start_takeoff_to_point`, `takeoff_to_point` | P0-08、P0-10、P1-01、P1-04 到 P1-06 | Wayline、DRC、SITL、起飞流程 E2E |
-| P0/P1 DRC | `drc_mode_enter`, `drc_mode_exit`, `heart_beat`, `stick_control`, `drone_control`, `drone_emergency_stop`, `fly_to_point`, `fly_to_point_stop`, `fly_to_point_update` | P0-09、P1-03、P1-04 | DRC 专项、超时恢复、SITL |
+| P0/P1 飞控和航线 | `flighttask_prepare`, `flighttask_execute`, `flighttask_undo`, `flighttask_return`, `flighttask_progress`, `flighttask_pause`, `flighttask_resume`, `resume_wayline_task`, `return_home_cancel`, `take_off`, `landing`, `go_home`, `return_home`, `set_flight_mode`, `start_takeoff_to_point` | P0-08、P0-10、P1-01、P1-04 到 P1-06 | Wayline、SITL、起飞流程 E2E；`takeoff_to_point/fly_to_point*` 归入 DRC/指点飞行，本期暂不接入 |
+| DRC 远程控制 | `drc_mode_enter`, `drc_mode_exit`, `heart_beat`, `stick_control`, `drone_control`, `drone_emergency_stop`, `flight_authority_grab`, `takeoff_to_point`, `fly_to_point`, `fly_to_point_stop`, `fly_to_point_update` | Deferred | 本期暂不接入 DRC 模式远程控制；保留入口和测试资料，不计当前缺口 |
 | P1 媒体和直播 | `file_list_get`, `file_delete`, `adjust_upload_priority`, `live_start`, `live_stop`, `live_capability_query`, `highest_priority_upload_flighttask_media`, `upload_flighttask_media_prioritize`, `live_lens_change`, `live_set_quality`；`storage_config_get/set_livestream_*` 当前不在默认公开 services 口径 | P1-07、P1-08 | media/live 专项 |
 | P1 相机/云台 | `camera_photo_take`, `camera_recording_start`, `camera_recording_stop`, `camera_focal_length_set`, `camera_point_focus_action`, `camera_exposure_mode_set`, `camera_focus_mode_set`, `camera_focus_value_set`, `gimbalRotate`, `camera_screen_drag`, `camera_look_at`, `gimbal_reset` | P1-09 | payload 专项或 media/live 联合专项 |
 | P1 运维 | `hms_get`, `hms_clear`, `device_log_list_get`, `device_log_upload`, `fileupload_list`, `fileupload_start`, `fileupload_update`, `ota_create`, `ota_cancel`, `firmware_upgrade`, `config_update`, `config_get`, `config_rollback`, `config` | P1-10 到 P1-13、P1-16 | HMS/log、firmware/config 均已通过 Ubuntu 专项；真实 OTA/上传 adapter 后续补 |
@@ -145,27 +145,22 @@ heart_beat, stick_control, drone_control, drone_emergency_stop
 
 ```text
 这里的 0 只表示 src/main.py 当前没有以 category="dock" 注册的独立 Router
-分组，不表示 DJI Dock/Dock3 官方没有 dock 类 method。
+分组，不表示 DJI Dock/Dock3 官方没有 dock 类能力。
 
-当前项目已实现或保留的 Dock 相关官方链路分散在其他分组：
+当前项目已实现或保留的 Dock 相关链路分散在其他分组：
 - CMD/services: cover_open, cover_close, cover_force_close, charge_open,
   charge_close, drone_open, drone_close, debug_mode_open, debug_mode_close,
   battery_maintenance_switch, air_conditioner_mode_switch,
   alarm_state_switch, battery_store_mode_switch 等。
-- DRC/down: heart_beat, stick_control, drone_control, drone_emergency_stop。
 - properties/HMS/status: emergency_stop_state、机巢状态属性、HMS 告警、
   update_topo/gateway_state_query 等。
 
-当前项目没有注册同名 handler、需要继续按 DOCK/Dock3 文档核对或补 adapter
-的聚合/查询入口：
-dock_status_query, dock_control, dock_alarm_query,
-dock_task_schedule_query, dock_task_schedule_set, dock_emergency_stop,
-dock_reset, dock_weather_query。
-
-其中 dock_control 不能简单标成“官方无用/旧版无用”。如果平台按 DOCK 文档
-调用同名 method，需要补一个云端 adapter，把 action 拆到 cover_open/
-cover_close/charge_open/charge_close/drone_open/drone_close/debug_mode_*
-或其他 Dock3 CMD 方法；当前项目只是没有同名公开 handler。
+当前不接入的聚合/查询入口：
+dock_control 已确认废弃，可以不接入。
+dock_status_query, dock_alarm_query, dock_task_schedule_query,
+dock_task_schedule_set, dock_emergency_stop, dock_reset, dock_weather_query
+当前项目没有注册同名公开 handler；如后续客户明确要求，再按具体 Dock3
+properties、CMD、HMS 或任务调度链路补 adapter。
 ```
 
 ### 4.7 log：3
@@ -214,7 +209,7 @@ job_delete, job_query, download_media, set_livestream_lens,
 set_livestream_quality
 ```
 
-`heart_beat`、`stick_control`、`drone_control`、`drone_emergency_stop` 是 Dock3 DRC 官方链路方法，当前注册在 Router 的 `drc` 分组；它们不在 `/services` 白名单是正常的，云端应通过 `thing/product/{sn}/drc/down` 调用，并通过 `drc/up` 回包，不能归为旧版无用方法。
+`drc_mode_enter`、`drc_mode_exit`、`flight_authority_grab`、`heart_beat`、`stick_control`、`drone_control`、`drone_emergency_stop`、`takeoff_to_point`、`fly_to_point*` 是 Dock3 DRC/指点飞行相关链路，当前项目保留 Router 入口；但本期暂不接入 DRC 模式远程控制，验收和缺口统计先排除这组方法。
 
 另外，`airport_bind_status`、`airport_organization_get`、`airport_organization_bind`、`device_binding`、`device_unbinding`、`workspace_bind_status`、`workspace_get`、`storage_config_get`、`flight_areas_get`、`device_capability_query`、`update_topo` 是 requests/status/internal 或非 services 口径；如果误发到 `/services`，当前 MQTT 层会按已知非 services method 忽略或拒绝，避免把它们伪装成公开云端 services。
 

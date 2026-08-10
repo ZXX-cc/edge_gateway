@@ -31,6 +31,8 @@ from src.cloud_api.dock3_reply_schema import sanitize_services_reply
 from src.cloud_api.dock3_publish_schema import sanitize_upstream_publish
 
 logger = get_logger("mqtt")
+mqtt_trace_logger = get_logger("mqtt.trace")
+gateway_traffic_logger = get_logger("gateway.traffic")
 
 
 class MQTTClient:
@@ -377,6 +379,63 @@ class MQTTClient:
             extra=extra,
         )
 
+    @staticmethod
+    def _payload_method(payload: dict) -> str:
+        return payload.get("method", "") if isinstance(payload, dict) else ""
+
+    @staticmethod
+    def _payload_tid(payload: dict) -> str:
+        return payload.get("tid", "") if isinstance(payload, dict) else ""
+
+    def _log_mqtt_method_line(
+        self,
+        label: str,
+        topic: str,
+        payload: dict,
+        *,
+        result=None,
+        ok: Optional[bool] = None,
+        elapsed_ms: Optional[int] = None,
+    ) -> None:
+        parts = [
+            "MQTT",
+            label,
+            f"topic={topic}",
+            f"method={self._payload_method(payload)}",
+            f"tid={self._payload_tid(payload)}",
+        ]
+        if result is not None:
+            parts.append(f"result={result}")
+        if ok is not None:
+            parts.append(f"ok={ok}")
+        if elapsed_ms is not None:
+            parts.append(f"elapsed_ms={elapsed_ms}")
+        mqtt_trace_logger.info(" | ".join(parts))
+
+    def _log_gateway_traffic(
+        self,
+        label: str,
+        topic: str,
+        payload: dict,
+        *,
+        result=None,
+        ok: Optional[bool] = None,
+        elapsed_ms: Optional[int] = None,
+    ) -> None:
+        gateway_traffic_logger.info(
+            "%s topic=%s method=%s tid=%s bid=%s result=%s ok=%s elapsed_ms=%s payload=%s",
+            label,
+            topic,
+            self._payload_method(payload),
+            self._payload_tid(payload),
+            payload.get("bid", "") if isinstance(payload, dict) else "",
+            result,
+            ok,
+            elapsed_ms,
+            format_with_labels(payload, max_length=5000),
+            extra={"console_silent": True},
+        )
+
     def publish_osd(self, device_sn: str, data: dict):
         """发布OSD定频数据"""
         topic = TopicBuilder.osd(device_sn)
@@ -388,7 +447,7 @@ class MQTTClient:
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
                 ("data", format_with_labels(payload, max_length=2000)),
-            ]))
+            ]), extra={"console_silent": True})
         self.publish(topic, payload, qos=0)
 
     def publish_state(self, device_sn: str, data: dict):
@@ -399,7 +458,7 @@ class MQTTClient:
         logger.info(self._format_log_block("MQTT STATE PUBLISH", [
             ("topic", topic),
             ("data", format_with_labels(payload, max_length=3000)),
-        ]))
+        ]), extra={"console_silent": True})
         self.publish(topic, payload, qos=1)
 
     def publish_event(self, data: dict):
@@ -418,10 +477,11 @@ class MQTTClient:
                 ("topic", topic),
                 ("method", data.get('method')),
                 ("data", format_with_labels(data, max_length=3000)),
-            ]))
+            ]), extra={"console_silent": True})
         ok = self.publish(topic, data, qos=1)
         if data.get('method') != 'heartbeat':
             self._trace_publish("mqtt_publish_event", topic, data, ok=ok)
+            self._log_mqtt_method_line("EVENT ->", topic, data, ok=ok)
         return ok
 
     def _sanitize_publish_payload(self, topic: str, payload: dict) -> dict:
@@ -443,6 +503,8 @@ class MQTTClient:
         data = self._normalize_reply_for_publish(TopicBuilder.services(self.gateway_sn), data)
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_services_reply", topic, data, ok=ok, source_topic=TopicBuilder.services(self.gateway_sn))
+        self._log_mqtt_method_line("SERVICES_REPLY ->", topic, data, result=self._reply_result(data), ok=ok)
+        self._log_gateway_traffic("reply_out", topic, data, result=self._reply_result(data), ok=ok)
 
     def publish_property_reply(self, data: dict):
         """发布属性设置响应"""
@@ -450,6 +512,8 @@ class MQTTClient:
         data = self._normalize_reply_for_publish(TopicBuilder.property_set(self.gateway_sn), data)
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_property_reply", topic, data, ok=ok, source_topic=TopicBuilder.property_set(self.gateway_sn))
+        self._log_mqtt_method_line("PROPERTY_REPLY ->", topic, data, result=self._reply_result(data), ok=ok)
+        self._log_gateway_traffic("reply_out", topic, data, result=self._reply_result(data), ok=ok)
 
     def publish_drc_up(self, data: dict):
         """发布DRC上行数据"""
@@ -457,6 +521,8 @@ class MQTTClient:
         data = self._normalize_reply_for_publish(TopicBuilder.drc_down(self.gateway_sn), data)
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_drc_up", topic, data, ok=ok, source_topic=TopicBuilder.drc_down(self.gateway_sn))
+        self._log_mqtt_method_line("DRC_UP ->", topic, data, result=self._reply_result(data), ok=ok)
+        self._log_gateway_traffic("reply_out", topic, data, result=self._reply_result(data), ok=ok)
 
     @staticmethod
     def _is_service_reply_method(method: str) -> bool:
@@ -623,7 +689,15 @@ class MQTTClient:
             ("result", self._reply_result(data)),
             ("ok", ok),
             ("data", format_with_labels(data, max_length=3000)),
-        ]))
+        ]), extra={"console_silent": True})
+        self._log_mqtt_method_line("REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
+        self._log_gateway_traffic(
+            "reply_out",
+            reply_topic,
+            data,
+            result=self._reply_result(data),
+            ok=ok,
+        )
         return ok
 
     def _publish_reply_for_source_topic(self, source_topic: str, data: dict) -> bool:
@@ -663,7 +737,15 @@ class MQTTClient:
             ("msg", data.get('msg')),
             ("ok", ok),
             ("data", format_with_labels(data, max_length=3000)),
-        ]))
+        ]), extra={"console_silent": True})
+        self._log_mqtt_method_line("ERROR_REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
+        self._log_gateway_traffic(
+            "reply_out",
+            reply_topic,
+            data,
+            result=self._reply_result(data),
+            ok=ok,
+        )
         return ok
 
     def _validate_downstream_topic(self, source_topic: str, method: str) -> Optional[str]:
@@ -680,9 +762,10 @@ class MQTTClient:
         logger.info(self._format_log_block("MQTT STATUS PUBLISH", [
             ("topic", topic),
             ("data", format_with_labels(data, max_length=3000)),
-        ]))
+        ]), extra={"console_silent": True})
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_status", topic, data, ok=ok)
+        self._log_mqtt_method_line("STATUS ->", topic, data, ok=ok)
 
     def publish_requests(self, data: dict):
         """发布设备请求 (thing/product/{sn}/requests)"""
@@ -691,9 +774,11 @@ class MQTTClient:
             ("topic", topic),
             ("method", data.get('method')),
             ("data", format_with_labels(data, max_length=3000)),
-        ]))
+        ]), extra={"console_silent": True})
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_request", topic, data, ok=ok)
+        self._log_mqtt_method_line("REQUEST ->", topic, data, ok=ok)
+        self._log_gateway_traffic("request_out", topic, data, ok=ok)
 
     # ---- 处理器注册 ----
 
@@ -872,7 +957,10 @@ class MQTTClient:
                 ("need_reply", payload.get('need_reply')),
                 ("payload_bytes", len(msg.payload or b'')),
                 ("payload", format_with_labels(payload, max_length=3000)),
-            ]))
+            ]), extra={"console_silent": True})
+            self._log_mqtt_method_line("CALL <-", msg.topic, payload)
+            if is_downstream_command:
+                self._log_gateway_traffic("request_in", msg.topic, payload)
 
             if is_downstream_command:
                 security = self._security_validator.validate_downstream(msg.topic, payload)
@@ -952,12 +1040,26 @@ class MQTTClient:
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
-                    ]))
+                    ]), extra={"console_silent": True})
                 self._trace.record(
                     "mqtt_status_reply_received",
                     direction="in",
                     topic=msg.topic,
                     payload=payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                self._log_mqtt_method_line(
+                    "STATUS_REPLY <-",
+                    msg.topic,
+                    payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                self._log_gateway_traffic(
+                    "reply_in",
+                    msg.topic,
+                    payload,
                     result=result,
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                 )
@@ -1003,12 +1105,26 @@ class MQTTClient:
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
-                    ]))
+                    ]), extra={"console_silent": True})
                 self._trace.record(
                     "mqtt_requests_reply_received",
                     direction="in",
                     topic=msg.topic,
                     payload=payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                self._log_mqtt_method_line(
+                    "REQUESTS_REPLY <-",
+                    msg.topic,
+                    payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                self._log_gateway_traffic(
+                    "reply_in",
+                    msg.topic,
+                    payload,
                     result=result,
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                 )
@@ -1032,7 +1148,8 @@ class MQTTClient:
                     msg.topic,
                     method,
                     payload.get('tid'),
-                    format_with_labels(payload, max_length=3000)
+                    format_with_labels(payload, max_length=3000),
+                    extra={"console_silent": True},
                 )
                 return
 
@@ -1053,7 +1170,21 @@ class MQTTClient:
                     ("method", method),
                     ("result", result),
                     ("payload", format_with_labels(payload, max_length=3000)),
-                ]))
+                ]), extra={"console_silent": True})
+                self._log_mqtt_method_line(
+                    "UPSTREAM_REPLY <-",
+                    msg.topic,
+                    payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                self._log_gateway_traffic(
+                    "reply_in",
+                    msg.topic,
+                    payload,
+                    result=result,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
                 return
 
             if self._should_ignore_service_method(msg.topic, method):
@@ -1262,7 +1393,7 @@ class MQTTClient:
                                     ("reason", admission.reason),
                                     ("result", self._reply_result(reply)),
                                     ("current_state", admission.snapshot.to_dict(compact=True) if admission.snapshot else {}),
-                                ]))
+                                ]), extra={"console_silent": True})
                                 if self._should_reply_to_downstream(msg.topic, payload):
                                     self._publish_reply_for_downstream_topic(msg.topic, reply)
                                 return
@@ -1437,7 +1568,22 @@ class MQTTClient:
                 ("handler_elapsed_ms", handler_elapsed_ms),
                 ("result", self._reply_result(result)),
                 ("reply", format_with_labels(result, max_length=3000)),
-            ]))
+            ]), extra={"console_silent": True})
+            self._log_mqtt_method_line(
+                "HANDLER OK",
+                source_topic,
+                payload,
+                result=self._reply_result(result),
+                elapsed_ms=elapsed_ms,
+            )
+            if is_downstream_command:
+                self._log_gateway_traffic(
+                    "handler_reply",
+                    source_topic,
+                    result if isinstance(result, dict) else {},
+                    result=self._reply_result(result),
+                    elapsed_ms=elapsed_ms,
+                )
             if is_downstream_command and isinstance(result, dict):
                 self._remember_downstream_reply(source_topic, payload, result)
             elif is_downstream_command:

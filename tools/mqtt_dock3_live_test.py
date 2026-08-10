@@ -97,8 +97,8 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     if rc != 0:
         return rc
     protocols = capability.get("data", {}).get("supported_protocols", [])
-    if "webrtc" not in protocols or "rtmp" not in protocols:
-        print(f"live capability missing common protocols: {capability}", file=sys.stderr)
+    if "rtmp" not in protocols:
+        print(f"live capability missing RTMP protocol: {capability}", file=sys.stderr)
         return 10
 
     status_before = client.event_count("live_status_notify")
@@ -213,7 +213,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--url", default="mock://dock3/live")
-    parser.add_argument("--url-type", type=int, default=4)
+    parser.add_argument("--url-type", type=int, default=1)
     parser.add_argument("--video-id", default="")
     parser.add_argument("--video-type", choices=["normal", "wide", "zoom", "ir", "fpv", "gimbal"], default="gimbal")
     parser.add_argument("--keep-stream", action="store_true")

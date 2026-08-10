@@ -7,6 +7,7 @@ import threading
 from typing import Optional, Dict, Any, List, Callable
 from src.modules.base_module import BaseModule
 from src.core.message_dispatcher import MAVLinkMessage, MessageDispatcher
+from src.utils.logger import get_logger
 from pymavlink import mavutil
 import sys
 import os
@@ -26,6 +27,7 @@ from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 
 
 HEARTBEAT_PULSE_GRACE_SECONDS = 30.0
+nest_raw_logger = get_logger("nest.raw")
 
 
 class DroneNestModule(BaseModule):
@@ -112,6 +114,8 @@ class DroneNestModule(BaseModule):
         self._last_sent_takeoff_land_order = 0
         self._order_response_condition = threading.Condition()
         self._order_response_sequence = 0
+        self._last_nest_console_summary = None
+        self._last_nest_console_log_time = 0.0
 
     @staticmethod
     def _normalize_protocol_version(protocol_version: str) -> str:
@@ -131,6 +135,8 @@ class DroneNestModule(BaseModule):
 
         raw_value = bool(raw_value)
         previous_value = self.environment_data.get(raw_key)
+        if previous_value is None:
+            self.environment_data[last_toggle_key] = now
         if previous_value is not None and bool(previous_value) != raw_value:
             self.environment_data[last_toggle_key] = now
             self.environment_data[toggle_count_key] = (
@@ -145,6 +151,29 @@ class DroneNestModule(BaseModule):
         if last_toggle is None:
             return False
         return now - float(last_toggle) <= HEARTBEAT_PULSE_GRACE_SECONDS
+
+    def _log_nest_console_summary(self, *, nest_heartbeat, plc_heartbeat, drone_heartbeat, msg, error_code):
+        summary = (
+            bool(nest_heartbeat),
+            bool(plc_heartbeat),
+            bool(drone_heartbeat),
+            int(getattr(msg, "gate_state", 0) or 0),
+            int(getattr(msg, "clamp_state", 0) or 0),
+            int(error_code or 0),
+        )
+        now = time.time()
+        if summary == self._last_nest_console_summary and now - self._last_nest_console_log_time < 30.0:
+            return
+        self._last_nest_console_summary = summary
+        self._last_nest_console_log_time = now
+        self.log(
+            "机巢状态摘要: "
+            f"nest_hb={int(bool(nest_heartbeat))}, "
+            f"plc_hb={int(bool(plc_heartbeat))}, "
+            f"drone_hb={int(bool(drone_heartbeat))}, "
+            f"gate_state={summary[3]}, clamp_state={summary[4]}, error_code={summary[5]}",
+            "INFO",
+        )
 
     # ========== 模块关联 ==========
 
@@ -502,7 +531,7 @@ class DroneNestModule(BaseModule):
             })
 
             self.environment_data["cloud_properties"] = self._build_cloud_properties(self.environment_data)
-            self.log(
+            nest_raw_logger.info(
                 "机巢12004原始状态: "
                 f"protocol={self.protocol_version}, "
                 f"boolstate1={self._fmt_hex(boolstate1, 4)}({boolstate1}), "
@@ -516,7 +545,14 @@ class DroneNestModule(BaseModule):
                 f"ready={int(ready_state)}, init={int(init_state)}, initializing={int(initializing_state)}, "
                 f"busy={int(system_busy)}, fault={int(fault_state)}, estop={int(estop_state)}, "
                 f"takeoff_allowed={int(takeoff_allowed)}",
-                "INFO",
+                extra={"console_silent": True},
+            )
+            self._log_nest_console_summary(
+                nest_heartbeat=nest_heartbeat,
+                plc_heartbeat=plc_heartbeat,
+                drone_heartbeat=drone_heartbeat,
+                msg=msg,
+                error_code=msg.error_code,
             )
 
             # 构造 gcs_order（兼容现有API）
@@ -656,7 +692,7 @@ class DroneNestModule(BaseModule):
                 and takeoff_info["raw"] == 0
                 and not result["rejections"]
             )
-            self.log(
+            nest_raw_logger.info(
                 "机巢12005原始ACK: "
                 f"ordinary_raw={self._fmt_hex(ordinary_info['raw'], 8)}({ordinary_info['raw']}), "
                 f"ordinary.reply_status={ordinary_info['reply_status']}, "
@@ -668,7 +704,7 @@ class DroneNestModule(BaseModule):
                 f"takeoff.reject_reason_code={takeoff_info['reject_reason_code']}, "
                 f"takeoff.command_code={self._fmt_hex(takeoff_info['command_code'], 2)}, "
                 f"rejections={result['rejections']}",
-                "INFO",
+                extra={"console_silent": True},
             )
             if is_empty_poll_response:
                 self.last_order_response = result

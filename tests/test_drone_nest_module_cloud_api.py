@@ -10,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +23,11 @@ if "pymavlink" not in sys.modules:
     sys.modules["pymavlink"] = pymavlink
     sys.modules["pymavlink.mavutil"] = pymavlink.mavutil
 
-from src.modules.drone_nest_module import HEARTBEAT_PULSE_GRACE_SECONDS, DroneNestModule  # noqa: E402
+from src.modules.drone_nest_module import (  # noqa: E402
+    HEARTBEAT_PULSE_GRACE_SECONDS,
+    DroneNestModule,
+    nest_raw_logger,
+)
 
 
 class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
@@ -184,9 +189,9 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
         self.module.set_protocol_version("v1.7")
 
         self.module._handle_nest_response(self._nest_response(0))
-        self.assertFalse(self.module.environment_data["nest_heartbeat"])
-        self.assertFalse(self.module.environment_data["drone_heartbeat"])
-        self.assertFalse(self.module.environment_data["plc_heartbeat"])
+        self.assertTrue(self.module.environment_data["nest_heartbeat"])
+        self.assertTrue(self.module.environment_data["drone_heartbeat"])
+        self.assertTrue(self.module.environment_data["plc_heartbeat"])
         self.assertFalse(self.module.environment_data["nest_heartbeat_raw"])
         self.assertFalse(self.module.environment_data["drone_heartbeat_raw"])
         self.assertFalse(self.module.environment_data["plc_heartbeat_raw"])
@@ -222,6 +227,12 @@ class DroneNestModuleCloudApiFlowTest(unittest.TestCase):
         self.assertFalse(self.module.environment_data["nest_heartbeat"])
         self.assertFalse(self.module.environment_data["drone_heartbeat"])
         self.assertFalse(self.module.environment_data["plc_heartbeat"])
+
+    def test_nest_raw_records_are_console_silent(self):
+        with patch.object(nest_raw_logger, "info") as info:
+            self.module._handle_nest_response(self._nest_response(0))
+
+        self.assertTrue(info.call_args.kwargs["extra"]["console_silent"])
 
     def test_order_response_maps_resident_mode_rejection_reason(self):
         rejected_reply = SimpleNamespace(

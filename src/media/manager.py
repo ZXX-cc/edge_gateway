@@ -38,6 +38,7 @@ from src.cloud_api.dock3_media import (
     upload_progress_event_data,
 )
 from src.cloud_api.dock3_live import (
+    REALTIME_FFMPEG_URL_TYPES,
     TASK_STATUS_FAILED,
     TASK_STATUS_IN_PROGRESS,
     TASK_STATUS_OK,
@@ -364,11 +365,13 @@ class MediaManager:
                 os.makedirs(self.storage_path, exist_ok=True)
                 return files
 
-            # 扫描常见媒体文件格式
+            # 扫描常见媒体文件格式。载荷通常按日期/任务建子目录，必须递归扫描。
             extensions = ['*.jpg', '*.jpeg', '*.png', '*.mp4', '*.mov', '*.avi']
             for ext in extensions:
-                pattern = os.path.join(self.storage_path, ext)
-                for filepath in glob.glob(pattern):
+                pattern = os.path.join(self.storage_path, "**", ext)
+                for filepath in glob.glob(pattern, recursive=True):
+                    if os.path.isdir(filepath):
+                        continue
                     item = build_media_file(filepath, self.storage_path, self.gateway_sn)
                     item['file_path'] = filepath
                     item['priority'] = self._priority_overrides.get(item['file_id'], 0)
@@ -560,23 +563,99 @@ class MediaManager:
                     mapping[str(identity)] = item
         return mapping
 
-    async def _get_pending_files_for_upload(self) -> List[dict]:
+    @staticmethod
+    def _db_media_to_upload_item(media_file) -> dict:
+        filepath = getattr(media_file, "file_path", "") or ""
+        file_name = getattr(media_file, "file_name", "") or os.path.basename(filepath)
+        file_id = stable_id = getattr(media_file, "id", "") or file_name
+        if filepath and os.path.exists(filepath):
+            try:
+                item = build_media_file(filepath, os.path.dirname(filepath) or ".", getattr(media_file, "device_sn", ""))
+            except Exception:
+                item = {}
+        else:
+            item = {}
+        db_file_size = int(getattr(media_file, "file_size", 0) or 0)
+        resolved_size = db_file_size or int(item.get("file_size", item.get("size", 0)) or 0)
+        item.update({
+            "db_id": getattr(media_file, "id", ""),
+            "file_id": item.get("file_id") or stable_id,
+            "fingerprint": item.get("fingerprint") or stable_id,
+            "device_sn": getattr(media_file, "device_sn", ""),
+            "file_name": file_name,
+            "name": file_name,
+            "file_path": filepath,
+            "file_size": resolved_size,
+            "size": resolved_size,
+            "file_type": getattr(media_file, "file_type", "") or Path(file_name).suffix.lower().lstrip("."),
+            "mission_id": getattr(media_file, "mission_id", "") or "",
+            "flight_id": getattr(media_file, "mission_id", "") or "",
+            "upload_status": getattr(media_file, "upload_status", "pending") or "pending",
+        })
+        return item
+
+    def _apply_upload_priority(self, item: dict) -> dict:
+        identities = [
+            item.get("file_id"),
+            item.get("fingerprint"),
+            item.get("name"),
+            item.get("file_name"),
+            item.get("object_key"),
+            item.get("path"),
+        ]
+        priority = 0
+        for identity in identities:
+            if identity and str(identity) in self._priority_overrides:
+                priority = max(priority, int(self._priority_overrides[str(identity)]))
+        item["priority"] = priority
+        return item
+
+    async def _get_pending_files_for_upload(self, flight_id: str = "") -> List[dict]:
         """获取待上传的文件列表（与数据库比对）"""
         await self._init_database()
         AsyncSessionLocal = get_async_session_local()
 
         async with AsyncSessionLocal() as session:
             db_files = await MediaDB.get_pending_uploads(session, self.gateway_sn)
-            db_file_names = {f.file_name for f in db_files}
-
-            local_files = self._scan_media_files()
+            flight_id = str(flight_id or "")
+            if flight_id:
+                db_files = [
+                    item for item in db_files
+                    if str(getattr(item, "mission_id", "") or "") == flight_id
+                ]
             pending_files = []
+            pending_files.extend([self._apply_upload_priority(self._db_media_to_upload_item(item)) for item in db_files])
 
-            for local_file in local_files:
-                if local_file['file_name'] not in db_file_names:
-                    pending_files.append(local_file)
+            if not flight_id:
+                # 扫描本地/远端媒体可能访问文件系统或 HTTP 目录，不能阻塞主事件循环。
+                local_files = await asyncio.to_thread(self._scan_media_files)
+                db_paths = {str(getattr(f, "file_path", "") or "") for f in db_files}
+                db_file_names = {str(getattr(f, "file_name", "") or "") for f in db_files}
+                for local_file in local_files:
+                    file_path = str(local_file.get("file_path", "") or "")
+                    file_name = str(local_file.get("file_name", "") or "")
+                    if file_path in db_paths or file_name in db_file_names:
+                        continue
+                    pending_files.append(self._apply_upload_priority(local_file))
 
-            return pending_files
+            return self._sort_upload_files(pending_files)
+
+    @staticmethod
+    def _sort_upload_files(files: List[dict]) -> List[dict]:
+        return sorted(
+            files,
+            key=lambda item: (
+                -int(item.get("priority", 0) or 0),
+                int(item.get("create_time", item.get("capture_time", 0)) or 0),
+                str(item.get("file_name", "")),
+            ),
+        )
+
+    def _pop_next_upload_file(self) -> Optional[dict]:
+        if not self._upload_queue:
+            return None
+        self._upload_queue = self._sort_upload_files(self._upload_queue)
+        return self._upload_queue.pop(0)
 
     def _request_upload_credentials(self, files: List[dict]) -> Optional[dict]:
         """向云端请求上传凭证"""
@@ -590,22 +669,25 @@ class MediaManager:
             'files': [{'name': f['file_name'], 'size': f['file_size']} for f in files]
         }
 
-        # 同步等待响应
-        result = {}
+        result_holder = {"received": False, "payload": {}}
+        done = threading.Event()
 
         def callback(*args):
-            nonlocal result
-            result = args[-1] if args else {}
+            result_holder["received"] = True
+            result_holder["payload"] = args[-1] if args else {}
+            done.set()
 
         request_id = self._request_sender('storage_config_get', request_data, callback)
+        if not request_id:
+            logger.warning("storage_config_get request was not sent")
+            return None
 
-        # 等待响应（最多等待10秒）
-        for _ in range(20):
-            if result:
-                break
-            time.sleep(0.5)
+        if not done.wait(timeout=10.0):
+            logger.warning("Timeout waiting storage_config_get reply")
+            return None
 
-        return result.get('data') if result else None
+        result = result_holder["payload"]
+        return result.get('data') if isinstance(result, dict) else None
 
     def _upload_file_http(self, filepath: str, upload_url: str) -> bool:
         """通过HTTP上传文件到对象存储"""
@@ -639,6 +721,14 @@ class MediaManager:
         prefix = str(storage.get("object_key_prefix") or "").strip("/")
         safe_name = os.path.basename(str(file_name or "media_file"))
         return f"{prefix}/{safe_name}" if prefix else safe_name
+
+    def _object_key_from_upload_target(self, storage: dict, upload_url: str, file_name: str) -> str:
+        object_key = self._object_key_from_storage(storage, file_name)
+        if object_key and object_key != os.path.basename(str(file_name or "")):
+            return object_key
+        parsed = urllib.parse.urlparse(str(upload_url or ""))
+        path_key = urllib.parse.unquote(parsed.path or "").lstrip("/")
+        return path_key or object_key or os.path.basename(str(file_name or "media_file"))
 
     @staticmethod
     def _quote_s3_path(path: str) -> str:
@@ -775,28 +865,44 @@ class MediaManager:
                 return True
         return False
 
-    def _update_upload_progress(self, file_id: str, progress: int, status: str):
+    def _update_upload_progress(
+        self,
+        file_id: str,
+        progress: int,
+        status: str,
+        *,
+        db_id: str = "",
+        upload_url: str = "",
+        file_item: Optional[dict] = None,
+    ):
         """更新上传进度"""
         async def _update_status():
+            target_id = db_id or file_id
+            if not target_id:
+                return
             await self._init_database()
             AsyncSessionLocal = get_async_session_local()
             if not AsyncSessionLocal:
                 return
             async with AsyncSessionLocal() as session:
-                await MediaDB.update_upload_status(session, file_id, status)
+                updated = await MediaDB.update_upload_status(session, target_id, status, upload_url=upload_url)
+                if not updated:
+                    logger.warning("Media upload status not updated: id=%s status=%s", target_id, status)
                 await session.commit()
 
-        self._run_db_coroutine(_update_status())
+        if db_id:
+            self._run_db_coroutine(_update_status())
 
         # 上报进度事件
         if self._event_callback:
-            event_files = [self._media_identity_map(self._scan_local_files()).get(file_id, {
+            event_item = file_item or self._media_identity_map(self._scan_local_files()).get(file_id, {
                 "file_id": file_id,
                 "fingerprint": file_id,
                 "device_sn": self.gateway_sn,
                 "object_key": file_id,
                 "size": 0,
-            })]
+            })
+            event_files = [event_item]
             event = MessageBuilder.build_event(
                 'fileupload_progress',
                 upload_progress_event_data(event_files, status=status, progress=progress),
@@ -812,12 +918,17 @@ class MediaManager:
                     self._uploading = False
                     break
 
-                file_info = self._upload_queue.pop(0)
+                file_info = self._pop_next_upload_file()
+                if not file_info:
+                    self._uploading = False
+                    break
 
             filepath = file_info.get('file_path')
             file_name = file_info.get('file_name')
             file_size = file_info.get('file_size')
             file_type = file_info.get('file_type')
+            file_id = file_info.get('file_id') or file_info.get('fingerprint') or file_name
+            db_id = file_info.get("db_id", "")
 
             logger.info(f"Starting upload: {file_name}")
             if not filepath and file_info.get('download_url'):
@@ -830,30 +941,34 @@ class MediaManager:
                     logger.info("Remote media cached for upload: name=%s path=%s size=%s", file_name, filepath, file_size)
                 except Exception as exc:
                     logger.error("Remote media download failed: name=%s url=%s error=%s", file_name, file_info.get('download_url'), exc)
-                    self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
+                    self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
                     continue
+            if not filepath or not os.path.exists(filepath):
+                logger.error("Upload file is missing: name=%s path=%s", file_name, filepath)
+                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
+                continue
 
             # 请求上传凭证
             credentials = self._request_upload_credentials([file_info])
             if not credentials:
                 logger.warning(f"Failed to get credentials for {file_name}")
-                time.sleep(5)
+                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
                 continue
             if self._credential_expired(credentials):
                 logger.warning("Upload credentials expired for %s", file_name)
-                self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
+                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
                 continue
 
             # 执行上传
             storage_config = self._storage_config_from_credentials(credentials)
             upload_url = storage_config.get('upload_url', '')
             uploaded_path = upload_url
-            object_key = storage_config.get("object_key") or upload_url
+            object_key = self._object_key_from_upload_target(storage_config, upload_url, file_name)
             success = False
             for retry in range(self._max_retry_count):
                 if upload_url:
                     success = self._upload_file_http(filepath, upload_url)
-                    object_key = storage_config.get("object_key") or upload_url
+                    object_key = self._object_key_from_upload_target(storage_config, upload_url, file_name)
                     uploaded_path = upload_url
                 else:
                     success, uploaded_path, object_key = self._upload_file_s3(
@@ -869,34 +984,45 @@ class MediaManager:
             # 更新状态
             if success:
                 logger.info(f"Upload completed: {file_name}")
-                self._update_upload_progress(file_name, 100, 'completed')
+                self._update_upload_progress(
+                    file_id,
+                    100,
+                    'completed',
+                    db_id=db_id,
+                    upload_url=uploaded_path,
+                    file_item={**file_info, "object_key": object_key, "path": uploaded_path or filepath},
+                )
                 self.report_upload_complete({
                     'object_key': object_key,
                     'path': uploaded_path or filepath,
                     'name': file_name,
-                    'ext': {},
-                    'metadata': {}
+                    'ext': {
+                        'flight_id': file_info.get('flight_id') or file_info.get('mission_id') or '',
+                    },
+                    'metadata': {},
+                    'cloud_to_cloud_id': file_info.get('fingerprint') or file_id or 'DEFAULT',
                 })
             else:
                 logger.error(f"Upload failed after {self._max_retry_count} attempts: {file_name}")
-                self._update_upload_progress(file_name, 0, 'failed')
+                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
 
     def start_upload(self, flight_id: str = None):
         """开始上传任务（异步触发）"""
-        self._run_db_coroutine(self._async_start_upload())
+        self._run_db_coroutine(self._async_start_upload(flight_id or ""))
 
-    async def _async_start_upload(self):
+    async def _async_start_upload(self, flight_id: str = ""):
         """异步获取待上传文件并启动上传"""
-        pending_files = await self._get_pending_files_for_upload()
+        pending_files = await self._get_pending_files_for_upload(flight_id)
 
         if not pending_files:
-            logger.info("No pending files to upload")
+            logger.info("No pending files to upload: flight_id=%s", flight_id or "<all>")
             return
 
-        logger.info(f"Found {len(pending_files)} pending files for upload")
+        logger.info("Found %s pending files for upload: flight_id=%s", len(pending_files), flight_id or "<all>")
 
         with self._upload_lock:
             self._upload_queue.extend(pending_files)
+            self._upload_queue = self._sort_upload_files(self._upload_queue)
             self._uploading = True
 
         if not self._upload_thread or not self._upload_thread.is_alive():
@@ -1143,6 +1269,16 @@ class MediaManager:
                 self._live_status_state_item(data, live_status=live_status)
             ]}})
 
+    def _clear_live_session_state(self):
+        self._live_streaming = False
+        self._live_session_id = ""
+        self._live_video_id = ""
+        self._live_url = ""
+        self._live_protocol = 4
+        self._live_quality = 0
+        self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+        self._live_source_key = self._live_video_type
+
     @staticmethod
     def _live_status_state_item(data: dict, live_status: Optional[int] = None) -> dict:
         output = data.get("output", {}) if isinstance(data, dict) else {}
@@ -1177,20 +1313,44 @@ class MediaManager:
             self._live_session_id = ""
             self._ffmpeg_process = None
 
+    def _live_start_failed_reply(self, msg: dict, reason: str, result: int = DOCK_SYSTEM_ERROR) -> dict:
+        """开始直播失败时明确回包，并向平台同步失败状态。"""
+        logger.error("Live start failed: %s", reason)
+        self._live_streaming = False
+        self._publish_live_status_event(TASK_STATUS_FAILED, reason=reason, live_status=0)
+        failed_video_id = self._live_video_id
+        failed_quality = self._live_quality
+        failed_video_type = self._live_video_type
+        self._clear_live_session_state()
+        return MessageBuilder.build_reply(
+            msg,
+            result=result,
+            data=live_task_output(TASK_STATUS_FAILED, {
+                "reason": reason,
+                "video_id": failed_video_id,
+                "video_quality": failed_quality,
+                "video_type": failed_video_type,
+            }),
+            msg_str=reason,
+        )
+
     def _live_restart_failed_reply(self, msg: dict, reason: str) -> dict:
         """直播切流重启失败时，向平台明确返回失败并同步断流状态。"""
         logger.error("Live stream restart failed: %s", reason)
         self._live_streaming = False
         self._publish_live_status_event(TASK_STATUS_FAILED, reason=reason, live_status=0)
-        self._live_session_id = ""
+        failed_video_id = self._live_video_id
+        failed_quality = self._live_quality
+        failed_video_type = self._live_video_type
+        self._clear_live_session_state()
         return MessageBuilder.build_reply(
             msg,
             result=DOCK_SYSTEM_ERROR,
             data=live_task_output(TASK_STATUS_FAILED, {
                 "reason": reason,
-                "video_id": self._live_video_id,
-                "video_quality": self._live_quality,
-                "video_type": self._live_video_type,
+                "video_id": failed_video_id,
+                "video_quality": failed_quality,
+                "video_type": failed_video_type,
             }),
             msg_str=reason,
         )
@@ -1266,12 +1426,10 @@ class MediaManager:
                    f"quality={video_quality}, url={url}")
 
         if is_mock_live_url(url) and str(Config.get('runtime.mode', 'test')).lower() == 'production':
-            self._live_streaming = False
-            return MessageBuilder.build_reply(
+            return self._live_start_failed_reply(
                 msg,
+                "Mock live url is disabled in production",
                 result=INVALID_COMMAND_FORMAT,
-                data=live_task_output(TASK_STATUS_REJECTED, {"reason": "mock live url is disabled in production"}),
-                msg_str="Mock live url is disabled in production",
             )
 
         if is_mock_live_url(url):
@@ -1282,17 +1440,17 @@ class MediaManager:
                 "url": url,
             })
         else:
-            if not self._start_ffmpeg(url, url_type, video_quality, self._live_source_key):
-                self._live_session_id = ""
-                self._live_video_id = ""
-                self._live_url = ""
-                return MessageBuilder.build_reply(
+            if url_type not in REALTIME_FFMPEG_URL_TYPES:
+                return self._live_start_failed_reply(
                     msg,
-                    result=INVALID_COMMAND_FORMAT,
-                    data=live_task_output(TASK_STATUS_REJECTED, {
-                        "reason": "live video source unavailable",
-                    }),
-                    msg_str="Live video source unavailable",
+                    "Live protocol adapter unavailable for url_type=%s" % url_type,
+                    result=DOCK_SYSTEM_ERROR,
+                )
+            if not self._start_ffmpeg(url, url_type, video_quality, self._live_source_key):
+                return self._live_start_failed_reply(
+                    msg,
+                    "Live video source unavailable",
+                    result=DOCK_SYSTEM_ERROR,
                 )
 
         self._publish_live_status_event(TASK_STATUS_IN_PROGRESS, live_status=1)
@@ -1577,13 +1735,20 @@ class MediaManager:
             )
 
         logger.info(f"File delete: {len(file_ids)} files")
-        known = self._scan_local_files()
+        known = self._scan_media_files()
         by_id = self._media_identity_map(known)
         results = []
         for file_id in file_ids:
             item = by_id.get(file_id)
             if not item:
                 results.append({"file_id": file_id, "result": INVALID_COMMAND_FORMAT, "msg": "file not found"})
+                continue
+            if item.get("source") == "remote_http" and not item.get("file_path"):
+                results.append({
+                    "file_id": file_id,
+                    "result": DEVICE_STATE_UNSUPPORTED,
+                    "msg": "remote media delete unsupported",
+                })
                 continue
 
             filepath = item.get("file_path", "")

@@ -51,7 +51,7 @@ from src.cloud_api.dock3_media import (
 from src.cloud_api.dock3_live import validate_live_start_payload
 from src.media.manager import MediaManager
 from src.utils.config import Config
-from src.utils.dji_error_codes import DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 
 
 def base_msg(method, data):
@@ -377,6 +377,59 @@ class Dock3MediaManagerTest(unittest.TestCase):
         callbacks = [event for event in events if event.get("method") == "file_upload_callback"]
         self.assertEqual(callbacks[0]["data"]["file"]["object_key"], "djidock/sample.jpg")
 
+    def test_http_upload_callback_does_not_use_upload_url_as_object_key(self):
+        manager = MediaManager()
+        events = []
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "upload_url": "https://oss.example/bucket/media/sample.jpg?signature=abc",
+            }
+            manager._upload_file_http = lambda filepath, upload_url: True
+            manager._upload_queue = [{
+                "file_id": "media-id",
+                "fingerprint": "media-id",
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        callback = next(event for event in events if event.get("method") == "file_upload_callback")
+        file_data = callback["data"]["file"]
+        self.assertEqual(file_data["object_key"], "bucket/media/sample.jpg")
+        self.assertNotIn("signature", file_data["object_key"])
+
+    def test_upload_queue_uses_priority_order(self):
+        manager = MediaManager()
+        uploaded = []
+        manager._request_upload_credentials = lambda files: {
+            "upload_url": f"https://oss.example/bucket/{files[0]['file_name']}",
+        }
+        manager._upload_file_http = lambda filepath, upload_url: uploaded.append(Path(filepath).name) or True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            low = Path(tmp) / "low.jpg"
+            high = Path(tmp) / "high.jpg"
+            low.write_bytes(b"low")
+            high.write_bytes(b"high")
+            manager._upload_queue = [
+                {"file_id": "low", "file_path": str(low), "file_name": "low.jpg", "file_size": 3, "priority": 0},
+                {"file_id": "high", "file_path": str(high), "file_name": "high.jpg", "file_size": 4, "priority": 9},
+            ]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(uploaded, ["high.jpg", "low.jpg"])
+
     def test_file_download_caches_remote_media_without_upload(self):
         class FakeResponse:
             def __init__(self, content):
@@ -419,6 +472,34 @@ class Dock3MediaManagerTest(unittest.TestCase):
 
         self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
         self.assertEqual(reply["data"]["output"]["status"], "rejected")
+
+    def test_file_delete_reports_remote_media_unsupported(self):
+        manager = MediaManager()
+        remote = build_remote_media_file("http://media.local/download/photo/a.jpg", "EDGEGW001")
+        manager._scan_media_files = lambda: [remote]
+
+        reply = manager.handle_file_delete(base_msg("file_delete", {
+            "file_ids": [remote["file_id"]],
+        }))
+
+        item = reply["data"]["files"][0]
+        self.assertEqual(item["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("remote media delete unsupported", item["msg"])
+
+    def test_scan_local_files_is_recursive(self):
+        manager = MediaManager()
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "flight-a" / "photo"
+            nested.mkdir(parents=True)
+            path = nested / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager.storage_path = tmp
+
+            files = manager._scan_local_files()
+
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["name"], "sample.jpg")
+        self.assertEqual(files[0]["path"], "flight-a/photo/sample.jpg")
 
     def test_build_media_file_has_stable_dock3_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -896,7 +977,32 @@ class Dock3MediaManagerTest(unittest.TestCase):
             Config.merge({"runtime": {"mode": "test"}})
 
         self.assertEqual(reply["data"]["result"], INVALID_COMMAND_FORMAT)
-        self.assertEqual(reply["data"]["output"]["status"], "rejected")
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+
+    def test_live_start_unsupported_protocol_reports_failure_and_clears_state(self):
+        events = []
+        states = []
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+        manager.set_event_callback(events.append)
+        manager.set_state_callback(states.append)
+
+        reply = manager.handle_live_start_push(base_msg("live_start_push", {
+            "url": "https://cloud.example/webrtc/whip",
+            "url_type": 4,
+            "video_id": "EDGEGW001/0/normal",
+            "video_quality": 2,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertFalse(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "")
+        self.assertEqual(manager._live_video_id, "")
+        self.assertEqual(events[-1]["method"], "live_status_notify")
+        self.assertEqual(events[-1]["data"]["output"]["status"], "failed")
+        self.assertEqual(states[-1]["property"]["live_status"][0]["status"], 0)
+        self.assertEqual(states[-1]["property"]["live_status"][0]["error_status"], 1)
 
     def test_upload_callback_keeps_official_nested_fields(self):
         events = []
