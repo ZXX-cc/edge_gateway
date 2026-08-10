@@ -337,7 +337,9 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
 
     def test_cover_open_times_out_when_12005_ack_missing(self):
         self.manager._nest_command_ack_timeout = 0.05
+        self.manager._nest_command_state_timeout = 0.05
         self.manager._nest_module = FakeNestModule(auto_ack=False)
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
 
         reply = self.manager.handle_cover_open(self._cover_msg())
 
@@ -346,6 +348,27 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertIn("timeout waiting for 12005 ACK", reply.get("msg", ""))
         self.assertNotIn("ack", reply["data"])
         self.assertNotIn("action", reply["data"])
+        self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
+
+    def test_cover_open_returns_ok_when_12005_missing_but_12004_final_state_arrives(self):
+        self.manager._nest_module = FakeNestModule(auto_ack=False)
+        self.manager.update_from_nest(nest_snapshot(gate_state=0))
+
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.setdefault("reply", self.manager.handle_cover_open(self._cover_msg()))
+        )
+        worker.start()
+        time.sleep(0.12)
+        self.assertNotIn("reply", result)
+
+        self.manager.update_from_nest(nest_snapshot(gate_state=1))
+        worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        reply = result["reply"]
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
         self.assertNotIn("cover_state", self.manager._pending_nest_command_targets)
 
     def test_cover_open_times_out_when_12004_target_state_never_arrives(self):
@@ -410,6 +433,26 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         )
         worker.start()
         time.sleep(0.05)
+        self.assertNotIn("reply", result)
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+        worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        reply = result["reply"]
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+
+    def test_drone_open_returns_ok_when_12005_missing_but_drone_heartbeat_arrives(self):
+        self.manager._nest_module = FakeNestModule(auto_ack=False)
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.setdefault("reply", self.manager.handle_drone_open(self._cover_msg("drone_open")))
+        )
+        worker.start()
+        time.sleep(0.12)
         self.assertNotIn("reply", result)
 
         self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))

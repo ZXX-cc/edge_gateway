@@ -24,6 +24,7 @@ _EVENT_LABELS = {
     "gateway_nest_command_fallback": "网关模拟机巢",
     "gateway_nest_command_unmapped": "网关机巢命令未映射",
     "gateway_nest_command_state_pending": "机巢状态异步等待",
+    "gateway_nest_command_ack_timeout_final_state_ok": "机巢ACK超时但最终状态到位",
     "gateway_drone_power_ready_timeout": "飞机上电最终状态超时",
     "nest_command_encoded": "网关编码机巢命令",
     "nest_command_mavlink_sent": "网关发送MAVLink",

@@ -2768,6 +2768,26 @@ class DeviceManager:
         self._remember_nest_command_target(command_name, prop_name, prop_value)
         ok, result, status, message, ack = self._send_nest_gcs_command_and_wait_ack(command_name, cmd)
         if not ok:
+            if (
+                result == DEVICE_COMMAND_TIMEOUT
+                and status == TASK_STATUS_TIMEOUT
+                and self._nest_command_require_final_state
+                and self._wait_for_nest_property(prop_name, prop_value, self._nest_command_state_timeout)
+            ):
+                self._clear_nest_command_target(prop_name)
+                trace_command(
+                    "gateway_nest_command_ack_timeout_final_state_ok",
+                    method=command_name,
+                    property=prop_name,
+                    target=prop_value,
+                    timeout=self._nest_command_state_timeout,
+                )
+                self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
+                return self._build_cmd_reply(
+                    msg,
+                    result=0,
+                    status=TASK_STATUS_OK,
+                )
             self._clear_nest_command_target(prop_name)
             self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
             return self._build_cmd_reply(
@@ -2838,6 +2858,19 @@ class DeviceManager:
     def _execute_nest_ack_command_sync(self, msg: dict, command_name: str, cmd, final_waiter: Optional[Callable[[], bool]] = None) -> dict:
         ok, result, status, message, ack = self._send_nest_gcs_command_and_wait_ack(command_name, cmd)
         if not ok:
+            if result == DEVICE_COMMAND_TIMEOUT and status == TASK_STATUS_TIMEOUT and final_waiter and final_waiter():
+                trace_command(
+                    "gateway_nest_command_ack_timeout_final_state_ok",
+                    method=command_name,
+                    timeout=self._drone_power_state_timeout,
+                    reason="12005 ACK timeout but final waiter succeeded",
+                )
+                self._notify_cmd_progress(command_name, status=TASK_STATUS_OK, percent=100, result=0)
+                return self._build_cmd_reply(
+                    msg,
+                    result=0,
+                    status=TASK_STATUS_OK,
+                )
             self._notify_cmd_progress(command_name, status=status, percent=100, result=result)
             return self._build_cmd_reply(
                 msg,
