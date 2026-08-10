@@ -62,7 +62,7 @@ class MQTTClient:
         self._lock = threading.Lock()
         self._running = False
         self._connect_count = 0
-        self._last_osd_log_time = 0
+        self._last_osd_log_time_by_topic: Dict[str, float] = {}
         # 仅写入本地 trace/command trace，不放入 Dock3 MQTT payload；用于在共享
         # broker 中识别“当前网关发布”与外部旧进程的同 tid 回包。
         self._trace_instance = f"{self.gateway_sn}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -426,6 +426,135 @@ class MQTTClient:
             return text[:max_length] + "\n...<truncated>"
         return text
 
+    @staticmethod
+    def _unwrap_osd_value(value):
+        if isinstance(value, dict) and set(value.keys()) == {"value"}:
+            return value.get("value")
+        return value
+
+    @classmethod
+    def _get_osd_path(cls, data: dict, *path, default=""):
+        current = data
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                return default
+            current = current.get(key)
+            current = cls._unwrap_osd_value(current)
+        return current
+
+    def _format_osd_summary(self, topic: str, device_sn: str, payload: dict) -> str:
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            return self._format_json_block(payload, max_length=4000)
+
+        is_dock = device_sn == self.gateway_sn
+        summary = OrderedDict()
+        summary["device_sn"] = device_sn
+        summary["device_type"] = "dock" if is_dock else "aircraft"
+        summary["field_count"] = len(data)
+        summary["timestamp"] = self._get_osd_path(data, "timestamp")
+
+        if is_dock:
+            for name in (
+                "mode_code",
+                "dock_state",
+                "drone_in_dock",
+                "cover_state",
+                "putter_state",
+                "charging_state",
+                "emergency_stop_state",
+                "alarm_state",
+                "wind_speed",
+                "environment_temperature",
+                "rainfall",
+                "humidity",
+            ):
+                value = self._get_osd_path(data, name)
+                if value != "":
+                    summary[name] = value
+            sub_device = self._get_osd_path(data, "sub_device", default={})
+            if isinstance(sub_device, dict):
+                device_online = self._get_osd_path(sub_device, "device_online_status")
+                if device_online != "":
+                    summary["sub_device.device_online_status"] = device_online
+        else:
+            for name in (
+                "mode_code",
+                "latitude",
+                "longitude",
+                "height",
+                "altitude",
+                "horizontal_speed",
+                "vertical_speed",
+                "attitude_head",
+                "course",
+                "gear",
+                "flight_time",
+                "home_distance",
+            ):
+                value = self._get_osd_path(data, name)
+                if value != "":
+                    summary[name] = value
+            battery = self._get_osd_path(data, "battery", default={})
+            if isinstance(battery, dict):
+                for name in ("capacity_percent", "voltage", "current", "temperature"):
+                    value = self._get_osd_path(battery, name)
+                    if value != "":
+                        summary[f"battery.{name}"] = value
+            position_state = self._get_osd_path(data, "position_state", default={})
+            if isinstance(position_state, dict):
+                for name in ("quality", "is_fixed", "gps_number"):
+                    value = self._get_osd_path(position_state, name)
+                    if value != "":
+                        summary[f"position_state.{name}"] = value
+            cameras = self._get_osd_path(data, "cameras", default=[])
+            if isinstance(cameras, list):
+                summary["cameras"] = len(cameras)
+
+        return self._format_json_block(summary, max_length=4000)
+
+    def _format_handler_reply_for_console(self, method: str, reply: dict) -> str:
+        if method != "gateway_state_query" or not isinstance(reply, dict):
+            return self._format_json_block(reply, max_length=12000)
+
+        data = reply.get("data", {}) if isinstance(reply.get("data", {}), dict) else {}
+        state = data.get("state", {}) if isinstance(data.get("state", {}), dict) else {}
+        summary = OrderedDict()
+        summary["method"] = reply.get("method", method)
+        summary["tid"] = reply.get("tid", "")
+        summary["result"] = self._reply_result(reply)
+        summary["ready"] = data.get("ready", "")
+        for name in ("device", "dock", "aircraft", "mission", "drc", "ota", "safety"):
+            if name in state:
+                summary[f"state.{name}"] = state.get(name)
+        details = state.get("details", {})
+        if isinstance(details, dict):
+            cloud = details.get("cloud", {})
+            if isinstance(cloud, dict):
+                summary["cloud.connect_state"] = cloud.get("connect_state", "")
+                summary["cloud.device_online_status"] = cloud.get("device_online_status", "")
+            nest = details.get("nest", {})
+            if isinstance(nest, dict):
+                for name in (
+                    "nest_heartbeat",
+                    "plc_heartbeat",
+                    "drone_heartbeat",
+                    "nest_heartbeat_last_toggle",
+                    "plc_heartbeat_last_toggle",
+                    "drone_heartbeat_last_toggle",
+                ):
+                    if name in nest:
+                        summary[f"nest.{name}"] = nest.get(name)
+        return self._format_json_block(summary, max_length=4000)
+
+    def _should_log_osd_sample(self, topic: str, interval_seconds: float = 10.0) -> bool:
+        now = time.time()
+        last_time = self._last_osd_log_time_by_topic.get(topic, 0.0)
+        if now - last_time < interval_seconds:
+            return False
+        self._last_osd_log_time_by_topic[topic] = now
+        return True
+
     def _log_mqtt_method_line(
         self,
         label: str,
@@ -485,14 +614,12 @@ class MQTTClient:
         topic = TopicBuilder.osd(device_sn)
         payload = MessageBuilder.build_osd(self.gateway_sn, data)
         payload = self._sanitize_publish_payload(topic, payload)
-        now = time.time()
-        if now - self._last_osd_log_time >= 30:
-            self._last_osd_log_time = now
+        if self._should_log_osd_sample(topic):
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
-                ("data", self._format_json_block(payload, max_length=8000)),
+                ("summary", self._format_osd_summary(topic, device_sn, payload)),
             ]))
-        self.publish(topic, payload, qos=0)
+        return self.publish(topic, payload, qos=0)
 
     def publish_state(self, device_sn: str, data: dict):
         """发布状态变更"""
@@ -1619,7 +1746,7 @@ class MQTTClient:
                 ("elapsed_ms", elapsed_ms),
                 ("handler_elapsed_ms", handler_elapsed_ms),
                 ("result", self._reply_result(result)),
-                ("reply", self._format_json_block(result, max_length=12000)),
+                ("reply", self._format_handler_reply_for_console(method, result)),
             ]))
             self._log_mqtt_method_line(
                 "HANDLER OK",

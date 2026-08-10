@@ -79,6 +79,9 @@ class TelemetryReporter:
             "flight_mode": "AUTO"
         }
         """
+        if self.mqtt.connected and hasattr(self.mqtt, "publish_osd"):
+            return bool(self.mqtt.publish_osd(device_sn, osd_data))
+
         topic = TopicBuilder.osd(device_sn)
         payload = MessageBuilder.build_osd(self.gateway_sn, osd_data)
         return self._publish_with_cache(topic, payload, qos=0)
