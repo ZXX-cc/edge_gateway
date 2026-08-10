@@ -814,6 +814,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)
 
+    def test_viewlink_device_status_callback_logs_each_type_once(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        callback = direct_payload._create_dev_callback()
+
+        with self.assertLogs("edge_gateway.payload.gimbal_control", level="INFO") as captured:
+            callback(2, None, 128, None)
+            callback(2, None, 256, None)
+            callback(3, None, 64, None)
+
+        status_logs = [
+            line for line in captured.output
+            if "设备状态:" in line
+        ]
+        self.assertEqual(len(status_logs), 2)
+        self.assertIn("设备遥测数据", status_logs[0])
+        self.assertIn("AI状态", status_logs[1])
+        self.assertEqual(direct_payload._last_dev_status["type"], 3)
+        self.assertEqual(direct_payload._last_dev_status["buffer_length"], 64)
+
     def test_viewlink_library_resolution_prefers_configured_sdk_dir(self):
         with tempfile.TemporaryDirectory() as sdk_dir:
             library_name = GimbalControl._platform_library_names()[0]

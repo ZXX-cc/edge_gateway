@@ -174,6 +174,7 @@ device:
   storage_capacity: 64000 # 存储容量(MB)
   nest_command_ack_timeout: 5.0 # services_reply 同步等待机巢 12005 指令 ACK/拒绝的超时时间(s)
   nest_command_state_timeout: 60.0 # services_reply 同步等待机巢 12004 最终状态到位的超时时间(s)
+  drone_power_state_timeout: 120.0 # 飞机上下电后等待机巢飞机心跳/主飞控 MAVLink 连接到位的超时时间(s)
   nest_command_require_final_state: true # true 时机巢动作类命令必须等 12004 最终状态到位才回复 ok
   allow_local_state_reset: false # true 时允许 device_reset 只重置网关本地状态；实机默认 false，避免伪造硬件复位成功
   auto_bind_on_startup: true # 本地联调默认置为已绑定，跳过平台 organization 绑定流程

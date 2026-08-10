@@ -232,6 +232,8 @@ class GimbalControl:
             "message": "设备状态回调尚未注册",
         }
         self._last_dev_status = None
+        self._logged_dev_status_types: set[int] = set()
+        self._dev_status_callback_disabled_logged = False
         self._connect_deadline = 0.0
         self._connect_timeout_seconds = 0.0
 
@@ -591,7 +593,9 @@ class GimbalControl:
                 "buffer_length": int(buf_len or 0),
                 "timestamp": time.time(),
             }
-            self.log(f"设备状态: {type_text}, 数据长度: {buf_len}")
+            if dev_type not in self._logged_dev_status_types:
+                self._logged_dev_status_types.add(dev_type)
+                self.log(f"设备状态: {type_text}, 数据长度: {buf_len}")
 
             if self._on_dev_status_change:
                 try:
@@ -643,7 +647,9 @@ class GimbalControl:
                 "message": "设备状态回调未启用",
                 "enabled": False,
             }
-            self.log("跳过 ViewLink 设备状态回调注册")
+            if not self._dev_status_callback_disabled_logged:
+                self._dev_status_callback_disabled_logged = True
+                self.log("跳过 ViewLink 设备状态回调注册")
             return
 
         with self._lock:

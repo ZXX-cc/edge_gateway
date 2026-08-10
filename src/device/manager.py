@@ -292,6 +292,10 @@ class DeviceManager:
             0.1,
             float(Config.get('device.nest_command_state_timeout', 60.0) or 60.0),
         )
+        self._drone_power_state_timeout = max(
+            0.1,
+            float(Config.get('device.drone_power_state_timeout', 120.0) or 120.0),
+        )
         self._nest_command_require_final_state = _config_bool(
             Config.get('device.nest_command_require_final_state', True),
             True,
@@ -2588,6 +2592,48 @@ class DeviceManager:
                 self._nest_state_condition.wait(remaining)
             return True
 
+    def _try_aircraft_lazy_connect(self, reason: str) -> bool:
+        if not self._aircraft_link_provider:
+            return False
+        try:
+            connected = bool(self._aircraft_link_provider(reason))
+        except Exception as exc:
+            logger.error("%s: Aircraft MAVLink lazy connect error: %s", reason, exc, exc_info=True)
+            return False
+        if not connected:
+            logger.warning("%s: Aircraft MAVLink lazy connect not ready", reason)
+        return connected
+
+    def _wait_for_drone_power_on_ready(self, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        next_connect_attempt = 0.0
+        while True:
+            with self._nest_state_condition:
+                if self._last_nest_drone_heartbeat is True:
+                    return True
+
+            now = time.monotonic()
+            if now >= next_connect_attempt:
+                if self._try_aircraft_lazy_connect("drone_open"):
+                    return True
+                next_connect_attempt = now + 10.0
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                trace_command(
+                    "gateway_drone_power_ready_timeout",
+                    method="drone_open",
+                    timeout=timeout,
+                    last_drone_heartbeat=self._last_nest_drone_heartbeat,
+                    aircraft_link_provider=bool(self._aircraft_link_provider),
+                    reason="waiting for nest drone_heartbeat=true or aircraft MAVLink lazy connect",
+                )
+                return False
+            with self._nest_state_condition:
+                if self._last_nest_drone_heartbeat is True:
+                    return True
+                self._nest_state_condition.wait(min(1.0, remaining))
+
     def _send_nest_gcs_command_and_wait_ack(self, command_name: str, cmd) -> Tuple[bool, int, str, str, Dict[str, Any]]:
         if not self._nest_module:
             trace_command(
@@ -3285,7 +3331,7 @@ class DeviceManager:
             msg,
             'drone_open',
             GCSCommand.DRONE_POWER_ON,
-            final_waiter=lambda: self._wait_for_drone_heartbeat(True, self._nest_command_state_timeout),
+            final_waiter=lambda: self._wait_for_drone_power_on_ready(self._drone_power_state_timeout),
         )
         if reply.get("data", {}).get("result") == 0:
             self._nest_drone_heartbeat_alarm_enabled = True
@@ -3311,7 +3357,7 @@ class DeviceManager:
             msg,
             'drone_close',
             GCSCommand.DRONE_POWER_OFF,
-            final_waiter=lambda: self._wait_for_drone_heartbeat(False, self._nest_command_state_timeout),
+            final_waiter=lambda: self._wait_for_drone_heartbeat(False, self._drone_power_state_timeout),
         )
         if reply.get("data", {}).get("result") == 0:
             self.report_update_topo()

@@ -400,6 +400,49 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.assertNotIn("ack", reply["data"])
         self.assertNotIn("action", reply["data"])
 
+    def test_drone_open_returns_ok_after_12005_and_drone_heartbeat(self):
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.setdefault("reply", self.manager.handle_drone_open(self._cover_msg("drone_open")))
+        )
+        worker.start()
+        time.sleep(0.05)
+        self.assertNotIn("reply", result)
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+        worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        reply = result["reply"]
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+
+    def test_drone_open_accepts_aircraft_lazy_connect_before_nest_heartbeat(self):
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+        calls = []
+        self.manager.set_aircraft_link_provider(lambda reason: calls.append(reason) or True)
+
+        reply = self.manager.handle_drone_open(self._cover_msg("drone_open"))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["output"]["status"], "ok")
+        self.assertIn("drone_open", calls)
+
+    def test_drone_open_times_out_when_power_on_ready_state_never_arrives(self):
+        self.manager._drone_power_state_timeout = 0.05
+        self.manager._nest_module = FakeNestModule()
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=False))
+
+        reply = self.manager.handle_drone_open(self._cover_msg("drone_open"))
+
+        self.assertEqual(reply["data"]["result"], DEVICE_COMMAND_TIMEOUT)
+        self.assertEqual(reply["data"]["output"]["status"], "timeout")
+        self.assertIn("timeout waiting for final device state", reply.get("msg", ""))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
