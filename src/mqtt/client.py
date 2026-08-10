@@ -410,9 +410,7 @@ class MQTTClient:
             parts.append(f"ok={ok}")
         if elapsed_ms is not None:
             parts.append(f"elapsed_ms={elapsed_ms}")
-        line = " | ".join(parts)
-        logger.info(line)
-        mqtt_trace_logger.info(line, extra={"console_silent": True})
+        mqtt_trace_logger.info(" | ".join(parts), extra={"console_silent": True})
 
     def _log_gateway_traffic(
         self,
@@ -449,7 +447,7 @@ class MQTTClient:
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
                 ("data", format_with_labels(payload, max_length=2000)),
-            ]), extra={"console_silent": True})
+            ]))
         self.publish(topic, payload, qos=0)
 
     def publish_state(self, device_sn: str, data: dict):
@@ -460,7 +458,7 @@ class MQTTClient:
         logger.info(self._format_log_block("MQTT STATE PUBLISH", [
             ("topic", topic),
             ("data", format_with_labels(payload, max_length=3000)),
-        ]), extra={"console_silent": True})
+            ]))
         self.publish(topic, payload, qos=1)
 
     def publish_event(self, data: dict):
@@ -479,7 +477,7 @@ class MQTTClient:
                 ("topic", topic),
                 ("method", data.get('method')),
                 ("data", format_with_labels(data, max_length=3000)),
-            ]), extra={"console_silent": True})
+            ]))
         ok = self.publish(topic, data, qos=1)
         if data.get('method') != 'heartbeat':
             self._trace_publish("mqtt_publish_event", topic, data, ok=ok)
@@ -691,7 +689,7 @@ class MQTTClient:
             ("result", self._reply_result(data)),
             ("ok", ok),
             ("data", format_with_labels(data, max_length=3000)),
-        ]), extra={"console_silent": True})
+        ]))
         self._log_mqtt_method_line("REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
         self._log_gateway_traffic(
             "reply_out",
@@ -739,7 +737,7 @@ class MQTTClient:
             ("msg", data.get('msg')),
             ("ok", ok),
             ("data", format_with_labels(data, max_length=3000)),
-        ]), extra={"console_silent": True})
+        ]))
         self._log_mqtt_method_line("ERROR_REPLY ->", reply_topic, data, result=self._reply_result(data), ok=ok)
         self._log_gateway_traffic(
             "reply_out",
@@ -764,7 +762,7 @@ class MQTTClient:
         logger.info(self._format_log_block("MQTT STATUS PUBLISH", [
             ("topic", topic),
             ("data", format_with_labels(data, max_length=3000)),
-        ]), extra={"console_silent": True})
+        ]))
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_status", topic, data, ok=ok)
         self._log_mqtt_method_line("STATUS ->", topic, data, ok=ok)
@@ -776,7 +774,7 @@ class MQTTClient:
             ("topic", topic),
             ("method", data.get('method')),
             ("data", format_with_labels(data, max_length=3000)),
-        ]), extra={"console_silent": True})
+        ]))
         ok = self.publish(topic, data, qos=1)
         self._trace_publish("mqtt_publish_request", topic, data, ok=ok)
         self._log_mqtt_method_line("REQUEST ->", topic, data, ok=ok)
@@ -959,7 +957,7 @@ class MQTTClient:
                 ("need_reply", payload.get('need_reply')),
                 ("payload_bytes", len(msg.payload or b'')),
                 ("payload", format_with_labels(payload, max_length=3000)),
-            ]), extra={"console_silent": True})
+            ]))
             self._log_mqtt_method_line("CALL <-", msg.topic, payload)
             if is_downstream_command:
                 self._log_gateway_traffic("request_in", msg.topic, payload)
@@ -1042,7 +1040,7 @@ class MQTTClient:
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
-                    ]), extra={"console_silent": True})
+                    ]))
                 self._trace.record(
                     "mqtt_status_reply_received",
                     direction="in",
@@ -1107,7 +1105,7 @@ class MQTTClient:
                         ("method", method),
                         ("result", result),
                         ("payload", format_with_labels(payload, max_length=3000)),
-                    ]), extra={"console_silent": True})
+                    ]))
                 self._trace.record(
                     "mqtt_requests_reply_received",
                     direction="in",
@@ -1151,7 +1149,6 @@ class MQTTClient:
                     method,
                     payload.get('tid'),
                     format_with_labels(payload, max_length=3000),
-                    extra={"console_silent": True},
                 )
                 return
 
@@ -1172,7 +1169,7 @@ class MQTTClient:
                     ("method", method),
                     ("result", result),
                     ("payload", format_with_labels(payload, max_length=3000)),
-                ]), extra={"console_silent": True})
+                ]))
                 self._log_mqtt_method_line(
                     "UPSTREAM_REPLY <-",
                     msg.topic,
@@ -1395,7 +1392,7 @@ class MQTTClient:
                                     ("reason", admission.reason),
                                     ("result", self._reply_result(reply)),
                                     ("current_state", admission.snapshot.to_dict(compact=True) if admission.snapshot else {}),
-                                ]), extra={"console_silent": True})
+                                ]))
                                 if self._should_reply_to_downstream(msg.topic, payload):
                                     self._publish_reply_for_downstream_topic(msg.topic, reply)
                                 return
@@ -1570,7 +1567,7 @@ class MQTTClient:
                 ("handler_elapsed_ms", handler_elapsed_ms),
                 ("result", self._reply_result(result)),
                 ("reply", format_with_labels(result, max_length=3000)),
-            ]), extra={"console_silent": True})
+            ]))
             self._log_mqtt_method_line(
                 "HANDLER OK",
                 source_topic,
