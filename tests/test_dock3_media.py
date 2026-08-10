@@ -466,6 +466,38 @@ class Dock3MediaManagerTest(unittest.TestCase):
     def test_upload_worker_uses_database_id_for_failed_status(self):
         manager = MediaManager()
         updates = []
+        manager._max_retry_count = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "upload_url": "https://oss.example/bucket/media/sample.jpg",
+            }
+            manager._update_upload_progress = (
+                lambda file_id, progress, status, **kwargs:
+                updates.append((file_id, progress, status, kwargs))
+            )
+            manager._upload_queue = [{
+                "id": "db-media-id",
+                "file_id": "business-file-id",
+                "fingerprint": "business-file-id",
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(updates[0][0], "business-file-id")
+        self.assertEqual(updates[0][2], "failed")
+        self.assertEqual(updates[0][3]["db_id"], "db-media-id")
+
+    def test_upload_worker_requeues_when_credentials_unavailable(self):
+        manager = MediaManager()
+        updates = []
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.jpg"
@@ -488,9 +520,48 @@ class Dock3MediaManagerTest(unittest.TestCase):
 
             manager._upload_files()
 
-        self.assertEqual(updates[0][0], "business-file-id")
-        self.assertEqual(updates[0][2], "failed")
-        self.assertEqual(updates[0][3]["db_id"], "db-media-id")
+        self.assertEqual(updates, [])
+        self.assertFalse(manager._uploading)
+        self.assertEqual(len(manager._upload_queue), 1)
+        self.assertEqual(manager._upload_queue[0]["db_id"], "db-media-id")
+        self.assertEqual(manager._upload_queue[0]["_defer_reason"], "upload credentials unavailable")
+
+    def test_upload_worker_requeues_when_upload_target_unavailable(self):
+        manager = MediaManager()
+        updates = []
+        upload_called = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "output": {
+                    "credentials": {},
+                }
+            }
+            manager._upload_file_s3 = lambda *args, **kwargs: upload_called.append(args) or (False, "", "")
+            manager._update_upload_progress = (
+                lambda file_id, progress, status, **kwargs:
+                updates.append((file_id, progress, status, kwargs))
+            )
+            manager._upload_queue = [{
+                "id": "db-media-id",
+                "file_id": "business-file-id",
+                "fingerprint": "business-file-id",
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(updates, [])
+        self.assertEqual(upload_called, [])
+        self.assertFalse(manager._uploading)
+        self.assertEqual(len(manager._upload_queue), 1)
+        self.assertEqual(manager._upload_queue[0]["_defer_reason"], "upload target unavailable")
 
     def test_upload_queue_uses_priority_order(self):
         manager = MediaManager()

@@ -695,6 +695,46 @@ class MediaManager:
             ),
         )
 
+    @staticmethod
+    def _upload_item_identity(file_info: dict) -> str:
+        """生成上传队列去重键，优先使用数据库主键。"""
+        if not isinstance(file_info, dict):
+            return ""
+        for key in (
+            "db_id",
+            "id",
+            "media_id",
+            "file_id",
+            "fingerprint",
+            "file_path",
+            "download_url",
+            "file_name",
+            "name",
+        ):
+            value = file_info.get(key)
+            if value:
+                return f"{key}:{value}"
+        return ""
+
+    def _enqueue_upload_files_locked(self, files: List[dict]) -> int:
+        """在持有 _upload_lock 时入列，并按媒体身份去重。"""
+        existing = {
+            identity
+            for identity in (self._upload_item_identity(item) for item in self._upload_queue)
+            if identity
+        }
+        added = 0
+        for item in files:
+            identity = self._upload_item_identity(item)
+            if identity and identity in existing:
+                continue
+            self._upload_queue.append(item)
+            if identity:
+                existing.add(identity)
+            added += 1
+        self._upload_queue = self._sort_upload_files(self._upload_queue)
+        return added
+
     def _pop_next_upload_file(self) -> Optional[dict]:
         if not self._upload_queue:
             return None
@@ -926,6 +966,37 @@ class MediaManager:
                 return str(value)
         return ""
 
+    @staticmethod
+    def _storage_target_available(storage_config: dict, upload_url: str = "") -> bool:
+        """判断平台是否下发了可用上传目标。"""
+        if upload_url:
+            return True
+        if not isinstance(storage_config, dict):
+            return False
+        credentials = storage_config.get("credentials") if isinstance(storage_config.get("credentials"), dict) else {}
+        return all([
+            storage_config.get("endpoint"),
+            storage_config.get("bucket"),
+            credentials.get("access_key_id"),
+            credentials.get("access_key_secret"),
+        ])
+
+    def _defer_upload_file(self, file_info: dict, reason: str):
+        """临时条件不满足时把文件放回队列，保持 DB pending，等待下一次触发。"""
+        file_info["_defer_count"] = int(file_info.get("_defer_count", 0) or 0) + 1
+        file_info["_defer_reason"] = reason
+        file_name = file_info.get("file_name") or file_info.get("name") or ""
+        with self._upload_lock:
+            added = self._enqueue_upload_files_locked([file_info])
+            self._uploading = False
+        logger.warning(
+            "Upload deferred and kept pending: name=%s reason=%s defer_count=%s requeued=%s",
+            file_name,
+            reason,
+            file_info["_defer_count"],
+            bool(added),
+        )
+
     def _update_upload_progress(
         self,
         file_id: str,
@@ -1023,16 +1094,20 @@ class MediaManager:
             credentials = self._request_upload_credentials([file_info])
             if not credentials:
                 logger.warning(f"Failed to get credentials for {file_name}")
-                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
-                continue
+                self._defer_upload_file(file_info, "upload credentials unavailable")
+                break
             if self._credential_expired(credentials):
                 logger.warning("Upload credentials expired for %s", file_name)
-                self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
-                continue
+                self._defer_upload_file(file_info, "upload credentials expired")
+                break
 
             # 执行上传
             storage_config = self._storage_config_from_credentials(credentials)
             upload_url = storage_config.get('upload_url', '')
+            if not self._storage_target_available(storage_config, upload_url):
+                logger.warning("Upload target unavailable for %s: upload_url and S3 config are empty or incomplete", file_name)
+                self._defer_upload_file(file_info, "upload target unavailable")
+                break
             uploaded_path = upload_url
             object_key = self._object_key_from_upload_target(storage_config, upload_url, file_name)
             success = False
@@ -1092,9 +1167,10 @@ class MediaManager:
         logger.info("Found %s pending files for upload: flight_id=%s", len(pending_files), flight_id or "<all>")
 
         with self._upload_lock:
-            self._upload_queue.extend(pending_files)
-            self._upload_queue = self._sort_upload_files(self._upload_queue)
+            added = self._enqueue_upload_files_locked(pending_files)
             self._uploading = True
+        if added < len(pending_files):
+            logger.info("Skipped %s duplicate pending upload queue items", len(pending_files) - added)
 
         if not self._upload_thread or not self._upload_thread.is_alive():
             self._upload_thread = threading.Thread(
