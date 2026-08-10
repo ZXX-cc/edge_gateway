@@ -242,6 +242,57 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
         self.assertTrue(all(item["source"] == "remote_http" for item in files))
 
+    def test_file_delete_uses_same_remote_media_scan_as_list(self):
+        class FakeResponse:
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        pages = {
+            "http://media.local/download/": '<a href="photo/">photo/</a>',
+            "http://media.local/download/photo/": '<a href="../">../</a><a href="a.jpg">a.jpg</a>',
+        }
+
+        def fake_get(url, timeout):
+            return FakeResponse(pages[url])
+
+        old_get = requests.get
+        requests.get = fake_get
+        Config.merge({
+            "media": {
+                "remote_media": {
+                    "enabled": True,
+                    "base_url": "http://media.local/download/",
+                    "max_depth": 2,
+                    "timeout_seconds": 1,
+                }
+            }
+        })
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                manager.storage_path = tmp
+                listed = manager.handle_file_list_get(base_msg("file_list_get", {
+                    "media_type": "all",
+                    "page": 1,
+                    "page_size": 10,
+                }))
+                remote_file = listed["data"]["files"][0]
+                deleted = manager.handle_file_delete(base_msg("file_delete", {
+                    "file_ids": [remote_file["file_id"]],
+                }))
+        finally:
+            requests.get = old_get
+            Config.merge({"media": {"remote_media": {"enabled": False}}})
+
+        item = deleted["data"]["files"][0]
+        self.assertEqual(remote_file["source"], "remote_http")
+        self.assertEqual(item["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("remote media delete unsupported", item["msg"])
+        self.assertNotIn("file not found", item["msg"])
+
     def test_file_list_syncs_mapping_camera_before_scan(self):
         manager = MediaManager()
         camera = FakeCameraController()
