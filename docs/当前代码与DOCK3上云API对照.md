@@ -316,12 +316,12 @@
 
 | method | 平台下发字段 | 当前校验/取值 | 当前动作 | 回包字段 | 主动上报 |
 |---|---|---|---|---|---|
-| `live_start_push` | `url_type`、`url`、`video_id`、`video_quality`，兼容 `video_type` | `url_type` 当前支持 `0/1/3/4`；`video_quality` 支持 `0..4`；`video_id/url` 必填 | `mock://` 走模拟；非 mock 走 ffmpeg 推流 | `output.status=in_progress`、`session_id`、`video_id`、`url_type`、`video_quality`、`video_type`、`source` | `events.live_status_notify` + `state.property.live_status` |
+| `live_start_push` | `url_type`、`url`、`video_id`、`video_quality`，兼容 `video_type` | `url_type` 当前支持 `0/1/3/4`；`video_quality` 支持 `0..4`；`video_id/url` 必填；默认缺省仍按 WebRTC=4 兼容平台字段 | `mock://` 走模拟；真实 ffmpeg 只支持 RTMP/RTMPS(`url_type=1`)；WebRTC=4、GB28181=3、Agora=0 需要专用适配器，当前真实地址明确拒绝，不生成错误 ffmpeg 命令 | 成功时 `output.status=in_progress`、`session_id`、`video_id`、`url_type`、`video_quality`、`video_type`、`source`；拒绝时 `output.status=rejected` 并带 `reason` | 成功后 `events.live_status_notify` + `state.property.live_status`；真实推流拒绝不会进入直播中状态 |
 | `live_stop_push` | `video_id` | 未直播会拒绝 | 停止 ffmpeg，清空直播状态 | `output.status=ok`、`session_id`、`video_id` | `events.live_status_notify` + `state.property.live_status(status=0)` |
 | `live_set_quality` | `video_id`、`video_quality` | `video_id` 必填，画质 `0..4` | 更新画质；真实推流时重启 ffmpeg | `output.status=ok`、`video_id`、`video_quality` | `events.live_status_notify` + `state.property.live_status` |
 | `live_lens_change` | `video_id`、`video_type` | `video_type` 支持 `normal/wide/zoom/ir/fpv/gimbal` | 更新镜头；真实推流时重启 ffmpeg；还会尝试触发拍照 | `output.status=ok`、`video_id`、`video_type`、`photo` | `events.live_status_notify` + `state.property.live_status` |
 | `live_camera_change` | `video_id`、`camera_position` | `camera_position=0/1` | 只记录当前直播相机位置 | `output.status=ok`、`video_id`、`camera_position` | 当前不发 `live_status` state/event |
-| `live_capability_query` | 无 | 已注册，但更像查询能力 | 返回能力 | `supported_protocols/supported_url_types/.../live_capacity` | 不主动推 state |
+| `live_capability_query` | 无 | 已注册，但更像查询能力 | 返回能力；`supported_protocols/supported_url_types` 读取 `livestream.protocols`，默认只声明 RTMP；WebRTC/GB28181/Agora 还必须打开对应 `livestream.adapters.<protocol>.enabled` 才会声明 | `supported_protocols/supported_url_types/.../live_capacity` | 不主动推 state |
 
 当前 `state.property.live_status` 的实际结构：
 
@@ -368,7 +368,7 @@
 | `state` 下直播能力有没有推 | 当前没有主动推 `live_capacity` | 要确认平台是否要求上线/能力变化推；若要求，需要补 |
 | `live_camera_change` 后是否推 `live_status` | 当前不推，只回包 | 要确认平台是否希望相机切换也刷新直播状态 |
 | DOCK3 `url_type` 是否允许 Agora=0 | 官方 Dock3 Live 页面显示重点为 RTMP/GB28181/WebRTC；当前代码也接受 0 | 要确认平台是否会下发 0，是否要禁用 |
-| WebRTC/GB28181 是否要求专用 SDK | 当前非 mock 主要靠 ffmpeg 模型，不等同完整 SDK | 必须确认 |
+| WebRTC/GB28181 是否要求专用 SDK | 是。当前已明确：ffmpeg 不再尝试原生 WebRTC/GB28181 推流，真实 WebRTC/GB28181 必须接专用 adapter | 必须接入专用适配器后再声明对应能力 |
 
 ## 8. Media：媒体文件和上传
 

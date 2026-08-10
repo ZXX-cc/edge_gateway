@@ -285,11 +285,18 @@ media:
 
 # --- 直播配置 ---
 livestream:
-  protocols: ["webrtc", "rtmp"]
-  default_video_type: "gimbal"
-  default_quality: "1080p"
-  default_bitrate: 4000 # kbps
+  protocols: ["rtmp"] # 当前内置 ffmpeg 真实推流仅支持 RTMP/RTMPS；WebRTC(url_type=4)、GB28181(url_type=3)、Agora(url_type=0) 需要专用直播适配器，mock:// 仍可用于协议专项测试
+  default_video_type: "gimbal" # 默认直播镜头/视频源 key，对应 media.video_sources.gimbal
+  default_quality: "1080p" # 默认展示质量；实际 Dock3 指令仍以 video_quality 枚举 0..4 为准
+  default_bitrate: 4000 # 默认码率，单位 kbps
   default_framerate: 30
+  adapters:
+    webrtc:
+      enabled: false # WebRTC(url_type=4) 需要 WHIP/WebRTC 专用推流适配器；未实现前保持 false
+    gb28181:
+      enabled: false # GB28181(url_type=3) 需要国标信令和媒体适配器；未实现前保持 false
+    agora:
+      enabled: false # Agora(url_type=0) 需要声网 SDK/服务适配器；未实现前保持 false
 
 # --- 日志配置 ---
 logging:

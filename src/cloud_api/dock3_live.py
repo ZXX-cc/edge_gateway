@@ -13,8 +13,17 @@ TASK_STATUS_IN_PROGRESS = "in_progress"
 TASK_STATUS_OK = "ok"
 TASK_STATUS_REJECTED = "rejected"
 
-SUPPORTED_URL_TYPES = {1, 3, 4}
 REALTIME_FFMPEG_URL_TYPES = {1}
+SUPPORTED_URL_TYPES = {0, 1, 3, 4}
+URL_TYPE_PROTOCOLS = {
+    0: "agora",
+    1: "rtmp",
+    3: "gb28181",
+    4: "webrtc",
+}
+PROTOCOL_URL_TYPES = {protocol: url_type for url_type, protocol in URL_TYPE_PROTOCOLS.items()}
+DEFAULT_LIVE_PROTOCOLS = ["rtmp"]
+DEDICATED_ADAPTER_PROTOCOLS = {"agora", "gb28181", "webrtc"}
 SUPPORTED_QUALITIES = {0, 1, 2, 3, 4}
 SUPPORTED_VIDEO_TYPES = {"normal", "wide", "zoom", "ir", "fpv", "gimbal"}
 SUPPORTED_CAMERA_POSITIONS = {0, 1}
@@ -44,7 +53,7 @@ def validate_live_start_payload(data: Any) -> Tuple[bool, Dict[str, Any], List[s
     if not video_id:
         errors.append("live_start missing video_id")
     if not _is_int(url_type) or url_type not in SUPPORTED_URL_TYPES:
-        errors.append("live_start.url_type must be int enum 1/3/4")
+        errors.append("live_start.url_type must be int enum 0/1/3/4")
     if not _is_int(video_quality) or video_quality not in SUPPORTED_QUALITIES:
         errors.append("live_start.video_quality must be int enum 0..4")
     if video_type and video_type not in SUPPORTED_VIDEO_TYPES:
@@ -147,9 +156,11 @@ def live_capability_data(payload_states: Dict[str, Any] | None = None) -> Dict[s
     payload_config = Config.get_payload_config()
     devices = payload_config.get("devices", {}) if isinstance(payload_config, dict) else {}
     default_device_sn = _default_live_device_sn()
+    protocols = _configured_live_protocols()
+    url_types = sorted(PROTOCOL_URL_TYPES[protocol] for protocol in protocols)
     return live_task_output(TASK_STATUS_OK, {
-        "supported_protocols": ["rtmp"],
-        "supported_url_types": sorted(REALTIME_FFMPEG_URL_TYPES),
+        "supported_protocols": protocols,
+        "supported_url_types": url_types,
         "supported_resolutions": ["720p", "1080p", "4k"],
         "supported_video_sources": sorted(SUPPORTED_VIDEO_TYPES),
         "supported_qualities": sorted(SUPPORTED_QUALITIES),
@@ -162,6 +173,32 @@ def live_capability_data(payload_states: Dict[str, Any] | None = None) -> Dict[s
             payload_states=payload_states,
         ),
     })
+
+
+def _configured_live_protocols() -> List[str]:
+    """读取直播能力声明；只声明已配置的真实推流协议。"""
+    configured = Config.get("livestream.protocols", DEFAULT_LIVE_PROTOCOLS)
+    if not isinstance(configured, list):
+        configured = DEFAULT_LIVE_PROTOCOLS
+
+    protocols: List[str] = []
+    for item in configured:
+        protocol = str(item or "").strip().lower()
+        if protocol not in PROTOCOL_URL_TYPES or protocol in protocols:
+            continue
+        if protocol in DEDICATED_ADAPTER_PROTOCOLS and not _live_adapter_enabled(protocol):
+            continue
+        if protocol:
+            protocols.append(protocol)
+    return protocols or list(DEFAULT_LIVE_PROTOCOLS)
+
+
+def _live_adapter_enabled(protocol: str) -> bool:
+    """专用直播协议必须显式打开 adapter 后才能对平台声明。"""
+    value = Config.get(f"livestream.adapters.{protocol}.enabled", False)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _default_live_device_sn() -> str:

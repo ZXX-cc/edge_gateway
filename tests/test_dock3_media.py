@@ -910,6 +910,49 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIn("flv", command)
         self.assertEqual(command[-1], "rtmp://cloud.example/live/stream")
 
+    def test_webrtc_url_type_requires_dedicated_adapter(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "media": {
+                "video_sources": {
+                    "gimbal": "rtsp://192.168.1.119:554/main",
+                }
+            },
+        })
+        try:
+            manager = MediaManager()
+            with self.assertRaises(ValueError) as error:
+                manager._build_ffmpeg_cmd(
+                    "https://cloud.example/live/webrtc",
+                    4,
+                    3,
+                    "gimbal",
+                )
+        finally:
+            Config._data = original
+
+        self.assertIn("WebRTC", str(error.exception))
+        self.assertIn("专用直播适配器", str(error.exception))
+
+    def test_live_start_rejects_real_webrtc_and_resets_state(self):
+        manager = MediaManager()
+        manager.gateway_sn = "EDGEGW001"
+
+        reply = manager.handle_live_start_push(base_msg("live_start_push", {
+            "url": "https://cloud.example/live/webrtc",
+            "url_type": 4,
+            "video_id": "EDGEGW001/0/gimbal",
+            "video_quality": 3,
+        }))
+
+        self.assertEqual(reply["data"]["result"], DOCK_SYSTEM_ERROR)
+        self.assertEqual(reply["data"]["output"]["status"], "failed")
+        self.assertIn("url_type=4", reply["data"]["reason"])
+        self.assertFalse(manager._live_streaming)
+        self.assertEqual(manager._live_session_id, "")
+        self.assertEqual(manager._live_video_id, "")
+        self.assertEqual(manager._live_url, "")
+
     def test_spectral_camera_live_source_builds_rtp_to_rtmp_ffmpeg_command(self):
         original = deepcopy(Config.all())
         Config.merge({
@@ -971,6 +1014,25 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(source_key, "mapping_camera")
         self.assertIn("rtsp://192.168.5.74:8554/LIVE", command)
         self.assertEqual(command[-1], "rtmp://cloud.example/live/mapping")
+
+    def test_live_capability_uses_configured_protocols(self):
+        original = deepcopy(Config.all())
+        Config.merge({
+            "livestream": {
+                "protocols": ["webrtc", "rtmp"],
+                "adapters": {
+                    "webrtc": {"enabled": False},
+                },
+            }
+        })
+        try:
+            manager = MediaManager()
+            reply = manager.handle_live_capability_query(base_msg("live_capability_query", {}))
+        finally:
+            Config._data = original
+
+        self.assertEqual(reply["data"]["supported_protocols"], ["rtmp"])
+        self.assertEqual(reply["data"]["supported_url_types"], [1])
 
     def test_old_ffmpeg_monitor_does_not_clear_restarted_stream(self):
         class FinishedProcess:
