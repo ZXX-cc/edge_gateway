@@ -220,6 +220,8 @@ class GimbalControl:
         # 连接状态
         self._conn_status = None
         self._conn_message = ""
+        self._last_connection_check_time = 0.0
+        self._connection_check_interval = 5.0
         self._last_ensure_connect_time = 0.0
         self._last_ensure_connect_result = {"success": False, "message": "尚未尝试连接"}
         self._connect_thread: Optional[threading.Thread] = None
@@ -563,8 +565,10 @@ class GimbalControl:
             # 更新连接状态
             if status in [2, 4]:
                 self._connected = True
+                self._last_connection_check_time = time.time()
             elif status in [3, 5]:
                 self._connected = False
+                self._last_connection_check_time = time.time()
 
             # 调用外部回调
             if self._on_conn_status_change:
@@ -732,15 +736,16 @@ class GimbalControl:
             # 等待连接建立
             start_time = time.time()
             while time.time() - start_time < timeout:
-                connected = self._call_sdk("VLK_IsConnected")
+                connected = self._connected or self.is_connected(force=True)
                 if connected:
                     self._connected = True
+                    self._last_connection_check_time = time.time()
                     result["success"] = True
                     result["message"] = f"成功连接到 {ip}:{port}"
                     self.log(result["message"], "OK")
                     self._ensure_dev_status_callback_registration()
                     return result
-                time.sleep(0.1)
+                time.sleep(1.0)
 
             result["message"] = f"连接超时（{timeout}秒）"
             self.log(result["message"], "ERROR")
@@ -765,20 +770,32 @@ class GimbalControl:
 
         return result
 
-    def is_connected(self) -> bool:
+    def is_connected(self, *, force: bool = False) -> bool:
         """检查是否已连接"""
         if not self._lib:
             self._connected = False
+            self._last_connection_check_time = time.time()
             return False
+
+        now = time.time()
+        if (
+            not force
+            and self._last_connection_check_time
+            and now - self._last_connection_check_time < self._connection_check_interval
+        ):
+            return self._connected
+
         try:
             connected = self._call_sdk("VLK_IsConnected") != 0
             if self._connected and not connected:
                 self.log("SDK 连接状态已刷新为断开", "WARN")
             self._connected = connected
+            self._last_connection_check_time = now
             return connected
         except Exception as exc:
             self.log(f"查询连接状态异常: {exc}", "WARN")
             self._connected = False
+            self._last_connection_check_time = now
         return False
 
     def _require_connected(self) -> dict:
@@ -789,7 +806,7 @@ class GimbalControl:
 
     def _confirm_command_sent(self, success_message: str) -> dict:
         """SDK 控制函数多为 void；发送后刷新连接，避免掉线时误报成功。"""
-        if not self.is_connected():
+        if not self.is_connected(force=True):
             message = f"{success_message}，但 ViewLink 已断开，命令可能未被吊舱执行"
             self.log(message, "WARN")
             return {"success": False, "message": message, "connection_lost": True}

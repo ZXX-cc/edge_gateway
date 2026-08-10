@@ -290,6 +290,7 @@ class FakeViewLinkLib:
         self.connected = bool(self.connected_sequence[-1]) if self.connected_sequence else bool(connected)
         self.register_dev_status_calls = 0
         self.connect_calls = 0
+        self.is_connected_calls = 0
         self.move_calls = []
         self.stop_calls = 0
         self.zoom_to_calls = []
@@ -307,6 +308,7 @@ class FakeViewLinkLib:
         return 0
 
     def VLK_IsConnected(self):
+        self.is_connected_calls += 1
         if self.connected_sequence is not None:
             if self.connected_sequence:
                 return 1 if self.connected_sequence.pop(0) else 0
@@ -796,6 +798,30 @@ class PayloadStateConsistencyTest(unittest.TestCase):
 
         self.assertFalse(direct_payload.is_connected())
         self.assertFalse(direct_payload._connected)
+
+    def test_viewlink_is_connected_uses_connected_cache_until_refresh_due(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=True)
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = fake_lib
+
+        self.assertTrue(direct_payload.is_connected())
+        self.assertTrue(direct_payload.is_connected())
+
+        self.assertEqual(fake_lib.is_connected_calls, 1)
+
+    def test_viewlink_is_connected_uses_disconnected_cache_until_refresh_due(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=False)
+        direct_payload._initialized = True
+        direct_payload._connected = False
+        direct_payload._lib = fake_lib
+
+        self.assertFalse(direct_payload.is_connected())
+        self.assertFalse(direct_payload.is_connected())
+
+        self.assertEqual(fake_lib.is_connected_calls, 1)
 
     def test_viewlink_move_reports_failure_when_connection_drops_after_send(self):
         direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
