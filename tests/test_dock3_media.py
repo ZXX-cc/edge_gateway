@@ -51,7 +51,7 @@ from src.cloud_api.dock3_media import (
     paginate,
     storage_config_output,
 )
-from src.cloud_api.dock3_live import validate_live_start_payload
+from src.cloud_api.dock3_live import live_status_event_data, validate_live_start_payload
 import src.media.manager as media_manager_module
 from src.media.manager import MediaManager
 from src.utils.config import Config
@@ -846,6 +846,17 @@ class Dock3MediaManagerTest(unittest.TestCase):
             "output": {"credentials": {"expire": int(time.time() * 1000) - 1000}},
         }))
 
+    def test_live_status_event_data_uses_output_status_without_result(self):
+        data = live_status_event_data(
+            status="failed",
+            video_id="EDGEGW001/0/normal",
+            reason="ffmpeg stopped",
+        )
+
+        self.assertEqual(data["output"]["status"], "failed")
+        self.assertEqual(data["reason"], "ffmpeg stopped")
+        self.assertNotIn("result", data)
+
     def test_live_mock_lifecycle_emits_status_events(self):
         events = []
         states = []
@@ -865,6 +876,9 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
         self.assertNotIn("software_pipeline", start["data"])
         self.assertTrue(manager._live_streaming)
+        status_events = [event for event in events if event.get("method") == "live_status_notify"]
+        self.assertNotIn("result", status_events[-1]["data"])
+        self.assertEqual(status_events[-1]["data"]["output"]["status"], "in_progress")
         live_status = states[-1]["property"]["live_status"]
         self.assertEqual(live_status[0]["video_id"], video_id)
         self.assertEqual(live_status[0]["status"], 1)
@@ -907,10 +921,10 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertFalse(manager._live_streaming)
         self.assertEqual(states[-1]["property"]["live_status"][0]["status"], 0)
         self.assertEqual(states[-1]["property"]["live_status"][0]["error_status"], 0)
-        self.assertGreaterEqual(
-            len([event for event in events if event.get("method") == "live_status_notify"]),
-            4,
-        )
+        status_events = [event for event in events if event.get("method") == "live_status_notify"]
+        self.assertGreaterEqual(len(status_events), 4)
+        self.assertNotIn("result", status_events[-1]["data"])
+        self.assertEqual(status_events[-1]["data"]["output"]["status"], "ok")
 
     def test_live_lens_change_does_not_embed_photo_reply(self):
         manager = MediaManager()
