@@ -20,9 +20,9 @@ from src.cloud_api.dock3_properties import (
 
 
 class Dock3PropertiesTest(unittest.TestCase):
-    def test_official_catalog_covers_all_49_top_level_properties(self):
-        self.assertEqual(len(DOCK3_PROPERTY_SPECS), 49)
-        self.assertEqual(len(official_property_names(push_mode=0)), 37)
+    def test_official_catalog_covers_all_50_top_level_properties(self):
+        self.assertEqual(len(DOCK3_PROPERTY_SPECS), 50)
+        self.assertEqual(len(official_property_names(push_mode=0)), 38)
         self.assertEqual(len(official_property_names(push_mode=1)), 12)
         self.assertEqual(
             official_property_names(push_mode=0) | official_property_names(push_mode=1),

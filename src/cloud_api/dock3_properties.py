@@ -131,6 +131,10 @@ DOCK3_PROPERTY_SPECS: Dict[str, PropertySpec] = {
         "cover_state", "舱盖状态", "enum_int", "r", 0,
         enum_values={0, 1, 2, 3},
     ),
+    "putter_state": PropertySpec(
+        "putter_state", "推杆状态", "enum_int", "r", 0,
+        enum_values={0, 1, 2, 3},
+    ),
     "sub_device": PropertySpec("sub_device", "子设备状态", "struct", "r", 0),
     "flighttask_step_code": PropertySpec(
         "flighttask_step_code", "机场任务状态", "enum_int", "r", 0,
@@ -190,7 +194,6 @@ LEGACY_READABLE_PROPERTIES: Dict[str, PropertySpec] = {
     "air_conditioner_mode": PropertySpec("air_conditioner_mode", "空调模式", "enum_int", "r", 0, source="legacy_service_controlled"),
     "remaining_power_for_return_home": PropertySpec("remaining_power_for_return_home", "返航预留电量", "int", "r", 0, source="legacy_service_controlled"),
     "battery_maintenance_mode": PropertySpec("battery_maintenance_mode", "电池保养模式", "enum_int", "r", 0, source="legacy_service_controlled"),
-    "putter_state": PropertySpec("putter_state", "推杆状态", "enum_int", "r", 0, enum_values={0, 1, 2, 3}, source="legacy_service_controlled"),
     "charging_state": PropertySpec("charging_state", "充电状态", "enum_int", "r", 0, enum_values={0, 1}, source="legacy_service_controlled"),
 }
 

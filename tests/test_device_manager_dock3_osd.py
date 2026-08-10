@@ -18,7 +18,7 @@ class DeviceManagerDock3OsdTest(unittest.TestCase):
 
         self.assertEqual(set(osd), official_property_names(push_mode=0))
         self.assertEqual(osd["mode_code"], "marker:mode_code")
-        self.assertNotIn("putter_state", osd)
+        self.assertEqual(osd["putter_state"], 1)
         self.assertNotIn("electricity", osd)
         self.assertTrue(official_property_names(push_mode=1).isdisjoint(osd))
 

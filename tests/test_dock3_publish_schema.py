@@ -37,6 +37,7 @@ class Dock3PublishSchemaTest(unittest.TestCase):
             "data": {
                 "cover_state": 1,
                 "mode_code": 0,
+                "putter_state": 1,
                 "type_subtype_gimbalindex": "0-42-0",
                 "live_capacity": {},
                 "software_pipeline": [{"step": "local"}],
@@ -50,7 +51,7 @@ class Dock3PublishSchemaTest(unittest.TestCase):
 
         self.assertEqual(
             set(sanitized["data"]),
-            {"cover_state", "mode_code", "type_subtype_gimbalindex"},
+            {"cover_state", "mode_code", "putter_state", "type_subtype_gimbalindex"},
         )
         self.assertIn("data.live_capacity", removed)
         self.assertIn("data.software_pipeline", removed)
