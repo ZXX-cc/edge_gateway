@@ -264,6 +264,8 @@ class MAVLinkConnection:
         self._message_queue = Queue(maxsize=1000)
         self._custom_valid_message_ids: Set[int] = set()
         self.disconnect_reason = ""
+        self._last_recv_error_signature = None
+        self._last_recv_error_log_time = 0.0
 
     def connect(self) -> bool:
         """建立连接"""
@@ -512,7 +514,6 @@ class MAVLinkConnection:
                                 data = self._sock.recv(4096)
                                 if not data:
                                     self._owner.mark_disconnected("TCP peer closed connection")
-                                    print("[Connection] TCP连接被关闭")
                                     break
 
                                 for byte in data:
@@ -718,6 +719,26 @@ class MAVLinkConnection:
                 self.disconnect_reason = reason
                 print(f"[Connection] 连接已断开: {reason}")
 
+    def _record_recv_error(self, error: Exception):
+        """记录一次接收异常并标记断线，避免对端下电后控制台刷屏。"""
+        message = str(error)
+        lowered = message.lower()
+        if "timeout" in lowered:
+            return
+
+        reason = f"recv error: {message}"
+        signature = message
+        now = time.time()
+        should_log = (
+            signature != self._last_recv_error_signature
+            or now - self._last_recv_error_log_time >= 30.0
+        )
+        self._last_recv_error_signature = signature
+        if should_log:
+            self._last_recv_error_log_time = now
+            print(f"[Connection] 接收消息错误: {message}")
+        self.mark_disconnected(reason)
+
     def recv_message(self, timeout: float = 0.01):
         """
         接收消息
@@ -739,9 +760,7 @@ class MAVLinkConnection:
                 _log_raw_mavlink("RX", self.connection_string, msg)
             return msg
         except Exception as e:
-            # 静默处理超时，只记录真正的错误
-            if "timeout" not in str(e).lower():
-                print(f"[Connection] 接收消息错误: {e}")
+            self._record_recv_error(e)
             return None
 
     def send_message(self, msg) -> bool:

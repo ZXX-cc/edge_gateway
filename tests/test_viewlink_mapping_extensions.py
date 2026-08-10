@@ -34,16 +34,18 @@ class ViewLinkMappingExtensionsTest(unittest.TestCase):
         self.assertEqual(image["args"]["enable_pip"], True)
         self.assertEqual(image["args"]["ir_color"], 1)
 
-    def test_digital_zoom_stop_mapping_uses_sensor_selected_c1_frames(self):
+    def test_digital_zoom_stop_mapping_uses_sdk_methods_only(self):
         eo = build_viewlink_call("eo_digital_zoom_stop", {})
         ir = build_viewlink_call("ir_digital_zoom_stop", {})
         ir_in = build_viewlink_call("ir_digital_zoom_in", {"speed": 5})
 
         self.assertEqual(eo["sdk_method"], "eo_digital_zoom_stop")
-        self.assertIn("0F 01", eo["protocol"]["frame_hex"])
+        self.assertNotIn("protocol", eo)
         self.assertEqual(ir["sdk_method"], "ir_digital_zoom_stop")
-        self.assertIn("0F 02", ir["protocol"]["frame_hex"])
-        self.assertIn("0F 6A", ir_in["protocol"]["frame_hex"])
+        self.assertNotIn("protocol", ir)
+        self.assertEqual(ir_in["sdk_method"], "ir_digital_zoom_in")
+        self.assertEqual(ir_in["args"]["speed"], 5)
+        self.assertNotIn("protocol", ir_in)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import sys
+from threading import Lock
 import types
 import unittest
+from unittest import mock
 
 
 if "pymavlink" not in sys.modules:
@@ -136,6 +138,31 @@ class MAVLinkConnectionSenderRoutingTest(unittest.TestCase):
             ],
         )
         self.assertEqual(drone_nest.MAVLink_drone_nest_response_message.crc_extra, 120)
+
+    def test_recv_error_marks_disconnected_without_repeated_console_spam(self):
+        conn = MAVLinkConnection.__new__(MAVLinkConnection)
+        conn.status = 2
+        conn.lock = Lock()
+        conn.disconnect_reason = ""
+        conn._last_recv_error_signature = None
+        conn._last_recv_error_log_time = 0.0
+
+        error = ConnectionResetError("Connection reset or closed by peer on TCP socket")
+
+        with mock.patch("builtins.print") as printed:
+            conn._record_recv_error(error)
+            conn._record_recv_error(error)
+
+        self.assertEqual(conn.status, 0)
+        self.assertEqual(
+            conn.disconnect_reason,
+            "recv error: Connection reset or closed by peer on TCP socket",
+        )
+        printed.assert_has_calls([
+            mock.call("[Connection] 接收消息错误: Connection reset or closed by peer on TCP socket"),
+            mock.call("[Connection] 连接已断开: recv error: Connection reset or closed by peer on TCP socket"),
+        ])
+        self.assertEqual(printed.call_count, 2)
 
 
 if __name__ == "__main__":

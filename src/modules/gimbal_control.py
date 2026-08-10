@@ -22,12 +22,6 @@ from pathlib import Path
 from typing import Optional, Callable
 from enum import IntEnum
 from src.utils.logger import get_logger
-from web.mavlink.viewlink import (
-    build_eo_dzoom_stop_frame,
-    build_ir_dzoom_stop_frame,
-    build_protocol_frame_for_method,
-)
-
 
 logger = get_logger("payload.gimbal_control")
 _SDK_CWD_LOCK = threading.RLock()
@@ -1030,25 +1024,8 @@ class GimbalControl:
         }
 
     def _confirm_and_send_protocol(self, method: str, args: dict, message: str) -> dict:
-        """Confirm SDK connection, then send the matching ViewLink V3.4.9 frame."""
-        confirmed = self._confirm_command_sent(message)
-        if not confirmed.get("success"):
-            return confirmed
-
-        frame = build_protocol_frame_for_method(method, args)
-        if not frame:
-            return confirmed
-
-        protocol_result = self.send_protocol_frame(frame)
-        if not protocol_result.get("success"):
-            return {
-                "success": False,
-                "message": protocol_result.get("message", "协议帧发送失败"),
-                "protocol_result": protocol_result,
-            }
-
-        confirmed["protocol_result"] = protocol_result
-        return confirmed
+        """Confirm a 3.5.3 SDK command without sending legacy raw protocol frames."""
+        return self._confirm_command_sent(message)
 
     # ==================== 云台控制 ====================
 
@@ -1311,15 +1288,8 @@ class GimbalControl:
         )
 
     def eo_digital_zoom_stop(self) -> dict:
-        """停止可见光电子变焦。"""
-        connected = self._require_connected()
-        if not connected["success"]:
-            return {"success": False, "message": connected["message"]}
-        result = self.send_protocol_frame(build_eo_dzoom_stop_frame())
-        if result.get("success"):
-            result["message"] = "可见光电子变焦已停止"
-            self.log(result["message"])
-        return result
+        """停止可见光电子变焦。3.5.3 SDK 通过关闭 EO 电子变焦实现。"""
+        return self.switch_eo_digital_zoom(False)
 
     def ir_digital_zoom_in(self, speed: int = 0) -> dict:
         """红外电子变焦放大一级"""
@@ -1346,15 +1316,17 @@ class GimbalControl:
         return result
 
     def ir_digital_zoom_stop(self) -> dict:
-        """停止红外连续电子变焦。"""
+        """停止红外电子变焦。
+
+        ViewLink SDK 3.5.3 只暴露 VLK_IRDigitalZoomIn/Out，头文件说明这两个
+        接口会放大/缩小一级后自动停止，因此没有独立的 IR stop SDK 方法。
+        """
         connected = self._require_connected()
         if not connected["success"]:
             return {"success": False, "message": connected["message"]}
-        result = self.send_protocol_frame(build_ir_dzoom_stop_frame())
-        if result.get("success"):
-            result["message"] = "红外电子变焦已停止"
-            self.log(result["message"])
-        return result
+        message = "ViewLink SDK 3.5.3 does not expose IR digital zoom stop; IR zoom in/out auto-stop"
+        self.log(message, "WARN")
+        return {"success": False, "message": message, "unsupported": True}
 
     def switch_defog(self, on: bool) -> dict:
         """开启或关闭除雾"""

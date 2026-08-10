@@ -21,7 +21,6 @@ from web.mavlink.viewlink import (
     build_temperature_output_once_frame,
     build_temperature_output_stop_frame,
     build_viewlink_call,
-    frame_hex,
 )
 from web.mavlink.viewlink.protocol import (
     C1_RAINBOW,
@@ -143,12 +142,12 @@ class ViewLinkProtocolV349Test(unittest.TestCase):
         self.assertEqual(area_frames[2][5], C2_TEMPERATURE_OUTPUT_ONCE)
         self.assertTrue(all(checksum_ok(frame) for frame in point_frames + area_frames))
 
-    def test_mapping_exposes_json_safe_protocol_hex(self):
+    def test_sdk_mapping_does_not_attach_legacy_protocol_frames(self):
         call = build_viewlink_call("turn_to", {"yaw": 90, "pitch": -45})
 
-        self.assertEqual(call["protocol"]["version"], "3.4.9")
-        self.assertEqual(call["protocol"]["frame_hex"], frame_hex(build_a1_absolute_720(90, -45, 0, 0)))
-        self.assertIsInstance(call["protocol"]["frame_hex"], str)
+        self.assertEqual(call["sdk_method"], "turn_to")
+        self.assertEqual(call["args"], {"yaw": 90.0, "pitch": -45.0})
+        self.assertNotIn("protocol", call)
 
 
 if __name__ == "__main__":
