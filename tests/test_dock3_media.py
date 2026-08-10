@@ -430,6 +430,68 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(file_data["path"], "https://oss.example/bucket/media/sample.jpg?signature=abc")
         self.assertNotIn("signature", file_data["object_key"])
 
+    def test_upload_worker_uses_database_id_for_completed_status(self):
+        manager = MediaManager()
+        updates = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: {
+                "upload_url": "https://oss.example/bucket/media/sample.jpg",
+            }
+            manager._upload_file_http = lambda filepath, upload_url: True
+            manager.report_upload_complete = lambda file_info: None
+            manager._update_upload_progress = (
+                lambda file_id, progress, status, **kwargs:
+                updates.append((file_id, progress, status, kwargs))
+            )
+            manager._upload_queue = [{
+                "id": "db-media-id",
+                "file_id": "business-file-id",
+                "fingerprint": "business-file-id",
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(updates[0][0], "business-file-id")
+        self.assertEqual(updates[0][2], "completed")
+        self.assertEqual(updates[0][3]["db_id"], "db-media-id")
+
+    def test_upload_worker_uses_database_id_for_failed_status(self):
+        manager = MediaManager()
+        updates = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.jpg"
+            path.write_bytes(b"jpeg")
+            manager._request_upload_credentials = lambda files: None
+            manager._update_upload_progress = (
+                lambda file_id, progress, status, **kwargs:
+                updates.append((file_id, progress, status, kwargs))
+            )
+            manager._upload_queue = [{
+                "id": "db-media-id",
+                "file_id": "business-file-id",
+                "fingerprint": "business-file-id",
+                "file_path": str(path),
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+            manager._uploading = True
+
+            manager._upload_files()
+
+        self.assertEqual(updates[0][0], "business-file-id")
+        self.assertEqual(updates[0][2], "failed")
+        self.assertEqual(updates[0][3]["db_id"], "db-media-id")
+
     def test_upload_queue_uses_priority_order(self):
         manager = MediaManager()
         uploaded = []

@@ -609,7 +609,8 @@ class MediaManager:
     def _db_media_to_upload_item(media_file) -> dict:
         filepath = getattr(media_file, "file_path", "") or ""
         file_name = getattr(media_file, "file_name", "") or os.path.basename(filepath)
-        file_id = stable_id = getattr(media_file, "id", "") or file_name
+        db_id = str(getattr(media_file, "id", "") or "")
+        stable_id = db_id or file_name
         if filepath and os.path.exists(filepath):
             try:
                 item = build_media_file(filepath, os.path.dirname(filepath) or ".", getattr(media_file, "device_sn", ""))
@@ -620,7 +621,8 @@ class MediaManager:
         db_file_size = int(getattr(media_file, "file_size", 0) or 0)
         resolved_size = db_file_size or int(item.get("file_size", item.get("size", 0)) or 0)
         item.update({
-            "db_id": getattr(media_file, "id", ""),
+            "db_id": db_id,
+            "id": db_id,
             "file_id": item.get("file_id") or stable_id,
             "fingerprint": item.get("fingerprint") or stable_id,
             "device_sn": getattr(media_file, "device_sn", ""),
@@ -913,6 +915,17 @@ class MediaManager:
                 return True
         return False
 
+    @staticmethod
+    def _upload_db_id(file_info: dict) -> str:
+        """解析媒体数据库主键，只能用它更新 media_files.upload_status。"""
+        if not isinstance(file_info, dict):
+            return ""
+        for key in ("db_id", "id", "media_id"):
+            value = file_info.get(key)
+            if value:
+                return str(value)
+        return ""
+
     def _update_upload_progress(
         self,
         file_id: str,
@@ -924,22 +937,30 @@ class MediaManager:
         file_item: Optional[dict] = None,
     ):
         """更新上传进度"""
+        target_db_id = str(db_id or self._upload_db_id(file_item or {}) or "").strip()
+
         async def _update_status():
-            target_id = db_id or file_id
-            if not target_id:
+            if not target_db_id:
                 return
             await self._init_database()
             AsyncSessionLocal = get_async_session_local()
             if not AsyncSessionLocal:
                 return
             async with AsyncSessionLocal() as session:
-                updated = await MediaDB.update_upload_status(session, target_id, status, upload_url=upload_url)
+                updated = await MediaDB.update_upload_status(session, target_db_id, status, upload_url=upload_url)
                 if not updated:
-                    logger.warning("Media upload status not updated: id=%s status=%s", target_id, status)
+                    logger.warning("Media upload status not updated: db_id=%s status=%s", target_db_id, status)
                 await session.commit()
 
-        if db_id:
+        if target_db_id:
             self._run_db_coroutine(_update_status())
+        elif status in {"completed", "failed"}:
+            logger.warning(
+                "Media upload DB status skipped: missing db_id file_id=%s file_name=%s status=%s",
+                file_id,
+                (file_item or {}).get("file_name") or (file_item or {}).get("name") or "",
+                status,
+            )
 
         # 上报进度事件
         if self._event_callback:
@@ -976,7 +997,9 @@ class MediaManager:
             file_size = file_info.get('file_size')
             file_type = file_info.get('file_type')
             file_id = file_info.get('file_id') or file_info.get('fingerprint') or file_name
-            db_id = file_info.get("db_id", "")
+            db_id = self._upload_db_id(file_info)
+            if db_id:
+                file_info["db_id"] = db_id
 
             logger.info(f"Starting upload: {file_name}")
             if not filepath and file_info.get('download_url'):
@@ -994,16 +1017,6 @@ class MediaManager:
             if not filepath or not os.path.exists(filepath):
                 logger.error("Upload file is missing: name=%s path=%s", file_name, filepath)
                 self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
-                continue
-
-            if not filepath or not os.path.exists(filepath):
-                logger.warning(
-                    "Upload source missing: name=%s path=%s download_url=%s",
-                    file_name,
-                    filepath,
-                    file_info.get('download_url', ''),
-                )
-                self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
                 continue
 
             # 请求上传凭证
