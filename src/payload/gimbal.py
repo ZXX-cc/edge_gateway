@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
 from src.modules.gimbal_control import (
     VLKConnType,
     VLKFocusMode,
@@ -111,6 +111,9 @@ class GimbalController:
         self._ir_zoom_level = 1.0
         self._last_control: Dict[str, Any] = {}
         self._last_update_time = int(time.time() * 1000)
+        self._ai_spotlight_enabled = False
+        self._ai_spotlight_selection: Optional[Dict[str, Any]] = None
+        self._drc_seq = 0
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -267,6 +270,17 @@ class GimbalController:
             "height": max(1, int(cls._frame_number({"value": height}, "value", 1080))),
         }
 
+    @staticmethod
+    def _drc_unit_value(value, default: float) -> float:
+        """兼容 DJI DRC 的 0-10000 坐标和本地 0-1 归一化坐标。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = default
+        if number > 1.0:
+            number = number / 10000.0
+        return max(0.0, min(1.0, number))
+
     @classmethod
     def _frame_point_pixels(cls, data: dict, x_value: float, y_value: float) -> tuple[int, int, dict]:
         frame_size = cls._frame_size(data)
@@ -342,6 +356,87 @@ class GimbalController:
             self.gateway_sn,
         )
         self._event_callback(event)
+
+    @staticmethod
+    def _reply_with_seq(msg: dict, reply: dict) -> dict:
+        """DRC 官方回包保留 seq，兼容不带 tid 的云端控制报文。"""
+        if "seq" in msg and "seq" not in reply:
+            reply["seq"] = msg.get("seq")
+        if not reply.get("gateway"):
+            reply["gateway"] = Config.get_gateway_sn()
+        return reply
+
+    def _build_drc_ai_reply(self, msg: dict, success: bool, result: dict, data: Optional[dict] = None) -> dict:
+        reply_data = data or {}
+        if result:
+            reply_data.setdefault("output", {
+                "status": "ok" if success else "failed",
+                "message": result.get("message", ""),
+            })
+            reply_data.setdefault("viewlink_result", result)
+        return self._reply_with_seq(msg, MessageBuilder.build_reply(
+            msg,
+            result=0 if success else DOCK_SYSTEM_ERROR,
+            msg_str="" if success else str(result.get("message", "drc ai spotlight zoom failed")),
+            data=reply_data,
+        ))
+
+    def _report_drc_ai_info(self, state: int, reason: str = "") -> None:
+        """按 Dock3 Remote Control 的 drc_ai_info_push 上报当前跟随状态。"""
+        if not self._event_callback:
+            return
+        self._drc_seq += 1
+        self._event_callback({
+            "method": "drc_ai_info_push",
+            "seq": self._drc_seq,
+            "gateway": self.gateway_sn,
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "identify_on": 0,
+                "spotlight_zoom_on": 1 if self._ai_spotlight_enabled else 0,
+                "ai_spotlight_zoom": {
+                    "state": state,
+                    "reason": reason,
+                },
+            },
+        })
+
+    def _drc_ai_selection_from_data(self, data: dict) -> dict:
+        width = self._drc_unit_value(data.get("width"), 0.1)
+        height = self._drc_unit_value(data.get("height"), 0.1)
+        if "center_x" in data or "center_y" in data:
+            center_x = self._drc_unit_value(data.get("center_x"), 0.5)
+            center_y = self._drc_unit_value(data.get("center_y"), 0.5)
+        else:
+            left = self._drc_unit_value(data.get("x"), 0.5 - width / 2.0)
+            top = self._drc_unit_value(data.get("y"), 0.5 - height / 2.0)
+            center_x = max(0.0, min(1.0, left + width / 2.0))
+            center_y = max(0.0, min(1.0, top + height / 2.0))
+        frame_size = self._frame_size(data)
+        x_px, y_px, _ = self._frame_point_pixels(data, center_x, center_y)
+        return {
+            "center_x": center_x,
+            "center_y": center_y,
+            "width": width,
+            "height": height,
+            "x_px": x_px,
+            "y_px": y_px,
+            "frame_size": frame_size,
+            "sensor": int(self._camera_type_sensor(data)),
+        }
+
+    def _start_drc_ai_track(self, selection: dict) -> dict:
+        connected, connect_result = self._ensure_viewlink_connected()
+        if not connected:
+            return connect_result
+        return self._gimbal_control.start_track(
+            selection["x_px"],
+            selection["y_px"],
+            selection["frame_size"]["width"],
+            selection["frame_size"]["height"],
+            VLKTrackTemplateSize.AUTO,
+            VLKSensor(selection["sensor"]),
+        )
 
     def _send_mavlink_command(self, command: int, params: list) -> bool:
         """发送MAVLink COMMAND_LONG"""
@@ -940,6 +1035,152 @@ class GimbalController:
             'mode': self._mode,
             'payload': self.build_payload_state(),
         })
+
+    # ---- Dock3 Remote Control AI 跟随适配 ----
+
+    def handle_drc_ai_spotlight_zoom_set(self, msg: dict) -> dict:
+        """AI 跟随开关。当前用 ViewLink 跟踪能力承接，不开启独立 AI 识别模型。"""
+        data = self._payload_data(msg.get('data', {}))
+        on = self._bool_value(data.get("on"), False)
+        logger.info("DRC AI spotlight zoom set: on=%s", on)
+
+        connected, connect_result = self._ensure_viewlink_connected()
+        if not connected:
+            return self._build_drc_ai_reply(msg, False, connect_result, {"on": 1 if on else 0})
+
+        result = {"success": True, "message": "AI spotlight zoom enabled by ViewLink track adapter"}
+        if not on:
+            if hasattr(self._gimbal_control, "stop_track"):
+                result = self._gimbal_control.stop_track()
+            else:
+                result = {"success": False, "message": "ViewLink stop_track is not exposed by this adapter"}
+        success = bool(result.get("success", False))
+        if success:
+            self._ai_spotlight_enabled = on
+            if not on:
+                self._ai_spotlight_selection = None
+            self._last_control = {
+                "method": msg.get("method", "drc_ai_spotlight_zoom_set"),
+                "on": 1 if on else 0,
+            }
+            self._notify_payload_state("drc_ai_spotlight_zoom_set")
+            self._report_drc_ai_info(0 if not on else 1, "enabled" if on else "disabled")
+        return self._build_drc_ai_reply(msg, success, result, {"on": 1 if on else 0})
+
+    def handle_drc_ai_spotlight_zoom_select(self, msg: dict) -> dict:
+        """AI 框选目标跟随。ViewLink 无候选确认阶段，先缓存框选并立即尝试跟踪。"""
+        data = self._payload_data(msg.get('data', {}))
+        selection = self._drc_ai_selection_from_data(data)
+        self._ai_spotlight_enabled = True
+        self._ai_spotlight_selection = selection
+        logger.info("DRC AI spotlight select: %s", selection)
+
+        result = self._start_drc_ai_track(selection)
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "drc_ai_spotlight_zoom_select"),
+                "selection": selection,
+            }
+            self._notify_payload_state("drc_ai_spotlight_zoom_select")
+            self._report_drc_ai_info(2, "target_selected")
+        return self._build_drc_ai_reply(msg, success, result, {"selection": selection})
+
+    def handle_drc_ai_spotlight_zoom_confirm(self, msg: dict) -> dict:
+        """AI 框选目标跟随确认。确认时对最近一次框选目标再次下发 ViewLink 跟踪。"""
+        if not self._ai_spotlight_selection:
+            reply = MessageBuilder.build_reply(
+                msg,
+                result=INVALID_COMMAND_FORMAT,
+                msg_str="no selected AI spotlight zoom target",
+                data={"output": {"status": "failed", "message": "no selected AI spotlight zoom target"}},
+            )
+            return self._reply_with_seq(msg, reply)
+
+        result = self._start_drc_ai_track(self._ai_spotlight_selection)
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "drc_ai_spotlight_zoom_confirm"),
+                "selection": dict(self._ai_spotlight_selection),
+            }
+            self._notify_payload_state("drc_ai_spotlight_zoom_confirm")
+            self._report_drc_ai_info(2, "target_confirmed")
+        return self._build_drc_ai_reply(
+            msg,
+            success,
+            result,
+            {"selection": dict(self._ai_spotlight_selection)},
+        )
+
+    def handle_drc_ai_spotlight_zoom_track(self, msg: dict) -> dict:
+        """
+        AI 识别目标跟随。
+
+        当前没有真实 AI 目标列表，不能仅凭 target_index 命中目标；如报文携带
+        框选坐标则按框选跟踪，否则复用最近一次框选目标。
+        """
+        data = self._payload_data(msg.get('data', {}))
+        if any(key in data for key in ("center_x", "center_y", "x", "y")):
+            self._ai_spotlight_selection = self._drc_ai_selection_from_data(data)
+        if not self._ai_spotlight_selection:
+            reply = MessageBuilder.build_reply(
+                msg,
+                result=DEVICE_STATE_UNSUPPORTED,
+                msg_str="target_index requires a real AI target list, select a target box first",
+                data={
+                    "target_index": data.get("target_index"),
+                    "output": {
+                        "status": "failed",
+                        "message": "target_index requires a real AI target list, select a target box first",
+                    },
+                },
+            )
+            return self._reply_with_seq(msg, reply)
+
+        self._ai_spotlight_enabled = True
+        result = self._start_drc_ai_track(self._ai_spotlight_selection)
+        success = bool(result.get("success", False))
+        if success:
+            self._last_control = {
+                "method": msg.get("method", "drc_ai_spotlight_zoom_track"),
+                "target_index": data.get("target_index"),
+                "selection": dict(self._ai_spotlight_selection),
+            }
+            self._notify_payload_state("drc_ai_spotlight_zoom_track")
+            self._report_drc_ai_info(2, "tracking")
+        return self._build_drc_ai_reply(
+            msg,
+            success,
+            result,
+            {
+                "target_index": data.get("target_index"),
+                "selection": dict(self._ai_spotlight_selection),
+            },
+        )
+
+    def handle_drc_ai_spotlight_zoom_stop(self, msg: dict) -> dict:
+        """停止目标跟随。"""
+        logger.info("DRC AI spotlight stop")
+        connected, connect_result = self._ensure_viewlink_connected()
+        if not connected:
+            return self._build_drc_ai_reply(msg, False, connect_result)
+        if not hasattr(self._gimbal_control, "stop_track"):
+            return self._build_drc_ai_reply(
+                msg,
+                False,
+                {"success": False, "message": "ViewLink stop_track is not exposed by this adapter"},
+            )
+
+        result = self._gimbal_control.stop_track()
+        success = bool(result.get("success", False))
+        if success:
+            self._ai_spotlight_enabled = False
+            self._ai_spotlight_selection = None
+            self._last_control = {"method": msg.get("method", "drc_ai_spotlight_zoom_stop")}
+            self._notify_payload_state("drc_ai_spotlight_zoom_stop")
+            self._report_drc_ai_info(0, "stopped")
+        return self._build_drc_ai_reply(msg, success, result)
 
     # ---- 红外相机接口 (IR) ----
 

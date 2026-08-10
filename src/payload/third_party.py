@@ -4,6 +4,7 @@
 """
 import base64
 import threading
+import time
 from typing import Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
@@ -26,7 +27,8 @@ class ThirdPartyController:
 
     API方法(drc/down/services通道):
     - drc_light_calibration, drc_light_fine_tuning_set
-    - drc_speaker_tts_set, drc_speaker_play_volume_set
+    - drc_speaker_play_mode_set, drc_speaker_play_stop, drc_speaker_replay
+    - drc_speaker_tts_set, drc_speaker_tts_play_start, drc_speaker_play_volume_set
     - speaker_audio_play_start, speaker_tts_play_start, speaker_play_stop
     - psdk_widget_value_set, psdk_input_box_text_set
     """
@@ -57,6 +59,7 @@ class ThirdPartyController:
         self._event_callback: Optional[Callable] = None
         self._payload_topology = None
         self._payload_state_provider: Optional[Callable] = None
+        self._drc_seq = 0
 
     def set_mavlink_connection(self, mavlink_conn):
         """注入显式启用的飞控 MAVLink 兼容链路。"""
@@ -105,7 +108,7 @@ class ThirdPartyController:
 
     @staticmethod
     def _unsupported_reply(msg: dict, capability: str, data: Optional[dict] = None) -> dict:
-        return MessageBuilder.build_reply(
+        reply = MessageBuilder.build_reply(
             msg,
             result=DEVICE_STATE_UNSUPPORTED,
             msg_str=f"{capability} is not wired to a real payload adapter",
@@ -118,6 +121,47 @@ class ThirdPartyController:
                 }
             },
         )
+        if "seq" in msg and "seq" not in reply:
+            reply["seq"] = msg.get("seq")
+        if not reply.get("gateway"):
+            reply["gateway"] = Config.get_gateway_sn()
+        return reply
+
+    @staticmethod
+    def _reply_with_seq(msg: dict, reply: dict) -> dict:
+        """DRC 官方报文使用 seq 标识顺序，回包保留原 seq 便于云端匹配。"""
+        if "seq" in msg and "seq" not in reply:
+            reply["seq"] = msg.get("seq")
+        if not reply.get("gateway"):
+            reply["gateway"] = Config.get_gateway_sn()
+        return reply
+
+    def _build_drc_speaker_progress(
+        self,
+        psdk_index: int,
+        status: str,
+        percent: int,
+        step_key: str = "play",
+        md5: str = "",
+        result: int = 0,
+    ) -> dict:
+        self._drc_seq += 1
+        return {
+            "method": "drc_speaker_play_progress",
+            "seq": self._drc_seq,
+            "gateway": self.gateway_sn,
+            "timestamp": int(time.time() * 1000),
+            "data": {
+                "psdk_index": psdk_index,
+                "result": result,
+                "status": status,
+                "progress": {
+                    "percent": max(1, min(100, int(percent))),
+                    "step_key": step_key,
+                },
+                "md5": md5,
+            },
+        }
 
     # ---- PSDK 事件上报 ----
 
@@ -195,6 +239,15 @@ class ThirdPartyController:
             )
             self._event_callback(event)
 
+    def report_drc_speaker_play_progress(self, psdk_index: int, status: str,
+                                         percent: int, step_key: str = "play",
+                                         md5: str = "", result: int = 0):
+        """按 Dock3 Remote Control 官方 method 上报喊话器播放进度。"""
+        if self._event_callback:
+            self._event_callback(self._build_drc_speaker_progress(
+                psdk_index, status, percent, step_key=step_key, md5=md5, result=result
+            ))
+
     # ---- 探照灯API ----
 
     def handle_drc_light_calibration(self, msg: dict) -> dict:
@@ -217,17 +270,19 @@ class ThirdPartyController:
         Request: { text, speed, volume, voice_type }
         """
         data = msg.get('data', {})
-        text = data.get('text', '')
-        speed = data.get('speed', 1.0)
-        volume = data.get('volume', 80)
-        voice_type = data.get('voice_type', 'default')
+        tts = data.get('tts') if isinstance(data.get('tts'), dict) else {}
+        text = data.get('text') or tts.get('text') or ''
+        speed = data.get('speed', tts.get('speed', 1.0))
+        volume = data.get('volume', data.get('play_volume', tts.get('volume', 80)))
+        voice_type = data.get('voice_type', data.get('type', tts.get('type', 'default')))
+        md5 = str(data.get('md5') or tts.get('md5') or '')
 
         if not text:
-            return MessageBuilder.build_reply(
+            return self._reply_with_seq(msg, MessageBuilder.build_reply(
                 msg,
                 result=INVALID_COMMAND_FORMAT,
                 data={'output': {'status': 'failed', 'message': 'tts text is required'}},
-            )
+            ))
 
         self._tts_text = text
         self._speaker_volume = volume
@@ -247,6 +302,14 @@ class ThirdPartyController:
                 "ok",
                 100,
                 step_key="play",
+                md5=md5,
+            )
+            self.report_drc_speaker_play_progress(
+                int(data.get('psdk_index', 0) or 0),
+                "success",
+                100,
+                step_key="tts_processing",
+                md5=md5,
             )
 
         return self._speaker_reply(msg, result)
@@ -254,10 +317,26 @@ class ThirdPartyController:
     def handle_drc_speaker_play_volume_set(self, msg: dict) -> dict:
         """播放音量设置"""
         data = msg.get('data', {})
-        volume = data.get('volume', 80)
+        volume = data.get('play_volume', data.get('volume', 80))
         self._speaker_volume = max(0, min(100, self._as_int(volume, 80)))
         logger.info(f"Speaker volume: {self._speaker_volume}")
         return self._speaker_reply(msg, self._speaker_adapter.set_volume(self._speaker_volume))
+
+    def handle_drc_speaker_play_mode_set(self, msg: dict) -> dict:
+        """Dock3 DRC 喊话器播放模式设置。"""
+        return self.handle_speaker_play_mode_set(msg)
+
+    def handle_drc_speaker_play_stop(self, msg: dict) -> dict:
+        """Dock3 DRC 喊话器停止播放。"""
+        return self._handle_speaker_audio_stop(msg)
+
+    def handle_drc_speaker_replay(self, msg: dict) -> dict:
+        """Dock3 DRC 喊话器重新播放。"""
+        return self.handle_speaker_replay(msg)
+
+    def handle_drc_speaker_tts_play_start(self, msg: dict) -> dict:
+        """Dock3 DRC 播放 TTS 文本，兼容官方 data.tts.text 结构。"""
+        return self.handle_drc_speaker_tts_set(msg)
 
     def _handle_speaker_audio_play(self, msg: dict) -> dict:
         """预录音频播放。由官方 speaker_audio_play_start 入口调用。"""
@@ -298,6 +377,13 @@ class ThirdPartyController:
         result = self._speaker_adapter.stop_audio()
         if result.ok:
             self._speaker_playing = False
+            data = msg.get('data', {})
+            self.report_drc_speaker_play_progress(
+                int(data.get('psdk_index', 0) or 0),
+                "success",
+                100,
+                step_key="play",
+            )
         return self._speaker_reply(msg, result)
 
     # ---- 大疆标准第三方负载接口扩展 ----
@@ -490,6 +576,13 @@ class ThirdPartyController:
         result = self._speaker_adapter.replay()
         if result.ok:
             self._speaker_playing = True
+            self.report_drc_speaker_play_progress(
+                int(psdk_index or 0),
+                "success",
+                100,
+                step_key="play",
+                md5=str(data.get('md5', '') or ''),
+            )
         return self._speaker_reply(msg, result)
 
     def handle_speaker_play_mode_set(self, msg: dict) -> dict:
@@ -663,12 +756,12 @@ class ThirdPartyController:
             or "not wired" in result.message
         ):
             error_code = DEVICE_STATE_UNSUPPORTED
-        return MessageBuilder.build_reply(
+        return self._reply_with_seq(msg, MessageBuilder.build_reply(
             msg,
             result=0 if result.ok else error_code,
             data={'output': result.as_output()},
             msg_str="" if result.ok else result.message,
-        )
+        ))
 
     @staticmethod
     def _as_int(value, default: int) -> int:

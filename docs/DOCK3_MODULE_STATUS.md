@@ -53,6 +53,17 @@
 | 准入规则 | `paused + 同 flight_id` 继续允许准备/执行/恢复；`paused + 新 flight_id + 合法 break_point` 允许接管；`paused + 新 flight_id + 无 break_point` 继续拒绝 |
 | 待验收 | 本轮只补代码和测试用例，未在本机运行测试；Ubuntu 需执行 Runbook 中 `breakpoint_v2` 留证命令 |
 
+## 2026-08-10 Dock3 Remote Control 负载上云接入快照
+
+| 项目 | 当前结论 |
+|---|---|
+| DRC topic 边界 | 官方 Remote Control 负载 method 已从 `/services` 白名单拆出，按 `thing/product/{gateway_sn}/drc/down` 接收，响应和主动状态按 `thing/product/{gateway_sn}/drc/up` 发布 |
+| 喊话器真实适配 | `drc_speaker_play_mode_set`、`drc_speaker_play_stop`、`drc_speaker_replay`、`drc_speaker_tts_set`、`drc_speaker_tts_play_start`、`drc_speaker_play_volume_set` 已接入现有 `JzSpeakerAdapter`，兼容官方 `play_volume`、`tts.text` 和旧内部字段 |
+| 喊话器进度 | TTS、重播、停止成功后补充 `drc_speaker_play_progress` 到 `/drc/up`；旧 `speaker_*_progress` 事件仍保留兼容 |
+| ViewLink AI 跟随 | `drc_ai_spotlight_zoom_set`、`drc_ai_spotlight_zoom_select`、`drc_ai_spotlight_zoom_confirm`、`drc_ai_spotlight_zoom_track`、`drc_ai_spotlight_zoom_stop` 已接入 ViewLink 跟踪/停止跟踪能力，并补充 `drc_ai_info_push` 状态上报 |
+| AI 能力边界 | 当前没有真实 AI 目标列表和模型识别 SDK，`drc_ai_spotlight_zoom_track` 若只传 `target_index` 且没有先框选目标，会返回不支持，不伪造成功 |
+| 探照灯边界 | `drc_light_calibration`、`drc_light_fine_tuning_set` 已放到 DRC topic 并保留 unsupported 回包；亮度、模式等真实探照灯能力仍待对应 SDK/协议确认 |
+
 ## 2026-07-09 晚间进度快照
 
 | 项目 | 当前结论 |
@@ -120,7 +131,7 @@
 | Remote Log 远程日志 | 待复测 | 76% | 本地日志落盘、日志列表扫描、`device_log_list_get`、`device_log_upload`、`fileupload_list/start/update`、上传进度事件和非法参数拒绝已补齐；已去除远程日志 `module=3` 硬编码，按路径推断 `module=0` 飞行器日志和 `module=3` 机巢/网关日志，`fileupload_list` 不再额外返回 `total/output.status`，也不再把同一批日志复制伪造成多个模块；`fileupload_start` 已保存并检查临时凭证过期，多文件上传会为每个日志生成独立 `object_key/key`，进度事件按单文件状态/result/progress 上报；`fileupload_update` 只允许 `cancel`，上传任务使用锁和过期清理 | OSS/AWS/MinIO 真实签名上传仍需按平台凭证规则最终精校；日志压缩、多文件打包和真实对象存储上传闭环待 Windows/Ubuntu 留证 | 先执行远程日志单测和 MQTT 专项留证；再接真实 OSS 凭证做对象存储上传验收 | 人员1/人员3 |
 | Config 配置更新 | 已通过 | 65% | `config_update/config_get/config_rollback/config` 已补本地配置持久化、版本号、历史回滚、`config_update_result/config_rollback_result` 事件和非法载荷拒绝；Ubuntu 输出 `dock3 firmware/config test ok (accepted=8, events=10, ignored_total=7)` | 与真实云端 config 字段边界仍需精校；当前晚到旧回包统计不阻断但需后续清理环境做严格复测 | 接入真实字段矩阵和 `--fail-on-stale` 严格环境复测 | 人员1 |
 | Custom Fly Region 自定义飞行区 | 部分接入，待补齐 | 55% | 已有 `flight_areas_update`、`flight_areas_get` services 兼容查询、requests 通道主动 `flight_areas_get`、文件下载/size/checksum 校验、本地缓存、`flight_areas_sync_progress` 上报和 MAVLink fence 生效器；已按甲方样例补 `geofence_type=nfz/dfence`、Point/Circle+radius、`files: []` 清空语义和 `geofence_{fileMD5}.json` fixture；已接入飞行器 OSD 位置，`flight_areas_drone_location` 只在靠近边界、进入围栏、离开围栏、离开边界范围这些状态变化时推送，不做固定周期轮询上报；新增 `tools/custom_fly_region_self_test.py` 本地自测和 `tools/mqtt_dock3_custom_fly_region_test.py` MQTT 专项；官方 API 见 https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/custom-fly-region.html，时序图见 https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/dock-feature-set/custom-flight-area.html，官方模板见 https://terra-1-g.djicdn.com/fee90c2e03e04e8da67ea6f56365fc76/SDK%20%E6%96%87%E6%A1%A3/CloudAPI/custom-flight-area-file-template.json | 缺官方模板本地留存、设备侧文件版本比较、sync reason 全量映射、全链路验收留证；`flight_areas_drone_location` 官方字段矩阵仍需精校；当前设备侧是 MAVLink fence 替代路径，不等同 DJI FlySafe SDK | 执行本地自测和 MQTT 专项保存日志；新增 `docs/reference/custom-flight-area-file-template.json`；继续补 dfence/非法字段 fixture、字段矩阵、解析测试、云端模拟器和实机/真实 SITL 生效证据 | 人员1/人员2 |
-| Remote Control 远程控制 | 待迁移 | 15% | DRC 控制通道已有基础 | Dock3 `remote-control.html` 独立语义未迁移 | DRC 稳定后再迁移 | 人员1/人员2 |
+| Remote Control 远程控制 | 部分接入 | 35% | 官方 DRC topic 边界已接入；喊话器 `drc_speaker_play_mode_set/play_stop/replay/tts_set/tts_play_start/play_volume_set` 已走真实 `JzSpeakerAdapter`；ViewLink 已接 `drc_ai_spotlight_zoom_set/select/confirm/track/stop`，并能上报 `drc_speaker_play_progress` 和基础 `drc_ai_info_push` | AI 模型选择/识别开关/置信度/过滤器、相机专业参数、PSDK 控件、夜航灯/隐蔽模式等仍无真实 SDK 或不属于负载 SDK；探照灯校准/微调仍是 unsupported | Windows 先用本机 MQTT 和真实 ViewLink/喊话器链路复测 `/drc/down -> /drc/up`；确认真实负载协议后再接探照灯、相机专业参数和 PSDK | 人员1/人员2 |
 | PSDK 功能 | 暂缓 | 5% | 保留旧负载/第三方入口 | 无真实 PSDK 设备，不阻塞当前主链路 | 接入真实负载时再做 | 后续 |
 | PSDK/ESDK 透传 | 暂缓 | 5% | 有 custom data manager 占位 | 透传数据契约未定义 | 后续定义透传协议 | 后续 |
 | FlySafe 远程解禁 | 部分接入，待设备适配 | 25% | `unlock_license_update/list/switch` 已补证书不存在失败回包、标准事件 envelope、`device_model_domain` 过滤、`license_type/create_time` 写入和设备生效适配器入口；未配置真实适配器时开关不再假成功 | 当前仍没有 DJI FlySafe SDK、MAVLink/PSDK 或机场直连的真实证书下发实现；缺甲方真实证书文件、平台原始报文、证书类型/域规则和设备生效验收方式 | 对接真实 FlySafe/设备适配器；补 MQTT 专项脚本并由 Win/Ubuntu 保存日志复测 | 后续 |

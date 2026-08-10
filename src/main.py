@@ -177,9 +177,7 @@ ALLOWED_SERVICE_METHODS = frozenset({
     'in_flight_wayline_recover', 'in_flight_wayline_cancel',
 
     # Payload / media / live services documented on Dock3 pages.
-    'gimbalRotate', 'camera_screen_drag', 'drc_light_calibration',
-    'drc_light_fine_tuning_set', 'drc_speaker_tts_set',
-    'drc_speaker_play_volume_set', 'payload_authority_release',
+    'gimbalRotate', 'camera_screen_drag', 'payload_authority_release',
     'psdk_ui_resource_upload_result', 'psdk_floating_window_text',
     'psdk_widget_value_set', 'psdk_input_box_text_set', 'speaker_replay',
     'speaker_play_mode_set', 'speaker_play_stop', 'speaker_audio_play_start',
@@ -230,7 +228,29 @@ IGNORED_NON_SERVICE_METHODS = frozenset({
     'update_topo',
 })
 
-DOWNSTREAM_REPLY_REQUIRED_METHODS = frozenset({'property_set'}) | ALLOWED_SERVICE_METHODS
+DRC_REPLY_REQUIRED_METHODS = frozenset({
+    'heart_beat',
+    'drone_emergency_stop',
+    'drc_light_calibration',
+    'drc_light_fine_tuning_set',
+    'drc_speaker_play_mode_set',
+    'drc_speaker_play_stop',
+    'drc_speaker_replay',
+    'drc_speaker_tts_set',
+    'drc_speaker_tts_play_start',
+    'drc_speaker_play_volume_set',
+    'drc_ai_spotlight_zoom_set',
+    'drc_ai_spotlight_zoom_track',
+    'drc_ai_spotlight_zoom_select',
+    'drc_ai_spotlight_zoom_confirm',
+    'drc_ai_spotlight_zoom_stop',
+})
+
+DOWNSTREAM_REPLY_REQUIRED_METHODS = (
+    frozenset({'property_set'})
+    | ALLOWED_SERVICE_METHODS
+    | DRC_REPLY_REQUIRED_METHODS
+)
 
 def filter_dock_status_fields(updates: dict) -> dict:
     """把 Dock3 机巢属性适配到当前 DockManager 状态缓存。"""
@@ -1680,15 +1700,24 @@ class EdgeGateway:
 
         # 第三方负载回调
         def third_party_event_cb(event):
-            self.mqtt.publish_event(event)
+            if str(event.get('method', '')).startswith('drc_'):
+                self.mqtt.publish_drc_up(event)
+            else:
+                self.mqtt.publish_event(event)
         self.third_party.set_event_callback(third_party_event_cb)
 
         def camera_event_cb(event):
-            self.mqtt.publish_event(event)
+            if str(event.get('method', '')).startswith('drc_'):
+                self.mqtt.publish_drc_up(event)
+            else:
+                self.mqtt.publish_event(event)
         self.camera.set_event_callback(camera_event_cb)
 
         def gimbal_event_cb(event):
-            self.mqtt.publish_event(event)
+            if str(event.get('method', '')).startswith('drc_'):
+                self.mqtt.publish_drc_up(event)
+            else:
+                self.mqtt.publish_event(event)
         self.gimbal.set_event_callback(gimbal_event_cb)
 
     def _handle_drc_event(self, event: dict):
@@ -1852,10 +1881,6 @@ class EdgeGateway:
 
         # ---- 第三方负载API (Third Party Payload) ----
         self.router.register_batch({
-            'drc_light_calibration': self.third_party.handle_drc_light_calibration,
-            'drc_light_fine_tuning_set': self.third_party.handle_drc_light_fine_tuning_set,
-            'drc_speaker_tts_set': self.third_party.handle_drc_speaker_tts_set,
-            'drc_speaker_play_volume_set': self.third_party.handle_drc_speaker_play_volume_set,
             'payload_authority_release': self.third_party.handle_payload_authority_release,
             'psdk_ui_resource_upload_result': self.third_party.handle_psdk_ui_resource_upload_result,
             'psdk_floating_window_text': self.third_party.handle_psdk_floating_window_text,
@@ -1908,6 +1933,19 @@ class EdgeGateway:
             'stick_control': self.drc.handle_stick_control,
             'drone_control': self.drc.handle_drone_control,
             'drone_emergency_stop': self.drc.handle_drone_emergency_stop,
+            'drc_light_calibration': self.third_party.handle_drc_light_calibration,
+            'drc_light_fine_tuning_set': self.third_party.handle_drc_light_fine_tuning_set,
+            'drc_speaker_play_mode_set': self.third_party.handle_drc_speaker_play_mode_set,
+            'drc_speaker_play_stop': self.third_party.handle_drc_speaker_play_stop,
+            'drc_speaker_replay': self.third_party.handle_drc_speaker_replay,
+            'drc_speaker_tts_set': self.third_party.handle_drc_speaker_tts_set,
+            'drc_speaker_tts_play_start': self.third_party.handle_drc_speaker_tts_play_start,
+            'drc_speaker_play_volume_set': self.third_party.handle_drc_speaker_play_volume_set,
+            'drc_ai_spotlight_zoom_set': self.gimbal.handle_drc_ai_spotlight_zoom_set,
+            'drc_ai_spotlight_zoom_track': self.gimbal.handle_drc_ai_spotlight_zoom_track,
+            'drc_ai_spotlight_zoom_select': self.gimbal.handle_drc_ai_spotlight_zoom_select,
+            'drc_ai_spotlight_zoom_confirm': self.gimbal.handle_drc_ai_spotlight_zoom_confirm,
+            'drc_ai_spotlight_zoom_stop': self.gimbal.handle_drc_ai_spotlight_zoom_stop,
         }, category='drc')
 
         # Dock3 文档的 DRC 页面同时列出了一批 services 负载控制接口。
