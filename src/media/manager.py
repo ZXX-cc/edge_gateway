@@ -98,6 +98,11 @@ class MediaManager:
 
     # 默认视频源
     DEFAULT_VIDEO_SOURCE = '/dev/video0'
+    DEDICATED_LIVE_ADAPTER_URL_TYPES = {
+        0: "Agora",
+        3: "GB28181",
+        4: "WebRTC",
+    }
 
     def __init__(self):
         self.gateway_sn = Config.get_gateway_sn()
@@ -1082,16 +1087,20 @@ class MediaManager:
         # 音频（如果有）
         cmd.extend(['-an'])  # 禁用音频，减少带宽
 
-        # 输出格式
-        if url_type == 1 or 'rtmp://' in url:
-            # RTMP
-            cmd.extend(['-f', 'flv', url])
-        elif url_type == 4 or url.startswith('http'):
-            # WebRTC / HTTP
-            cmd.extend(['-f', 'mpegts', url])
-        else:
-            # 默认 RTMP
-            cmd.extend(['-f', 'flv', url])
+        output_url = str(url or "").strip()
+        output_url_lower = output_url.lower()
+
+        # 输出格式：当前内置 ffmpeg 真实链路只负责 RTMP/RTMPS。
+        # WebRTC、GB28181、Agora 都需要专用适配器，不能用 mpegts/http 伪装。
+        if url_type in self.DEDICATED_LIVE_ADAPTER_URL_TYPES:
+            protocol = self.DEDICATED_LIVE_ADAPTER_URL_TYPES[url_type]
+            raise ValueError(f"{protocol} 真实推流需要专用直播适配器，ffmpeg 不支持原生推流")
+        if url_type != 1:
+            raise ValueError(f"当前 ffmpeg 真实推流只支持 RTMP url_type=1，不支持 url_type={url_type}")
+        if not output_url_lower.startswith(("rtmp://", "rtmps://")):
+            raise ValueError("RTMP 真实推流地址必须以 rtmp:// 或 rtmps:// 开头")
+
+        cmd.extend(['-f', 'flv', output_url])
 
         return cmd
 
@@ -1157,6 +1166,13 @@ class MediaManager:
                 "reason": str(e),
             })
             return False
+
+    def _last_live_pipeline_failure_reason(self, default: str) -> str:
+        """从最近的直播流水线失败节点中取出可回传平台的原因。"""
+        for item in reversed(self._live_pipeline):
+            if isinstance(item, dict) and item.get("status") == "failed" and item.get("reason"):
+                return str(item["reason"])
+        return default
 
     def _stop_ffmpeg(self):
         """停止 ffmpeg 推流进程"""
@@ -1346,14 +1362,15 @@ class MediaManager:
             })
         else:
             if not self._start_ffmpeg(url, url_type, video_quality, live_source_key):
+                reason = self._last_live_pipeline_failure_reason("live video source unavailable")
                 self._reset_live_start_state()
                 return MessageBuilder.build_reply(
                     msg,
                     result=INVALID_COMMAND_FORMAT,
                     data=live_task_output(TASK_STATUS_REJECTED, {
-                        "reason": "live video source unavailable",
+                        "reason": reason,
                     }),
-                    msg_str="Live video source unavailable",
+                    msg_str=reason,
                 )
 
         self._publish_live_status_event(TASK_STATUS_IN_PROGRESS, live_status=1)
