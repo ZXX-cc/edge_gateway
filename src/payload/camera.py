@@ -101,6 +101,8 @@ class CameraController:
         # ViewLink SDK 云台控制模块引用
         self._gimbal_control = None
         self._last_viewlink_connection_result = None
+        self._viewlink_record_mode_cache: Optional[int] = None
+        self._viewlink_recording_state_cache: Optional[bool] = None
 
         # 遥测模块引用
         self._telemetry_module = None
@@ -728,6 +730,9 @@ class CameraController:
             }
         result = self._gimbal_control.set_record_mode(mode_map[mode_name])
         logger.info("ViewLink camera mode mapped to record mode: mode=%s result=%s", mode_name, result)
+        if isinstance(result, dict) and result.get("success"):
+            self._viewlink_record_mode_cache = int(mode_map[mode_name])
+            self._viewlink_recording_state_cache = False
         return True, result
 
     def build_aircraft_osd_cameras(self) -> list[dict[str, Any]]:
@@ -800,19 +805,9 @@ class CameraController:
         )
 
     def _safe_viewlink_record_mode(self) -> Optional[int]:
-        if not hasattr(self._gimbal_control, "get_record_mode"):
+        if self._viewlink_record_mode_cache is None:
             return None
-        try:
-            result = self._gimbal_control.get_record_mode()
-        except Exception as exc:
-            logger.warning("Read ViewLink record mode for aircraft OSD failed: %s", exc)
-            return None
-        if not isinstance(result, dict) or not result.get("success"):
-            return None
-        try:
-            return int(result.get("mode"))
-        except (TypeError, ValueError):
-            return None
+        return int(self._viewlink_record_mode_cache)
 
     @staticmethod
     def _dock3_camera_mode_from_record_mode(record_mode: int) -> int:
@@ -820,13 +815,9 @@ class CameraController:
         return {1: 0, 2: 1}.get(record_mode, -1)
 
     def _safe_viewlink_recording_state(self) -> Optional[bool]:
-        if not hasattr(self._gimbal_control, "is_recording"):
+        if self._viewlink_recording_state_cache is None:
             return None
-        try:
-            return bool(self._gimbal_control.is_recording())
-        except Exception as exc:
-            logger.warning("Read ViewLink recording state for aircraft OSD failed: %s", exc)
-            return None
+        return bool(self._viewlink_recording_state_cache)
 
     def _viewlink_photo_session_active(self) -> Optional[bool]:
         if not self._gimbal_control:
@@ -1273,11 +1264,13 @@ class CameraController:
         success = False
 
         # 优先使用 ViewLink SDK 开始录像
+        viewlink_success = False
         if self._gimbal_control and self._gimbal_control.is_connected():
             self._set_viewlink_record_mode("video")
             logger.info("ViewLink mapped: %s", build_viewlink_call("start_recording", data))
             result = self._gimbal_control.start_recording()
             success = result.get('success', False)
+            viewlink_success = success
             logger.info(f"ViewLink start recording: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
@@ -1288,6 +1281,9 @@ class CameraController:
             self._is_recording = True
             self._recording_start_time = time.time()
             self._resolution = str(resolution) if resolution else None
+            if viewlink_success:
+                self._viewlink_record_mode_cache = int(VLKRecordMode.RECORD)
+                self._viewlink_recording_state_cache = True
 
         return MessageBuilder.build_reply(msg, result=0 if success else -1)
 
@@ -1303,10 +1299,12 @@ class CameraController:
         success = False
 
         # 优先使用 ViewLink SDK 停止录像
+        viewlink_success = False
         if self._gimbal_control and self._gimbal_control.is_connected():
             logger.info("ViewLink mapped: %s", build_viewlink_call("stop_recording", data))
             result = self._gimbal_control.stop_recording()
             success = result.get('success', False)
+            viewlink_success = success
             logger.info(f"ViewLink stop recording: {result}")
 
         # 如果 ViewLink 不可用，回退到 MAVLink
@@ -1317,6 +1315,8 @@ class CameraController:
         if success:
             self._is_recording = False
             self._recording_time = recording_time
+            if viewlink_success:
+                self._viewlink_recording_state_cache = False
             self._save_media_metadata_sync(
                 'video',
                 duration=recording_time,

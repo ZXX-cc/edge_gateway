@@ -437,7 +437,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
             ("set_image_color", 2, False, 0),
         ])
 
-    def test_aircraft_osd_cameras_use_real_payload_readback(self):
+    def test_aircraft_osd_cameras_use_successful_viewlink_command_cache(self):
         camera = CameraController()
         direct_payload = FakeDirectPayload()
         camera.set_gimbal_control(direct_payload)
@@ -458,6 +458,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(cameras[0]["zoom_factor"], 3.5)
         self.assertNotIn("remain_photo_num", cameras[0])
         self.assertNotIn("remain_record_duration", cameras[0])
+
+    def test_aircraft_osd_cameras_do_not_poll_viewlink_recording_readback(self):
+        class ReadbackCrashPayload(FakeDirectPayload):
+            def get_record_mode(self):
+                raise OSError("access violation reading 0x0000000000000024")
+
+            def is_recording(self):
+                raise OSError("access violation reading 0x0000000000000024")
+
+        camera = CameraController()
+        direct_payload = ReadbackCrashPayload()
+        camera.set_gimbal_control(direct_payload)
+
+        reply = camera.handle_camera_mode_switch(message("camera_mode_switch", {"camera_mode": 1}))
+        cameras = camera.build_aircraft_osd_cameras()
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(cameras[0]["camera_mode"], 1)
+        self.assertEqual(cameras[0]["recording_state"], 0)
 
     def test_aircraft_osd_cameras_skip_disconnected_payload(self):
         class DisconnectedPayload(FakeDirectPayload):
