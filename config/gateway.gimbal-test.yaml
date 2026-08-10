@@ -92,13 +92,31 @@ livestream:
   default_framerate: 30
 
 logging:
-  level: "INFO"
-  dir: "./logs"
-  filename_prefix: "edge_gateway_gimbal_test"
-  console: true
-  capture_print: true
-  daily_files: true
-  monthly_dirs: true
+  level: "INFO" # DEBUG/INFO/WARNING/ERROR
+  dir: "./logs" # 日志根目录；Windows/Ubuntu 均按 pathlib 处理路径
+  filename_prefix: "edge_gateway_gimbal_test" # 网关总日志：logs/YYYY-MM/edge_gateway_gimbal_test_YYYY-MM-DD.log
+  max_file_mb: 100 # 单个日志文件超过该大小会自动切分为 _001/_002
+  console: true # 同时输出到终端
+  capture_print: true # 捕获旧模块 print/stdout/stderr 到日志文件
+  daily_files: true # 每日独立日志文件
+  monthly_dirs: true # 每月独立日志目录
+  important:
+    enabled: true # WARNING/ERROR/CRITICAL 会额外写入重要日志，默认保留 30 天
+    dir: "important" # 重要日志目录：logs/important/YYYY-MM/important_YYYY-MM-DD.log
+    filename_prefix: "important"
+    level: "WARNING"
+  retention:
+    enabled: true # 是否启用运行日志自动清理和压缩
+    normal_days: 7 # 普通运行日志保留 7 天
+    important_days: 30 # 报错/告警等重要日志保留 30 天
+    debug_days: 3 # 调试/原始链路日志保留 3 天
+    compress_after_days: 1 # 超过 1 天的旧日志自动 gzip 压缩
+    max_file_mb: 100 # 分类日志未单独配置时沿用该切分大小
+    disk_cleanup_enabled: true # 磁盘高水位时允许提前清理日志
+    disk_high_watermark_percent: 80 # 磁盘使用率达到 80% 触发兜底清理
+    disk_target_percent: 75 # 兜底清理目标水位
+    debug_categories: ["mqtt_trace", "gateway_traffic", "nest_raw", "drone_report", "mavlink_raw"]
+    important_categories: ["alarm", "important"]
   categories:
     gateway:
       enabled: true
@@ -159,19 +177,28 @@ rtk:
   enabled: false
 
 retention:
-  telemetry_hours: 2
-  operation_days: 3
-  alarm_days: 1
-  media_uploaded_days: 7
-  cleanup_interval_hours: 1
-  vacuum_interval_hours: 24
-  max_db_size_mb: 50
+  telemetry_hours: 2 # 遥测数据保留时长(小时)
+  operation_days: 3 # 操作记录保留时长(天)
+  alarm_days: 1 # 告警记录保留时长(天)
+  media_uploaded_days: 7 # 已上传媒体保留时长(天)
+  cleanup_interval_hours: 1 # 清理间隔(小时)
+  vacuum_interval_hours: 24 # 数据库压缩间隔(小时)
+  max_db_size_mb: 50 # 最大数据库大小(MB)
+  disk_cleanup:
+    enabled: true # 磁盘达到高水位时，提前触发日志和本地历史兜底清理
+    high_watermark_percent: 80 # 磁盘使用率达到 80% 触发提前清理
+    target_percent: 75 # 目标清理到 75% 以下
+    cooldown_seconds: 300 # 两次磁盘兜底清理之间的最小间隔
 
 local_history:
-  enabled: true
-  dir: "logs/history"
-  flight_telemetry_days: 7
-  device_state_days: 7
+  enabled: true # 是否保存本地历史日志
+  dir: "logs/history" # 本地历史日志根目录
+  flight_telemetry_days: 7 # 飞机原始飞行历史遥测保留天数
+  device_state_days: 7 # 设备状态变更历史保留天数
+  flight_telemetry_granularity: "hour" # 飞机原始飞行遥测按小时拆文件
+  device_state_granularity: "day" # 设备状态按天拆文件
+  compress_after_days: 1 # 超过 1 天的历史 JSONL 自动 gzip 压缩
+  disk_cleanup_enabled: true # 磁盘高水位时允许按旧到新删除本地历史小文件
 
 security:
   mqtt:

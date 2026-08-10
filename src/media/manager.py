@@ -31,6 +31,8 @@ from src.cloud_api.dock3_media import (
     filter_media_files,
     media_task_output,
     normalize_delete_ids,
+    normalize_delete_ids_with_codes,
+    FILE_ID_ERROR_MISSING_IDS,
     normalize_page,
     normalize_priority_items,
     paginate,
@@ -131,6 +133,7 @@ class MediaManager:
         # ffmpeg 推流进程
         self._ffmpeg_process: Optional[subprocess.Popen] = None
         self._ffmpeg_monitor_thread: Optional[threading.Thread] = None
+        self._ffmpeg_process_lock = threading.RLock()
 
         # 存储状态
         self._total_capacity = Config.get('device.storage_capacity', 64000)  # MB
@@ -560,7 +563,7 @@ class MediaManager:
     def _resolve_media_items_for_download(self, data: dict) -> tuple[List[dict], List[str]]:
         known = self._scan_media_files()
         by_id = self._media_identity_map(known)
-        requested, errors = normalize_delete_ids(data)
+        requested, validation_errors = normalize_delete_ids_with_codes(data)
         urls = []
         raw_urls = data.get("download_urls", data.get("download_url", [])) if isinstance(data, dict) else []
         if isinstance(raw_urls, list):
@@ -569,8 +572,11 @@ class MediaManager:
             urls = [str(raw_urls)]
         requested.extend(urls)
         requested = list(dict.fromkeys(requested))
-        if urls and errors == ["file_delete missing file_ids/files"]:
-            errors = []
+        errors = [
+            item["message"]
+            for item in validation_errors
+            if not (urls and item.get("code") == FILE_ID_ERROR_MISSING_IDS)
+        ]
         if not requested:
             return [], errors or ["file_download missing file_ids/files/download_url"]
 
@@ -1417,7 +1423,12 @@ class MediaManager:
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
             )
-            self._ffmpeg_process = process
+            monitor_thread = threading.Thread(
+                target=self._ffmpeg_monitor, args=(process,), daemon=True
+            )
+            with self._ffmpeg_process_lock:
+                self._ffmpeg_process = process
+                self._ffmpeg_monitor_thread = monitor_thread
             logger.info(f"FFmpeg started, pid={process.pid}")
             self._live_pipeline.append({
                 "step": "start_ffmpeg_process",
@@ -1426,10 +1437,7 @@ class MediaManager:
             })
 
             # 启动监控线程
-            self._ffmpeg_monitor_thread = threading.Thread(
-                target=self._ffmpeg_monitor, args=(process,), daemon=True
-            )
-            self._ffmpeg_monitor_thread.start()
+            monitor_thread.start()
             return True
 
         except FileNotFoundError:
@@ -1460,18 +1468,41 @@ class MediaManager:
 
     def _stop_ffmpeg(self):
         """停止 ffmpeg 推流进程"""
-        if self._ffmpeg_process:
-            try:
-                self._ffmpeg_process.terminate()
-                self._ffmpeg_process.wait(timeout=5.0)
-                logger.info(f"FFmpeg stopped, pid={self._ffmpeg_process.pid}")
-            except subprocess.TimeoutExpired:
-                self._ffmpeg_process.kill()
-                logger.warning("FFmpeg killed after timeout")
-            except Exception as e:
-                logger.error(f"Error stopping ffmpeg: {e}")
-            finally:
-                self._ffmpeg_process = None
+        with self._ffmpeg_process_lock:
+            process = self._ffmpeg_process
+            monitor_thread = self._ffmpeg_monitor_thread
+        if not process:
+            return
+
+        try:
+            process.terminate()
+            monitor_thread_started = bool(getattr(monitor_thread, "ident", None))
+            if monitor_thread and monitor_thread_started:
+                if monitor_thread.is_alive() and monitor_thread is not threading.current_thread():
+                    monitor_thread.join(timeout=5.0)
+                    if monitor_thread.is_alive():
+                        process.kill()
+                        logger.warning("FFmpeg killed after monitor timeout")
+                        monitor_thread.join(timeout=2.0)
+                if not monitor_thread.is_alive():
+                    logger.info(f"FFmpeg stopped, pid={process.pid}")
+            else:
+                process.communicate(timeout=5.0)
+                logger.info(f"FFmpeg stopped, pid={process.pid}")
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            logger.warning("FFmpeg killed after timeout")
+        except Exception as e:
+            logger.error(f"Error stopping ffmpeg: {e}")
+        finally:
+            with self._ffmpeg_process_lock:
+                if self._ffmpeg_process is process:
+                    self._ffmpeg_process = None
+                if self._ffmpeg_monitor_thread is monitor_thread and (
+                    not monitor_thread or not monitor_thread.is_alive()
+                ):
+                    self._ffmpeg_monitor_thread = None
 
     def _publish_live_status_event(
         self,
@@ -1527,12 +1558,8 @@ class MediaManager:
             "error_status": 0 if task_status in {TASK_STATUS_OK, TASK_STATUS_IN_PROGRESS} else 1,
         }
 
-    def _ffmpeg_monitor(self, process: Optional[subprocess.Popen] = None):
+    def _ffmpeg_monitor(self, process: subprocess.Popen):
         """监控 ffmpeg 进程状态"""
-        process = process or self._ffmpeg_process
-        if not process:
-            return
-
         stdout, stderr = process.communicate()
         returncode = process.returncode
 
@@ -1540,11 +1567,14 @@ class MediaManager:
             stderr_text = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else ""
             logger.warning(f"FFmpeg exited with code {returncode}: {stderr_text}")
 
-        if self._ffmpeg_process is process and self._live_streaming:
-            logger.info("FFmpeg exited, live streaming stopped")
-            self._live_streaming = False
-            self._live_session_id = ""
-            self._ffmpeg_process = None
+        with self._ffmpeg_process_lock:
+            if self._ffmpeg_monitor_thread is threading.current_thread():
+                self._ffmpeg_monitor_thread = None
+            if self._ffmpeg_process is process and self._live_streaming:
+                logger.info("FFmpeg exited, live streaming stopped")
+                self._live_streaming = False
+                self._live_session_id = ""
+                self._ffmpeg_process = None
 
     def _live_start_failed_reply(self, msg: dict, reason: str, result: int = DOCK_SYSTEM_ERROR) -> dict:
         """开始直播失败时明确回包，并向平台同步失败状态。"""

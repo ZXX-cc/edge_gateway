@@ -743,7 +743,9 @@ firmware/config 均无可归因旧回包；一键启航流程同时通过。该�
 
 2026-07-10 数据保留/操作记录专项已通过：`python tools/database_retention_audit.py --config config/gateway.yaml` 在独立 `/tmp/edge_gateway_retention_audit_*` SQLite 库中输出 `deleted={'telemetry': 1, 'operation': 2, 'alarm': 1, 'media_uploaded': 1}`，并验证保留 `telemetry=1`、`operation=2`、`alarm=1`、`media=2`。该脚本拒绝已有路径和项目 `missions.db`，不访问运行网关数据库；`python -m unittest -v tests.test_retention_manager` 输出 `Ran 1 test ... OK`。
 
-本地历史日志：网关会把飞机原始飞行遥测追加到 `logs/history/flight_telemetry/YYYY-MM-DD.jsonl`，把设备状态变更追加到 `logs/history/device_state/YYYY-MM-DD.jsonl`。默认保留 7 日，清理动作跟随 `DataRetentionManager` 的 `retention.cleanup_interval_hours` 周期执行；手动留证可执行 `python -m unittest -v tests.test_retention_manager > "$EVIDENCE_DIR/retention_history.log" 2>&1`，并在网关运行后用 `find logs/history -type f -name '*.jsonl' -maxdepth 3` 确认文件生成。
+本地历史日志：网关会把飞机原始飞行遥测按小时追加到 `logs/history/flight_telemetry/YYYY-MM/YYYY-MM-DD_HH.jsonl`，把设备状态变更按天追加到 `logs/history/device_state/YYYY-MM/YYYY-MM-DD.jsonl`。默认保留 7 日，超过 `local_history.compress_after_days` 的旧 JSONL 自动 gzip 压缩，清理动作跟随 `DataRetentionManager` 的 `retention.cleanup_interval_hours` 周期执行；磁盘使用率达到 `retention.disk_cleanup.high_watermark_percent`，默认 80% 时会提前清理日志和本地历史，目标降到 75%。手动留证可执行 `python -m unittest -v tests.test_retention_manager > "$EVIDENCE_DIR/retention_history.log" 2>&1`，并在网关运行后用 `find logs/history -maxdepth 4 -type f \( -name '*.jsonl' -o -name '*.jsonl.gz' \)` 确认文件生成、压缩和清理策略。
+
+运行日志保留：普通日志默认保留 7 天，`logs/important/` 重要日志和 `alarm` 分类保留 30 天，`mqtt_trace/gateway_traffic/nest_raw/drone_report/mavlink_raw` 等调试/原始链路日志保留 3 天；单个 `.log` 默认超过 100MB 自动切分为 `_001/_002`，超过 1 天的旧日志自动压缩为 `.log.gz`。Windows 可用 PowerShell 的 `Get-ChildItem logs -Recurse -File` 检查，Ubuntu 可用 `find logs -type f` 检查。
 
 本地安全校验不依赖真机：`security.mqtt` 可开启云端下行和云端 reply 的 HMAC-SHA256 `timestamp + nonce + sign` 校验，nonce 会按 TTL 防重放；`security.drc` 控制 DRC 心跳 timestamp 时间窗和 seq 递增；`security.mission` 控制航线定时/条件任务允许的时钟误差。默认测试配置不强制签名，production 模式会要求 `security.mqtt.downstream_auth_enabled=true` 且 `sign_secret` 至少 16 字符。留证命令：
 

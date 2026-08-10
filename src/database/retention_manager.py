@@ -17,10 +17,12 @@
 """
 import os
 import time
+import shutil
 import asyncio
 from typing import Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
+from src.utils.log_retention import cleanup_log_files
 from src.database.connection import (
     DATABASE_URL,
     async_engine,
@@ -56,6 +58,11 @@ class DataRetentionManager:
         self._cleanup_interval_hours = Config.get('retention.cleanup_interval_hours', 1)
         self._vacuum_interval_hours = Config.get('retention.vacuum_interval_hours', 24)
         self._max_db_size_mb = Config.get('retention.max_db_size_mb', 50)
+        disk_cleanup = Config.get('retention.disk_cleanup', {}) or {}
+        self._disk_cleanup_enabled = bool(disk_cleanup.get('enabled', True))
+        self._disk_high_watermark_percent = float(disk_cleanup.get('high_watermark_percent', 80) or 80)
+        self._disk_target_percent = float(disk_cleanup.get('target_percent', 75) or 75)
+        self._disk_cleanup_cooldown_seconds = int(disk_cleanup.get('cooldown_seconds', 300) or 300)
 
         self._last_cleanup_time = 0
         self._last_cleanup_counts = {
@@ -65,8 +72,18 @@ class DataRetentionManager:
             'media_uploaded': 0,
             'flight_telemetry_history': 0,
             'device_state_history': 0,
+            'flight_telemetry_history_compressed': 0,
+            'device_state_history_compressed': 0,
+            'log_deleted': 0,
+            'log_compressed': 0,
+            'log_disk_pressure_deleted': 0,
+            'log_disk_pressure_freed_bytes': 0,
+            'history_disk_pressure_deleted': 0,
+            'history_disk_pressure_freed_bytes': 0,
         }
         self._last_vacuum_time = 0
+        self._last_disk_cleanup_time = 0
+        self._last_disk_usage_percent = 0.0
 
         self._db_file_path = self._extract_db_path()
 
@@ -94,7 +111,8 @@ class DataRetentionManager:
                     f"alarm={self._alarm_days}d, "
                     f"media_uploaded={self._media_uploaded_days}d, "
                     f"flight_telemetry_history={self._local_history_flight_telemetry_days}d, "
-                    f"device_state_history={self._local_history_device_state_days}d")
+                    f"device_state_history={self._local_history_device_state_days}d, "
+                    f"disk_high_watermark={self._disk_high_watermark_percent:.1f}%")
 
     async def stop(self):
         """异步停止数据保留管理器"""
@@ -123,6 +141,7 @@ class DataRetentionManager:
                 current_time = time.time()
 
                 await self._check_db_size()
+                await self._check_disk_pressure()
 
                 if current_time - self._last_cleanup_time >= self._cleanup_interval_hours * 3600:
                     await self._clean_expired_data()
@@ -182,6 +201,14 @@ class DataRetentionManager:
                 'media_uploaded': 0,
                 'flight_telemetry_history': 0,
                 'device_state_history': 0,
+                'flight_telemetry_history_compressed': 0,
+                'device_state_history_compressed': 0,
+                'log_deleted': 0,
+                'log_compressed': 0,
+                'log_disk_pressure_deleted': 0,
+                'log_disk_pressure_freed_bytes': 0,
+                'history_disk_pressure_deleted': 0,
+                'history_disk_pressure_freed_bytes': 0,
             }
 
             if is_mongo_session(session):
@@ -214,6 +241,7 @@ class DataRetentionManager:
                 await self._clean_expired_sqlalchemy(session, deleted_counts)
 
             deleted_counts.update(self._clean_expired_local_history())
+            deleted_counts.update(self._clean_expired_logs())
 
             await session.commit()
 
@@ -224,6 +252,75 @@ class DataRetentionManager:
                 logger.info(f"Data retention cleanup: {deleted_counts}")
 
             return deleted_counts
+
+    async def _check_disk_pressure(self):
+        """磁盘超过高水位时提前清理日志和本地历史文件。"""
+        if not self._disk_cleanup_enabled:
+            return
+        now = time.time()
+        if now - self._last_disk_cleanup_time < self._disk_cleanup_cooldown_seconds:
+            return
+        try:
+            log_dir = Config.get('logging.dir', './logs') or './logs'
+            probe = os.path.abspath(os.path.expanduser(str(log_dir)))
+            while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+                probe = os.path.dirname(probe)
+            usage = shutil.disk_usage(probe)
+            used_percent = (usage.used / usage.total) * 100 if usage.total else 0.0
+            self._last_disk_usage_percent = used_percent
+            if used_percent < self._disk_high_watermark_percent:
+                return
+
+            self._last_disk_cleanup_time = now
+            log_counts = cleanup_log_files(Config.get('logging', {}) or {})
+            history_counts = self._clean_local_history_for_disk_pressure()
+            logger.warning(
+                "Disk usage %.1f%% reached cleanup watermark %.1f%%: logs=%s history=%s",
+                used_percent,
+                self._disk_high_watermark_percent,
+                log_counts,
+                history_counts,
+            )
+            if self._event_callback:
+                self._event_callback({
+                    'type': 'disk_cleanup',
+                    'data': {
+                        'used_percent': used_percent,
+                        'high_watermark_percent': self._disk_high_watermark_percent,
+                        'target_percent': self._disk_target_percent,
+                        'logs': log_counts,
+                        'history': history_counts,
+                        'timestamp': int(time.time() * 1000),
+                    }
+                })
+        except Exception as exc:
+            logger.error("Disk pressure cleanup check error: %s", exc, exc_info=True)
+
+    def _clean_expired_logs(self) -> dict:
+        """清理和压缩运行日志文件。"""
+        try:
+            return cleanup_log_files(Config.get('logging', {}) or {})
+        except Exception as exc:
+            logger.warning("Log retention cleanup failed: %s", exc, exc_info=True)
+            return {
+                'log_deleted': 0,
+                'log_compressed': 0,
+                'log_disk_pressure_deleted': 0,
+                'log_disk_pressure_freed_bytes': 0,
+            }
+
+    def _clean_local_history_for_disk_pressure(self) -> dict:
+        """磁盘高水位时优先删除最旧的本地历史文件。"""
+        try:
+            from src.utils.local_history_logger import LocalHistoryLogger
+
+            return LocalHistoryLogger().cleanup_for_disk_pressure(self._disk_target_percent)
+        except Exception as exc:
+            logger.warning("Local history disk pressure cleanup failed: %s", exc, exc_info=True)
+            return {
+                'history_disk_pressure_deleted': 0,
+                'history_disk_pressure_freed_bytes': 0,
+            }
 
     def _clean_expired_local_history(self) -> dict:
         """清理本地原始遥测和设备状态变更历史日志。"""
@@ -239,6 +336,8 @@ class DataRetentionManager:
             return {
                 'flight_telemetry_history': 0,
                 'device_state_history': 0,
+                'flight_telemetry_history_compressed': 0,
+                'device_state_history_compressed': 0,
             }
 
     async def _clean_expired_sqlalchemy(self, session, deleted_counts):
@@ -313,11 +412,16 @@ class DataRetentionManager:
                 'local_history_device_state_days': self._local_history_device_state_days,
                 'cleanup_interval_hours': self._cleanup_interval_hours,
                 'vacuum_interval_hours': self._vacuum_interval_hours,
-                'max_db_size_mb': self._max_db_size_mb
+                'max_db_size_mb': self._max_db_size_mb,
+                'disk_cleanup_enabled': self._disk_cleanup_enabled,
+                'disk_high_watermark_percent': self._disk_high_watermark_percent,
+                'disk_target_percent': self._disk_target_percent,
             },
             'last_cleanup_time': self._last_cleanup_time,
             'last_cleanup_counts': dict(self._last_cleanup_counts),
             'last_vacuum_time': self._last_vacuum_time,
+            'last_disk_cleanup_time': self._last_disk_cleanup_time,
+            'last_disk_usage_percent': self._last_disk_usage_percent,
             'db_file_path': self._db_file_path,
             'backend': get_database_backend(),
         }

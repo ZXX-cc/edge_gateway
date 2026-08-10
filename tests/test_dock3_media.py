@@ -39,17 +39,19 @@ if "src.database.media_db" not in sys.modules:
     sys.modules["src.database.media_db"] = media_db
 
 from src.cloud_api.dock3_media import (
+    FILE_ID_ERROR_MISSING_IDS,
     build_media_file,
     build_remote_media_file,
     file_list_data,
     filter_media_files,
     media_type_for_file,
     normalize_delete_ids,
+    normalize_delete_ids_with_codes,
     normalize_priority_items,
     paginate,
     storage_config_output,
 )
-from src.cloud_api.dock3_live import validate_live_start_payload
+from src.cloud_api.dock3_live import live_status_event_data, validate_live_start_payload
 import src.media.manager as media_manager_module
 from src.media.manager import MediaManager
 from src.utils.config import Config
@@ -120,6 +122,10 @@ class Dock3MediaHelperTest(unittest.TestCase):
         ids, errors = normalize_delete_ids({"files": [{"file_id": "a"}, {"fingerprint": "b"}]})
         self.assertFalse(errors)
         self.assertEqual(ids, ["a", "b"])
+
+        _, structured_errors = normalize_delete_ids_with_codes({})
+        self.assertEqual(structured_errors[0]["code"], FILE_ID_ERROR_MISSING_IDS)
+        self.assertIn("message", structured_errors[0])
 
         files, errors = normalize_priority_items({"files": [{"file_id": "a", "priority": 10}]})
         self.assertFalse(errors)
@@ -235,6 +241,57 @@ class Dock3MediaManagerTest(unittest.TestCase):
         files = listed["data"]["files"]
         self.assertEqual({item["name"] for item in files}, {"a.jpg", "b.mp4"})
         self.assertTrue(all(item["source"] == "remote_http" for item in files))
+
+    def test_file_delete_uses_same_remote_media_scan_as_list(self):
+        class FakeResponse:
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        pages = {
+            "http://media.local/download/": '<a href="photo/">photo/</a>',
+            "http://media.local/download/photo/": '<a href="../">../</a><a href="a.jpg">a.jpg</a>',
+        }
+
+        def fake_get(url, timeout):
+            return FakeResponse(pages[url])
+
+        old_get = requests.get
+        requests.get = fake_get
+        Config.merge({
+            "media": {
+                "remote_media": {
+                    "enabled": True,
+                    "base_url": "http://media.local/download/",
+                    "max_depth": 2,
+                    "timeout_seconds": 1,
+                }
+            }
+        })
+        try:
+            manager = MediaManager()
+            with tempfile.TemporaryDirectory() as tmp:
+                manager.storage_path = tmp
+                listed = manager.handle_file_list_get(base_msg("file_list_get", {
+                    "media_type": "all",
+                    "page": 1,
+                    "page_size": 10,
+                }))
+                remote_file = listed["data"]["files"][0]
+                deleted = manager.handle_file_delete(base_msg("file_delete", {
+                    "file_ids": [remote_file["file_id"]],
+                }))
+        finally:
+            requests.get = old_get
+            Config.merge({"media": {"remote_media": {"enabled": False}}})
+
+        item = deleted["data"]["files"][0]
+        self.assertEqual(remote_file["source"], "remote_http")
+        self.assertEqual(item["result"], DEVICE_STATE_UNSUPPORTED)
+        self.assertIn("remote media delete unsupported", item["msg"])
+        self.assertNotIn("file not found", item["msg"])
 
     def test_file_list_syncs_mapping_camera_before_scan(self):
         manager = MediaManager()
@@ -721,6 +778,46 @@ class Dock3MediaManagerTest(unittest.TestCase):
         finally:
             requests.get = old_get
 
+    def test_file_download_resolves_nested_payload_media_object_key(self):
+        manager = MediaManager()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "DCIM" / "flight-001"
+            folder.mkdir(parents=True)
+            path = folder / "Riebo000003.jpg"
+            path.write_bytes(b"nested-mapping-photo")
+            manager.storage_path = tmp
+
+            reply = manager.handle_file_download(base_msg("file_download", {
+                "file_ids": ["DCIM/flight-001/Riebo000003.jpg"],
+            }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        files = reply["data"]["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["result"], 0)
+        self.assertEqual(files[0]["name"], "Riebo000003.jpg")
+        self.assertEqual(Path(files[0]["cache_path"]), path)
+
+    def test_file_download_url_uses_structured_missing_id_error_code(self):
+        old_normalize = media_manager_module.normalize_delete_ids_with_codes
+        media_manager_module.normalize_delete_ids_with_codes = lambda data: (
+            [],
+            [{"code": FILE_ID_ERROR_MISSING_IDS, "message": "renamed missing ids message"}],
+        )
+        try:
+            manager = MediaManager()
+            manager._scan_media_files = lambda: []
+            items, errors = manager._resolve_media_items_for_download({
+                "download_url": "http://media.local/download/photo/a.jpg",
+            })
+        finally:
+            media_manager_module.normalize_delete_ids_with_codes = old_normalize
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["download_url"], "http://media.local/download/photo/a.jpg")
+
     def test_file_delete_rejects_missing_ids(self):
         manager = MediaManager()
         reply = manager.handle_file_delete(base_msg("file_delete", {}))
@@ -800,6 +897,17 @@ class Dock3MediaManagerTest(unittest.TestCase):
             "output": {"credentials": {"expire": int(time.time() * 1000) - 1000}},
         }))
 
+    def test_live_status_event_data_uses_output_status_without_result(self):
+        data = live_status_event_data(
+            status="failed",
+            video_id="EDGEGW001/0/normal",
+            reason="ffmpeg stopped",
+        )
+
+        self.assertEqual(data["output"]["status"], "failed")
+        self.assertEqual(data["reason"], "ffmpeg stopped")
+        self.assertNotIn("result", data)
+
     def test_live_mock_lifecycle_emits_status_events(self):
         events = []
         states = []
@@ -819,6 +927,9 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertEqual(start["data"]["output"]["status"], "in_progress")
         self.assertNotIn("software_pipeline", start["data"])
         self.assertTrue(manager._live_streaming)
+        status_events = [event for event in events if event.get("method") == "live_status_notify"]
+        self.assertNotIn("result", status_events[-1]["data"])
+        self.assertEqual(status_events[-1]["data"]["output"]["status"], "in_progress")
         live_status = states[-1]["property"]["live_status"]
         self.assertEqual(live_status[0]["video_id"], video_id)
         self.assertEqual(live_status[0]["status"], 1)
@@ -861,10 +972,10 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertFalse(manager._live_streaming)
         self.assertEqual(states[-1]["property"]["live_status"][0]["status"], 0)
         self.assertEqual(states[-1]["property"]["live_status"][0]["error_status"], 0)
-        self.assertGreaterEqual(
-            len([event for event in events if event.get("method") == "live_status_notify"]),
-            4,
-        )
+        status_events = [event for event in events if event.get("method") == "live_status_notify"]
+        self.assertGreaterEqual(len(status_events), 4)
+        self.assertNotIn("result", status_events[-1]["data"])
+        self.assertEqual(status_events[-1]["data"]["output"]["status"], "ok")
 
     def test_live_lens_change_does_not_embed_photo_reply(self):
         manager = MediaManager()
@@ -1285,6 +1396,139 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertIs(manager._ffmpeg_process, new_process)
         self.assertTrue(manager._live_streaming)
         self.assertEqual(manager._live_session_id, "new-live")
+
+    def test_ffmpeg_monitor_requires_explicit_process(self):
+        manager = MediaManager()
+
+        with self.assertRaises(TypeError):
+            manager._ffmpeg_monitor()
+
+    def test_stop_ffmpeg_lets_monitor_thread_own_communicate(self):
+        class FakeProcess:
+            pid = 321
+
+            def __init__(self):
+                self.terminated = False
+                self.killed = False
+                self.wait_called = False
+                self.communicate_called = False
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+            def wait(self, timeout=None):
+                self.wait_called = True
+                raise AssertionError("stop_ffmpeg should not call wait while monitor owns communicate")
+
+            def communicate(self, timeout=None):
+                self.communicate_called = True
+                raise AssertionError("stop_ffmpeg should not call communicate while monitor thread is registered")
+
+        class FakeMonitorThread:
+            def __init__(self):
+                self.alive = True
+                self.ident = 1
+                self.join_calls = []
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout=None):
+                self.join_calls.append(timeout)
+                self.alive = False
+
+        manager = MediaManager()
+        process = FakeProcess()
+        monitor_thread = FakeMonitorThread()
+        manager._ffmpeg_process = process
+        manager._ffmpeg_monitor_thread = monitor_thread
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertFalse(process.wait_called)
+        self.assertFalse(process.communicate_called)
+        self.assertEqual(monitor_thread.join_calls, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+        self.assertIsNone(manager._ffmpeg_monitor_thread)
+
+    def test_stop_ffmpeg_without_monitor_uses_communicate(self):
+        class FakeProcess:
+            pid = 654
+
+            def __init__(self):
+                self.terminated = False
+                self.wait_called = False
+                self.communicate_timeouts = []
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                raise AssertionError("stop_ffmpeg should not kill when communicate exits")
+
+            def wait(self, timeout=None):
+                self.wait_called = True
+                raise AssertionError("stop_ffmpeg should not call wait")
+
+            def communicate(self, timeout=None):
+                self.communicate_timeouts.append(timeout)
+                return b"", b""
+
+        manager = MediaManager()
+        process = FakeProcess()
+        manager._ffmpeg_process = process
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.wait_called)
+        self.assertEqual(process.communicate_timeouts, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+
+    def test_stop_ffmpeg_with_unstarted_monitor_uses_communicate(self):
+        class FakeProcess:
+            pid = 655
+
+            def __init__(self):
+                self.terminated = False
+                self.communicate_timeouts = []
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                raise AssertionError("stop_ffmpeg should not kill when communicate exits")
+
+            def communicate(self, timeout=None):
+                self.communicate_timeouts.append(timeout)
+                return b"", b""
+
+        class FakeUnstartedMonitorThread:
+            ident = None
+
+            def is_alive(self):
+                return False
+
+            def join(self, timeout=None):
+                raise AssertionError("unstarted monitor thread should not be joined")
+
+        manager = MediaManager()
+        process = FakeProcess()
+        monitor_thread = FakeUnstartedMonitorThread()
+        manager._ffmpeg_process = process
+        manager._ffmpeg_monitor_thread = monitor_thread
+
+        manager._stop_ffmpeg()
+
+        self.assertTrue(process.terminated)
+        self.assertEqual(process.communicate_timeouts, [5.0])
+        self.assertIsNone(manager._ffmpeg_process)
+        self.assertIsNone(manager._ffmpeg_monitor_thread)
 
     def test_live_start_accepts_gimbal_video_type(self):
         ok, normalized, errors = validate_live_start_payload({

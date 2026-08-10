@@ -148,7 +148,6 @@ def live_status_event_data(
         data["reason"] = reason
     if source:
         data["source"] = source
-    data["result"] = 0 if status in {TASK_STATUS_OK, TASK_STATUS_IN_PROGRESS} else 1
     return data
 
 
