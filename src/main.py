@@ -208,6 +208,12 @@ ALLOWED_SERVICE_METHODS = frozenset({
     'flight_areas_update',
     'custom_data_transmission_from_esdk', 'custom_data_transmission_to_esdk',
     'custom_data_transmission_from_psdk', 'custom_data_transmission_to_psdk',
+
+    # Private ops/testing method.  Dock3 has no official set_flight_mode
+    # service, but real-device acceptance needs an MQTT-only hook that calls
+    # the gateway-owned FlightControl.set_mode without opening another MAVLink
+    # TCP connection.
+    'set_flight_mode',
 })
 
 IGNORED_NON_SERVICE_METHODS = frozenset({
