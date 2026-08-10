@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Callable
 from src.utils.logger import get_logger
 from src.utils.config import Config
 from src.utils.message import MessageBuilder
-from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED
+from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
 from src.modules.gimbal_control import (
     VLKConnType,
     VLKFocusMode,
@@ -18,10 +18,11 @@ from src.modules.gimbal_control import (
     VLKSensor,
     VLKTrackTemplateSize,
 )
-from src.payload.dock3_payload import with_dock3_payload_index
+from src.payload.dock3_payload import payload_index_from_config, with_dock3_payload_index
 from web.mavlink.gimbal import GIMBAL_CAPABILITY, build_gimbal_command
 from web.mavlink.viewlink import (
     build_ir_metering_area_frames,
+    build_ir_color_palette_frame,
     build_ir_metering_point_frames,
     build_screen_split_frame,
     build_temperature_output_interval_frame,
@@ -453,6 +454,82 @@ class GimbalController:
         y = int(round((y_px / max(1, frame_size["height"]) - 0.5) * 1080))
         return max(-960, min(960, x)), max(-540, min(540, y)), frame_size
 
+    def _configured_payload_index(self) -> str:
+        gimbal_config = Config.get_payload_config().get("devices", {}).get("gimbal", {})
+        return payload_index_from_config(gimbal_config if isinstance(gimbal_config, dict) else {})
+
+    def _reject_ir_request(self, msg: dict, reason: str) -> dict:
+        return MessageBuilder.build_reply(
+            msg,
+            result=INVALID_COMMAND_FORMAT,
+            msg_str=reason,
+            data={"reason": reason},
+        )
+
+    def _validate_ir_payload_index(self, msg: dict, data: dict) -> Optional[dict]:
+        requested = str(data.get("payload_index") or "").strip()
+        expected = self._configured_payload_index()
+        if requested and requested != expected:
+            return self._reject_ir_request(
+                msg,
+                f"payload_index {requested} is not handled by gimbal payload {expected}",
+            )
+        return None
+
+    @staticmethod
+    def _finite_float(value) -> Optional[float]:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+
+    @staticmethod
+    def _is_ir_coordinate_valid(value: float, pixel_limit: int) -> bool:
+        if 0.0 <= value <= 1.0:
+            return True
+        if value < 0.0 or value > float(pixel_limit):
+            return False
+        return float(value).is_integer()
+
+    @classmethod
+    def _validate_ir_point_input(cls, data: dict) -> tuple[Optional[float], Optional[float], str]:
+        frame_size = cls._frame_size(data)
+        x = cls._finite_float(data.get("x", 0.5))
+        y = cls._finite_float(data.get("y", 0.5))
+        if x is None or y is None:
+            return None, None, "point x/y must be numeric"
+        if not cls._is_ir_coordinate_valid(x, frame_size["width"]):
+            return x, y, "point x out of range"
+        if not cls._is_ir_coordinate_valid(y, frame_size["height"]):
+            return x, y, "point y out of range"
+        return x, y, ""
+
+    @classmethod
+    def _validate_ir_area_input(cls, data: dict) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float], str]:
+        frame_size = cls._frame_size(data)
+        x = cls._finite_float(data.get("x", 0.0))
+        y = cls._finite_float(data.get("y", 0.0))
+        width = cls._finite_float(data.get("width", 1.0))
+        height = cls._finite_float(data.get("height", 1.0))
+        if x is None or y is None or width is None or height is None:
+            return x, y, width, height, "area x/y/width/height must be numeric"
+        if width <= 0.0 or height <= 0.0:
+            return x, y, width, height, "area width/height must be positive"
+        if not cls._is_ir_coordinate_valid(x, frame_size["width"]):
+            return x, y, width, height, "area x out of range"
+        if not cls._is_ir_coordinate_valid(y, frame_size["height"]):
+            return x, y, width, height, "area y out of range"
+        if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+            if width > 1.0 or height > 1.0 or x + width > 1.0 or y + height > 1.0:
+                return x, y, width, height, "normalized area exceeds frame"
+        else:
+            if x + width > frame_size["width"] or y + height > frame_size["height"]:
+                return x, y, width, height, "pixel area exceeds frame"
+        return x, y, width, height, ""
+
     # ---- API处理器 ----
 
     def handle_gimbal_rotate(self, msg: dict) -> dict:
@@ -624,6 +701,12 @@ class GimbalController:
     def handle_camera_aim(self, msg: dict) -> dict:
         """双击成为 AIM (camera_aim)，属于 services 负载控制。"""
         data = msg.get('data', {})
+        logger.info(
+            "Payload services method received: method=camera_aim tid=%s bid=%s payload_index=%s",
+            msg.get("tid", ""),
+            msg.get("bid", ""),
+            data.get("payload_index", ""),
+        )
         locked = bool(data.get("locked", False))
         x = float(data.get("x", 0.5) or 0.5)
         y = float(data.get("y", 0.5) or 0.5)
@@ -689,24 +772,30 @@ class GimbalController:
         enabled = bool(data.get("enable", data.get("enabled", False)))
         mode = data.get("mode") or data.get("display_mode") or ("visible_ir" if enabled else "visible")
         mode_key = str(mode).lower()
+        palette = data.get("palette", data.get("ir_color", "white_hot"))
         logger.info(
-            "Camera screen split: payload_index=%s enabled=%s mode=%s",
+            "Camera screen split: payload_index=%s enabled=%s mode=%s palette=%s",
             data.get("payload_index", ""),
             enabled,
             mode_key,
+            palette,
         )
 
         result = {"success": False, "message": "ViewLink control is not connected"}
         image_type = None
         enable_pip = False
+        ir_color = self._ir_color_value(palette)
         if self._gimbal_control and self._gimbal_control.is_connected():
             image_type, enable_pip = IR_DISPLAY_MODE_MAP.get(
                 mode_key,
                 IR_DISPLAY_MODE_MAP["visible_ir" if enabled else "visible"],
             )
-            result = self._gimbal_control.set_image_color(image_type, enable_pip, VLKIrColor.WHITEHOT)
+            result = self._gimbal_control.set_image_color(image_type, enable_pip, ir_color)
         else:
-            result = self._send_viewlink_protocol_frames([build_screen_split_frame(mode_key)])
+            frames = [build_screen_split_frame(mode_key)]
+            if str(palette or "").strip():
+                frames.append(build_ir_color_palette_frame(palette))
+            result = self._send_viewlink_protocol_frames(frames)
 
         success = bool(result.get("success", False))
         if success:
@@ -715,6 +804,7 @@ class GimbalController:
                 "payload_index": data.get("payload_index", ""),
                 "enable": enabled,
                 "mode": mode_key,
+                "ir_color": int(ir_color),
             }
             self._notify_payload_state("camera_screen_split")
 
@@ -724,6 +814,7 @@ class GimbalController:
             "mode": mode_key,
             "image_type": int(image_type) if image_type is not None else None,
             "enable_pip": enable_pip,
+            "ir_color": int(ir_color),
             "viewlink_result": result,
         })
 
@@ -855,6 +946,9 @@ class GimbalController:
     def handle_ir_metering_mode_set(self, msg: dict) -> dict:
         """IR测温模式设置"""
         data = msg.get('data', {})
+        payload_error = self._validate_ir_payload_index(msg, data)
+        if payload_error:
+            return payload_error
         mode = str(data.get('mode', data.get("metering_mode", 0))).lower()
         interval = data.get("interval_frames", data.get("interval"))
         logger.info("IR metering mode: %s interval=%s", mode, interval)
@@ -874,8 +968,19 @@ class GimbalController:
     def handle_ir_metering_point_set(self, msg: dict) -> dict:
         """IR 点测温设置 (ir_metering_point_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
-        raw_x = data.get("x", 0.5)
-        raw_y = data.get("y", 0.5)
+        payload_error = self._validate_ir_payload_index(msg, data)
+        if payload_error:
+            return payload_error
+        raw_x, raw_y, validation_error = self._validate_ir_point_input(data)
+        if validation_error:
+            logger.warning(
+                "IR metering point rejected: payload_index=%s x=%s y=%s reason=%s",
+                data.get("payload_index", ""),
+                data.get("x"),
+                data.get("y"),
+                validation_error,
+            )
+            return self._reject_ir_request(msg, validation_error)
         protocol_x, protocol_y, frame_size = self._protocol_point(data, raw_x, raw_y)
         logger.info(
             "IR metering point: payload_index=%s point=(%s,%s) protocol=(%s,%s)",
@@ -906,10 +1011,21 @@ class GimbalController:
     def handle_ir_metering_area_set(self, msg: dict) -> dict:
         """IR 区域测温设置 (ir_metering_area_set)，属于 services 负载控制。"""
         data = msg.get('data', {})
-        x = self._frame_number(data, "x", 0.0)
-        y = self._frame_number(data, "y", 0.0)
-        width = self._frame_number(data, "width", 1.0)
-        height = self._frame_number(data, "height", 1.0)
+        payload_error = self._validate_ir_payload_index(msg, data)
+        if payload_error:
+            return payload_error
+        x, y, width, height, validation_error = self._validate_ir_area_input(data)
+        if validation_error:
+            logger.warning(
+                "IR metering area rejected: payload_index=%s x=%s y=%s width=%s height=%s reason=%s",
+                data.get("payload_index", ""),
+                data.get("x"),
+                data.get("y"),
+                data.get("width"),
+                data.get("height"),
+                validation_error,
+            )
+            return self._reject_ir_request(msg, validation_error)
         left, top, frame_size = self._protocol_point(data, x, y)
         right, bottom, _ = self._protocol_point(data, x + width, y + height)
         logger.info(

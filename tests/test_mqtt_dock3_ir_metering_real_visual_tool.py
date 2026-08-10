@@ -24,7 +24,7 @@ class FakeIrClient:
 
     def service(self, method, data, timeout):
         self.calls.append((method, data, "services"))
-        if method == "ir_display_mode_set":
+        if method == "camera_screen_split":
             return 0, {"data": {"result": 0, "viewlink_result": {"success": True, "frame_hex": ["AA"]}}}
         if method == "ir_metering_point_set":
             return 0, {
@@ -73,6 +73,7 @@ def args(**overrides):
         "invalid_small_area_height": -0.1,
         "skip_invalid": True,
         "video_url": "rtsp://example.invalid/main",
+        "allow_non_live_video_source": False,
         "ffmpeg": "ffmpeg",
         "snapshot_timeout": 1.0,
         "output_dir": "logs/test_ir_metering_real_visual",
@@ -81,7 +82,8 @@ def args(**overrides):
         "require_snapshots": False,
         "switch_ir_display": True,
         "display_mode": "ir",
-        "palette": "white_hot",
+        "palette": "pseudo_hot",
+        "enable_pip": False,
         "stop_on_failure": False,
         "verbose_reply": False,
         "open_report": False,
@@ -128,7 +130,7 @@ class Dock3IrMeteringRealVisualToolTest(unittest.TestCase):
         self.assertEqual(
             [method for method, _, _ in client.calls],
             [
-                "ir_display_mode_set",
+                "camera_screen_split",
                 "ir_metering_mode_set",
                 "ir_metering_mode_set",
                 "ir_metering_mode_set",
@@ -136,6 +138,8 @@ class Dock3IrMeteringRealVisualToolTest(unittest.TestCase):
                 "ir_metering_area_set",
             ],
         )
+        self.assertEqual(client.calls[0][1]["palette"], "pseudo_hot")
+        self.assertEqual(client.calls[0][1]["mode"], "ir")
 
 
 if __name__ == "__main__":

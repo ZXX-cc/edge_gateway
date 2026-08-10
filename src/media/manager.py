@@ -118,7 +118,7 @@ class MediaManager:
         self._live_quality = 0   # 默认自适应
         self._live_video_id = ""
         self._live_url = ""
-        self._live_video_type = str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+        self._live_video_type = self._default_live_video_type()
         self._live_source_key = self._live_video_type
         self._live_camera_position = 0
         self._live_pipeline: List[Dict[str, Any]] = []
@@ -144,6 +144,23 @@ class MediaManager:
 
         # 上传重试配置
         self._max_retry_count = 3
+
+    @staticmethod
+    def _default_live_video_type() -> str:
+        """读取默认直播镜头类型。"""
+        return str(Config.get('livestream.default_video_type', 'gimbal') or 'gimbal')
+
+    def _reset_live_start_state(self):
+        """清理一次未成功开始的直播会话状态。"""
+        default_video_type = self._default_live_video_type()
+        self._live_streaming = False
+        self._live_session_id = ""
+        self._live_protocol = 4
+        self._live_quality = 0
+        self._live_video_id = ""
+        self._live_url = ""
+        self._live_video_type = default_video_type
+        self._live_source_key = default_video_type
 
     @staticmethod
     def _resolve_storage_path(configured_path: str) -> str:
@@ -303,6 +320,7 @@ class MediaManager:
                 {uploaded_file_count, expected_file_count, flight_type}
         """
         if self._event_callback:
+            object_key, file_path = self._normalize_upload_callback_object_key(file_info)
             ext = {
                 'flight_id': '',
                 'drone_model_key': '',
@@ -322,8 +340,8 @@ class MediaManager:
             metadata['shoot_position'] = {'lat': None, 'lng': None, **shoot_position}
             payload = {
                 'file': {
-                    'object_key': file_info.get('object_key', ''),
-                    'path': file_info.get('path', ''),
+                    'object_key': object_key,
+                    'path': file_path,
                     'name': file_info.get('name', ''),
                     'ext': ext,
                     'metadata': metadata,
@@ -339,6 +357,21 @@ class MediaManager:
                 self.gateway_sn
             )
             self._event_callback(event)
+
+    @staticmethod
+    def _normalize_upload_callback_object_key(file_info: dict) -> tuple[str, str]:
+        """规范化上传完成事件的对象键，避免把完整 upload_url 当 object_key。"""
+        raw_object_key = str(file_info.get('object_key') or file_info.get('key') or '').strip()
+        file_path = str(file_info.get('path') or file_info.get('upload_url') or '').strip()
+
+        if '://' not in raw_object_key:
+            return raw_object_key, file_path
+
+        if not file_path:
+            file_path = raw_object_key
+        parsed = urllib.parse.urlparse(raw_object_key)
+        object_key = urllib.parse.unquote(parsed.path or '').lstrip('/')
+        return object_key, file_path
 
     def report_priority_media(self, flight_id: str):
         """
@@ -365,12 +398,12 @@ class MediaManager:
                 os.makedirs(self.storage_path, exist_ok=True)
                 return files
 
-            # 扫描常见媒体文件格式。载荷通常按日期/任务建子目录，必须递归扫描。
-            extensions = ['*.jpg', '*.jpeg', '*.png', '*.mp4', '*.mov', '*.avi']
+            # 扫描常见媒体文件格式；正射相机 FTP 会保留 DCIM 下的架次子目录。
+            extensions = ['*.jpg', '*.jpeg', '*.png', '*.dng', '*.mp4', '*.mov', '*.avi', '*.mkv']
             for ext in extensions:
                 pattern = os.path.join(self.storage_path, "**", ext)
                 for filepath in glob.glob(pattern, recursive=True):
-                    if os.path.isdir(filepath):
+                    if os.path.isdir(filepath) or f"{os.sep}.remote_cache{os.sep}" in filepath:
                         continue
                     item = build_media_file(filepath, self.storage_path, self.gateway_sn)
                     item['file_path'] = filepath
@@ -462,6 +495,10 @@ class MediaManager:
     def _scan_media_files(self) -> List[dict]:
         self._sync_direct_payload_media()
         return self._scan_local_files() + self._scan_remote_media_files()
+
+    async def _scan_media_files_async(self) -> List[dict]:
+        """在线程中扫描媒体文件，避免远端 HTTP 目录扫描阻塞主事件循环。"""
+        return await asyncio.to_thread(self._scan_media_files)
 
     def _remote_media_cache_path(self, url: str) -> str:
         """将云台等远端媒体 URL 映射到稳定的本地缓存路径。"""
@@ -628,7 +665,7 @@ class MediaManager:
 
             if not flight_id:
                 # 扫描本地/远端媒体可能访问文件系统或 HTTP 目录，不能阻塞主事件循环。
-                local_files = await asyncio.to_thread(self._scan_media_files)
+                local_files = await self._scan_media_files_async()
                 db_paths = {str(getattr(f, "file_path", "") or "") for f in db_files}
                 db_file_names = {str(getattr(f, "file_name", "") or "") for f in db_files}
                 for local_file in local_files:
@@ -729,6 +766,12 @@ class MediaManager:
         parsed = urllib.parse.urlparse(str(upload_url or ""))
         path_key = urllib.parse.unquote(parsed.path or "").lstrip("/")
         return path_key or object_key or os.path.basename(str(file_name or "media_file"))
+
+    @staticmethod
+    def _object_key_from_upload_url(upload_url: str) -> str:
+        """从预签名上传 URL 中提取 path 作为兜底对象键，不返回完整 URL。"""
+        parsed = urllib.parse.urlparse(str(upload_url or ""))
+        return urllib.parse.unquote(parsed.path or "").lstrip("/")
 
     @staticmethod
     def _quote_s3_path(path: str) -> str:
@@ -946,6 +989,16 @@ class MediaManager:
             if not filepath or not os.path.exists(filepath):
                 logger.error("Upload file is missing: name=%s path=%s", file_name, filepath)
                 self._update_upload_progress(file_id, 0, 'failed', db_id=db_id, file_item=file_info)
+                continue
+
+            if not filepath or not os.path.exists(filepath):
+                logger.warning(
+                    "Upload source missing: name=%s path=%s download_url=%s",
+                    file_name,
+                    filepath,
+                    file_info.get('download_url', ''),
+                )
+                self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
                 continue
 
             # 请求上传凭证
@@ -1383,13 +1436,15 @@ class MediaManager:
         video_quality = data["video_quality"]
         requested_video_type = data.get("video_type") or self._video_type_from_video_id(video_id)
         requested_source_key = self._live_source_key_from_video_id(video_id)
+        live_source_key = self._live_source_key
+        live_video_type = self._live_video_type
         if requested_source_key:
-            self._live_source_key = requested_source_key
-            self._live_video_type = requested_video_type or requested_source_key
+            live_source_key = requested_source_key
+            live_video_type = requested_video_type or requested_source_key
         elif requested_video_type:
-            self._live_video_type = requested_video_type
-            self._live_source_key = requested_video_type
-        selected_source = self._get_video_source(self._live_source_key)
+            live_video_type = requested_video_type
+            live_source_key = requested_video_type
+        selected_source = self._get_video_source(live_source_key)
         self._live_pipeline = [
             {
                 "step": "validate_live_start",
@@ -1401,8 +1456,8 @@ class MediaManager:
             {
                 "step": "select_video_source",
                 "status": "ok",
-                "video_type": self._live_video_type,
-                "source_key": self._live_source_key,
+                "video_type": live_video_type,
+                "source_key": live_source_key,
                 "source": selected_source,
             },
         ]
@@ -1421,6 +1476,8 @@ class MediaManager:
         self._live_quality = video_quality
         self._live_video_id = video_id
         self._live_url = url
+        self._live_video_type = live_video_type
+        self._live_source_key = live_source_key
 
         logger.info(f"Live start: url_type={url_type}, video_id={video_id}, "
                    f"quality={video_quality}, url={url}")
@@ -1596,17 +1653,26 @@ class MediaManager:
             logger.warning("Live lens changed but camera controller is not available for direct photo")
             return {"status": "skipped", "reason": "camera_controller_unavailable"}
 
+        source_data = msg.get("data", {}) if isinstance(msg.get("data"), dict) else {}
+        photo_data = {
+            "camera_index": 0,
+            "video_id": video_id,
+            "video_type": video_type,
+            "live_lens_type": video_type,
+            "trigger": "live_lens_change",
+        }
+        # video_type 是直播镜头类型，不等同于底层拍照相机类型。品灵/ViewLink
+        # 拍照命令本身固定调用 Photograph；只有平台显式传 camera_type 时才透传。
+        explicit_camera_type = str(source_data.get("camera_type") or "").strip()
+        if explicit_camera_type:
+            photo_data["camera_type"] = explicit_camera_type
+
         photo_msg = {
             "tid": msg.get("tid"),
             "bid": msg.get("bid"),
             "gateway": msg.get("gateway", self.gateway_sn),
             "method": "camera_photo_take",
-            "data": {
-                "camera_index": 0,
-                "camera_type": video_type,
-                "video_id": video_id,
-                "trigger": "live_lens_change",
-            },
+            "data": photo_data,
         }
         logger.info(
             "Live lens change triggers direct photo: video_id=%s, video_type=%s",

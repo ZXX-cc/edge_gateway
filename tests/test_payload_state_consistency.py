@@ -285,9 +285,15 @@ class FakeStuckGimbalControl(GimbalControl):
 
 
 class FakeViewLinkLib:
-    def __init__(self):
+    def __init__(self, connected=True):
+        self.connected_sequence = list(connected) if isinstance(connected, (list, tuple)) else None
+        self.connected = bool(self.connected_sequence[-1]) if self.connected_sequence else bool(connected)
         self.register_dev_status_calls = 0
         self.connect_calls = 0
+        self.move_calls = []
+        self.stop_calls = 0
+        self.zoom_to_calls = []
+        self.track_calls = []
         self.events = []
 
     def VLK_RegisterDevStatusCB(self, callback, user_param):
@@ -301,7 +307,23 @@ class FakeViewLinkLib:
         return 0
 
     def VLK_IsConnected(self):
-        return 1
+        if self.connected_sequence is not None:
+            if self.connected_sequence:
+                return 1 if self.connected_sequence.pop(0) else 0
+            return 1 if self.connected else 0
+        return 1 if self.connected else 0
+
+    def VLK_Move(self, yaw_speed, pitch_speed):
+        self.move_calls.append((yaw_speed, pitch_speed))
+
+    def VLK_Stop(self):
+        self.stop_calls += 1
+
+    def VLK_ZoomTo(self, magnification):
+        self.zoom_to_calls.append(float(magnification.value if hasattr(magnification, "value") else magnification))
+
+    def VLK_TrackTargetPositionEx(self, param, x, y, video_width, video_height):
+        self.track_calls.append((x, y, video_width, video_height))
 
 
 def wait_for_dev_status_registration(gimbal_control):
@@ -746,6 +768,29 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(fake_lib.connect_calls, 1)
         self.assertEqual(fake_lib.register_dev_status_calls, 0)
+
+    def test_viewlink_is_connected_refreshes_stale_connected_cache(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = FakeViewLinkLib(connected=False)
+
+        self.assertFalse(direct_payload.is_connected())
+        self.assertFalse(direct_payload._connected)
+
+    def test_viewlink_move_reports_failure_when_connection_drops_after_send(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=[True, False])
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.move(200, 0)
+
+        self.assertFalse(result["success"])
+        self.assertTrue(result["connection_lost"])
+        self.assertEqual(fake_lib.move_calls, [(200, 0)])
+        self.assertFalse(direct_payload._connected)
 
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)
@@ -1238,6 +1283,25 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["enable_pip"], True)
         self.assertEqual(direct_payload.calls, [("set_image_color", 0, True, 0)])
 
+    def test_screen_split_can_select_pseudo_hot_palette_for_ir_metering(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_screen_split(message("camera_screen_split", {
+            "payload_index": "52-0-0",
+            "enable": False,
+            "mode": "ir",
+            "palette": "pseudo_hot",
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(reply["data"]["mode"], "ir")
+        self.assertEqual(reply["data"]["image_type"], 2)
+        self.assertEqual(reply["data"]["enable_pip"], False)
+        self.assertEqual(reply["data"]["ir_color"], 2)
+        self.assertEqual(direct_payload.calls, [("set_image_color", 2, False, 2)])
+
     def test_screen_split_falls_back_to_raw_viewlink_protocol(self):
         gimbal = GimbalController()
         raw_payload = FakeRawProtocolPayload()
@@ -1285,6 +1349,46 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         })
         self.assertEqual(len(area["data"]["viewlink_result"]["frame_hex"]), 3)
         self.assertEqual([call[0] for call in raw_payload.calls], ["send_protocol_frames", "send_protocol_frames"])
+
+    def test_ir_metering_rejects_out_of_bounds_area_and_wrong_payload(self):
+        gimbal = GimbalController()
+        raw_payload = FakeRawProtocolPayload()
+        gimbal.set_gimbal_control(raw_payload)
+
+        bad_point = gimbal.handle_ir_metering_point_set(message("ir_metering_point_set", {
+            "payload_index": "52-0-0",
+            "x": 1.2,
+            "y": -0.1,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+        bad_area = gimbal.handle_ir_metering_area_set(message("ir_metering_area_set", {
+            "payload_index": "52-0-0",
+            "x": 0.8,
+            "y": 0.8,
+            "width": 0.5,
+            "height": 0.5,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+        small_area = gimbal.handle_ir_metering_area_set(message("ir_metering_area_set", {
+            "payload_index": "52-0-0",
+            "x": 0.25,
+            "y": 0.25,
+            "width": 0,
+            "height": -0.1,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+        wrong_payload = gimbal.handle_ir_metering_point_set(message("ir_metering_point_set", {
+            "payload_index": "52-0-1",
+            "x": 0.5,
+            "y": 0.5,
+            "frame_size": {"width": 1280, "height": 720},
+        }))
+
+        self.assertEqual(bad_point["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(bad_area["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(small_area["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(wrong_payload["data"]["result"], INVALID_COMMAND_FORMAT)
+        self.assertEqual(raw_payload.calls, [])
 
     def test_ir_metering_mode_builds_temperature_protocol_frame(self):
         gimbal = GimbalController()

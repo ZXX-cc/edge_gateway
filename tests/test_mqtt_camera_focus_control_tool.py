@@ -39,6 +39,8 @@ def args(**overrides):
         "focus_values": "",
         "focus_speed": 2,
         "focus_duration": 0.1,
+        "focus_reset_distance": None,
+        "focus_reset_wait": 0.3,
         "focus_x": 0.5,
         "focus_y": 0.5,
         "invalid_focus_mode": "bad_focus_mode",
@@ -134,6 +136,27 @@ class CameraFocusControlToolTest(unittest.TestCase):
             if case.method == "camera_focus_value_set" and case.label.startswith("绝对对焦值-")
         ]
         self.assertEqual([case.data["focus_distance"] for case in sweep], [0.0, 32768.0, 65535.0])
+
+    def test_manual_to_auto_focus_requires_reset_step(self):
+        cases = build_cases(args(focus_distance=5.0, focus_reset_distance=12.0))
+
+        manual_index = next(
+            index
+            for index, case in enumerate(cases)
+            if case.method == "camera_focus_mode_set" and case.data["mode"] == "manual_focus"
+        )
+        auto_index = next(
+            index
+            for index, case in enumerate(cases)
+            if case.method == "camera_focus_mode_set" and case.data["mode"] == "auto_focus"
+        )
+        between = cases[manual_index + 1:auto_index]
+
+        self.assertTrue(between)
+        self.assertEqual(between[-1].label, "对焦复位-切换自动前")
+        self.assertEqual(between[-1].method, "camera_focus_value_set")
+        self.assertEqual(between[-1].data["focus_distance"], 12.0)
+        self.assertIn("不能直接", between[-1].note)
 
 
 if __name__ == "__main__":

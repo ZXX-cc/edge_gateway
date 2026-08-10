@@ -147,9 +147,10 @@ let startPoint = null;
 const selectLayer = document.getElementById('selectLayer');
 const selectBox = document.getElementById('selectBox');
 const boxText = document.getElementById('boxText');
+const statusEl = document.getElementById('status');
 function log(obj) {
   const text = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
-  status.textContent = new Date().toLocaleTimeString() + '\\n' + text;
+  statusEl.textContent = new Date().toLocaleTimeString() + '\\n' + text;
 }
 function reloadVideo() {
   const video = document.getElementById('video');
@@ -256,6 +257,26 @@ function saveSelection(box) {
   };
   boxText.textContent = `框选: x=${selection.x.toFixed(3)}, y=${selection.y.toFixed(3)}, w=${selection.width.toFixed(3)}, h=${selection.height.toFixed(3)}`;
 }
+function selectionFromVisibleBox() {
+  if (selection) return selection;
+  if (selectBox.style.display === 'none') return null;
+  const content = videoContentRect();
+  const left = Number.parseFloat(selectBox.style.left || '0');
+  const top = Number.parseFloat(selectBox.style.top || '0');
+  const width = Number.parseFloat(selectBox.style.width || '0');
+  const height = Number.parseFloat(selectBox.style.height || '0');
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 8 || height < 8) return null;
+  selection = {
+    x: clamp((left - content.left) / content.width, 0, 1),
+    y: clamp((top - content.top) / content.height, 0, 1),
+    width: clamp(width / content.width, 0.001, 1),
+    height: clamp(height / content.height, 0.001, 1)
+  };
+  selection.width = Math.min(selection.width, 1 - selection.x);
+  selection.height = Math.min(selection.height, 1 - selection.y);
+  boxText.textContent = `框选: x=${selection.x.toFixed(3)}, y=${selection.y.toFixed(3)}, w=${selection.width.toFixed(3)}, h=${selection.height.toFixed(3)}`;
+  return selection;
+}
 function clearSelection() {
   selection = null;
   selecting = false;
@@ -263,15 +284,22 @@ function clearSelection() {
   boxText.textContent = '在画面上拖动鼠标框选目标';
 }
 function requireSelection() {
-  if (!selection) {
-    log('请先在画面上拖动鼠标框选目标');
-    throw new Error('no selection');
-  }
-  return selection;
+  const box = selectionFromVisibleBox();
+  if (box) return box;
+  log('请先在画面上拖动鼠标框选目标，然后再点击按钮');
+  boxText.textContent = '请先在画面上拖动鼠标框选目标';
+  return null;
 }
-function frameZoom() { return api('/api/frame_zoom', requireSelection()); }
+async function frameZoom() {
+  const box = requireSelection();
+  if (!box) return null;
+  log({ action: 'frame_zoom_request', selection: box });
+  return api('/api/frame_zoom', box);
+}
 function aimLock() {
   const box = requireSelection();
+  if (!box) return null;
+  log({ action: 'aim_request', selection: box });
   return api('/api/aim', {
     x: box.x + box.width / 2,
     y: box.y + box.height / 2,
@@ -294,6 +322,10 @@ selectLayer.addEventListener('pointerup', (ev) => {
   if (!selecting || !startPoint) return;
   const box = drawSelection(startPoint, pointFromEvent(ev));
   saveSelection(box);
+  selecting = false;
+  startPoint = null;
+});
+selectLayer.addEventListener('pointercancel', () => {
   selecting = false;
   startPoint = null;
 });
@@ -485,11 +517,22 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
     }
 
     def request_services(method: str, data: dict[str, Any], allowed=None, status=None):
+        print(f"HTTP control -> MQTT services: method={method} data={json.dumps(data, ensure_ascii=False)}")
         with lock:
             if not client.connected and not client.connect(args.timeout):
+                print(f"MQTT services connect failed: host={args.host} port={args.port} method={method}")
                 return 1, {"error": f"MQTT 未连接: {args.host}:{args.port}"}
             rc, reply = client.services(method, data, args.timeout, allowed=allowed, status=status)
+        print(f"MQTT services <- reply: method={method} rc={rc} result={result_code(reply)}")
         return rc, reply
+
+    def reply_ok(rc: int, reply: Any, allowed: set[int] | None = None) -> bool:
+        if rc != 0:
+            return False
+        actual = result_code(reply)
+        if allowed is None:
+            return actual == 0
+        return actual in allowed
 
     def stop_video(video_id: str):
         if not video_id:
@@ -667,7 +710,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 )
                 state["gimbal_yaw"] = ((state["gimbal_yaw"] + payload["yaw_speed"] * args.gimbal_step_seconds + 180.0) % 360.0) - 180.0
             return {
-                "ok": screen_rc == 0,
+                "ok": reply_ok(screen_rc, screen_reply),
                 "request": payload,
                 "gimbal_pose": {"pitch": state["gimbal_pitch"], "yaw": state["gimbal_yaw"]},
                 "screen_drag_reply": screen_reply,
@@ -687,7 +730,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "zoom_factor": state["zoom_ratio"],
             }
             rc, reply = request_services("camera_focal_length_set", payload)
-            return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "reply": reply}
+            return {"ok": reply_ok(rc, reply), "zoom_ratio": state["zoom_ratio"], "reply": reply}
 
         if path.startswith("/api/quality/"):
             quality = int(path.rsplit("/", 1)[-1])
@@ -699,7 +742,7 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 {"video_id": state["active_video_id"], "video_quality": state["quality"]},
                 status="ok",
             )
-            return {"ok": rc == 0, "quality": state["quality"], "reply": reply}
+            return {"ok": reply_ok(rc, reply), "quality": state["quality"], "reply": reply}
 
         if path == "/api/frame_zoom":
             # 真正的框选变焦：页面框选坐标 -> camera_frame_zoom -> ViewLink track center -> zoom_to。
@@ -723,10 +766,17 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "width": max(1, int(round(width * frame_width))),
                 "height": max(1, int(round(height * frame_height))),
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
+                "normalized_box": {"x": x, "y": y, "width": width, "height": height},
                 "frame_size": {"width": frame_width, "height": frame_height},
             }
             rc, reply = request_services("camera_frame_zoom", payload, allowed={0, DOCK_SYSTEM_ERROR})
-            return {"ok": rc == 0, "zoom_ratio": state["zoom_ratio"], "request": payload, "reply": reply}
+            return {
+                "ok": reply_ok(rc, reply),
+                "connecting": reply_ok(rc, reply, {DOCK_SYSTEM_ERROR}),
+                "zoom_ratio": state["zoom_ratio"],
+                "request": payload,
+                "reply": reply,
+            }
 
         if path == "/api/aim":
             x = max(0.0, min(1.0, float(data.get("x", 0.5) or 0.5)))
@@ -743,14 +793,15 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
                 "width": max(1, int(round(width * frame_width))),
                 "height": max(1, int(round(height * frame_height))),
                 "normalized": {"x": x, "y": y, "width": width, "height": height},
+                "normalized_box": {"x": x, "y": y, "width": width, "height": height},
                 "frame_size": {"width": frame_width, "height": frame_height},
             }
             rc, reply = request_services("camera_aim", payload)
-            return {"ok": rc == 0, "request": payload, "reply": reply}
+            return {"ok": reply_ok(rc, reply), "request": payload, "reply": reply}
 
         if path == "/api/track/stop":
             rc, reply = request_services("viewlink_stop_track", {"payload_index": args.payload_index})
-            return {"ok": rc == 0, "reply": reply}
+            return {"ok": reply_ok(rc, reply), "reply": reply}
 
         return {"ok": False, "error": "not found"}
 
