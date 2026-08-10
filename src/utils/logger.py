@@ -3,8 +3,9 @@
 
 日志落盘规则：
 - logs/YYYY-MM/edge_gateway_YYYY-MM-DD.log 保存网关总日志
-- logs/<分类>/YYYY-MM/<分类>_YYYY-MM-DD.log 保存七类专用日志
-- 每天一个独立文件，每月一个独立目录，共八类运行日志
+- logs/<分类>/YYYY-MM/<分类>_YYYY-MM-DD.log 保存专用日志
+- 单文件超过配置大小后追加 _001/_002 自动切分
+- warning/error/critical 会额外镜像到 logs/important，便于延长保留
 - 控制台、文件、stdout/stderr 捕获共用同一套格式
 """
 import logging
@@ -103,11 +104,18 @@ _CATEGORY_DEFAULTS = {
 class DailyMonthlyFileHandler(logging.Handler):
     """按月份建目录、按日期写文件的日志 handler。"""
 
-    def __init__(self, base_dir: str, filename_prefix: str = "edge_gateway", encoding: str = "utf-8"):
+    def __init__(
+        self,
+        base_dir: str,
+        filename_prefix: str = "edge_gateway",
+        encoding: str = "utf-8",
+        max_bytes: int = 0,
+    ):
         super().__init__()
         self.base_dir = Path(base_dir)
         self.filename_prefix = filename_prefix
         self.encoding = encoding
+        self.max_bytes = max(0, int(max_bytes or 0))
         self._current_path: Optional[Path] = None
         self._stream = None
         self._stream_lock = threading.RLock()
@@ -118,8 +126,34 @@ class DailyMonthlyFileHandler(logging.Handler):
         day_name = record_dt.strftime("%Y-%m-%d")
         return self.base_dir / month_dir / f"{self.filename_prefix}_{day_name}.log"
 
-    def _open_for_record(self, record: logging.LogRecord):
-        target_path = self._path_for_record(record)
+    def _rotated_path_for_record(self, record: logging.LogRecord, incoming_bytes: int) -> Path:
+        base_path = self._path_for_record(record)
+        if self.max_bytes <= 0:
+            return base_path
+
+        if self._current_path and self._current_path.parent == base_path.parent:
+            if self._current_path.name.startswith(base_path.stem) and self._current_path.suffix == base_path.suffix:
+                try:
+                    if self._current_path.stat().st_size + incoming_bytes <= self.max_bytes:
+                        return self._current_path
+                except OSError:
+                    return self._current_path
+
+        candidates = [base_path]
+        candidates.extend(
+            base_path.with_name(f"{base_path.stem}_{index:03d}{base_path.suffix}")
+            for index in range(1, 10000)
+        )
+        for candidate in candidates:
+            try:
+                if not candidate.exists() or candidate.stat().st_size + incoming_bytes <= self.max_bytes:
+                    return candidate
+            except OSError:
+                return candidate
+        return candidates[-1]
+
+    def _open_for_record(self, record: logging.LogRecord, incoming_bytes: int):
+        target_path = self._rotated_path_for_record(record, incoming_bytes)
         if self._stream and self._current_path == target_path:
             return
 
@@ -128,14 +162,15 @@ class DailyMonthlyFileHandler(logging.Handler):
             self._stream = None
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        self._stream = target_path.open("a", encoding=self.encoding)
+        self._stream = target_path.open("a", encoding=self.encoding, newline="\n")
         self._current_path = target_path
 
     def emit(self, record: logging.LogRecord):
         try:
             msg = self.format(record)
+            incoming_bytes = len((msg + "\n").encode(self.encoding, errors="replace"))
             with self._stream_lock:
-                self._open_for_record(record)
+                self._open_for_record(record, incoming_bytes)
                 self._stream.write(msg + "\n")
                 self._stream.flush()
         except Exception:
@@ -173,6 +208,17 @@ class ConsoleVisibilityFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not bool(getattr(record, "console_silent", False))
+
+
+class MinimumLevelFilter(logging.Filter):
+    """只保留不低于指定级别的日志。"""
+
+    def __init__(self, minimum_level: int):
+        super().__init__()
+        self.minimum_level = minimum_level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= self.minimum_level
 
 
 class SafeConsoleStreamHandler(logging.StreamHandler):
@@ -290,6 +336,18 @@ def _resolve_category_dir(base_dir: str, category: str, category_config: dict) -
     return str(Path(base_dir) / configured_path)
 
 
+def _max_log_file_bytes(config: dict, category_config: dict | None = None) -> int:
+    category_config = category_config or {}
+    value = category_config.get(
+        "max_file_mb",
+        (config.get("retention", {}) or {}).get("max_file_mb", config.get("max_file_mb", 100)),
+    )
+    try:
+        return max(0, int(float(value) * 1024 * 1024))
+    except (TypeError, ValueError):
+        return 100 * 1024 * 1024
+
+
 def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], list[str]]:
     formatter = logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] "
@@ -306,10 +364,29 @@ def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], li
         handlers.append(console)
 
     base_dir, filename_prefix = _resolve_log_dir(config)
-    file_handler = DailyMonthlyFileHandler(base_dir, filename_prefix)
+    file_handler = DailyMonthlyFileHandler(
+        base_dir,
+        filename_prefix,
+        max_bytes=_max_log_file_bytes(config),
+    )
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     handlers.append(file_handler)
+
+    important_config = (config.get("important", {}) or {})
+    if _parse_bool(important_config.get("enabled"), True):
+        important_dir = _resolve_category_dir(base_dir, "important", important_config)
+        important_prefix = important_config.get("filename_prefix", "important")
+        important_level = _parse_level(important_config.get("level", "WARNING"), logging.WARNING)
+        important_handler = DailyMonthlyFileHandler(
+            important_dir,
+            important_prefix,
+            max_bytes=_max_log_file_bytes(config, important_config),
+        )
+        important_handler.setLevel(important_level)
+        important_handler.setFormatter(formatter)
+        important_handler.addFilter(MinimumLevelFilter(important_level))
+        handlers.append(important_handler)
 
     enabled_categories = []
     category_configs = config.get("categories", {}) or {}
@@ -321,7 +398,11 @@ def _build_handlers(config: dict, level: int) -> tuple[list[logging.Handler], li
         category_level = _parse_level(category_config.get("level", config.get("level", "INFO")), level)
         category_dir = _resolve_category_dir(base_dir, category, category_config)
         category_prefix = category_config.get("filename_prefix", category)
-        category_handler = DailyMonthlyFileHandler(category_dir, category_prefix)
+        category_handler = DailyMonthlyFileHandler(
+            category_dir,
+            category_prefix,
+            max_bytes=_max_log_file_bytes(config, category_config),
+        )
         category_handler.setLevel(category_level)
         category_handler.setFormatter(formatter)
         category_handler.addFilter(LoggerNameFilter(
