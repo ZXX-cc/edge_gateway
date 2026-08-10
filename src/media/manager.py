@@ -874,6 +874,16 @@ class MediaManager:
                     self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
                     continue
 
+            if not filepath or not os.path.exists(filepath):
+                logger.warning(
+                    "Upload source missing: name=%s path=%s download_url=%s",
+                    file_name,
+                    filepath,
+                    file_info.get('download_url', ''),
+                )
+                self._update_upload_progress(file_info.get('file_id', file_name), 0, 'failed')
+                continue
+
             # 请求上传凭证
             credentials = self._request_upload_credentials([file_info])
             if not credentials:
