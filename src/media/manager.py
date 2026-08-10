@@ -495,6 +495,10 @@ class MediaManager:
         self._sync_direct_payload_media()
         return self._scan_local_files() + self._scan_remote_media_files()
 
+    async def _scan_media_files_async(self) -> List[dict]:
+        """在线程中扫描媒体文件，避免远端 HTTP 目录扫描阻塞主事件循环。"""
+        return await asyncio.to_thread(self._scan_media_files)
+
     def _remote_media_cache_path(self, url: str) -> str:
         """将云台等远端媒体 URL 映射到稳定的本地缓存路径。"""
         parsed = urllib.parse.urlparse(url)
@@ -604,14 +608,14 @@ class MediaManager:
             db_files = await MediaDB.get_pending_uploads(session, self.gateway_sn)
             db_file_names = {f.file_name for f in db_files}
 
-            local_files = self._scan_media_files()
-            pending_files = []
+        local_files = await self._scan_media_files_async()
+        pending_files = []
 
-            for local_file in local_files:
-                if local_file['file_name'] not in db_file_names:
-                    pending_files.append(local_file)
+        for local_file in local_files:
+            if local_file['file_name'] not in db_file_names:
+                pending_files.append(local_file)
 
-            return pending_files
+        return pending_files
 
     def _request_upload_credentials(self, files: List[dict]) -> Optional[dict]:
         """向云端请求上传凭证"""
