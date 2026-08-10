@@ -1,3 +1,4 @@
+import asyncio
 import os
 import requests
 import sys
@@ -49,6 +50,7 @@ from src.cloud_api.dock3_media import (
     storage_config_output,
 )
 from src.cloud_api.dock3_live import validate_live_start_payload
+import src.media.manager as media_manager_module
 from src.media.manager import MediaManager
 from src.utils.config import Config
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, DOCK_SYSTEM_ERROR, INVALID_COMMAND_FORMAT
@@ -562,6 +564,82 @@ class Dock3MediaManagerTest(unittest.TestCase):
         self.assertFalse(manager._uploading)
         self.assertEqual(len(manager._upload_queue), 1)
         self.assertEqual(manager._upload_queue[0]["_defer_reason"], "upload target unavailable")
+
+    def test_async_start_upload_reuses_running_worker(self):
+        class FakeAliveThread:
+            def is_alive(self):
+                return True
+
+        manager = MediaManager()
+        manager._upload_thread = FakeAliveThread()
+        manager._uploading = True
+
+        async def fake_pending_files(flight_id):
+            return [{
+                "file_id": "media-id",
+                "fingerprint": "media-id",
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+
+        created_threads = []
+        old_thread = media_manager_module.threading.Thread
+        media_manager_module.threading.Thread = (
+            lambda *args, **kwargs: created_threads.append((args, kwargs))
+        )
+        manager._get_pending_files_for_upload = fake_pending_files
+        try:
+            asyncio.run(manager._async_start_upload("flight-001"))
+        finally:
+            media_manager_module.threading.Thread = old_thread
+
+        self.assertEqual(created_threads, [])
+        self.assertTrue(manager._uploading)
+        self.assertEqual(len(manager._upload_queue), 1)
+        self.assertEqual(manager._upload_queue[0]["file_id"], "media-id")
+
+    def test_async_start_upload_restarts_after_uploading_flag_cleared(self):
+        class FakeStoppingThread:
+            def is_alive(self):
+                return True
+
+        class FakeReplacementThread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started_threads.append(self)
+
+        manager = MediaManager()
+        manager._upload_thread = FakeStoppingThread()
+        manager._uploading = False
+
+        async def fake_pending_files(flight_id):
+            return [{
+                "file_id": "media-id",
+                "fingerprint": "media-id",
+                "file_name": "sample.jpg",
+                "file_size": 4,
+                "file_type": "jpg",
+            }]
+
+        started_threads = []
+        old_thread = media_manager_module.threading.Thread
+        media_manager_module.threading.Thread = FakeReplacementThread
+        manager._get_pending_files_for_upload = fake_pending_files
+        try:
+            asyncio.run(manager._async_start_upload("flight-001"))
+        finally:
+            media_manager_module.threading.Thread = old_thread
+
+        self.assertEqual(len(started_threads), 1)
+        self.assertTrue(manager._uploading)
+        self.assertIs(manager._upload_thread, started_threads[0])
+        self.assertIs(started_threads[0].target.__self__, manager)
+        self.assertEqual(started_threads[0].target.__name__, "_upload_files")
+        self.assertTrue(started_threads[0].daemon)
 
     def test_upload_queue_uses_priority_order(self):
         manager = MediaManager()

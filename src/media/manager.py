@@ -1166,17 +1166,23 @@ class MediaManager:
 
         logger.info("Found %s pending files for upload: flight_id=%s", len(pending_files), flight_id or "<all>")
 
+        upload_worker_running = False
         with self._upload_lock:
             added = self._enqueue_upload_files_locked(pending_files)
+            worker_alive = bool(self._upload_thread and self._upload_thread.is_alive())
+            upload_worker_running = self._uploading and worker_alive
             self._uploading = True
+
+            if not upload_worker_running:
+                self._upload_thread = threading.Thread(
+                    target=self._upload_files, daemon=True
+                )
+                self._upload_thread.start()
+
         if added < len(pending_files):
             logger.info("Skipped %s duplicate pending upload queue items", len(pending_files) - added)
-
-        if not self._upload_thread or not self._upload_thread.is_alive():
-            self._upload_thread = threading.Thread(
-                target=self._upload_files, daemon=True
-            )
-            self._upload_thread.start()
+        if upload_worker_running:
+            logger.info("Upload worker already running; pending files queued: added=%s", added)
 
     def handle_upload_flighttask_media_prioritize(self, msg: dict) -> dict:
         """
