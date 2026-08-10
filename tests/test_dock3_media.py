@@ -39,12 +39,14 @@ if "src.database.media_db" not in sys.modules:
     sys.modules["src.database.media_db"] = media_db
 
 from src.cloud_api.dock3_media import (
+    FILE_ID_ERROR_MISSING_IDS,
     build_media_file,
     build_remote_media_file,
     file_list_data,
     filter_media_files,
     media_type_for_file,
     normalize_delete_ids,
+    normalize_delete_ids_with_codes,
     normalize_priority_items,
     paginate,
     storage_config_output,
@@ -120,6 +122,10 @@ class Dock3MediaHelperTest(unittest.TestCase):
         ids, errors = normalize_delete_ids({"files": [{"file_id": "a"}, {"fingerprint": "b"}]})
         self.assertFalse(errors)
         self.assertEqual(ids, ["a", "b"])
+
+        _, structured_errors = normalize_delete_ids_with_codes({})
+        self.assertEqual(structured_errors[0]["code"], FILE_ID_ERROR_MISSING_IDS)
+        self.assertIn("message", structured_errors[0])
 
         files, errors = normalize_priority_items({"files": [{"file_id": "a", "priority": 10}]})
         self.assertFalse(errors)
@@ -720,6 +726,25 @@ class Dock3MediaManagerTest(unittest.TestCase):
                 self.assertEqual(cache_path.read_bytes(), b"download-only")
         finally:
             requests.get = old_get
+
+    def test_file_download_url_uses_structured_missing_id_error_code(self):
+        old_normalize = media_manager_module.normalize_delete_ids_with_codes
+        media_manager_module.normalize_delete_ids_with_codes = lambda data: (
+            [],
+            [{"code": FILE_ID_ERROR_MISSING_IDS, "message": "renamed missing ids message"}],
+        )
+        try:
+            manager = MediaManager()
+            manager._scan_media_files = lambda: []
+            items, errors = manager._resolve_media_items_for_download({
+                "download_url": "http://media.local/download/photo/a.jpg",
+            })
+        finally:
+            media_manager_module.normalize_delete_ids_with_codes = old_normalize
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["download_url"], "http://media.local/download/photo/a.jpg")
 
     def test_file_delete_rejects_missing_ids(self):
         manager = MediaManager()

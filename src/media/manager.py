@@ -31,6 +31,8 @@ from src.cloud_api.dock3_media import (
     filter_media_files,
     media_task_output,
     normalize_delete_ids,
+    normalize_delete_ids_with_codes,
+    FILE_ID_ERROR_MISSING_IDS,
     normalize_page,
     normalize_priority_items,
     paginate,
@@ -560,7 +562,7 @@ class MediaManager:
     def _resolve_media_items_for_download(self, data: dict) -> tuple[List[dict], List[str]]:
         known = self._scan_media_files()
         by_id = self._media_identity_map(known)
-        requested, errors = normalize_delete_ids(data)
+        requested, validation_errors = normalize_delete_ids_with_codes(data)
         urls = []
         raw_urls = data.get("download_urls", data.get("download_url", [])) if isinstance(data, dict) else []
         if isinstance(raw_urls, list):
@@ -569,8 +571,11 @@ class MediaManager:
             urls = [str(raw_urls)]
         requested.extend(urls)
         requested = list(dict.fromkeys(requested))
-        if urls and errors == ["file_delete missing file_ids/files"]:
-            errors = []
+        errors = [
+            item["message"]
+            for item in validation_errors
+            if not (urls and item.get("code") == FILE_ID_ERROR_MISSING_IDS)
+        ]
         if not requested:
             return [], errors or ["file_download missing file_ids/files/download_url"]
 

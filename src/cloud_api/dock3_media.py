@@ -179,9 +179,16 @@ def file_list_data(files: List[Dict[str, Any]], page: int, page_size: int, total
     }
 
 
-def normalize_delete_ids(data: Any) -> Tuple[List[str], List[str]]:
+FILE_ID_ERROR_DATA_NOT_OBJECT = "data_not_object"
+FILE_ID_ERROR_MISSING_IDS = "missing_file_ids"
+
+
+def normalize_delete_ids_with_codes(data: Any) -> Tuple[List[str], List[Dict[str, str]]]:
     if not isinstance(data, dict):
-        return [], ["file_delete data must be object"]
+        return [], [{
+            "code": FILE_ID_ERROR_DATA_NOT_OBJECT,
+            "message": "file_delete data must be object",
+        }]
 
     raw_files = data.get("files")
     raw_ids = data.get("file_ids", data.get("file_id", []))
@@ -203,7 +210,17 @@ def normalize_delete_ids(data: Any) -> Tuple[List[str], List[str]]:
 
     ids = list(dict.fromkeys(ids))
     if not ids:
-        return [], ["file_delete missing file_ids/files"]
+        return [], [{
+            "code": FILE_ID_ERROR_MISSING_IDS,
+            "message": "file_delete missing file_ids/files",
+        }]
+    return ids, []
+
+
+def normalize_delete_ids(data: Any) -> Tuple[List[str], List[str]]:
+    ids, errors = normalize_delete_ids_with_codes(data)
+    if errors:
+        return ids, [item["message"] for item in errors]
     return ids, []
 
 
