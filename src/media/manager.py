@@ -404,7 +404,7 @@ class MediaManager:
                 return files
 
             # 扫描常见媒体文件格式；正射相机 FTP 会保留 DCIM 下的架次子目录。
-            extensions = ['*.jpg', '*.jpeg', '*.png', '*.dng', '*.mp4', '*.mov', '*.avi', '*.mkv']
+            extensions = ['*.jpg', '*.jpeg', '*.png', '*.dng', '*.mp4', '*.mov', '*.avi', '*.mkv', '*.zip']
             for ext in extensions:
                 pattern = os.path.join(self.storage_path, "**", ext)
                 for filepath in glob.glob(pattern, recursive=True):

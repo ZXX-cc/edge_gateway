@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".dng"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
+FOLDER_ARCHIVE_EXTENSIONS = {".zip"}
 
 
 def stable_file_id(path: str) -> str:
@@ -31,6 +32,8 @@ def media_type_for_file(path: str) -> str:
         return "photo"
     if ext in VIDEO_EXTENSIONS:
         return "video"
+    if ext in FOLDER_ARCHIVE_EXTENSIONS:
+        return "folder"
     return "unknown"
 
 

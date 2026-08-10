@@ -14,11 +14,13 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import shutil
 import sys
 import threading
 import time
 import urllib.parse
 import uuid
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 from mqtt_test_client import MqttRequestClient, build_client
 from tool_config import add_config_argument, resolve_mqtt_credentials, resolve_mqtt_settings
+
+
+MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".dng", ".mp4", ".mov", ".avi", ".mkv"}
 
 
 class UploadCapture:
@@ -61,6 +66,15 @@ class UploadCapture:
                     return self.records[-1]
                 self.condition.wait(max(0.05, min(0.5, deadline - time.time())))
         raise TimeoutError("timeout waiting upload_url PUT")
+
+    def wait_many(self, previous_count: int, expected_count: int, timeout: float) -> list[dict[str, Any]]:
+        deadline = time.time() + timeout
+        with self.condition:
+            while time.time() < deadline:
+                if len(self.records) - previous_count >= expected_count:
+                    return self.records[previous_count:previous_count + expected_count]
+                self.condition.wait(max(0.05, min(0.5, deadline - time.time())))
+        raise TimeoutError(f"timeout waiting {expected_count} upload_url PUTs")
 
 
 def make_upload_handler(capture: UploadCapture):
@@ -125,6 +139,63 @@ def prepare_local_media_file(args: argparse.Namespace) -> Path | None:
     return target
 
 
+def prepare_local_media_folder(args: argparse.Namespace) -> list[Path]:
+    if not args.prepare_local_folder:
+        return []
+
+    storage = resolve_media_storage_path(args)
+    storage.mkdir(parents=True, exist_ok=True)
+    folder_name = args.prepare_folder_name or f"manual-folder-upload-{int(time.time() * 1000)}"
+    safe_folder_name = Path(folder_name).name
+    source_root = PROJECT_ROOT / "logs" / "folder_upload_sources" / safe_folder_name
+    if source_root.exists():
+        shutil.rmtree(source_root)
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    if args.prepare_folder:
+        source_dir = Path(args.prepare_folder).expanduser()
+        if not source_dir.is_dir():
+            raise RuntimeError(f"--prepare-folder is not a directory: {source_dir}")
+        for source in sorted(source_dir.rglob("*")):
+            if not source.is_file():
+                continue
+            relative = source.relative_to(source_dir)
+            target = source_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    else:
+        count = max(1, int(args.prepare_folder_file_count or 1))
+        for index in range(1, count + 1):
+            target = source_root / f"folder-upload-probe-{index:03d}.jpg"
+            target.write_bytes(
+                b"\xff\xd8\xff\xe0"
+                + f"edge-gateway-folder-upload-test-{index}".encode("ascii")
+                + b"\xff\xd9"
+            )
+
+    source_files = [path for path in sorted(source_root.rglob("*")) if path.is_file()]
+    if not source_files:
+        raise RuntimeError("no files prepared for folder upload")
+
+    archive_path = storage / f"{safe_folder_name}.zip"
+    if archive_path.exists():
+        archive_path.unlink()
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for source in source_files:
+            relative = source.relative_to(source_root)
+            archive.write(source, arcname=str(Path(safe_folder_name) / relative))
+
+    print("prepared local media folder archive:")
+    print(json.dumps({
+        "source_folder": str(source_root),
+        "source_files": [str(path) for path in source_files],
+        "archive": str(archive_path),
+        "archive_size": archive_path.stat().st_size,
+        "source_file_count": len(source_files),
+    }, ensure_ascii=False, indent=2))
+    return [archive_path]
+
+
 class FastPlatformResponder:
     """Reply to device-originated requests immediately from the MQTT callback."""
 
@@ -143,6 +214,7 @@ class FastPlatformResponder:
         self.storage_requests: list[dict[str, Any]] = []
         self.storage_outputs: list[dict[str, Any]] = []
         self.handled_tids: set[str] = set()
+        self.condition = threading.Condition()
         self.client = build_client(mqtt_module, f"edge_gateway_fast_platform_{uuid.uuid4().hex[:8]}")
         if args.username:
             self.client.username_pw_set(args.username, args.password)
@@ -189,6 +261,8 @@ class FastPlatformResponder:
             self.storage_requests.append(request)
             self.storage_outputs.append(output)
             self.storage_replied.set()
+            with self.condition:
+                self.condition.notify_all()
         if data is None:
             return
 
@@ -206,6 +280,15 @@ class FastPlatformResponder:
             print(f"fast replied storage_config_get with {self.args.storage_mode} credential, tid={tid}")
         else:
             print(f"fast replied {method}, tid={tid}")
+
+    def wait_storage_replies(self, previous_count: int, expected_count: int, timeout: float) -> list[dict[str, Any]]:
+        deadline = time.time() + timeout
+        with self.condition:
+            while time.time() < deadline:
+                if len(self.storage_requests) - previous_count >= expected_count:
+                    return self.storage_requests[previous_count:previous_count + expected_count]
+                self.condition.wait(max(0.05, min(0.5, deadline - time.time())))
+        raise TimeoutError(f"timeout waiting {expected_count} storage_config_get requests")
 
 
 def data_node(message: Any) -> dict[str, Any]:
@@ -411,6 +494,16 @@ def callback_object_key(callback: dict[str, Any]) -> str:
     return str(file_node.get("object_key") or "")
 
 
+def callback_file_name(callback: dict[str, Any]) -> str:
+    data = data_node(callback)
+    file_node = data.get("file") if isinstance(data.get("file"), dict) else {}
+    name = str(file_node.get("name") or "")
+    if name:
+        return Path(name).name
+    object_key = callback_object_key(callback)
+    return Path(object_key).name if object_key else ""
+
+
 def verify_minio_object(args: argparse.Namespace, object_key: str) -> dict[str, Any]:
     if not object_key:
         raise RuntimeError("missing object_key for MinIO verification")
@@ -489,6 +582,74 @@ def wait_callback(client: MqttRequestClient, args: argparse.Namespace, previous_
     return wait_method(client, args, topic, "file_upload_callback", previous_count, args.callback_timeout)
 
 
+def wait_callbacks(
+    client: MqttRequestClient,
+    args: argparse.Namespace,
+    previous_count: int,
+    expected_count: int,
+) -> list[dict[str, Any]]:
+    topic = f"thing/product/{args.sn}/events"
+    callbacks: list[dict[str, Any]] = []
+    seen_tids: set[str] = set()
+    handled_requests: set[str] = set()
+    deadline = time.time() + args.callback_timeout
+    while time.time() < deadline:
+        for message in client.observed_by_topic.get(topic, [])[previous_count:]:
+            if not isinstance(message, dict):
+                continue
+            maybe_reply_platform_request(client, args, message, handled_requests)
+            if message.get("method") != "file_upload_callback":
+                continue
+            tid = str(message.get("tid") or id(message))
+            if tid in seen_tids:
+                continue
+            seen_tids.add(tid)
+            callbacks.append(message)
+            if len(callbacks) >= expected_count:
+                return callbacks
+        remaining = deadline - time.time()
+        client.observed_signal.wait(max(0.05, min(0.5, remaining)))
+        client.observed_signal.clear()
+    raise TimeoutError(f"timeout waiting {expected_count} file_upload_callback events")
+
+
+def wait_target_callbacks(
+    client: MqttRequestClient,
+    args: argparse.Namespace,
+    previous_count: int,
+    target_names: set[str],
+) -> list[dict[str, Any]]:
+    topic = f"thing/product/{args.sn}/events"
+    callbacks_by_name: dict[str, dict[str, Any]] = {}
+    seen_tids: set[str] = set()
+    handled_requests: set[str] = set()
+    deadline = time.time() + args.callback_timeout
+    while time.time() < deadline:
+        for message in client.observed_by_topic.get(topic, [])[previous_count:]:
+            if not isinstance(message, dict):
+                continue
+            maybe_reply_platform_request(client, args, message, handled_requests)
+            if message.get("method") != "file_upload_callback":
+                continue
+            tid = str(message.get("tid") or id(message))
+            if tid in seen_tids:
+                continue
+            seen_tids.add(tid)
+            name = callback_file_name(message)
+            if name in target_names:
+                callbacks_by_name[name] = message
+                print(f"target file_upload_callback received: {name} ({len(callbacks_by_name)}/{len(target_names)})")
+                if target_names.issubset(callbacks_by_name):
+                    return [callbacks_by_name[name] for name in sorted(target_names)]
+            elif name:
+                print(f"ignored non-target file_upload_callback: {name}")
+        remaining = deadline - time.time()
+        client.observed_signal.wait(max(0.05, min(0.5, remaining)))
+        client.observed_signal.clear()
+    missing = sorted(target_names - set(callbacks_by_name))
+    raise TimeoutError(f"timeout waiting target file_upload_callback events, missing={missing}")
+
+
 def trigger_upload_queue(client: MqttRequestClient, args: argparse.Namespace) -> None:
     if args.skip_upload_trigger:
         print("skip upload trigger by --skip-upload-trigger")
@@ -544,53 +705,100 @@ def run(args: argparse.Namespace) -> int:
     try:
         previous_events = client.observed_count(event_topic)
         previous_puts = len(capture.records) if capture else 0
+        previous_storage_requests = len(responder.storage_requests)
 
-        prepare_local_media_file(args)
+        prepared_file = prepare_local_media_file(args)
+        prepared_folder_files = prepare_local_media_folder(args)
+        target_names = {path.name for path in prepared_folder_files}
+        if prepared_file:
+            target_names.add(prepared_file.name)
+        expected_count = int(args.expected_callbacks or 0)
+        if expected_count <= 0:
+            expected_count = len(target_names) or 1
+
         trigger_photo(client, args)
         if args.photo_wait > 0:
             time.sleep(args.photo_wait)
         trigger_upload_queue(client, args)
-        print(f"waiting gateway storage_config_get on {request_topic}")
-        if not responder.storage_replied.wait(args.credential_timeout):
-            raise TimeoutError(f"timeout waiting storage_config_get on {request_topic}")
-        request = responder.storage_requests[-1]
-        output = responder.storage_outputs[-1]
-        object_key = str(output.get("object_key") or "")
-        print("storage_config_get request/reply:")
-        print(json.dumps({
-            "tid": request.get("tid"),
-            "file_name": request_file_name(request),
-            "file_size": request_file_size(request),
-            "reply": redact(output),
-        }, ensure_ascii=False, indent=2))
+        if target_names:
+            print(f"waiting target file_upload_callback for: {sorted(target_names)}")
+            storage_requests = []
+            storage_outputs = []
+            object_keys = []
+        else:
+            print(f"waiting gateway storage_config_get on {request_topic}")
+            storage_requests = responder.wait_storage_replies(
+                previous_storage_requests,
+                expected_count,
+                args.credential_timeout,
+            )
+            storage_outputs = responder.storage_outputs[previous_storage_requests:previous_storage_requests + expected_count]
+            object_keys = [str(output.get("object_key") or "") for output in storage_outputs]
+            print("storage_config_get request/reply:")
+            print(json.dumps([
+                {
+                    "tid": request.get("tid"),
+                    "file_name": request_file_name(request),
+                    "file_size": request_file_size(request),
+                    "reply": redact(output),
+                }
+                for request, output in zip(storage_requests, storage_outputs)
+            ], ensure_ascii=False, indent=2))
 
         upload_record = None
+        upload_records = None
         if args.storage_mode in {"upload-url", "fake-minio"}:
             assert capture is not None
-            upload_record = capture.wait(previous_puts, args.upload_timeout)
+            upload_records = capture.wait_many(previous_puts, expected_count, args.upload_timeout)
+            upload_record = upload_records[-1] if upload_records else None
             print(f"{args.storage_mode} PUT received:")
-            print(json.dumps(upload_record, ensure_ascii=False, indent=2))
+            print(json.dumps(upload_records, ensure_ascii=False, indent=2))
         else:
             print("s3/minio mode: object upload must be verified in object storage or by gateway logs")
 
-        callback = wait_callback(client, args, previous_events)
-        if result_code(callback) not in {None, 0}:
-            raise RuntimeError("file_upload_callback result is not ok: " + json.dumps(callback, ensure_ascii=False))
+        if target_names:
+            callbacks = wait_target_callbacks(client, args, previous_events, target_names)
+            target_storage = [
+                (request, output)
+                for request, output in zip(responder.storage_requests[previous_storage_requests:], responder.storage_outputs[previous_storage_requests:])
+                if request_file_name(request) in target_names
+            ]
+            storage_requests = [item[0] for item in target_storage]
+            storage_outputs = [item[1] for item in target_storage]
+            object_keys = [str(output.get("object_key") or "") for output in storage_outputs]
+            print("target storage_config_get request/reply:")
+            print(json.dumps([
+                {
+                    "tid": request.get("tid"),
+                    "file_name": request_file_name(request),
+                    "file_size": request_file_size(request),
+                    "reply": redact(output),
+                }
+                for request, output in target_storage
+            ], ensure_ascii=False, indent=2))
+        else:
+            callbacks = wait_callbacks(client, args, previous_events, expected_count)
+        bad_callbacks = [callback for callback in callbacks if result_code(callback) not in {None, 0}]
+        if bad_callbacks:
+            raise RuntimeError("file_upload_callback result is not ok: " + json.dumps(bad_callbacks, ensure_ascii=False))
         print("file_upload_callback received:")
-        print(json.dumps(callback, ensure_ascii=False, indent=2))
+        print(json.dumps(callbacks, ensure_ascii=False, indent=2))
 
-        minio_verified = None
+        minio_verified = []
         if args.verify_minio_sdk:
-            verify_key = callback_object_key(callback) or object_key
-            minio_verified = verify_minio_object(args, verify_key)
+            for index, callback in enumerate(callbacks):
+                verify_key = callback_object_key(callback) or (object_keys[index] if index < len(object_keys) else "")
+                minio_verified.append(verify_minio_object(args, verify_key))
             print("MinIO object verified:")
             print(json.dumps(minio_verified, ensure_ascii=False, indent=2))
 
         print(json.dumps({
             "status": "ok",
             "storage_mode": args.storage_mode,
-            "object_key": object_key,
+            "expected_count": expected_count,
+            "object_keys": object_keys,
             "uploaded": upload_record,
+            "uploaded_records": upload_records,
             "minio_verified": minio_verified,
         }, ensure_ascii=False, indent=2))
         return 0
@@ -635,6 +843,11 @@ def main() -> int:
     parser.add_argument("--prepare-local-file", action="store_true", help="Create a local media file before triggering upload.")
     parser.add_argument("--prepare-file", default="", help="Existing file to copy into media.storage_path before upload.")
     parser.add_argument("--prepare-file-name", default="", help="Name for the generated/copied media file.")
+    parser.add_argument("--prepare-local-folder", action="store_true", help="Create/copy a folder and upload it as one zip archive object.")
+    parser.add_argument("--prepare-folder", default="", help="Existing folder to copy recursively into a zip archive before upload.")
+    parser.add_argument("--prepare-folder-name", default="", help="Folder/archive base name for the generated upload object.")
+    parser.add_argument("--prepare-folder-file-count", type=int, default=3, help="Generated source file count when --prepare-folder is omitted.")
+    parser.add_argument("--expected-callbacks", type=int, default=0, help="Expected file_upload_callback count. Defaults to prepared upload object count, otherwise 1.")
     parser.add_argument("--bucket", default="payload-media-test")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--object-prefix", default="payload-photo-chain")

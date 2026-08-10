@@ -39,12 +39,8 @@ def build_args(**overrides):
         "timeout": 5.0,
         "sn": "EDGEGW001",
         "reset_mode": ["0,1,2,3"],
-        "query_status": False,
         "manual_confirm": False,
-        "pre_position": False,
-        "pre_pitch": -20.0,
-        "pre_yaw": 25.0,
-        "settle_seconds": 0.0,
+        "wait_before_reset": False,
         "stop_on_failure": False,
     }
     values.update(overrides)
@@ -74,18 +70,18 @@ class PayloadGimbalResetModesToolTest(unittest.TestCase):
             ],
         )
 
-    def test_optional_status_and_pre_position_use_existing_services_methods(self):
+    def test_wait_before_reset_does_not_publish_extra_methods(self):
         client = FakeClient()
 
-        rc = run_reset_mode_checks(
-            client,
-            build_args(reset_mode=["1"], query_status=True, pre_position=True),
-        )
+        rc = run_reset_mode_checks(client, build_args(reset_mode=["1"]))
 
         self.assertEqual(rc, 0)
-        methods = [call[0] for call in client.calls]
-        self.assertEqual(methods, ["gimbal_rotate", "gimbal_status_query", "gimbal_reset", "gimbal_status_query"])
-        self.assertTrue(all(call[2] == "services" for call in client.calls))
+        self.assertEqual(
+            client.calls,
+            [
+                ("gimbal_reset", {"payload_index": "52-0-0", "reset_mode": 1}, "services", {0}),
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 from mqtt_camera_focus_control_test import (  # noqa: E402
     CLOUD_METHODS,
     build_cases,
+    ensure_real_gateway_ready,
     run_case,
 )
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED  # noqa: E402
@@ -36,7 +37,7 @@ def args(**overrides):
         "camera_index": 0,
         "camera_type": "zoom",
         "focus_distance": 5.0,
-        "focus_values": "",
+        "focus_values": "0,32768,65535",
         "focus_speed": 2,
         "focus_duration": 0.1,
         "focus_reset_distance": None,
@@ -59,6 +60,7 @@ def args(**overrides):
         "ffmpeg": "ffmpeg",
         "snapshot_timeout": 1.0,
         "observe_wait": 0.0,
+        "skip_gateway_preflight": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -66,6 +68,17 @@ def args(**overrides):
 
 def ok_reply(method):
     return {"method": method, "data": {"result": 0}}
+
+
+def gateway_state_reply(device="bound"):
+    return {
+        "method": "gateway_state_query",
+        "data": {
+            "result": 0,
+            "ready": True,
+            "state": {"device": device},
+        },
+    }
 
 
 def unsupported_reply(method):
@@ -79,6 +92,7 @@ class CameraFocusControlToolTest(unittest.TestCase):
         self.assertTrue(cases)
         self.assertEqual({case.method for case in cases}.issubset(CLOUD_METHODS), True)
         self.assertTrue(all(not case.method.startswith("viewlink_") for case in cases))
+        self.assertNotIn("gateway_state_query", {case.method for case in cases})
 
     def test_strict_default_requires_absolute_and_point_focus_success(self):
         focus_cases = {
@@ -126,10 +140,12 @@ class CameraFocusControlToolTest(unittest.TestCase):
         self.assertIn("error", detail)
 
     def test_focus_values_expand_to_visual_sweep_cases_after_manual_mode(self):
-        cases = build_cases(args(focus_values="0,32768,65535"))
+        cases = build_cases(args())
 
-        self.assertEqual(cases[0].method, "camera_focus_mode_set")
-        self.assertEqual(cases[0].data["mode"], "manual_focus")
+        self.assertEqual(cases[0].label, "对焦复位-切换手动前")
+        self.assertEqual(cases[0].method, "camera_focus_value_set")
+        self.assertEqual(cases[1].method, "camera_focus_mode_set")
+        self.assertEqual(cases[1].data["mode"], "manual_focus")
         sweep = [
             case
             for case in cases
@@ -157,6 +173,52 @@ class CameraFocusControlToolTest(unittest.TestCase):
         self.assertEqual(between[-1].method, "camera_focus_value_set")
         self.assertEqual(between[-1].data["focus_distance"], 12.0)
         self.assertIn("不能直接", between[-1].note)
+
+    def test_auto_to_manual_focus_requires_reset_step_before_manual(self):
+        cases = build_cases(args(focus_distance=5.0, focus_reset_distance=12.0))
+
+        manual_index = next(
+            index
+            for index, case in enumerate(cases)
+            if case.method == "camera_focus_mode_set" and case.data["mode"] == "manual_focus"
+        )
+
+        self.assertGreater(manual_index, 0)
+        self.assertEqual(cases[manual_index - 1].label, "对焦复位-切换手动前")
+        self.assertEqual(cases[manual_index - 1].method, "camera_focus_value_set")
+        self.assertEqual(cases[manual_index - 1].data["focus_distance"], 12.0)
+        self.assertIn("不能直接", cases[manual_index - 1].note)
+
+    def test_auto_suite_to_continuous_enum_requires_reset_step(self):
+        cases = build_cases(args(focus_distance=5.0, focus_reset_distance=12.0))
+
+        continuous_index = next(
+            index
+            for index, case in enumerate(cases)
+            if case.method == "camera_focus_mode_set" and case.data["mode"] == "continuous_auto_focus"
+        )
+
+        self.assertGreater(continuous_index, 0)
+        self.assertEqual(cases[continuous_index - 1].label, "对焦复位-连续自动枚举前")
+        self.assertEqual(cases[continuous_index - 1].method, "camera_focus_value_set")
+
+    def test_gateway_preflight_uses_cloud_services_method(self):
+        client = FakeFocusClient([(0, gateway_state_reply())])
+
+        ok, detail = ensure_real_gateway_ready(client, args(sn="EDGEGW001"))
+
+        self.assertTrue(ok, detail)
+        self.assertEqual(client.calls[0][0], "gateway_state_query")
+        self.assertEqual(client.calls[0][2], "services")
+        self.assertEqual(detail["device"], "bound")
+
+    def test_gateway_preflight_rejects_unbound_gateway(self):
+        client = FakeFocusClient([(0, gateway_state_reply(device="unbound"))])
+
+        ok, detail = ensure_real_gateway_ready(client, args(sn="EDGEGW001"))
+
+        self.assertFalse(ok)
+        self.assertIn("error", detail)
 
 
 if __name__ == "__main__":

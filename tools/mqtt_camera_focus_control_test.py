@@ -49,6 +49,7 @@ FAILURE_RESULTS = {
 }
 FOCUS_MODES = ("manual_focus", "auto_focus", "continuous_auto_focus")
 CLOUD_METHODS = {
+    "gateway_state_query",
     "camera_focus_mode_set",
     "camera_focus_value_set",
     "camera_point_focus_action",
@@ -149,9 +150,34 @@ def _focus_reset_value(args: argparse.Namespace) -> float:
     return float(args.focus_reset_distance)
 
 
+def _focus_reset_case(args: argparse.Namespace, base: dict[str, Any], label: str, note: str) -> FocusCase:
+    return FocusCase(
+        label,
+        "camera_focus_value_set",
+        {
+            **base,
+            "focus_distance": _focus_reset_value(args),
+            "focus_speed": args.focus_speed,
+            "focus_duration": args.focus_reset_wait,
+        },
+        expect_success=not args.allow_viewlink_focus_limitations,
+        note=note,
+        allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
+    )
+
+
 def build_cases(args: argparse.Namespace) -> list[FocusCase]:
     base = _base_payload(args)
     cases: list[FocusCase] = []
+
+    cases.append(
+        _focus_reset_case(
+            args,
+            base,
+            "对焦复位-切换手动前",
+            "模式切换隔离步；不能直接从 auto_focus/未知状态切到 manual_focus",
+        )
+    )
 
     cases.append(
         FocusCase(
@@ -184,20 +210,11 @@ def build_cases(args: argparse.Namespace) -> list[FocusCase]:
         )
 
     cases.append(
-        FocusCase(
+        _focus_reset_case(
+            args,
+            base,
             "对焦复位-切换自动前",
-            "camera_focus_value_set",
-            {
-                **base,
-                "focus_distance": _focus_reset_value(args),
-                "focus_speed": args.focus_speed,
-                "focus_duration": args.focus_reset_wait,
-            },
-            expect_success=not args.allow_viewlink_focus_limitations,
-            note=(
-                "手动对焦套件结束后的复位隔离步；不能直接从 manual_focus 切到 auto_focus"
-            ),
-            allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
+            "手动对焦套件结束后的复位隔离步；不能直接从 manual_focus 切到 auto_focus",
         )
     )
 
@@ -221,6 +238,12 @@ def build_cases(args: argparse.Namespace) -> list[FocusCase]:
                 expect_success=not args.allow_viewlink_focus_limitations,
                 note="验证点对焦坐标是否真正通过上云方法下发到负载",
                 allowed_results={DEVICE_STATE_UNSUPPORTED} if args.allow_viewlink_focus_limitations else {0},
+            ),
+            _focus_reset_case(
+                args,
+                base,
+                "对焦复位-连续自动枚举前",
+                "自动点对焦套件结束后的复位隔离步；不能直接从 auto_focus 切到 continuous_auto_focus",
             ),
             FocusCase(
                 "对焦模式-continuous_auto_focus",
@@ -265,6 +288,52 @@ def _compact_reply(reply: dict[str, Any] | None) -> str:
     return json.dumps(reply, ensure_ascii=False, separators=(",", ":"))
 
 
+def _reply_data(reply: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(reply, dict):
+        return {}
+    data = reply.get("data", {})
+    return data if isinstance(data, dict) else {}
+
+
+def ensure_real_gateway_ready(client: MqttRequestClient, args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
+    """Verify the running target is the real cloud-facing gateway services path."""
+    started = time.monotonic()
+    rc, reply = client.request(
+        "gateway_state_query",
+        {"compact": True},
+        args.timeout,
+        channel="services",
+        allowed_results={0},
+        verbose=args.verbose,
+    )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    data = _reply_data(reply)
+    state = data.get("state", {}) if isinstance(data.get("state"), dict) else {}
+    detail = {
+        "label": "真实网关预检",
+        "method": "gateway_state_query",
+        "channel": "services",
+        "result": result_code(reply),
+        "elapsed_ms": elapsed_ms,
+        "device": state.get("device"),
+        "ready": data.get("ready"),
+        "cloud_method_path": "thing/product/{sn}/services".format(sn=args.sn),
+    }
+    if rc != 0:
+        detail["error"] = "gateway_state_query 未通过，不能证明当前目标是真实上云网关"
+        print(f"[FAIL] 真实网关预检: rc={rc} elapsed={elapsed_ms}ms", file=sys.stderr)
+        return False, detail
+    if state.get("device") != "bound":
+        detail["error"] = "网关未完成官方 organization 绑定流程"
+        print(
+            "[FAIL] 真实网关预检: gateway is not bound; complete the official organization requests flow",
+            file=sys.stderr,
+        )
+        return False, detail
+    print(f"[PASS] 真实网关预检: gateway_state_query services result=0 device=bound elapsed={elapsed_ms}ms")
+    return True, detail
+
+
 def run_case(client: MqttRequestClient, case: FocusCase, args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
     if case.method not in CLOUD_METHODS:
         raise ValueError(f"script may only publish existing cloud focus methods, got: {case.method}")
@@ -285,6 +354,7 @@ def run_case(client: MqttRequestClient, case: FocusCase, args: argparse.Namespac
     detail = {
         "label": case.label,
         "method": case.method,
+        "channel": "services",
         "expect_success": case.expect_success,
         "result": code,
         "elapsed_ms": elapsed_ms,
@@ -296,6 +366,8 @@ def run_case(client: MqttRequestClient, case: FocusCase, args: argparse.Namespac
         ok = False
         detail["error"] = f"unexpected reply/result rc={rc}"
         detail["reply"] = reply
+    if code == DEVICE_STATE_UNSUPPORTED:
+        detail["device_connection"] = "not_connected_or_unsupported"
     if case.expect_success and code != 0:
         ok = False
         detail["error"] = "合法对焦命令未成功"
@@ -379,7 +451,7 @@ def main() -> int:
     parser.add_argument("--focus-distance", type=float, default=5.0)
     parser.add_argument(
         "--focus-values",
-        default="",
+        default="0,32768,65535",
         help="Comma-separated absolute focus values for visual sweep, e.g. 0,32768,65535. Overrides --focus-distance.",
     )
     parser.add_argument("--focus-speed", type=int, default=2)
@@ -427,6 +499,11 @@ def main() -> int:
         help="Fail a case when services reply latency exceeds this threshold.",
     )
     parser.add_argument(
+        "--skip-gateway-preflight",
+        action="store_true",
+        help="Skip the gateway_state_query real-gateway services preflight.",
+    )
+    parser.add_argument(
         "--skip-disconnected-probe",
         action="store_true",
         help="Skip the MQTT unreachable-host probe.",
@@ -459,6 +536,10 @@ def main() -> int:
     details: list[dict[str, Any]] = []
     try:
         all_ok = True
+        if not args.skip_gateway_preflight:
+            ok, detail = ensure_real_gateway_ready(client, args)
+            details.append(detail)
+            all_ok = ok and all_ok
         if args.video_url and args.capture_snapshots:
             snapshot_dir = Path(args.snapshot_dir)
             snap_rc, snap_detail = _capture_snapshot(args.video_url, snapshot_dir / "00_baseline_before.jpg", args.ffmpeg, args.snapshot_timeout)
