@@ -88,7 +88,7 @@ def build_media_file(path: str, storage_root: str, device_sn: str) -> Dict[str, 
     ext = Path(path).suffix.lower().lstrip(".")
     media_type = media_type_for_file(path)
     create_time = int(stat.st_mtime * 1000)
-    relative_path = os.path.relpath(path, storage_root)
+    relative_path = os.path.relpath(path, storage_root).replace("\\", "/")
     mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     return {
@@ -99,7 +99,7 @@ def build_media_file(path: str, storage_root: str, device_sn: str) -> Dict[str, 
         "name": filename,
         "file_name": filename,
         "path": relative_path,
-        "object_key": relative_path.replace(os.sep, "/"),
+        "object_key": relative_path,
         "size": int(stat.st_size),
         "file_size": int(stat.st_size),
         "media_type": media_type,

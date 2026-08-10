@@ -41,6 +41,8 @@ class Dock3LiveClient(MqttRequestClient):
             data = payload.get("data", {}) if isinstance(payload, dict) else {}
             properties = data.get("property", {}) if isinstance(data, dict) else {}
             live_status = properties.get("live_status") if isinstance(properties, dict) else None
+            if live_status is None and isinstance(data, dict):
+                live_status = data.get("live_status")
             if not isinstance(live_status, list):
                 continue
             for item in live_status:
