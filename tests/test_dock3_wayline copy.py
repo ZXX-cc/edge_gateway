@@ -84,6 +84,7 @@ KMZ_NEST_TEST_POINT = {
     "latitude": -35.363000,
     "longitude": 149.165000,
     "altitude": 0.0,
+    "absolute_altitude": 194.92,
     "takeoff_alt_offset": 40.0,
 }
 
@@ -364,6 +365,8 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(len(waypoints), 4)
         self.assertAlmostEqual(waypoints[0]["latitude"], KMZ_NEST_TEST_POINT["latitude"])
         self.assertAlmostEqual(waypoints[0]["longitude"], KMZ_NEST_TEST_POINT["longitude"])
+        self.assertEqual(waypoints[0]["frame"], 0)
+        self.assertAlmostEqual(waypoints[0]["altitude"], KMZ_NEST_TEST_POINT["absolute_altitude"])
         self.assertAlmostEqual(waypoints[2]["latitude"], -35.363262)
         self.assertAlmostEqual(waypoints[2]["longitude"], 149.165237)
 

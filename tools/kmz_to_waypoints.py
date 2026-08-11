@@ -17,6 +17,7 @@ from xml.etree import ElementTree as ET
 MAV_CMD_NAV_WAYPOINT = 16
 MAV_CMD_NAV_LOITER_TIME = 19
 MAV_CMD_NAV_VTOL_TAKEOFF = 84
+MAV_FRAME_GLOBAL = 0
 MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
 DEFAULT_HOME_LAT = 43.9759961
 DEFAULT_HOME_LON = 125.3979932
@@ -285,22 +286,30 @@ def resolve_takeoff_settings(args) -> tuple[TakeoffRefPoint, float, float, dict]
     home_alt = parse_optional_float(args.home_alt, "home_alt")
     home_absolute_alt = parse_optional_float(args.home_absolute_alt, "home_absolute_alt")
     takeoff_alt_offset = parse_optional_float(args.takeoff_alt_offset, "takeoff_alt_offset")
+    configured_absolute_alt = float(config.get("absolute_altitude", DEFAULT_HOME_ABSOLUTE_ALT))
+    used_absolute_alt = (
+        home_absolute_alt
+        if home_absolute_alt is not None
+        else (home_alt if home_alt is not None else configured_absolute_alt)
+    )
 
     used_home = TakeoffRefPoint(
         lat=home_lat if home_lat is not None else float(config.get("latitude", DEFAULT_HOME_LAT)),
         lon=home_lon if home_lon is not None else float(config.get("longitude", DEFAULT_HOME_LON)),
-        alt=home_absolute_alt
-        if home_absolute_alt is not None
-        else float(config.get("absolute_altitude", DEFAULT_HOME_ABSOLUTE_ALT)),
+        alt=used_absolute_alt,
     )
     validate_home_ref(used_home)
-    used_home_alt = home_alt if home_alt is not None else float(config.get("altitude", DEFAULT_HOME_RELATIVE_ALT))
+    used_home_alt = used_home.alt
     used_offset = (
         takeoff_alt_offset
         if takeoff_alt_offset is not None
         else float(config.get("takeoff_alt_offset", DEFAULT_TAKEOFF_ALT_OFFSET))
     )
-    source = "cli" if home_lat is not None or home_lon is not None else ("config" if config else "default")
+    source = (
+        "cli"
+        if any(value is not None for value in (home_lat, home_lon, home_alt, home_absolute_alt, takeoff_alt_offset))
+        else ("config" if config else "default")
+    )
     return used_home, used_home_alt, used_offset, {
         "source": source,
         "config_path": str(Path(args.config).expanduser()) if args.config else "",
@@ -440,7 +449,7 @@ def build_wpl_items(
         WplItem(
             seq=0,
             current=1,
-            frame=MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            frame=MAV_FRAME_GLOBAL,
             command=MAV_CMD_NAV_WAYPOINT,
             param1=0,
             param2=0,
@@ -528,7 +537,8 @@ def convert(args) -> dict:
         "used_takeoff_ref_point": asdict(used_takeoff_ref),
         "takeoff_ref_point_source": takeoff_source,
         "rules": {
-            "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            "home_frame": MAV_FRAME_GLOBAL,
+            "waypoint_frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
             "execute_height_mode": "relativeToStartPoint",
             "coordinate_mode": "WGS84",
             "height_mode": "relativeToStartPoint",
@@ -585,11 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--home-alt",
         default="",
-        help="首行 HOME 任务项相对高度；默认读配置，配置缺失时 0 米",
+        help="兼容旧参数：覆盖首行 HOME 任务项 GPS 海拔高；优先建议使用 --home-absolute-alt",
     )
     parser.add_argument("--home-lat", default="", help="覆盖 HOME/VTOL 起飞点纬度")
     parser.add_argument("--home-lon", default="", help="覆盖 HOME/VTOL 起飞点经度")
-    parser.add_argument("--home-absolute-alt", default="", help="覆盖 HOME GPS 海拔高，仅写入摘要，不写入 frame=3 航点高度")
+    parser.add_argument("--home-absolute-alt", default="", help="覆盖 HOME GPS 海拔高；写入首行 HOME 点 frame=0 的高度")
     return parser
 
 

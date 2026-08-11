@@ -54,6 +54,7 @@ POSITION_WAYPOINT_COMMANDS = {16, 17, 18, 19, 20, 21, 22, 82, 84, 85}
 MAV_CMD_NAV_WAYPOINT = 16
 MAV_CMD_NAV_LOITER_TIME = 19
 MAV_CMD_NAV_VTOL_TAKEOFF = 84
+MAV_FRAME_GLOBAL = 0
 MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
 DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS = 40.0
 KMZ_NEST_TAKEOFF_CONFIG_PREFIX = "mission.wayline.nest_takeoff_point"
@@ -428,8 +429,12 @@ def _configured_kmz_nest_takeoff_point() -> Dict[str, float]:
     lon = Config.get(lon_key)
     if lat in (None, "") or lon in (None, ""):
         raise ValueError(f"KMZ 转换缺少固定机巢经纬度配置: {lat_key}, {lon_key}")
+    absolute_alt = Config.get(absolute_alt_key)
+    if absolute_alt in (None, ""):
+        raise ValueError(f"KMZ 转换缺少固定机巢 GPS 海拔高度配置: {absolute_alt_key}")
     lat_f = _parse_strict_float(lat, lat_key)
     lon_f = _parse_strict_float(lon, lon_key)
+    absolute_alt_f = _parse_strict_float(absolute_alt, absolute_alt_key)
     if not -90 <= lat_f <= 90 or not -180 <= lon_f <= 180:
         raise ValueError(f"KMZ 固定机巢经纬度超范围: latitude={lat_f}, longitude={lon_f}")
     if lat_f == 0.0 and lon_f == 0.0:
@@ -438,7 +443,7 @@ def _configured_kmz_nest_takeoff_point() -> Dict[str, float]:
         "latitude": lat_f,
         "longitude": lon_f,
         "altitude": _to_float(Config.get(alt_key, 0.0), 0.0),
-        "absolute_altitude": _to_float(Config.get(absolute_alt_key, 0.0), 0.0),
+        "absolute_altitude": absolute_alt_f,
         "takeoff_alt_offset": _to_float(
             Config.get(offset_key, DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS),
             DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS,
@@ -585,9 +590,9 @@ def _build_dji_kmz_waypoints(source_waypoints: List[dict], nest_point: Dict[str,
             "current": 1,
             "latitude": nest_point["latitude"],
             "longitude": nest_point["longitude"],
-            "altitude": _to_float(nest_point.get("altitude"), 0.0),
+            "altitude": _to_float(nest_point.get("absolute_altitude"), 0.0),
             "command": MAV_CMD_NAV_WAYPOINT,
-            "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            "frame": MAV_FRAME_GLOBAL,
             "param1": 0.0,
             "param2": 0.0,
             "param3": 0.0,
@@ -692,6 +697,9 @@ def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
         },
         "takeoff_alt_offset": nest_point["takeoff_alt_offset"],
         "first_execute_height": source_waypoints[0]["altitude"],
+        "home_frame": MAV_FRAME_GLOBAL,
+        "waypoint_frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+        "home_altitude_source": f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.absolute_altitude",
         "inserted_home": True,
         "inserted_vtol_takeoff": True,
         "source_placemark_count": len(source_waypoints),

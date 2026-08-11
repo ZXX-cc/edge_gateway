@@ -87,6 +87,7 @@ KMZ_NEST_TEST_POINT = {
     "latitude": -35.363000,
     "longitude": 149.165000,
     "altitude": 0.0,
+    "absolute_altitude": 194.92,
     "takeoff_alt_offset": 40.0,
 }
 
@@ -473,6 +474,11 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(waypoints[1]["inserted_by_gateway"], "kmz_vtol_takeoff")
         self.assertAlmostEqual(waypoints[0]["latitude"], KMZ_NEST_TEST_POINT["latitude"])
         self.assertAlmostEqual(waypoints[0]["longitude"], KMZ_NEST_TEST_POINT["longitude"])
+        self.assertEqual(waypoints[0]["frame"], 0)
+        self.assertAlmostEqual(waypoints[0]["altitude"], KMZ_NEST_TEST_POINT["absolute_altitude"])
+        self.assertEqual(summary["home_frame"], 0)
+        self.assertEqual(summary["waypoint_frame"], 3)
+        self.assertEqual(summary["home_altitude_source"], "mission.wayline.nest_takeoff_point.absolute_altitude")
         self.assertAlmostEqual(waypoints[2]["latitude"], -35.363262)
         self.assertAlmostEqual(waypoints[2]["longitude"], 149.165237)
 
@@ -655,9 +661,9 @@ class Dock3WaylineTest(unittest.TestCase):
                 "seq": 0,
                 "latitude": KMZ_NEST_TEST_POINT["latitude"],
                 "longitude": KMZ_NEST_TEST_POINT["longitude"],
-                "altitude": 0,
+                "altitude": KMZ_NEST_TEST_POINT["absolute_altitude"],
                 "command": 16,
-                "frame": 3,
+                "frame": 0,
                 "inserted_by_gateway": "kmz_home",
             },
             {

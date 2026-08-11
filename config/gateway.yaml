@@ -256,8 +256,8 @@ mission:
     nest_takeoff_point:
       latitude: 43.9759961 # 飞机 HOME/机巢起飞点纬度，用于 KMZ 转换插入 HOME、VTOL_TAKEOFF
       longitude: 125.3979932 # 飞机 HOME/机巢起飞点经度，用于 KMZ 转换插入 HOME、VTOL_TAKEOFF
-      altitude: 0.0 # HOME 点相对高度，默认 0 米
-      absolute_altitude: 194.92 # 飞机 HOME 点 GPS 海拔高，用于平台/摘要上报，不写入 frame=3 相对高度航点
+      altitude: 0.0 # 保留兼容字段；KMZ 生成 HOME 点不再使用该相对高度
+      absolute_altitude: 194.92 # 飞机 HOME 点 GPS 海拔高；KMZ 生成 HOME 点 frame=0，高度写入该海拔值
       takeoff_alt_offset: 40.0 # VTOL_TAKEOFF 高度 = 第一个 executeHeight - 该偏移，最低不小于 0 米
   completion:
     enabled: true # 航线末航点到达后执行真实返航闭环
