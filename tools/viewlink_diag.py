@@ -20,6 +20,7 @@ from ctypes import (
     c_char,
     c_char_p,
     c_int,
+    c_short,
     c_void_p,
 )
 
@@ -68,11 +69,56 @@ class VLK_CONN_PARAM(Structure):
     ]
 
 
+def _library_path(sdk_dir: str) -> str:
+    if os.name == "nt":
+        return os.path.join(sdk_dir, "ViewLink.dll")
+    if sys.platform.startswith("linux"):
+        return os.path.join(sdk_dir, "libViewLink.so")
+    return os.path.join(sdk_dir, "ViewLink.dll")
+
+
 def load_library(sdk_dir: str, loader: str):
-    dll_path = os.path.join(sdk_dir, "ViewLink.dll")
+    dll_path = _library_path(sdk_dir)
+    if os.name == "nt" and hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(os.path.abspath(sdk_dir))
     if loader == "windll" and os.name == "nt":
         return ctypes.WinDLL(dll_path)
     return ctypes.CDLL(dll_path)
+
+
+def bind_optional(lib, name: str, argtypes: list, restype):
+    try:
+        func = getattr(lib, name)
+    except AttributeError:
+        print(f"{name}=unavailable", flush=True)
+        return None
+    func.argtypes = argtypes
+    func.restype = restype
+    return func
+
+
+def read_int_status(lib, name: str):
+    func = getattr(lib, name, None)
+    if func is None:
+        return "unavailable"
+    try:
+        return int(func())
+    except Exception as exc:
+        return f"error:{exc}"
+
+
+def print_motion_status(lib, label: str) -> None:
+    connected = read_int_status(lib, "VLK_IsConnected")
+    motor_on = read_int_status(lib, "VLK_IsMotorOn")
+    follow_mode = read_int_status(lib, "VLK_IsFollowMode")
+    tracking = read_int_status(lib, "VLK_IsTracking")
+    print(
+        (
+            f"{label}: connected={connected} "
+            f"motor_on={motor_on} follow_mode={follow_mode} tracking={tracking}"
+        ),
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -88,6 +134,14 @@ def main() -> int:
         default="minimal",
     )
     parser.add_argument("--poll-seconds", type=float, default=3.0)
+    parser.add_argument("--skip-motion-status", action="store_true")
+    parser.add_argument("--switch-motor", choices=["keep", "on", "off"], default="keep")
+    parser.add_argument("--follow-mode", choices=["keep", "on", "off"], default="keep")
+    parser.add_argument("--stop-track", action="store_true")
+    parser.add_argument("--test-move", action="store_true")
+    parser.add_argument("--move-yaw", type=int, default=1000)
+    parser.add_argument("--move-pitch", type=int, default=0)
+    parser.add_argument("--move-seconds", type=float, default=1.0)
     args = parser.parse_args()
 
     print(f"cwd.before={os.getcwd()}", flush=True)
@@ -113,6 +167,15 @@ def main() -> int:
     lib.VLK_IsConnected.restype = c_int
     lib.VLK_UnInit.argtypes = []
     lib.VLK_UnInit.restype = None
+    bind_optional(lib, "VLK_IsMotorOn", [], c_int)
+    bind_optional(lib, "VLK_SwitchMotor", [c_int], None)
+    bind_optional(lib, "VLK_IsFollowMode", [], c_int)
+    bind_optional(lib, "VLK_EnableFollowMode", [c_int], None)
+    bind_optional(lib, "VLK_IsTracking", [], c_int)
+    bind_optional(lib, "VLK_StopTrack", [], None)
+    bind_optional(lib, "VLK_DisableTrackMode", [], None)
+    bind_optional(lib, "VLK_Move", [c_short, c_short], None)
+    bind_optional(lib, "VLK_Stop", [], None)
 
     callback = None
     if args.callback == "none":
@@ -184,6 +247,61 @@ def main() -> int:
         connected = lib.VLK_IsConnected()
         print(f"is_connected={connected}", flush=True)
         time.sleep(0.5)
+
+    if not args.skip_motion_status:
+        print_motion_status(lib, "motion_status.before")
+
+    if args.switch_motor != "keep":
+        switch_motor = getattr(lib, "VLK_SwitchMotor", None)
+        if switch_motor is None:
+            print("switch_motor=unavailable", flush=True)
+        else:
+            value = 1 if args.switch_motor == "on" else 0
+            print(f"calling VLK_SwitchMotor({value})", flush=True)
+            switch_motor(value)
+            time.sleep(0.5)
+
+    if args.follow_mode != "keep":
+        enable_follow = getattr(lib, "VLK_EnableFollowMode", None)
+        if enable_follow is None:
+            print("follow_mode=unavailable", flush=True)
+        else:
+            value = 1 if args.follow_mode == "on" else 0
+            print(f"calling VLK_EnableFollowMode({value})", flush=True)
+            enable_follow(value)
+            time.sleep(0.5)
+
+    if args.stop_track:
+        stop_track = getattr(lib, "VLK_StopTrack", None)
+        disable_track = getattr(lib, "VLK_DisableTrackMode", None)
+        if stop_track is None and disable_track is None:
+            print("stop_track=unavailable", flush=True)
+        if stop_track is not None:
+            print("calling VLK_StopTrack()", flush=True)
+            stop_track()
+        if disable_track is not None:
+            print("calling VLK_DisableTrackMode()", flush=True)
+            disable_track()
+        time.sleep(0.5)
+
+    if args.test_move:
+        move = getattr(lib, "VLK_Move", None)
+        stop = getattr(lib, "VLK_Stop", None)
+        if move is None or stop is None:
+            print("test_move=unavailable", flush=True)
+        else:
+            yaw = max(-16383, min(16383, int(args.move_yaw)))
+            pitch = max(-16383, min(16383, int(args.move_pitch)))
+            duration = max(0.1, min(5.0, float(args.move_seconds)))
+            print(f"calling VLK_Move({yaw}, {pitch}) for {duration}s", flush=True)
+            move(yaw, pitch)
+            time.sleep(duration)
+            print("calling VLK_Stop()", flush=True)
+            stop()
+            time.sleep(0.5)
+
+    if not args.skip_motion_status:
+        print_motion_status(lib, "motion_status.after")
 
     print("calling VLK_UnInit", flush=True)
     lib.VLK_UnInit()
