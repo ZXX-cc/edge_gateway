@@ -93,6 +93,47 @@ class TelemetryModuleSourceFilterTest(unittest.TestCase):
         self.assertEqual(data["gps_fixed"], 1)
         self.assertEqual(data["satelliteNumber"], 12)
 
+    def test_non_flight_controller_heartbeat_does_not_overwrite_flight_status(self):
+        telemetry = TelemetryModule(mode="real", aircraft_system_id=1, aircraft_component_id=1)
+
+        telemetry.on_message(
+            mav_msg(
+                "HEARTBEAT",
+                sysid=1,
+                compid=1,
+                base_mode=0x80,
+                custom_mode=10,
+                type=1,
+                autopilot=3,
+            )
+        )
+        telemetry.on_message(
+            mav_msg(
+                "HEARTBEAT",
+                sysid=1,
+                compid=100,
+                base_mode=0,
+                custom_mode=0,
+                type=30,
+                autopilot=8,
+            )
+        )
+
+        data = telemetry.get_telemetry_data()
+        self.assertTrue(data["armed"])
+        self.assertEqual(data["flight_mode"], "AUTO")
+        self.assertEqual(data["mav_type"], 1)
+        self.assertEqual(data["autopilot"], 3)
+
+    def test_non_heartbeat_from_same_aircraft_system_still_updates_telemetry(self):
+        telemetry = TelemetryModule(mode="real", aircraft_system_id=1, aircraft_component_id=1)
+
+        telemetry.on_message(mav_msg("GPS_RAW_INT", sysid=1, compid=100, fix_type=3, satellites_visible=14))
+
+        data = telemetry.get_telemetry_data()
+        self.assertEqual(data["gps_fixed"], 1)
+        self.assertEqual(data["satelliteNumber"], 14)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
