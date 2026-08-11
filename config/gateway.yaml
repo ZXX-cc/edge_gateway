@@ -246,6 +246,17 @@ device:
 
 # --- 航线任务真实闭环配置 ---
 mission:
+  wayline:
+    # KMZ 航线由网关严格解析成 .waypoints 等价任务点后上传飞控/机巢。
+    download_cache_dir: "./data/waylines" # 平台下发 http/https KMZ 时，网关下载后的本地缓存目录
+    download_timeout_seconds: 20.0 # 下载平台航线文件的超时时间
+    max_download_bytes: 52428800 # 单个航线文件最大下载大小，默认 50 MiB
+    # 下面固定机巢起飞点用于网关插入 HOME 和 VTOL_TAKEOFF 点，必须与实际机巢经纬度一致。
+    nest_takeoff_point:
+      latitude: 35.66312555 # 机巢/起飞点纬度，用于 KMZ 转换插入 HOME、VTOL_TAKEOFF
+      longitude: 119.22672346 # 机巢/起飞点经度，用于 KMZ 转换插入 HOME、VTOL_TAKEOFF
+      altitude: 0.0 # HOME 点相对高度，默认 0 米
+      takeoff_alt_offset: 40.0 # VTOL_TAKEOFF 高度 = 第一个 executeHeight - 该偏移，最低不小于 0 米
   completion:
     enabled: true # 航线末航点到达后执行真实返航闭环
     auto_return_home: true # 调用真实飞控 RTL/QRTL，不生成模拟完成

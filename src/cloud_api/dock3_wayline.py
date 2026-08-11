@@ -7,12 +7,15 @@ MissionManager's MAVLink execution details.
 """
 import os
 import re
+import hashlib
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
+from urllib.request import Request, url2pathname, urlopen
 from xml.etree import ElementTree
+
+from src.utils.config import Config
 
 
 STATUS_CANCELED = "canceled"
@@ -45,8 +48,15 @@ VALID_RETURN_TYPES = {0, 1}
 VALID_BREAKPOINT_STATES = {0, 1}
 WAYLINE_FILE_EXTENSIONS = {".kmz", ".kml", ".wpml", ".xml", ".waypoints"}
 MAX_WAYLINE_XML_BYTES = 2 * 1024 * 1024
+MAX_WAYLINE_FILE_BYTES = 50 * 1024 * 1024
 MIN_WAYPOINT_ALTITUDE_METERS = 120.0
 POSITION_WAYPOINT_COMMANDS = {16, 17, 18, 19, 20, 21, 22, 82, 84, 85}
+MAV_CMD_NAV_WAYPOINT = 16
+MAV_CMD_NAV_LOITER_TIME = 19
+MAV_CMD_NAV_VTOL_TAKEOFF = 84
+MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
+DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS = 40.0
+KMZ_NEST_TAKEOFF_CONFIG_PREFIX = "mission.wayline.nest_takeoff_point"
 
 
 def _is_int(value: Any) -> bool:
@@ -80,6 +90,28 @@ def _child_text(elem: ElementTree.Element, names: set[str]) -> str:
     for child in elem.iter():
         if _local_name(child.tag) in names and child.text:
             return child.text.strip()
+    return ""
+
+
+def _direct_child_text(elem: ElementTree.Element, name: str) -> str:
+    for child in list(elem):
+        if _local_name(child.tag) == name and child.text:
+            return child.text.strip()
+    return ""
+
+
+def _iter_by_name(root: ElementTree.Element, name: str) -> List[ElementTree.Element]:
+    return [elem for elem in root.iter() if _local_name(elem.tag) == name]
+
+
+def _first_text(root: ElementTree.Element, name: str, required: bool = True) -> str:
+    for elem in root.iter():
+        if _local_name(elem.tag) == name and elem.text:
+            text = elem.text.strip()
+            if text:
+                return text
+    if required:
+        raise ValueError(f"缺少必需字段: {name}")
     return ""
 
 
@@ -176,6 +208,63 @@ def _local_wayline_path(file_info: Dict[str, Any]) -> str:
             continue
         return value
     return ""
+
+
+def _remote_wayline_url(file_info: Dict[str, Any]) -> str:
+    value = file_info.get("url") if isinstance(file_info, dict) else ""
+    if not isinstance(value, str) or not value:
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} else ""
+
+
+def _download_remote_wayline_file(url: str) -> str:
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix not in WAYLINE_FILE_EXTENSIONS and suffix != ".zip":
+        suffix = ".kmz"
+    cache_dir = Path(str(Config.get("mission.wayline.download_cache_dir", "./data/waylines")))
+    cache_dir = cache_dir.expanduser().resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    base_name = Path(unquote(parsed.path)).name or "mission.kmz"
+    safe_base = re.sub(r"[^A-Za-z0-9_.-]+", "_", base_name).strip("._") or "mission.kmz"
+    if not safe_base.lower().endswith(suffix):
+        safe_base = f"{safe_base}{suffix}"
+    target = cache_dir / f"{digest}_{safe_base}"
+    timeout = _to_float(Config.get("mission.wayline.download_timeout_seconds", 20.0), 20.0)
+    max_bytes = int(_to_float(Config.get("mission.wayline.max_download_bytes", MAX_WAYLINE_FILE_BYTES), MAX_WAYLINE_FILE_BYTES))
+    tmp_target = target.with_suffix(target.suffix + ".tmp")
+    request = Request(url, headers={"User-Agent": "edge-gateway-wayline/1.0"})
+    total = 0
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            length = response.headers.get("Content-Length")
+            if length:
+                try:
+                    content_length = int(length)
+                except (TypeError, ValueError):
+                    content_length = 0
+                if content_length > max_bytes:
+                    raise ValueError(f"remote wayline file exceeds {max_bytes} bytes")
+            with open(tmp_target, "wb") as fp:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"remote wayline file exceeds {max_bytes} bytes")
+                    fp.write(chunk)
+        os.replace(tmp_target, target)
+    except Exception:
+        try:
+            if tmp_target.exists():
+                tmp_target.unlink()
+        except OSError:
+            pass
+        raise
+    return str(target)
 
 
 def _empty_wayline_summary(file_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -303,7 +392,250 @@ def _parse_qgc_wpl(text: str) -> List[dict]:
     return waypoints
 
 
+def _parse_strict_float(value: Any, field_name: str) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} 不是有效数字: {value!r}") from exc
+
+
+def _parse_strict_int(value: Any, field_name: str) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} 不是有效整数: {value!r}") from exc
+
+
+def _parse_takeoff_ref_point(text: str) -> Dict[str, float]:
+    parts = [item.strip() for item in text.split(",")]
+    if len(parts) < 3:
+        raise ValueError(f"takeOffRefPoint 必须为 纬度,经度,高度: {text!r}")
+    lat = _parse_strict_float(parts[0], "takeOffRefPoint.lat")
+    lon = _parse_strict_float(parts[1], "takeOffRefPoint.lon")
+    alt = _parse_strict_float(parts[2], "takeOffRefPoint.alt")
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError(f"takeOffRefPoint 经纬度超范围: lat={lat}, lon={lon}")
+    return {"latitude": lat, "longitude": lon, "altitude": alt}
+
+
+def _configured_kmz_nest_takeoff_point() -> Dict[str, float]:
+    lat_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.latitude"
+    lon_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.longitude"
+    alt_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.altitude"
+    offset_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.takeoff_alt_offset"
+    lat = Config.get(lat_key)
+    lon = Config.get(lon_key)
+    if lat in (None, "") or lon in (None, ""):
+        raise ValueError(f"KMZ 转换缺少固定机巢经纬度配置: {lat_key}, {lon_key}")
+    lat_f = _parse_strict_float(lat, lat_key)
+    lon_f = _parse_strict_float(lon, lon_key)
+    if not -90 <= lat_f <= 90 or not -180 <= lon_f <= 180:
+        raise ValueError(f"KMZ 固定机巢经纬度超范围: latitude={lat_f}, longitude={lon_f}")
+    if lat_f == 0.0 and lon_f == 0.0:
+        raise ValueError("KMZ 固定机巢经纬度不能同时为 0")
+    return {
+        "latitude": lat_f,
+        "longitude": lon_f,
+        "altitude": _to_float(Config.get(alt_key, 0.0), 0.0),
+        "takeoff_alt_offset": _to_float(
+            Config.get(offset_key, DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS),
+            DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS,
+        ),
+    }
+
+
+def _select_kmz_member(names: List[str], suffix: str, preferred_names: set[str]) -> str:
+    matches = [name for name in names if name.lower().endswith(suffix)]
+    if not matches:
+        raise ValueError(f"KMZ 中未找到 {suffix} 文件")
+    if len(matches) == 1:
+        return matches[0]
+    preferred = [name for name in matches if Path(name).name.lower() in preferred_names]
+    if len(preferred) == 1:
+        return preferred[0]
+    raise ValueError(f"KMZ 中存在多个 {suffix} 文件，暂不解析: {matches}")
+
+
+def _validate_dji_kml(root: ElementTree.Element) -> Dict[str, float]:
+    coordinate_mode = _first_text(root, "coordinateMode")
+    height_mode = _first_text(root, "heightMode")
+    if coordinate_mode != "WGS84":
+        raise ValueError(f".kml coordinateMode 必须等于 WGS84，实际为 {coordinate_mode!r}")
+    if height_mode != "relativeToStartPoint":
+        raise ValueError(f".kml heightMode 必须等于 relativeToStartPoint，实际为 {height_mode!r}")
+    takeoff_ref = _first_text(root, "takeOffRefPoint")
+    return _parse_takeoff_ref_point(takeoff_ref)
+
+
+def _validate_dji_wpml(root: ElementTree.Element) -> Tuple[ElementTree.Element, str, str]:
+    execute_height_mode = _first_text(root, "executeHeightMode")
+    if execute_height_mode != "relativeToStartPoint":
+        raise ValueError(
+            ".wpml executeHeightMode 必须存在且等于 relativeToStartPoint，"
+            f"实际为 {execute_height_mode!r}"
+        )
+    avoid_mode = _first_text(root, "waylineAvoidLimitAreaMode")
+    if avoid_mode != "0":
+        raise ValueError(f".wpml waylineAvoidLimitAreaMode 必须为 0，实际为 {avoid_mode!r}")
+    folders = _iter_by_name(root, "Folder")
+    if len(folders) != 1:
+        raise ValueError(f".wpml 只支持一个 Folder，实际数量为 {len(folders)}")
+    folder = folders[0]
+    template_id = _direct_child_text(folder, "templateId")
+    wayline_id = _direct_child_text(folder, "waylineId")
+    if template_id != "0" or wayline_id != "0":
+        raise ValueError(f"只支持 templateId=0 且 waylineId=0，实际为 {template_id}/{wayline_id}")
+    return folder, _direct_child_text(folder, "distance"), _direct_child_text(folder, "duration")
+
+
+def _parse_wpml_point_coordinates(placemark: ElementTree.Element, index: int) -> Tuple[float, float]:
+    point = next((item for item in _iter_by_name(placemark, "Point")), None)
+    if point is None:
+        raise ValueError(f"Placemark index={index} 缺少 Point")
+    text = _direct_child_text(point, "coordinates")
+    if not text:
+        raise ValueError(f"Placemark index={index} 缺少 Point.coordinates")
+    parts = [item.strip() for item in text.split()[0].split(",")]
+    if len(parts) < 2:
+        raise ValueError(f"Placemark index={index} coordinates 必须为 经度,纬度: {text!r}")
+    lon = _parse_strict_float(parts[0], f"Placemark[{index}].lon")
+    lat = _parse_strict_float(parts[1], f"Placemark[{index}].lat")
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError(f"Placemark index={index} 经纬度超范围: lat={lat}, lon={lon}")
+    return lat, lon
+
+
+def _wpml_hover_time(placemark: ElementTree.Element, index: int, warnings: List[str]) -> float:
+    for group in _iter_by_name(placemark, "actionGroup"):
+        hover_actions = [
+            action for action in _iter_by_name(group, "action")
+            if _direct_child_text(action, "actionActuatorFunc") == "hover"
+        ]
+        if not hover_actions:
+            continue
+        start_index = _direct_child_text(group, "actionGroupStartIndex")
+        end_index = _direct_child_text(group, "actionGroupEndIndex")
+        group_mode = _direct_child_text(group, "actionGroupMode")
+        trigger_type = _first_text(group, "actionTriggerType", required=False)
+        if start_index != str(index) or end_index != str(index):
+            warnings.append(f"Placemark index={index} 的 hover 动作组起止索引不匹配，已按 WAYPOINT 处理")
+            continue
+        if group_mode and group_mode != "sequence":
+            warnings.append(f"Placemark index={index} 的 actionGroupMode 不是 sequence，已按 WAYPOINT 处理")
+            continue
+        if trigger_type != "reachPoint":
+            warnings.append(f"Placemark index={index} 的 actionTriggerType 不是 reachPoint，已按 WAYPOINT 处理")
+            continue
+        for action in hover_actions:
+            hover_time = _first_text(action, "hoverTime", required=False)
+            if not hover_time:
+                warnings.append(f"Placemark index={index} 的 hover 动作缺少 hoverTime，已按 WAYPOINT 处理")
+                continue
+            value = _parse_strict_float(hover_time, f"Placemark[{index}].hoverTime")
+            if value < 0:
+                warnings.append(f"Placemark index={index} 的 hoverTime 小于 0，已按 WAYPOINT 处理")
+                continue
+            return value
+    return 0.0
+
+
+def _parse_wpml_source_waypoints(folder: ElementTree.Element, warnings: List[str]) -> List[dict]:
+    placemarks = _iter_by_name(folder, "Placemark")
+    if not placemarks:
+        raise ValueError(".wpml Folder 中没有 Placemark 航点")
+    source_waypoints: List[dict] = []
+    for expected_index, placemark in enumerate(placemarks):
+        index_text = _direct_child_text(placemark, "index")
+        if not index_text:
+            raise ValueError(f"第 {expected_index} 个 Placemark 缺少 wpml:index")
+        index = _parse_strict_int(index_text, f"Placemark[{expected_index}].index")
+        if index != expected_index:
+            raise ValueError(f"Placemark index 必须从 0 连续递增，期望 {expected_index}，实际 {index}")
+        lat, lon = _parse_wpml_point_coordinates(placemark, index)
+        height_text = _direct_child_text(placemark, "executeHeight")
+        if not height_text:
+            raise ValueError(f"Placemark index={index} 缺少 executeHeight")
+        altitude = _parse_strict_float(height_text, f"Placemark[{index}].executeHeight")
+        hover_time = _wpml_hover_time(placemark, index, warnings)
+        command = MAV_CMD_NAV_LOITER_TIME if hover_time > 0 else MAV_CMD_NAV_WAYPOINT
+        source_waypoints.append({
+            "source_index": index,
+            "latitude": lat,
+            "longitude": lon,
+            "altitude": altitude,
+            "command": command,
+            "hover_time": hover_time,
+        })
+    return source_waypoints
+
+
+def _build_dji_kmz_waypoints(source_waypoints: List[dict], nest_point: Dict[str, float]) -> List[dict]:
+    if not source_waypoints:
+        raise ValueError("没有可转换的 Placemark 航点")
+    first_alt = _to_float(source_waypoints[0].get("altitude"), 0.0)
+    takeoff_alt = max(0.0, first_alt - _to_float(
+        nest_point.get("takeoff_alt_offset"),
+        DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS,
+    ))
+    waypoints: List[dict] = [
+        {
+            "seq": 0,
+            "current": 1,
+            "latitude": nest_point["latitude"],
+            "longitude": nest_point["longitude"],
+            "altitude": _to_float(nest_point.get("altitude"), 0.0),
+            "command": MAV_CMD_NAV_WAYPOINT,
+            "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            "param1": 0.0,
+            "param2": 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "autocontinue": 1,
+            "action_type": "kmz_home",
+            "inserted_by_gateway": "kmz_home",
+        },
+        {
+            "seq": 1,
+            "current": 0,
+            "latitude": nest_point["latitude"],
+            "longitude": nest_point["longitude"],
+            "altitude": takeoff_alt,
+            "command": MAV_CMD_NAV_VTOL_TAKEOFF,
+            "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            "param1": 0.0,
+            "param2": 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "autocontinue": 1,
+            "action_type": "kmz_vtol_takeoff",
+            "inserted_by_gateway": "kmz_vtol_takeoff",
+        },
+    ]
+    for source in source_waypoints:
+        command = int(source["command"])
+        waypoints.append({
+            "seq": len(waypoints),
+            "current": 0,
+            "latitude": source["latitude"],
+            "longitude": source["longitude"],
+            "altitude": source["altitude"],
+            "command": command,
+            "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            "param1": source["hover_time"] if command == MAV_CMD_NAV_LOITER_TIME else 0.0,
+            "param2": 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "autocontinue": 1,
+            "action_type": "loiter_time" if command == MAV_CMD_NAV_LOITER_TIME else "waypoint",
+            "source_index": source["source_index"],
+            "hover_time": source["hover_time"],
+        })
+    return waypoints
+
+
 def _waypoint_requires_min_altitude(waypoint: dict) -> bool:
+    if waypoint.get("inserted_by_gateway") or waypoint.get("adjusted_by_gateway"):
+        return False
     command = int(waypoint.get("command", 16) or 0)
     if command not in POSITION_WAYPOINT_COMMANDS:
         return False
@@ -325,29 +657,47 @@ def _validate_waypoint_altitudes(waypoints: List[dict]) -> List[str]:
 
 def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
     warnings: List[str] = []
-    waypoints: List[dict] = []
-    parsed_files: List[str] = []
     with zipfile.ZipFile(path) as archive:
-        names = [
-            name for name in archive.namelist()
-            if Path(name).suffix.lower() in {".kml", ".wpml", ".xml"}
-            and not name.endswith("/")
-        ]
-        for name in names:
-            info = archive.getinfo(name)
-            if info.file_size > MAX_WAYLINE_XML_BYTES:
-                warnings.append(f"{name} exceeds 2 MiB limit")
-                continue
-            xml_text = archive.read(name).decode("utf-8", errors="replace")
-            parsed_files.append(name)
-            for waypoint in _extract_waypoints_from_xml(xml_text):
-                waypoint["seq"] = len(waypoints)
-                waypoints.append(waypoint)
-    summary = {"format": "kmz", "files": parsed_files}
-    if not parsed_files:
-        warnings.append("kmz contains no kml/wpml/xml files")
-    if not waypoints:
-        warnings.append("no waypoint coordinates found")
+        names = [name for name in archive.namelist() if not name.endswith("/")]
+        kml_name = _select_kmz_member(names, ".kml", {"template.kml"})
+        wpml_name = _select_kmz_member(names, ".wpml", {"waylines.wpml"})
+        for name in (kml_name, wpml_name):
+            if archive.getinfo(name).file_size > MAX_WAYLINE_XML_BYTES:
+                raise ValueError(f"{name} exceeds 2 MiB limit")
+        try:
+            kml_root = ElementTree.fromstring(archive.read(kml_name))
+            wpml_root = ElementTree.fromstring(archive.read(wpml_name))
+        except ElementTree.ParseError as exc:
+            raise ValueError(f"KMZ XML 解析失败: {exc}") from exc
+
+    takeoff_ref = _validate_dji_kml(kml_root)
+    folder, distance, duration = _validate_dji_wpml(wpml_root)
+    source_waypoints = _parse_wpml_source_waypoints(folder, warnings)
+    nest_point = _configured_kmz_nest_takeoff_point()
+    waypoints = _build_dji_kmz_waypoints(source_waypoints, nest_point)
+    summary = {
+        "format": "kmz",
+        "parser": "dji_wpml_strict",
+        "generated_waypoints_format": "qgc_wpl_equivalent",
+        "files": [kml_name, wpml_name],
+        "source_takeoff_ref_point": takeoff_ref,
+        "nest_takeoff_point_source": KMZ_NEST_TAKEOFF_CONFIG_PREFIX,
+        "configured_nest_takeoff_point": {
+            "latitude": nest_point["latitude"],
+            "longitude": nest_point["longitude"],
+            "altitude": nest_point["altitude"],
+        },
+        "takeoff_alt_offset": nest_point["takeoff_alt_offset"],
+        "first_execute_height": source_waypoints[0]["altitude"],
+        "inserted_home": True,
+        "inserted_vtol_takeoff": True,
+        "source_placemark_count": len(source_waypoints),
+        "hover_count": sum(1 for item in source_waypoints if item["command"] == MAV_CMD_NAV_LOITER_TIME),
+        "wpml_plan_estimate": {
+            "distance": _to_float(distance, 0.0) if distance else None,
+            "duration": _to_float(duration, 0.0) if duration else None,
+        },
+    }
     return summary, waypoints, warnings
 
 
@@ -366,12 +716,25 @@ def parse_wayline_file(file_info: Any) -> Tuple[Dict[str, Any], List[dict]]:
     summary = _empty_wayline_summary(file_info)
     path = _local_wayline_path(file_info)
     if not path:
-        summary["format"] = "remote" if summary["source"] else ""
-        if summary["source"]:
-            summary["warnings"].append("remote wayline file not downloaded in local simulation")
-        return summary, []
+        remote_url = _remote_wayline_url(file_info)
+        if remote_url:
+            try:
+                path = _download_remote_wayline_file(remote_url)
+                summary["downloaded"] = True
+                summary["downloaded_path"] = path
+            except Exception as exc:
+                summary["format"] = "remote"
+                summary["warnings"].append(f"remote wayline file download failed: {exc}")
+                return summary, []
+        else:
+            summary["format"] = "remote" if summary["source"] else ""
+            if summary["source"]:
+                summary["warnings"].append("remote wayline file not downloaded in local simulation")
+            return summary, []
 
     path = os.path.abspath(os.path.expanduser(path))
+    if summary.get("downloaded"):
+        summary["remote_source"] = summary.get("source", "")
     summary["source"] = path
     suffix = Path(path).suffix.lower()
     summary["format"] = suffix.lstrip(".")

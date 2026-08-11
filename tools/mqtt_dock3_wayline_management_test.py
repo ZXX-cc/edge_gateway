@@ -48,23 +48,44 @@ def now_ms() -> int:
 
 def write_mock_kmz(path: Path, waypoints: list[tuple[float, float, float]] | None = None) -> None:
     waypoints = waypoints or DEFAULT_WAYPOINTS
-    coordinates = "\n".join(f"          {lon},{lat},{alt}" for lon, lat, alt in waypoints)
+    placemarks = "\n".join(
+        "\n".join([
+            "      <Placemark>",
+            f"        <Point><coordinates>{lon},{lat}</coordinates></Point>",
+            f"        <wpml:index>{index}</wpml:index>",
+            f"        <wpml:executeHeight>{alt}</wpml:executeHeight>",
+            "      </Placemark>",
+        ])
+        for index, (lon, lat, alt) in enumerate(waypoints)
+    )
     kml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
   <Document>
-    <Placemark>
-      <wpml:waypointSpeed>6</wpml:waypointSpeed>
-      <LineString>
-        <coordinates>
-{coordinates}
-        </coordinates>
-      </LineString>
-    </Placemark>
+    <wpml:waylineCoordinateSysParam>
+      <wpml:coordinateMode>WGS84</wpml:coordinateMode>
+      <wpml:heightMode>relativeToStartPoint</wpml:heightMode>
+    </wpml:waylineCoordinateSysParam>
+    <wpml:takeOffRefPoint>-35.363000,149.165000,584.0</wpml:takeOffRefPoint>
+    <wpml:takeOffRefPointAGLHeight>584.0</wpml:takeOffRefPointAGLHeight>
+  </Document>
+</kml>
+"""
+    wpml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
+  <Document>
+    <wpml:executeHeightMode>relativeToStartPoint</wpml:executeHeightMode>
+    <wpml:waylineAvoidLimitAreaMode>0</wpml:waylineAvoidLimitAreaMode>
+    <Folder>
+      <wpml:templateId>0</wpml:templateId>
+      <wpml:waylineId>0</wpml:waylineId>
+{placemarks}
+    </Folder>
   </Document>
 </kml>
 """
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("wpmz/template.kml", kml)
+        archive.writestr("wpmz/waylines.wpml", wpml)
 
 
 def local_file_reference(path: str) -> str:

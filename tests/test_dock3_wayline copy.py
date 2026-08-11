@@ -5,6 +5,7 @@ import types
 import unittest
 import tempfile
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -75,7 +76,24 @@ if "src.database.schemas" not in sys.modules:
 
 from src.cloud_api.dock3_wayline import normalize_prepare_payload, parse_wayline_file
 from src.mission.manager import MissionManager
+from src.utils.config import Config
 from src.utils.dji_error_codes import DEVICE_STATE_UNSUPPORTED, INVALID_COMMAND_FORMAT
+
+
+KMZ_NEST_TEST_POINT = {
+    "latitude": -35.363000,
+    "longitude": 149.165000,
+    "altitude": 0.0,
+    "takeoff_alt_offset": 40.0,
+}
+
+
+def with_wayline_test_config(base=None):
+    data = deepcopy(base or {})
+    mission = data.setdefault("mission", {})
+    wayline = mission.setdefault("wayline", {})
+    wayline.setdefault("nest_takeoff_point", deepcopy(KMZ_NEST_TEST_POINT))
+    return data
 
 
 def base_msg(method, data):
@@ -90,21 +108,42 @@ def base_msg(method, data):
 
 def write_mock_kmz(path: Path):
     kml = """<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
   <Document>
-    <Placemark>
-      <LineString>
-        <coordinates>
-          149.165237,-35.363262,120
-          149.165537,-35.363562,140
-        </coordinates>
-      </LineString>
-    </Placemark>
+    <wpml:waylineCoordinateSysParam>
+      <wpml:coordinateMode>WGS84</wpml:coordinateMode>
+      <wpml:heightMode>relativeToStartPoint</wpml:heightMode>
+    </wpml:waylineCoordinateSysParam>
+    <wpml:takeOffRefPoint>-35.363000,149.165000,584.0</wpml:takeOffRefPoint>
+    <wpml:takeOffRefPointAGLHeight>584.0</wpml:takeOffRefPointAGLHeight>
+  </Document>
+</kml>
+"""
+    wpml = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
+  <Document>
+    <wpml:executeHeightMode>relativeToStartPoint</wpml:executeHeightMode>
+    <wpml:waylineAvoidLimitAreaMode>0</wpml:waylineAvoidLimitAreaMode>
+    <Folder>
+      <wpml:templateId>0</wpml:templateId>
+      <wpml:waylineId>0</wpml:waylineId>
+      <Placemark>
+        <Point><coordinates>149.165237,-35.363262</coordinates></Point>
+        <wpml:index>0</wpml:index>
+        <wpml:executeHeight>120</wpml:executeHeight>
+      </Placemark>
+      <Placemark>
+        <Point><coordinates>149.165537,-35.363562</coordinates></Point>
+        <wpml:index>1</wpml:index>
+        <wpml:executeHeight>140</wpml:executeHeight>
+      </Placemark>
+    </Folder>
   </Document>
 </kml>
 """
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("wpmz/template.kml", kml)
+        archive.writestr("wpmz/waylines.wpml", wpml)
 
 
 def write_mock_wpml_actions(path: Path):
@@ -304,6 +343,13 @@ class RecordingTelemetry:
 
 
 class Dock3WaylineTest(unittest.TestCase):
+    def setUp(self):
+        self._original_config_data = Config._data
+        Config._data = with_wayline_test_config(Config._data if isinstance(Config._data, dict) else {})
+
+    def tearDown(self):
+        Config._data = self._original_config_data
+
     def test_parse_local_kmz_extracts_waypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
             kmz_path = Path(tmp) / "mission.kmz"
@@ -314,10 +360,12 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertTrue(summary["available"])
         self.assertTrue(summary["parsed"])
         self.assertEqual(summary["format"], "kmz")
-        self.assertEqual(summary["waypoint_count"], 2)
-        self.assertEqual(len(waypoints), 2)
-        self.assertAlmostEqual(waypoints[0]["latitude"], -35.363262)
-        self.assertAlmostEqual(waypoints[0]["longitude"], 149.165237)
+        self.assertEqual(summary["waypoint_count"], 4)
+        self.assertEqual(len(waypoints), 4)
+        self.assertAlmostEqual(waypoints[0]["latitude"], KMZ_NEST_TEST_POINT["latitude"])
+        self.assertAlmostEqual(waypoints[0]["longitude"], KMZ_NEST_TEST_POINT["longitude"])
+        self.assertAlmostEqual(waypoints[2]["latitude"], -35.363262)
+        self.assertAlmostEqual(waypoints[2]["longitude"], 149.165237)
 
     def test_parse_wpml_extracts_waypoint_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -563,7 +611,7 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(prepare["data"]["output"]["status"], "sent")
         file_summary = prepare["data"]["output"]["ext"]["file"]
         self.assertTrue(file_summary["parsed"])
-        self.assertEqual(file_summary["waypoint_count"], 2)
+        self.assertEqual(file_summary["waypoint_count"], 4)
         self.assertTrue(any(event.get("method") == "flighttask_ready" for event in events))
         self.assertEqual(waypoint_manager.clear_calls, 0)
         self.assertEqual(waypoint_manager.added, [])

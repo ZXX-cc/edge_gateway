@@ -2332,6 +2332,26 @@ class MissionManager:
         normalized = [dict(waypoint) for waypoint in waypoints]
         if normalized[0].get("inserted_by_gateway") == "home_transition":
             return True, normalized, "", {"inserted_home_transition": False}
+        if (
+            len(normalized) >= 2
+            and normalized[0].get("inserted_by_gateway") == "kmz_home"
+            and normalized[1].get("inserted_by_gateway") == "kmz_vtol_takeoff"
+        ):
+            for index, waypoint in enumerate(normalized):
+                waypoint["seq"] = index
+            release_altitude = self._as_float(
+                normalized[1].get("altitude"),
+                MIN_WAYPOINT_ALTITUDE_METERS,
+            )
+            self._set_loiter_guided_release_altitude(release_altitude, 1)
+            return True, normalized, "", {
+                "inserted_home_transition": False,
+                "kmz_strict_wayline": True,
+                "kmz_home_seq": 0,
+                "kmz_vtol_takeoff_seq": 1,
+                "mode_switch_release_altitude": release_altitude,
+                "mode_switch_release_waypoint_seq": 1,
+            }
 
         position_indices = [
             index for index, waypoint in enumerate(normalized)

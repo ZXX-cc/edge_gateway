@@ -29,7 +29,14 @@ class Dock3LiveClient(MqttRequestClient):
     def ignored_total(self):
         return self.stale_total()
 
-    def wait_live_state(self, previous_count: int, timeout: float, *, video_id: str, expected_status: int) -> int:
+    def wait_live_state_item(
+        self,
+        previous_count: int,
+        timeout: float,
+        *,
+        video_id: str,
+        expected_status: int,
+    ) -> tuple[int, dict]:
         topic = f"thing/product/{self.sn}/state"
         deadline = time.time() + timeout
         seen = previous_count
@@ -54,7 +61,7 @@ class Dock3LiveClient(MqttRequestClient):
                     continue
                 if not isinstance(item.get("error_status"), int):
                     continue
-                return 0
+                return 0, item
 
         latest = self.observed_by_topic.get(topic, [])[-3:]
         print(
@@ -63,7 +70,28 @@ class Dock3LiveClient(MqttRequestClient):
         )
         if latest:
             print(json.dumps(latest, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 14
+        return 14, {}
+
+    def wait_live_state(self, previous_count: int, timeout: float, *, video_id: str, expected_status: int) -> int:
+        rc, _ = self.wait_live_state_item(
+            previous_count,
+            timeout,
+            video_id=video_id,
+            expected_status=expected_status,
+        )
+        return rc
+
+
+def extract_live_session_id(*payloads) -> str:
+    """从直播回复、事件或状态项中提取 session_id，兼容旧回包缺字段的现场版本。"""
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        session_id = str(data.get("session_id") or "").strip() if isinstance(data, dict) else ""
+        if session_id:
+            return session_id
+    return ""
 
 
 def run_live_checks(client: Dock3LiveClient, args) -> int:
@@ -121,14 +149,15 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     )
     if rc != 0:
         return rc
-    rc = client.wait_live_state(state_before, args.timeout, video_id=video_id, expected_status=1)
+    rc, live_state = client.wait_live_state_item(
+        state_before,
+        args.timeout,
+        video_id=video_id,
+        expected_status=1,
+    )
     if rc != 0:
         return rc
-    session_id = start.get("data", {}).get("session_id")
-    if not session_id:
-        print(f"live_start missing session_id: {start}", file=sys.stderr)
-        return 11
-    rc, _ = client.wait_event(
+    rc, live_event = client.wait_event(
         "live_status_notify",
         status_before,
         args.timeout,
@@ -136,6 +165,11 @@ def run_live_checks(client: Dock3LiveClient, args) -> int:
     )
     if rc != 0:
         return rc
+    session_id = extract_live_session_id(start, live_event, live_state)
+    if not session_id:
+        print("live_start session_id not observed; state/event already confirmed in_progress")
+    else:
+        print(f"live_start session_id observed: {session_id}")
 
     status_before = client.event_count("live_status_notify")
     state_before = client.observed_count(state_topic)

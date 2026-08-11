@@ -7,6 +7,7 @@ import unittest
 import tempfile
 import zipfile
 import json
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -82,6 +83,22 @@ from src.utils.dji_error_codes import (
 )
 
 
+KMZ_NEST_TEST_POINT = {
+    "latitude": -35.363000,
+    "longitude": 149.165000,
+    "altitude": 0.0,
+    "takeoff_alt_offset": 40.0,
+}
+
+
+def with_wayline_test_config(base=None):
+    data = deepcopy(base or {})
+    mission = data.setdefault("mission", {})
+    wayline = mission.setdefault("wayline", {})
+    wayline.setdefault("nest_takeoff_point", deepcopy(KMZ_NEST_TEST_POINT))
+    return data
+
+
 def base_msg(method, data):
     return {
         "tid": f"tid-{method}",
@@ -94,21 +111,44 @@ def base_msg(method, data):
 
 def write_mock_kmz(path: Path):
     kml = """<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
   <Document>
-    <Placemark>
-      <LineString>
-        <coordinates>
-          149.165237,-35.363262,120
-          149.165537,-35.363562,140
-        </coordinates>
-      </LineString>
-    </Placemark>
+    <wpml:waylineCoordinateSysParam>
+      <wpml:coordinateMode>WGS84</wpml:coordinateMode>
+      <wpml:heightMode>relativeToStartPoint</wpml:heightMode>
+    </wpml:waylineCoordinateSysParam>
+    <wpml:takeOffRefPoint>-35.363000,149.165000,584.0</wpml:takeOffRefPoint>
+    <wpml:takeOffRefPointAGLHeight>584.0</wpml:takeOffRefPointAGLHeight>
+  </Document>
+</kml>
+"""
+    wpml = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="http://www.dji.com/wpmz/1.0.2">
+  <Document>
+    <wpml:executeHeightMode>relativeToStartPoint</wpml:executeHeightMode>
+    <wpml:waylineAvoidLimitAreaMode>0</wpml:waylineAvoidLimitAreaMode>
+    <Folder>
+      <wpml:templateId>0</wpml:templateId>
+      <wpml:waylineId>0</wpml:waylineId>
+      <wpml:distance>100</wpml:distance>
+      <wpml:duration>60</wpml:duration>
+      <Placemark>
+        <Point><coordinates>149.165237,-35.363262</coordinates></Point>
+        <wpml:index>0</wpml:index>
+        <wpml:executeHeight>120</wpml:executeHeight>
+      </Placemark>
+      <Placemark>
+        <Point><coordinates>149.165537,-35.363562</coordinates></Point>
+        <wpml:index>1</wpml:index>
+        <wpml:executeHeight>140</wpml:executeHeight>
+      </Placemark>
+    </Folder>
   </Document>
 </kml>
 """
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("wpmz/template.kml", kml)
+        archive.writestr("wpmz/waylines.wpml", wpml)
 
 
 def write_mock_wpml_actions(path: Path):
@@ -408,6 +448,13 @@ class RecordingTelemetry:
 
 
 class Dock3WaylineTest(unittest.TestCase):
+    def setUp(self):
+        self._original_config_data = Config._data
+        Config._data = with_wayline_test_config(Config._data if isinstance(Config._data, dict) else {})
+
+    def tearDown(self):
+        Config._data = self._original_config_data
+
     def test_parse_local_kmz_extracts_waypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
             kmz_path = Path(tmp) / "mission.kmz"
@@ -418,10 +465,16 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertTrue(summary["available"])
         self.assertTrue(summary["parsed"])
         self.assertEqual(summary["format"], "kmz")
-        self.assertEqual(summary["waypoint_count"], 2)
-        self.assertEqual(len(waypoints), 2)
-        self.assertAlmostEqual(waypoints[0]["latitude"], -35.363262)
-        self.assertAlmostEqual(waypoints[0]["longitude"], 149.165237)
+        self.assertEqual(summary["parser"], "dji_wpml_strict")
+        self.assertEqual(summary["waypoint_count"], 4)
+        self.assertEqual(len(waypoints), 4)
+        self.assertEqual(waypoints[0]["inserted_by_gateway"], "kmz_home")
+        self.assertEqual(waypoints[1]["command"], 84)
+        self.assertEqual(waypoints[1]["inserted_by_gateway"], "kmz_vtol_takeoff")
+        self.assertAlmostEqual(waypoints[0]["latitude"], KMZ_NEST_TEST_POINT["latitude"])
+        self.assertAlmostEqual(waypoints[0]["longitude"], KMZ_NEST_TEST_POINT["longitude"])
+        self.assertAlmostEqual(waypoints[2]["latitude"], -35.363262)
+        self.assertAlmostEqual(waypoints[2]["longitude"], 149.165237)
 
     def test_parse_wpml_extracts_waypoint_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -590,6 +643,49 @@ class Dock3WaylineTest(unittest.TestCase):
         self.assertEqual(details["home_transition_next_seq"], 2)
         self.assertAlmostEqual(normalized[1]["altitude"], 110.0)
         self.assertAlmostEqual(details["mode_switch_release_altitude"], 110.0)
+        self.assertEqual(details["mode_switch_release_waypoint_seq"], 1)
+
+    def test_strict_kmz_inserted_takeoff_skips_home_transition_insert(self):
+        manager = MissionManager()
+        waypoint_manager = RecordingWaypointManager()
+        manager.set_waypoint_manager(waypoint_manager)
+
+        ok, normalized, reason, details = manager._normalize_wayline_for_flight([
+            {
+                "seq": 0,
+                "latitude": KMZ_NEST_TEST_POINT["latitude"],
+                "longitude": KMZ_NEST_TEST_POINT["longitude"],
+                "altitude": 0,
+                "command": 16,
+                "frame": 3,
+                "inserted_by_gateway": "kmz_home",
+            },
+            {
+                "seq": 1,
+                "latitude": KMZ_NEST_TEST_POINT["latitude"],
+                "longitude": KMZ_NEST_TEST_POINT["longitude"],
+                "altitude": 80,
+                "command": 84,
+                "frame": 3,
+                "inserted_by_gateway": "kmz_vtol_takeoff",
+            },
+            {
+                "seq": 2,
+                "latitude": KMZ_NEST_TEST_POINT["latitude"] + 0.001,
+                "longitude": KMZ_NEST_TEST_POINT["longitude"] + 0.001,
+                "altitude": 120,
+                "command": 16,
+                "frame": 3,
+            },
+        ])
+
+        self.assertTrue(ok, reason)
+        self.assertEqual(len(normalized), 3)
+        self.assertFalse(details["inserted_home_transition"])
+        self.assertTrue(details["kmz_strict_wayline"])
+        self.assertEqual(details["kmz_home_seq"], 0)
+        self.assertEqual(details["kmz_vtol_takeoff_seq"], 1)
+        self.assertAlmostEqual(details["mode_switch_release_altitude"], 80.0)
         self.assertEqual(details["mode_switch_release_waypoint_seq"], 1)
 
     def test_mission_manager_executes_waypoint_actions_once(self):
@@ -821,7 +917,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_paused_task_can_be_superseded_by_new_breakpoint_prepare(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": True}, "nest_mavlink": {"enabled": True}}
+        Config._data = with_wayline_test_config({"mavlink": {"enabled": True}, "nest_mavlink": {"enabled": True}})
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 breakpoint_path = Path(tmp) / "breakpoint.json"
@@ -1515,7 +1611,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_mission_manager_wayline_lifecycle_outputs_dock3_status(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
+        Config._data = with_wayline_test_config({"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}})
         try:
             events = []
             manager = MissionManager()
@@ -1586,7 +1682,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_flighttask_prepare_uploads_wayline_to_flight_controller_when_main_mavlink_enabled(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": True}, "nest_mavlink": {"enabled": True}}
+        Config._data = with_wayline_test_config({"mavlink": {"enabled": True}, "nest_mavlink": {"enabled": True}})
         try:
             manager = MissionManager()
             nest = RecordingNest()
@@ -1616,13 +1712,16 @@ class Dock3WaylineTest(unittest.TestCase):
             self.assertEqual(prepare["data"]["output"]["status"], "sent")
             self.assertTrue(prepare["data"]["output"]["ext"]["file"]["parsed"])
             self.assertNotEqual(prepare["data"]["output"]["ext"]["file"].get("delegated_to"), "nest")
-            self.assertEqual(prepare["data"]["output"]["ext"]["waypoint_count"], 3)
-            self.assertTrue(prepare["data"]["output"]["ext"]["file"]["inserted_home_transition"])
+            self.assertEqual(prepare["data"]["output"]["ext"]["waypoint_count"], 4)
+            self.assertFalse(prepare["data"]["output"]["ext"]["file"]["inserted_home_transition"])
+            self.assertTrue(prepare["data"]["output"]["ext"]["file"]["kmz_strict_wayline"])
+            self.assertTrue(prepare["data"]["output"]["ext"]["file"]["inserted_vtol_takeoff"])
             self.assertEqual(waypoint_manager.clear_calls, 1)
-            self.assertEqual(len(waypoint_manager.added), 3)
-            self.assertAlmostEqual(waypoint_manager.added[0]["lat"], waypoint_manager.home_position["lat"])
-            self.assertAlmostEqual(waypoint_manager.added[0]["lon"], waypoint_manager.home_position["lon"])
-            self.assertAlmostEqual(waypoint_manager.added[0]["alt"], 80.0)
+            self.assertEqual(len(waypoint_manager.added), 4)
+            self.assertAlmostEqual(waypoint_manager.added[0]["lat"], KMZ_NEST_TEST_POINT["latitude"])
+            self.assertAlmostEqual(waypoint_manager.added[0]["lon"], KMZ_NEST_TEST_POINT["longitude"])
+            self.assertEqual(waypoint_manager.added[1]["command"], 84)
+            self.assertAlmostEqual(waypoint_manager.added[1]["alt"], 80.0)
             self.assertEqual(waypoint_manager.upload_calls, [15.0])
 
             execute = manager.handle_flighttask_execute(base_msg("flighttask_execute", {
@@ -1642,7 +1741,7 @@ class Dock3WaylineTest(unittest.TestCase):
 
     def test_flighttask_prepare_fails_when_nest_link_configured_before_module_injection(self):
         original_config = Config._data
-        Config._data = {"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}}
+        Config._data = with_wayline_test_config({"mavlink": {"enabled": False}, "nest_mavlink": {"enabled": True}})
         try:
             manager = MissionManager()
             waypoint_manager = RecordingWaypointManager()
