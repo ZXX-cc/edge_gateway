@@ -127,6 +127,11 @@ def main() -> int:
     parser.add_argument("--ip", default="192.168.1.119")
     parser.add_argument("--port", type=int, default=2000)
     parser.add_argument("--loader", choices=["windll", "cdll"], default="windll")
+    parser.add_argument(
+        "--work-dir",
+        default=".",
+        help="runtime working directory for SDK logs; default keeps the command cwd",
+    )
     parser.add_argument("--callback", choices=["none", "cdecl", "stdcall"], default="cdecl")
     parser.add_argument(
         "--callback-body",
@@ -155,8 +160,12 @@ def main() -> int:
         flush=True,
     )
 
-    os.chdir(args.sdk_dir)
-    print(f"cwd.sdk={os.getcwd()}", flush=True)
+    sdk_dir = os.path.abspath(args.sdk_dir)
+    work_dir = os.path.abspath(args.work_dir)
+    print(f"sdk_dir={sdk_dir}", flush=True)
+    os.makedirs(work_dir, exist_ok=True)
+    os.chdir(work_dir)
+    print(f"cwd.runtime={os.getcwd()}", flush=True)
     log_dir = os.path.join(os.getcwd(), "VLKLog")
     try:
         os.makedirs(log_dir, exist_ok=True)
@@ -164,7 +173,7 @@ def main() -> int:
     except OSError as exc:
         print(f"log_dir.create_failed={log_dir} error={exc}", flush=True)
 
-    lib = load_library(args.sdk_dir, args.loader)
+    lib = load_library(sdk_dir, args.loader)
     lib.GetSDKVersion.argtypes = []
     lib.GetSDKVersion.restype = c_char_p
     lib.VLK_Init.argtypes = []
@@ -193,7 +202,7 @@ def main() -> int:
         if args.callback_body == "gimbal":
             from src.modules.gimbal_control import GimbalControl
 
-            gimbal = GimbalControl(args.sdk_dir, args.ip, args.port, False)
+            gimbal = GimbalControl(sdk_dir, args.ip, args.port, False)
             gimbal._lib = lib
             callback = gimbal._create_conn_callback()
         else:
