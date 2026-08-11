@@ -403,7 +403,7 @@ class DeviceManager:
             # ---- 子设备状态 (pushMode=0, 只读) ----
             'sub_device': {
                 'device_sn': '',
-                'product_type': '',
+                'device_model_key': '',
                 'device_online_status': 0,   # 0:关机,1:开机
                 'device_paired': 0           # 0:未对频,1:已对频
             },
@@ -1524,12 +1524,12 @@ class DeviceManager:
 
     # ========== 拓扑管理 ==========
 
-    def update_device_topology(self, device_sn: str, product_type: str,
+    def update_device_topology(self, device_sn: str, device_model_key: str,
                                online: bool, paired: bool):
         """更新单个设备拓扑信息"""
         self._properties['sub_device'] = {
             'device_sn': device_sn,
-            'product_type': product_type,
+            'device_model_key': device_model_key,
             'device_online_status': 1 if online else 0,
             'device_paired': 1 if paired else 0
         }
@@ -1578,7 +1578,10 @@ class DeviceManager:
 
         state = {
             'device_sn': selected.sn if selected else '',
-            'product_type': str(selected.type) if selected else '',
+            'device_model_key': (
+                f"{selected.domain}-{selected.type}-{selected.sub_type}"
+                if selected else ''
+            ),
             'device_online_status': 1 if selected and selected.online else 0,
             'device_paired': 1 if selected and selected.paired else 0,
         }
@@ -1598,7 +1601,7 @@ class DeviceManager:
         self._sub_devices[sub_device.sn] = sub_device
         logger.info(f"Sub device added: {sub_device.sn}")
         self.update_device_topology(
-            sub_device.sn, str(sub_device.type),
+            sub_device.sn, f"{sub_device.domain}-{sub_device.type}-{sub_device.sub_type}",
             sub_device.online, sub_device.paired
         )
         return True

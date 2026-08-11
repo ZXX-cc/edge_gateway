@@ -808,7 +808,7 @@ python src\mavlink_definitions\generate_dialect.py
 | MQTT              | services、property、requests、status、events、OSD、state、DRC topic 和回包 | 用户名密码已支持；生产 TLS 未完成           |
 | MongoDB           | 任务、航点、遥测、操作、告警、媒体、绑定和保留策略                         | 需在 Windows 实库执行审计和压测             |
 | 设备上线和拓扑    | 上线、心跳、绑定、解绑、update_topo、多子设备缓存                          | 真实平台型号、密钥和组织字段需确认          |
-| Dock 3 Properties | 49 项官方属性 schema、读写校验、OSD/state 分流                             | 17 项物理语义需要真机确认                   |
+| Dock 3 Properties | 50 项属性 schema、读写校验、OSD/state 分流，含现场保留 `putter_state`       | 17 项物理语义需要真机确认                   |
 | 飞控遥测          | HEARTBEAT、GPS、姿态、电池、高度、速度和模式解析                           | 真机字段、单位、目标 ID 和丢包行为待验收    |
 | 基础飞控          | 模式切换、预解锁、解锁、起飞、返航、降落及 ACK 检查                        | 当前目标 ID 默认 `1/1`；PX4 未适配          |
 | 航线              | prepare、execute、progress、pause、resume、undo、stop 和断点保存           | 真机任务终态和恢复流程未完成验收            |

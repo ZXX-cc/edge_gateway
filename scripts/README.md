@@ -132,5 +132,5 @@ MOSQUITTO_CONFIG=/etc/mosquitto/mosquitto.conf MOSQUITTO_CONFIG_CHECK_TIMEOUT=8s
 bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-stale
 ```
 
-脚本验证官方 49 项顶层属性、37 项 OSD、12 项 state 分流以及 3 项可写属性，
+脚本验证 50 项顶层属性、38 项 OSD、12 项 state 分流以及 3 项可写属性，
 日志和 JSON 摘要统一保存到 `logs/acceptance_evidence/<时间>_dock3_properties/`。

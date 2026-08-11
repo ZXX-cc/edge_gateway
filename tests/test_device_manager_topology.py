@@ -344,6 +344,7 @@ class DeviceManagerTopologyTest(unittest.TestCase):
         self.assertTrue(device.paired)
         self.assertEqual(self.update_topo_events()[-1]["data"]["sub_devices"][0]["sn"], "DRONE-A")
         self.assertEqual(self.manager.get_property("sub_device")["device_paired"], 1)
+        self.assertEqual(self.manager.get_property("sub_device")["device_model_key"], "0-60-0")
 
     def test_unbind_clears_sub_devices_bindings_and_reports_empty_topology(self):
         for sn, index in (("DRONE-A", "A"), ("DRONE-B", "B")):

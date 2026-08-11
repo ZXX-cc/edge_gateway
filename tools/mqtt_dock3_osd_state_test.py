@@ -167,8 +167,12 @@ def validate_dock_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
     check_field(data, "backup_battery.voltage", int, errors, min_value=0, max_value=30000)
     check_field(data, "storage.total", int, errors, min_value=0)
     check_field(data, "storage.used", int, errors, min_value=0)
+    check_field(data, "sub_device.device_sn", str, errors)
+    check_field(data, "sub_device.device_model_key", str, errors)
+    check_field(data, "sub_device.device_online_status", int, errors, allowed={0, 1})
+    check_field(data, "sub_device.device_paired", int, errors, allowed={0, 1})
 
-    if "battery" in data or "putter_state" in data or "electricity" in data:
+    if "battery" in data or "electricity" in data:
         errors.append("dock OSD must use Dock3 dock properties, not drone battery OSD")
     return errors
 

@@ -10,11 +10,11 @@
 - 模拟可验证：MAVLink/SITL -> aircraft OSD、机巢状态 -> dock OSD、属性变化 -> state。
 - 待真机确认：不可用值、固件差异、字段拆包顺序、完整 payload、真实传感器精度和枚举切换过程。
 
-截至 2026-07-13，官方 Dock 3 顶层属性已形成单一代码目录：**49/49 项结构覆盖**，
-其中 `pushMode=0` OSD 37 项、`pushMode=1` state 12 项；官方 3 个 `rw` 属性均可在
-纯模拟环境通过 `property/set -> state` 验证。此处“结构覆盖”不等于 49 项真机语义验收完成。
+截至 2026-07-13，Dock 3 顶层属性已形成单一代码目录：**50 项结构覆盖**，
+包含现场保留的 `putter_state`；其中 `pushMode=0` OSD 38 项、`pushMode=1` state 12 项；官方 3 个 `rw` 属性均可在
+纯模拟环境通过 `property/set -> state` 验证。此处“结构覆盖”不等于 50 项真机语义验收完成。
 
-2026-07-13 Ubuntu 严格验收已在 `192.168.2.188:1883` 完成：37 项专项单测和 MQTT
+2026-07-13 Ubuntu 严格验收已在 `192.168.2.188:1883` 完成：38 项专项单测和 MQTT
 属性专项均以退出码 0 结束，覆盖摘要为 `status=passed`、`strict_stale_total=0`，竞争回复、
 旧格式回复和无关回复计数全部为 0。由此确认**纯模拟属性阶段完成**；下表标记的 17 项
 真机确认字段仍需实体 Dock3/飞行器样本，不能由模拟值替代。
@@ -56,7 +56,7 @@
 | `wireless_link_topo/dongle_infos` | 模拟拓扑、无 Dongle 空数组 | 官方结构和 state 分流已补齐，不伪造硬件 ID | 接真实 SDR、4G Dongle、SIM/eSIM 数据 |
 | `mode_code` | 机场任务/调试状态机 | 已限制为机场枚举 `0..5`；不再被 aircraft mode 覆盖 | 核对固件升级、待标定切换 |
 | `cover_state` | 机巢 `gate_state` | 映射 `0..3` | 用真机开/关/半开/异常逐项确认 |
-| `putter_state` | 机巢 `clamp_state` | 保留为内部/历史控制字段，不再进入官方 Dock 3 OSD | 核对实体机巢夹紧机构业务语义 |
+| `putter_state` | 机巢 `clamp_state` | 保留在机场 OSD，供平台侧观察推杆/夹紧机构实际变化 | 核对实体机巢夹紧机构业务语义 |
 | `drone_in_dock` | 机巢无人机心跳/内部状态 | 推断值 | 必须真机确认检测源 |
 | `drone_charge_state` | 飞控电量 + 机巢充电位 | 基础结构可用 | 核对断电、满电、无飞机状态 |
 | `position_state` | 当前兼容使用飞控 GPS | 仅用于模拟链路 | 必须改接机场 RTK/定位数据 |
@@ -68,8 +68,8 @@
 
 ## 4. State 分流规则
 
-- `osd` 只承载官方 37 个 `pushMode=0` 定频属性，频率为 `0.5Hz`；
-  `putter_state/electricity/wpmz_version` 等历史或其他设备域字段不再混入机场 OSD。
+- `osd` 承载 38 个 `pushMode=0` 定频属性，频率为 `0.5Hz`；
+  `putter_state` 保留在机场 OSD，`electricity/wpmz_version` 等历史或其他设备域字段不再混入机场 OSD。
 - OSD 默认按官方示例直接输出原始属性值，不再默认套用旧 Demo 的
   `{"value": ...}` 包装；兼容包装仅保留为显式内部选项。
 - `state` 只承载真实属性变化；禁止上报内部键 `flight_mode`、`armed`、
@@ -92,8 +92,8 @@ bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-s
 
 脚本会完成三层验证：
 
-1. 单元测试校验官方目录为 49 项、OSD/state 分组为 37/12。
-2. MQTT `property_get` 对 49 项逐项检查存在性、顶层类型、枚举和值域。
+1. 单元测试校验官方目录为 50 项、OSD/state 分组为 38/12。
+2. MQTT `property_get` 对 50 项逐项检查存在性、顶层类型、枚举和值域。
 3. 检查完整机场 OSD 无 state/历史字段泄漏，并依次触发 3 个 `rw` 属性的 state。
 
 属性专项只订阅机场 OSD 和机场 state，不把 aircraft OSD 纳入属性门禁；aircraft OSD
@@ -107,7 +107,7 @@ bash scripts/dock3_property_acceptance.sh --timeout 20 --quiet-stale --fail-on-s
 
 完整日志和 `dock3_property_coverage_summary.json` 会保存到同一个
 `logs/acceptance_evidence/<时间>_dock3_properties/` 目录。JSON 将 17 个只能由
-真机确认物理语义的字段单列，避免把模拟值当成真机证据。未接负载不影响机场 49 项
+真机确认物理语义的字段单列，避免把模拟值当成真机证据。未接负载不影响机场 50 项
 顶层属性结构验收，但相机、云台等 payload-index 属性不在本次完成范围内。
 
 ## 6. 真机对接验收清单

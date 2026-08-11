@@ -113,9 +113,10 @@ def valid_dock_osd(sn="EDGEGW001"):
             "network_state": {"type": 2, "quality": 5, "rate": 10},
             "supplement_light_state": 0,
             "cover_state": 0,
+            "putter_state": 0,
             "sub_device": {
                 "device_sn": "DRONESIM001",
-                "product_type": "91",
+                "device_model_key": "0-91-0",
                 "device_online_status": 1,
                 "device_paired": 1,
             },
