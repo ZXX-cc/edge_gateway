@@ -167,11 +167,7 @@ def main() -> int:
     os.chdir(work_dir)
     print(f"cwd.runtime={os.getcwd()}", flush=True)
     log_dir = os.path.join(os.getcwd(), "VLKLog")
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        print(f"log_dir.ready={log_dir}", flush=True)
-    except OSError as exc:
-        print(f"log_dir.create_failed={log_dir} error={exc}", flush=True)
+    print(f"log_dir.expected={log_dir}", flush=True)
 
     lib = load_library(sdk_dir, args.loader)
     lib.GetSDKVersion.argtypes = []
