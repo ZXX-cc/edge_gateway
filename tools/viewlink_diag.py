@@ -20,6 +20,7 @@ from ctypes import (
     Union,
     c_char,
     c_char_p,
+    c_double,
     c_int,
     c_short,
     c_void_p,
@@ -67,6 +68,24 @@ class VLK_CONN_PARAM(Structure):
     _fields_ = [
         ("emType", c_int),
         ("ConnParam", ConnParamUnion),
+    ]
+
+
+class VLK_DEV_TELEMETRY(Structure):
+    _fields_ = [
+        ("dYaw", c_double),
+        ("dPitch", c_double),
+        ("dRoll", c_double),
+        ("emSensorType", c_int),
+        ("emTrackerStatus", c_int),
+        ("dTargetLat", c_double),
+        ("dTargetLng", c_double),
+        ("dTargetAlt", c_double),
+        ("dDroneLat", c_double),
+        ("dDroneLng", c_double),
+        ("dDroneAlt", c_double),
+        ("dFov", c_double),
+        ("dVertical", c_double),
     ]
 
 
@@ -122,6 +141,21 @@ def print_motion_status(lib, label: str) -> None:
     )
 
 
+def print_telemetry(state: dict, label: str) -> None:
+    telemetry = state.get("telemetry")
+    if not telemetry:
+        print(f"{label}: telemetry=none", flush=True)
+        return
+    print(
+        (
+            f"{label}: yaw={telemetry['yaw']:.3f} pitch={telemetry['pitch']:.3f} "
+            f"roll={telemetry['roll']:.3f} sensor={telemetry['sensor']} "
+            f"tracker={telemetry['tracker']}"
+        ),
+        flush=True,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose ViewLink VLK_Connect")
     parser.add_argument("--sdk-dir", default="D:/ViewLink/bin/win64")
@@ -153,6 +187,11 @@ def main() -> int:
     parser.add_argument("--move-yaw", type=int, default=1000)
     parser.add_argument("--move-pitch", type=int, default=0)
     parser.add_argument("--move-seconds", type=float, default=1.0)
+    parser.add_argument("--turn-to", action="store_true")
+    parser.add_argument("--turn-yaw", type=float, default=30.0)
+    parser.add_argument("--turn-pitch", type=float, default=-20.0)
+    parser.add_argument("--turn-wait", type=float, default=2.0)
+    parser.add_argument("--dev-status", action="store_true")
     args = parser.parse_args()
 
     print(f"cwd.before={os.getcwd()}", flush=True)
@@ -196,6 +235,7 @@ def main() -> int:
     bind_optional(lib, "VLK_DisableTrackMode", [], None)
     bind_optional(lib, "VLK_Move", [c_short, c_short], None)
     bind_optional(lib, "VLK_Stop", [], None)
+    bind_optional(lib, "VLK_TurnTo", [c_double, c_double], None)
 
     callback = None
     if args.callback == "none":
@@ -234,6 +274,25 @@ def main() -> int:
                 return 0
 
     lib.VLK_Connect.restype = c_int
+    dev_status_callback = None
+    dev_status_state = {"telemetry": None}
+    if args.dev_status:
+        dev_cb_type = CALLBACK_FACTORIES["cdecl"](c_int, c_void_p, c_int, c_void_p)
+        lib.VLK_RegisterDevStatusCB.argtypes = [dev_cb_type, c_void_p]
+        lib.VLK_RegisterDevStatusCB.restype = None
+
+        @dev_cb_type
+        def dev_status_callback(status_type, buffer, buf_len, user_param):
+            if status_type == 2 and buffer and buf_len >= ctypes.sizeof(VLK_DEV_TELEMETRY):
+                telemetry = ctypes.cast(buffer, POINTER(VLK_DEV_TELEMETRY)).contents
+                dev_status_state["telemetry"] = {
+                    "yaw": float(telemetry.dYaw),
+                    "pitch": float(telemetry.dPitch),
+                    "roll": float(telemetry.dRoll),
+                    "sensor": int(telemetry.emSensorType),
+                    "tracker": int(telemetry.emTrackerStatus),
+                }
+            return 0
 
     version = lib.GetSDKVersion()
     print(f"version={version!r}", flush=True)
@@ -262,6 +321,10 @@ def main() -> int:
     ret = lib.VLK_Connect(ctypes.byref(param), callback, None)
     print(f"after VLK_Connect ret={ret}", flush=True)
 
+    if args.dev_status:
+        print("calling VLK_RegisterDevStatusCB()", flush=True)
+        lib.VLK_RegisterDevStatusCB(dev_status_callback, None)
+
     deadline = time.time() + max(0.0, args.poll_seconds)
     while time.time() < deadline:
         connected = lib.VLK_IsConnected()
@@ -270,6 +333,8 @@ def main() -> int:
 
     if not args.skip_motion_status:
         print_motion_status(lib, "motion_status.before")
+    if args.dev_status:
+        print_telemetry(dev_status_state, "telemetry.before")
 
     if args.switch_motor != "keep":
         switch_motor = getattr(lib, "VLK_SwitchMotor", None)
@@ -320,8 +385,22 @@ def main() -> int:
             stop()
             time.sleep(0.5)
 
+    if args.turn_to:
+        turn_to = getattr(lib, "VLK_TurnTo", None)
+        if turn_to is None:
+            print("turn_to=unavailable", flush=True)
+        else:
+            yaw = max(-180.0, min(180.0, float(args.turn_yaw)))
+            pitch = max(-90.0, min(90.0, float(args.turn_pitch)))
+            wait = max(0.1, min(10.0, float(args.turn_wait)))
+            print(f"calling VLK_TurnTo({yaw}, {pitch}), wait {wait}s", flush=True)
+            turn_to(c_double(yaw), c_double(pitch))
+            time.sleep(wait)
+
     if not args.skip_motion_status:
         print_motion_status(lib, "motion_status.after")
+    if args.dev_status:
+        print_telemetry(dev_status_state, "telemetry.after")
 
     print("calling VLK_UnInit", flush=True)
     lib.VLK_UnInit()
