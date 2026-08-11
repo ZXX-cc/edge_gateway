@@ -183,6 +183,7 @@ def main() -> int:
     parser.add_argument("--switch-motor", choices=["keep", "on", "off"], default="keep")
     parser.add_argument("--follow-mode", choices=["keep", "on", "off"], default="keep")
     parser.add_argument("--stop-track", action="store_true")
+    parser.add_argument("--stop-motion", action="store_true")
     parser.add_argument("--test-move", action="store_true")
     parser.add_argument("--move-yaw", type=int, default=1000)
     parser.add_argument("--move-pitch", type=int, default=0)
@@ -368,6 +369,15 @@ def main() -> int:
             print("calling VLK_DisableTrackMode()", flush=True)
             disable_track()
         time.sleep(0.5)
+
+    if args.stop_motion:
+        stop = getattr(lib, "VLK_Stop", None)
+        if stop is None:
+            print("stop_motion=unavailable", flush=True)
+        else:
+            print("calling VLK_Stop()", flush=True)
+            stop()
+            time.sleep(0.5)
 
     if args.test_move:
         move = getattr(lib, "VLK_Move", None)
