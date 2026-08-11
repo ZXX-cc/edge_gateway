@@ -86,6 +86,7 @@ class TelemetryProcessor:
 
     def _osd_loop(self):
         """OSD定时推送循环"""
+        next_tick = time.monotonic()
         while self._running:
             try:
                 osd_data = self.build_osd_data()
@@ -94,7 +95,12 @@ class TelemetryProcessor:
                     self._osd_callback(osd_data)
             except Exception as e:
                 logger.error(f"OSD push error: {e}")
-            time.sleep(self._osd_interval)
+            next_tick += self._osd_interval
+            sleep_seconds = next_tick - time.monotonic()
+            if sleep_seconds <= 0:
+                next_tick = time.monotonic()
+                continue
+            time.sleep(sleep_seconds)
 
     def configure_osd_rate(self, rate_hz) -> None:
         """按配置设置 OSD 上报频率；客户要求 2 秒一次时配置 0.5Hz。"""
