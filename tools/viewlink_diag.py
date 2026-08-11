@@ -156,6 +156,64 @@ def print_telemetry(state: dict, label: str) -> None:
     )
 
 
+def latest_telemetry(state: dict) -> dict | None:
+    telemetry = state.get("telemetry")
+    return dict(telemetry) if telemetry else None
+
+
+def angle_delta(after: float, before: float) -> float:
+    delta = after - before
+    while delta > 180.0:
+        delta -= 360.0
+    while delta < -180.0:
+        delta += 360.0
+    return delta
+
+
+def print_telemetry_delta(before: dict | None, after: dict | None, label: str) -> None:
+    if not before or not after:
+        print(f"{label}: telemetry_delta=unavailable", flush=True)
+        return
+    print(
+        (
+            f"{label}: delta_yaw={angle_delta(after['yaw'], before['yaw']):.3f} "
+            f"delta_pitch={after['pitch'] - before['pitch']:.3f} "
+            f"delta_roll={after['roll'] - before['roll']:.3f}"
+        ),
+        flush=True,
+    )
+
+
+def run_axis_sweep(lib, state: dict, speed: int, seconds: float) -> None:
+    move = getattr(lib, "VLK_Move", None)
+    stop = getattr(lib, "VLK_Stop", None)
+    if move is None or stop is None:
+        print("axis_sweep=unavailable", flush=True)
+        return
+
+    speed = max(1, min(2000, int(speed)))
+    duration = max(0.2, min(5.0, float(seconds)))
+    cases = [
+        ("yaw_positive", speed, 0),
+        ("yaw_negative", -speed, 0),
+        ("pitch_positive", 0, speed),
+        ("pitch_negative", 0, -speed),
+    ]
+    for label, yaw, pitch in cases:
+        time.sleep(0.8)
+        before = latest_telemetry(state)
+        print_telemetry(state, f"{label}.before")
+        print(f"calling VLK_Move({yaw}, {pitch}) for {duration}s", flush=True)
+        move(yaw, pitch)
+        time.sleep(duration)
+        print("calling VLK_Stop()", flush=True)
+        stop()
+        time.sleep(0.8)
+        after = latest_telemetry(state)
+        print_telemetry(state, f"{label}.after")
+        print_telemetry_delta(before, after, label)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose ViewLink VLK_Connect")
     parser.add_argument("--sdk-dir", default="D:/ViewLink/bin/win64")
@@ -193,6 +251,9 @@ def main() -> int:
     parser.add_argument("--turn-pitch", type=float, default=-20.0)
     parser.add_argument("--turn-wait", type=float, default=2.0)
     parser.add_argument("--dev-status", action="store_true")
+    parser.add_argument("--axis-sweep", action="store_true")
+    parser.add_argument("--axis-sweep-speed", type=int, default=1000)
+    parser.add_argument("--axis-sweep-seconds", type=float, default=1.0)
     args = parser.parse_args()
 
     print(f"cwd.before={os.getcwd()}", flush=True)
@@ -406,6 +467,12 @@ def main() -> int:
             print(f"calling VLK_TurnTo({yaw}, {pitch}), wait {wait}s", flush=True)
             turn_to(c_double(yaw), c_double(pitch))
             time.sleep(wait)
+
+    if args.axis_sweep:
+        if not args.dev_status:
+            print("axis_sweep requires --dev-status", flush=True)
+        else:
+            run_axis_sweep(lib, dev_status_state, args.axis_sweep_speed, args.axis_sweep_seconds)
 
     if not args.skip_motion_status:
         print_motion_status(lib, "motion_status.after")

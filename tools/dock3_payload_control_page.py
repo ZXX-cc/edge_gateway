@@ -105,6 +105,12 @@ HTML = """<!doctype html>
           <button onpointerdown="startDrag(0,-1)" onpointerup="stopDrag()" onpointerleave="stopDrag()">左</button><button onclick="stopDrag()">停</button><button onpointerdown="startDrag(0,1)" onpointerup="stopDrag()" onpointerleave="stopDrag()">右</button>
           <span></span><button onpointerdown="startDrag(-1,0)" onpointerup="stopDrag()" onpointerleave="stopDrag()">下</button><span></span>
         </div>
+        <div class="grid">
+          <button onclick="pulseDrag(0,-1)">左点动</button>
+          <button onclick="pulseDrag(0,1)">右点动</button>
+          <button onclick="pulseDrag(1,0)">上点动</button>
+          <button onclick="pulseDrag(-1,0)">下点动</button>
+        </div>
       </section>
       <section>
         <h2>速度 <span id="speedText">10</span> degree/s</h2>
@@ -198,6 +204,12 @@ function startDrag(pitchDir, yawDir) {
 function stopDrag() {
   if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
   return api('/api/drag', { pitch_speed: 0, yaw_speed: 0 });
+}
+async function pulseDrag(pitchDir, yawDir) {
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  await drag(pitchDir, yawDir);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  return stopDrag();
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function videoContentRect() {
