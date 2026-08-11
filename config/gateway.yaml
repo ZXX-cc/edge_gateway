@@ -145,6 +145,7 @@ mavlink:
   target_system_id: 1 # 飞控目标 sysid；按 HEARTBEAT/日志里的真实飞机 sysid 修改。
   target_component_id: 1 # 飞控目标 compid；ArduPilot 飞控通常是 1。
   aircraft_system_id: 1 # 飞机飞控 sysid；TelemetryModule 只用该 sysid 构建无人机 OSD，避免机巢 101 空遥测覆盖。
+  aircraft_component_id: 1 # 飞机飞控 compid；TelemetryModule 只用该组件 HEARTBEAT 更新飞控模式/解锁状态，避免相机/云台心跳覆盖。
 
   # 遥测推送频率(Hz)
   telemetry_rate:

@@ -918,7 +918,8 @@ class EdgeGateway:
         source_component = int(mavlink_config.get('component_id') or 191)
         target_system = int(mavlink_config.get('target_system_id') or 1)
         target_component = int(mavlink_config.get('target_component_id') or 1)
-        aircraft_system_id = int(mavlink_config.get('aircraft_system_id') or target_system)
+        aircraft_system_id = mavlink_config.get('aircraft_system_id', target_system)
+        aircraft_component_id = mavlink_config.get('aircraft_component_id', target_component)
 
         self.flight_control = self.flight_control or FlightControl(
             target_system=target_system,
@@ -935,6 +936,7 @@ class EdgeGateway:
         self.telemetry_module = self.telemetry_module or TelemetryModule(
             mode="real",
             aircraft_system_id=aircraft_system_id,
+            aircraft_component_id=aircraft_component_id,
         )
         self.waypoint_manager = self.waypoint_manager or WaypointManager(
             target_system=target_system,

@@ -27,18 +27,25 @@ class TelemetryModule(BaseModule):
     - 支持模拟数据生成
     """
 
-    def __init__(self, mode: str = "real", aircraft_system_id: Optional[int] = None):
+    def __init__(
+        self,
+        mode: str = "real",
+        aircraft_system_id: Optional[int] = None,
+        aircraft_component_id: Optional[int] = None,
+    ):
         """
         初始化遥测模块
 
         Args:
             mode: 数据模式 ('real' 或 'simulated')
             aircraft_system_id: 飞控系统ID；None 时从配置读取，0 表示不按 sysid 过滤。
+            aircraft_component_id: 飞控组件ID；仅用于 HEARTBEAT 过滤，0 表示不按 compid 过滤。
         """
         super().__init__("TelemetryModule")
 
         self.mode = mode  # 'real' 或 'simulated'
         self.aircraft_system_id = self._resolve_aircraft_system_id(aircraft_system_id)
+        self.aircraft_component_id = self._resolve_aircraft_component_id(aircraft_component_id)
         self._ignored_source_log_keys = set()
 
         self.telemetry_data = new_telemetry_state()
@@ -114,8 +121,22 @@ class TelemetryModule(BaseModule):
             parsed = 1
         return parsed if parsed > 0 else None
 
+    @staticmethod
+    def _resolve_aircraft_component_id(aircraft_component_id: Optional[int]) -> Optional[int]:
+        configured = aircraft_component_id
+        if configured is None:
+            configured = Config.get(
+                'mavlink.aircraft_component_id',
+                Config.get('mavlink.target_component_id', 1),
+            )
+        try:
+            parsed = int(configured)
+        except (TypeError, ValueError):
+            parsed = 1
+        return parsed if parsed > 0 else None
+
     def _should_accept_aircraft_message(self, message: MAVLinkMessage) -> bool:
-        """只让真实飞控源更新 aircraft OSD，避免机巢/PLC 空遥测覆盖飞机值。"""
+        """只让真实飞控源更新 aircraft OSD，避免机巢/PLC/载荷空遥测覆盖飞机值。"""
         if self.aircraft_system_id is None:
             return True
         sysid = getattr(message, "sysid", None)
@@ -126,7 +147,7 @@ class TelemetryModule(BaseModule):
         except (TypeError, ValueError):
             return True
         if source_sysid == self.aircraft_system_id:
-            return True
+            return self._should_accept_aircraft_component_heartbeat(message, source_sysid)
 
         msg_type = getattr(message, "msg_type", "UNKNOWN")
         key = (source_sysid, msg_type)
@@ -137,6 +158,36 @@ class TelemetryModule(BaseModule):
                 msg_type,
                 source_sysid,
                 self.aircraft_system_id,
+            )
+        return False
+
+    def _should_accept_aircraft_component_heartbeat(self, message: MAVLinkMessage, source_sysid: int) -> bool:
+        """只用飞控本体 HEARTBEAT 更新 armed/flight_mode/mav_type，不影响其它模块接收组件心跳。"""
+        if self.aircraft_component_id is None:
+            return True
+        msg_type = getattr(message, "msg_type", "UNKNOWN")
+        if msg_type != "HEARTBEAT":
+            return True
+        compid = getattr(message, "compid", None)
+        if compid is None:
+            return True
+        try:
+            source_compid = int(compid)
+        except (TypeError, ValueError):
+            return True
+        if source_compid == self.aircraft_component_id:
+            return True
+
+        key = (source_sysid, source_compid, msg_type)
+        if key not in self._ignored_source_log_keys:
+            self._ignored_source_log_keys.add(key)
+            self.logger.debug(
+                "Ignore non-flight-controller heartbeat for aircraft telemetry: "
+                "msg_type=%s sysid=%s compid=%s expected_aircraft_component_id=%s",
+                msg_type,
+                source_sysid,
+                source_compid,
+                self.aircraft_component_id,
             )
         return False
 
