@@ -76,6 +76,11 @@ VIEWLINK_METHOD_MAP: Dict[str, Dict[str, Any]] = {
     "move": {"sdk_method": "move", "params": ("yaw_speed", "pitch_speed")},
     "stop": {"sdk_method": "stop", "params": ()},
     "home": {"sdk_method": "home", "params": ()},
+    "switch_motor": {"sdk_method": "switch_motor", "params": ("on",)},
+    "is_motor_on": {"sdk_method": "is_motor_on", "params": ()},
+    "enable_follow_mode": {"sdk_method": "enable_follow_mode", "params": ("enable",)},
+    "is_follow_mode": {"sdk_method": "is_follow_mode", "params": ()},
+    "motion_status": {"sdk_method": "get_motion_status", "params": ()},
     "turn_to": {"sdk_method": "turn_to", "params": ("yaw", "pitch")},
     "zoom_in": {"sdk_method": "zoom_in", "params": ("speed",)},
     "zoom_out": {"sdk_method": "zoom_out", "params": ("speed",)},
@@ -145,6 +150,10 @@ def _normalize_value(name: str, value: Any) -> Any:
             return LASER_ZOOM_MODE_MAP[key]
         return int(value or 0)
     if name == "on":
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in {"1", "true", "yes", "on"}
+    if name == "enable":
         if isinstance(value, bool):
             return value
         return str(value).lower() in {"1", "true", "yes", "on"}

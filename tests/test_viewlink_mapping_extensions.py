@@ -17,10 +17,18 @@ class ViewLinkMappingExtensionsTest(unittest.TestCase):
         defog = build_viewlink_call("switch_defog", {"on": "true"})
         laser = build_viewlink_call("switch_laser", {"on": False})
         tracking = build_viewlink_call("is_tracking", {})
+        motion = build_viewlink_call("motion_status", {})
+        motor = build_viewlink_call("switch_motor", {"on": "true"})
+        follow = build_viewlink_call("enable_follow_mode", {"enable": False})
 
         self.assertEqual(defog["args"]["on"], True)
         self.assertEqual(laser["args"]["on"], False)
         self.assertEqual(tracking["sdk_method"], "is_tracking")
+        self.assertEqual(motion["sdk_method"], "get_motion_status")
+        self.assertEqual(motor["sdk_method"], "switch_motor")
+        self.assertEqual(motor["args"]["on"], True)
+        self.assertEqual(follow["sdk_method"], "enable_follow_mode")
+        self.assertEqual(follow["args"]["enable"], False)
 
     def test_image_color_mapping(self):
         image = build_viewlink_call("set_image_color", {

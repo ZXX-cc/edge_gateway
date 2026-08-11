@@ -131,6 +131,32 @@ class FakeDirectPayload:
         self.calls.append(("stop",))
         return {"success": True}
 
+    def switch_motor(self, on):
+        self.calls.append(("switch_motor", bool(on)))
+        return {"success": True}
+
+    def is_motor_on(self):
+        self.calls.append(("is_motor_on",))
+        return {"success": True, "motor_on": True}
+
+    def enable_follow_mode(self, enable):
+        self.calls.append(("enable_follow_mode", bool(enable)))
+        return {"success": True}
+
+    def is_follow_mode(self):
+        self.calls.append(("is_follow_mode",))
+        return {"success": True, "follow_mode": False}
+
+    def get_motion_status(self):
+        self.calls.append(("get_motion_status",))
+        return {
+            "success": True,
+            "connected": True,
+            "motor_on": True,
+            "follow_mode": False,
+            "tracking": False,
+        }
+
     def zoom_to(self, magnification):
         self.calls.append(("zoom_to", magnification))
         return {"success": True}
@@ -296,6 +322,9 @@ class FakeViewLinkLib:
         self.zoom_to_calls = []
         self.track_calls = []
         self.events = []
+        self.motor_on = True
+        self.follow_mode = False
+        self.tracking = False
 
     def VLK_RegisterDevStatusCB(self, callback, user_param):
         self.register_dev_status_calls += 1
@@ -326,6 +355,21 @@ class FakeViewLinkLib:
 
     def VLK_TrackTargetPositionEx(self, param, x, y, video_width, video_height):
         self.track_calls.append((x, y, video_width, video_height))
+
+    def VLK_SwitchMotor(self, on):
+        self.motor_on = bool(on)
+
+    def VLK_IsMotorOn(self):
+        return 1 if self.motor_on else 0
+
+    def VLK_EnableFollowMode(self, enable):
+        self.follow_mode = bool(enable)
+
+    def VLK_IsFollowMode(self):
+        return 1 if self.follow_mode else 0
+
+    def VLK_IsTracking(self):
+        return 1 if self.tracking else 0
 
 
 def wait_for_dev_status_registration(gimbal_control):
@@ -534,6 +578,20 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["result"], 0)
         self.assertEqual(direct_payload.calls, [("home",)])
         self.assertEqual(connection.master.mav.commands, [])
+
+    def test_viewlink_motion_status_queries_sdk_status(self):
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_viewlink_service(message("viewlink_motion_status"))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("get_motion_status",)])
+        self.assertEqual(reply["data"]["viewlink_result"]["connected"], True)
+        self.assertEqual(reply["data"]["viewlink_result"]["motor_on"], True)
+        self.assertEqual(reply["data"]["viewlink_result"]["follow_mode"], False)
+        self.assertEqual(reply["data"]["viewlink_result"]["tracking"], False)
 
     def test_camera_screen_drag_uses_gimbal_viewlink_move(self):
         gimbal = GimbalController()
@@ -836,6 +894,24 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertTrue(result["connection_lost"])
         self.assertEqual(fake_lib.move_calls, [(200, 0)])
         self.assertFalse(direct_payload._connected)
+
+    def test_viewlink_motion_status_reads_sdk_lock_related_state(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=True)
+        fake_lib.motor_on = False
+        fake_lib.follow_mode = True
+        fake_lib.tracking = True
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.get_motion_status()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["connected"])
+        self.assertFalse(result["motor_on"])
+        self.assertTrue(result["follow_mode"])
+        self.assertTrue(result["tracking"])
 
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)

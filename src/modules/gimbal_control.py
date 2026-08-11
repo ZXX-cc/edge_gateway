@@ -430,6 +430,18 @@ class GimbalControl:
         lib.VLK_Home.argtypes = []
         lib.VLK_Home.restype = None
 
+        lib.VLK_SwitchMotor.argtypes = [c_int]
+        lib.VLK_SwitchMotor.restype = None
+
+        lib.VLK_IsMotorOn.argtypes = []
+        lib.VLK_IsMotorOn.restype = c_int
+
+        lib.VLK_EnableFollowMode.argtypes = [c_int]
+        lib.VLK_EnableFollowMode.restype = None
+
+        lib.VLK_IsFollowMode.argtypes = []
+        lib.VLK_IsFollowMode.restype = c_int
+
         lib.VLK_TurnTo.argtypes = [ctypes.c_double, ctypes.c_double]
         lib.VLK_TurnTo.restype = None
 
@@ -1085,6 +1097,68 @@ class GimbalControl:
 
         self._call_sdk("VLK_Home")
         return self._confirm_and_send_protocol("home", {}, "云台正在归位")
+
+    def switch_motor(self, on: bool) -> dict:
+        """打开或关闭云台电机。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "message": connected["message"]}
+
+        enabled = bool(on)
+        self._call_sdk("VLK_SwitchMotor", 1 if enabled else 0)
+        return self._confirm_command_sent("云台电机已打开" if enabled else "云台电机已关闭")
+
+    def is_motor_on(self) -> dict:
+        """查询云台电机状态。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "motor_on": False, "message": connected["message"]}
+
+        motor_on = self._call_sdk("VLK_IsMotorOn") == 1
+        return {"success": True, "motor_on": motor_on}
+
+    def enable_follow_mode(self, enable: bool) -> dict:
+        """打开或关闭跟随模式。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "message": connected["message"]}
+
+        enabled = bool(enable)
+        self._call_sdk("VLK_EnableFollowMode", 1 if enabled else 0)
+        return self._confirm_command_sent("云台跟随模式已打开" if enabled else "云台跟随模式已关闭")
+
+    def is_follow_mode(self) -> dict:
+        """查询云台跟随模式状态。"""
+        connected = self._require_connected()
+        if not connected["success"]:
+            return {"success": False, "follow_mode": False, "message": connected["message"]}
+
+        follow_mode = self._call_sdk("VLK_IsFollowMode") == 1
+        return {"success": True, "follow_mode": follow_mode}
+
+    def get_motion_status(self) -> dict:
+        """查询影响物理云台运动的关键 SDK 状态。"""
+        connected = self.is_connected(force=True)
+        if not connected:
+            return {
+                "success": False,
+                "connected": False,
+                "motor_on": False,
+                "follow_mode": False,
+                "tracking": False,
+                "message": "未连接到设备",
+            }
+
+        motor_on = self._call_sdk("VLK_IsMotorOn") == 1
+        follow_mode = self._call_sdk("VLK_IsFollowMode") == 1
+        tracking = self._call_sdk("VLK_IsTracking") == 1
+        return {
+            "success": True,
+            "connected": True,
+            "motor_on": motor_on,
+            "follow_mode": follow_mode,
+            "tracking": tracking,
+        }
 
     def turn_to(self, yaw: float, pitch: float) -> dict:
         """
