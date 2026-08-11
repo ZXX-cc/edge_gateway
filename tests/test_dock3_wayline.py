@@ -1188,7 +1188,8 @@ class Dock3WaylineTest(unittest.TestCase):
         completed = manager._process_mission_current(1)
 
         self.assertTrue(completed)
-        self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertEqual(manager._return_final_status, "ok")
         self.assertIn(("one_click_return", None), flight_control.calls)
         self.assertNotIn(("land", None), flight_control.calls)
         self.assertNotIn("CLAMP_TIGHTEN", nest.calls)
@@ -1198,7 +1199,75 @@ class Dock3WaylineTest(unittest.TestCase):
             step.get("name") == "fixed_wing_recovery_guard"
             for step in manager._last_completion_flow_steps
         ))
+        self.assertTrue(any(event.get("method") == "return_home_info" for event in events))
         self.assertTrue(any(event.get("method") == "flighttask_progress" for event in events))
+
+        manager._get_telemetry_snapshot = lambda: {
+            "armed": False,
+            "altitudeRelative": 0.2,
+        }
+        self.assertTrue(manager._maybe_finish_returned_task())
+        self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+
+    def test_mission_completion_waits_for_landing_before_nest_recovery(self):
+        original_config = Config._data
+        Config._data = with_wayline_test_config({
+            "mission": {
+                "completion": {
+                    "enabled": True,
+                    "auto_return_home": True,
+                    "auto_land": False,
+                    "nest_recovery": True,
+                },
+            },
+        })
+        try:
+            manager = MissionManager()
+            flight_control = RecordingRealWaylineFlightControl()
+            flight_control.mode_profile = "copter"
+            nest = RecordingNest()
+            telemetry = RecordingTelemetry()
+            telemetry.data.update({
+                "armed": True,
+                "altitudeRelative": 20.0,
+            })
+            manager.set_flight_control(flight_control)
+            manager.set_nest_module(nest)
+            manager.set_telemetry_module(telemetry)
+            manager._current_task_id = "flight-complete-copter"
+            manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+            manager._status = manager.MISSION_RUNNING
+            manager._simulate_mission = {"is_enable": 0}
+            manager._save_breakpoint_file = lambda reason="": None
+            manager._clear_breakpoint_file = lambda: None
+            manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+            manager._flow_retry_settings = lambda: (1, 0.0)
+
+            completed = manager._process_mission_current(1)
+
+            self.assertTrue(completed)
+            self.assertEqual(manager._status, manager.MISSION_PAUSED)
+            self.assertEqual(manager._return_final_status, "ok")
+            self.assertIn(("one_click_return", None), flight_control.calls)
+            self.assertNotIn("CLAMP_TIGHTEN", nest.calls)
+            self.assertNotIn("DOOR_CLOSE", nest.calls)
+            self.assertNotIn("CHARGE_START", nest.calls)
+            self.assertTrue(any(
+                step.get("name") == "nest_recovery_wait_returned"
+                for step in manager._last_completion_flow_steps
+            ))
+
+            telemetry.data.update({
+                "armed": False,
+                "altitudeRelative": 0.2,
+            })
+            self.assertTrue(manager._maybe_finish_returned_task())
+            self.assertEqual(manager._status, manager.MISSION_COMPLETED)
+            self.assertIn("CLAMP_TIGHTEN", nest.calls)
+            self.assertIn("DOOR_CLOSE", nest.calls)
+            self.assertIn("CHARGE_START", nest.calls)
+        finally:
+            Config._data = original_config
 
     def test_return_home_directly_switches_aircraft_to_rtl(self):
         manager = MissionManager()

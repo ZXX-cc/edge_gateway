@@ -68,6 +68,7 @@ VTOL_TAKEOFF_COMMAND = 84
 UAV_AND_NEST_IS_VTOL_MASK = 1 << 13
 WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED = 321773
 WAYLINE_RESULT_USER_RETURN_INTERRUPTED = 322283
+PASSIVE_RETURN_FLIGHT_MODES = {"RTL", "QRTL", "AUTO_RTL", "SMART_RTL"}
 
 
 def serialize_flighttask(handler):
@@ -321,6 +322,8 @@ class MissionManager:
         self._return_final_status: Optional[str] = None
         self._return_final_reason: str = ""
         self._return_final_result: int = 0
+        self._return_needs_nest_recovery = False
+        self._return_completion_steps: List[dict] = []
         self._current_wayline_result: int = 0
         self._return_release_lock = threading.RLock()
         self._executed_waypoint_actions = set()
@@ -830,6 +833,8 @@ class MissionManager:
         self._return_final_status = None
         self._return_final_reason = ""
         self._return_final_result = 0
+        self._return_needs_nest_recovery = False
+        self._return_completion_steps = []
         self._current_wayline_result = 0
         self._executed_waypoint_actions.clear()
         self._clear_task_failure()
@@ -1565,6 +1570,11 @@ class MissionManager:
             if not self._run_takeoff_flow_flight_step(steps, 'return_home', 'one_click_return'):
                 self._fail_mission_completion_flow(flight_id, steps, 'return_home failed')
                 return False
+            self.report_return_home_info(
+                planned_path_points=[],
+                last_point_type=0,
+                flight_id=flight_id,
+            )
 
         fixed_wing_profile = (
             self._flight_control is not None
@@ -1585,6 +1595,14 @@ class MissionManager:
                 },
             )
             self._last_completion_flow_steps = list(steps)
+            self._status = self.MISSION_PAUSED
+            self._wayline_mission_state = 7
+            self._current_step = 24
+            self._mark_return_pending(
+                STATUS_OK,
+                "航线完成后固定翼返航，等待落地/回巢释放任务占用",
+                completion_steps=steps,
+            )
             return True
 
         if self._bool_config('mission.completion.auto_land', True):
@@ -1593,6 +1611,33 @@ class MissionManager:
                 return False
 
         if self._bool_config('mission.completion.nest_recovery', True):
+            aircraft_ground_state = self._aircraft_disarmed_ground_state()
+            nest_snapshot = self._get_nest_snapshot()
+            if aircraft_ground_state is False or (
+                aircraft_ground_state is not True
+                and not self._drone_in_dock_from_nest(nest_snapshot)
+            ):
+                self._record_takeoff_flow_step(
+                    steps,
+                    'nest_recovery_wait_returned',
+                    detail={
+                        'flight_id': flight_id,
+                        'reason': 'waiting_for_disarmed_ground_or_drone_in_dock',
+                        'aircraft_ground_state': aircraft_ground_state,
+                        'drone_in_dock': self._drone_in_dock_from_nest(nest_snapshot),
+                    },
+                )
+                self._last_completion_flow_steps = list(steps)
+                self._status = self.MISSION_PAUSED
+                self._wayline_mission_state = 7
+                self._current_step = 24
+                self._mark_return_pending(
+                    STATUS_OK,
+                    "航线完成后等待飞机落地/回巢再恢复机巢",
+                    nest_recovery=True,
+                    completion_steps=steps,
+                )
+                return True
             for command_name in ('putter_close', 'cover_close', 'charge_open'):
                 if not self._run_takeoff_flow_nest_step(steps, command_name):
                     self._fail_mission_completion_flow(flight_id, steps, f'{command_name} failed')
@@ -1760,13 +1805,23 @@ class MissionManager:
             return STATUS_PARTIALLY_DONE
         return STATUS_FAILED
 
-    def _mark_return_pending(self, final_status: str, reason: str, result: int = 0):
+    def _mark_return_pending(
+        self,
+        final_status: str,
+        reason: str,
+        result: int = 0,
+        *,
+        nest_recovery: bool = False,
+        completion_steps: list = None,
+    ):
         if final_status not in self._STATUS_ENUM:
             final_status = STATUS_FAILED
         with self._return_release_lock:
             self._return_final_status = final_status
             self._return_final_reason = reason
             self._return_final_result = int(result or 0)
+            self._return_needs_nest_recovery = bool(nest_recovery)
+            self._return_completion_steps = list(completion_steps or [])
         self._maybe_finish_returned_task()
 
     def _on_nest_environment_update(self, nest_data: Dict[str, Any]):
@@ -1777,6 +1832,8 @@ class MissionManager:
             final_status = self._return_final_status
             reason = self._return_final_reason
             result = self._return_final_result
+            needs_nest_recovery = self._return_needs_nest_recovery
+            completion_steps = list(self._return_completion_steps)
         if not final_status or not self._current_task_id:
             return False
         if self._status not in (self.MISSION_PAUSED, self.MISSION_FAILED):
@@ -1791,6 +1848,25 @@ class MissionManager:
 
         flight_id = self._current_task_id
         self.stop_mission_monitor()
+        if needs_nest_recovery:
+            for command_name in ('putter_close', 'cover_close', 'charge_open'):
+                if not self._run_takeoff_flow_nest_step(completion_steps, command_name):
+                    reason = f'{command_name} failed after returned confirmation'
+                    self._fail_mission_completion_flow(flight_id, completion_steps, reason)
+                    with self._return_release_lock:
+                        self._return_final_status = None
+                        self._return_final_reason = ""
+                        self._return_final_result = 0
+                        self._return_needs_nest_recovery = False
+                        self._return_completion_steps = []
+                    return True
+            self._record_takeoff_flow_step(
+                completion_steps,
+                'completion_flow_completed',
+                detail={'flight_id': flight_id, 'simulated': False, 'returned_confirmed': True},
+            )
+            self._last_completion_flow_steps = list(completion_steps)
+
         self._status = self._mission_state_from_api_status(final_status)
         self._wayline_mission_state = 9  # 航线停止
         self._current_step = 33  # 通知任务结果
@@ -1799,6 +1875,8 @@ class MissionManager:
             self._return_final_status = None
             self._return_final_reason = ""
             self._return_final_result = 0
+            self._return_needs_nest_recovery = False
+            self._return_completion_steps = []
 
         percent = self._current_progress_percent()
         self._emit_wayline_progress(
@@ -2912,6 +2990,52 @@ class MissionManager:
             return True
 
         return False
+
+    def _handle_passive_return_mode(self) -> bool:
+        """Bridge aircraft-side RTL/QRTL into Dock3 flighttask return events."""
+        if self._status != self.MISSION_RUNNING:
+            return False
+        if self._battery_safety_action is not None or self._return_final_status:
+            return False
+
+        telemetry = self._get_telemetry_snapshot()
+        if not telemetry:
+            return False
+        mode = str(telemetry.get("flight_mode") or telemetry.get("mode") or "").strip().upper()
+        if mode not in PASSIVE_RETURN_FLIGHT_MODES:
+            return False
+
+        reason = f"飞控被动返航模式: {mode}"
+        logger.warning(reason)
+        self._battery_safety_action = "rtl"
+        self._status = self.MISSION_PAUSED
+        self._wayline_mission_state = 7
+        self._current_step = 24
+        self._break_point = {
+            **(self._break_point or {}),
+            "index": self._current_waypoint_idx,
+            "break_reason": 773,
+            "reason": reason,
+            "breakpoint_type": "passive_auto_return",
+            "flight_mode": mode,
+        }
+        self._breakpoint_waypoint_idx = self._current_waypoint_idx
+        self._save_breakpoint_file(reason)
+        self._report_mission_progress(
+            status="paused",
+            result=WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED,
+        )
+        self.report_return_home_info(
+            planned_path_points=[],
+            last_point_type=0,
+            flight_id=self._current_task_id,
+        )
+        self._mark_return_pending(
+            self._interrupted_mission_final_status(),
+            reason,
+            result=WAYLINE_RESULT_LOW_BATTERY_RETURN_INTERRUPTED,
+        )
+        return True
 
     def _waypoint_at(self, index: int) -> Optional[dict]:
         if 0 <= index < len(self._current_wayline):
@@ -4662,6 +4786,20 @@ class MissionManager:
             )
             if not self._run_mission_completion_flow(flight_id, "mission_completed"):
                 return True
+            if self._status != self.MISSION_RUNNING:
+                logger.info(
+                    "Mission completion flow changed task state: flight_id=%s status=%s",
+                    flight_id,
+                    self._status,
+                )
+                return True
+            if self._return_final_status:
+                logger.info(
+                    "Mission completion is waiting for returned confirmation: flight_id=%s status=%s",
+                    flight_id,
+                    self._return_final_status,
+                )
+                return True
 
             self._status = self.MISSION_COMPLETED
             self._wayline_mission_state = 9  # 航线停止
@@ -4718,6 +4856,10 @@ class MissionManager:
                     with self._mission_state_lock:
                         battery_safety_triggered = self._handle_battery_safety()
                     if battery_safety_triggered:
+                        stop_event.set()
+                        break
+                    passive_return_triggered = self._handle_passive_return_mode()
+                    if passive_return_triggered:
                         stop_event.set()
                         break
 
@@ -5430,6 +5572,11 @@ class MissionManager:
         self._break_point = {}
         self._simulate_mission = {}
         self._battery_safety_action = None
+        self._return_final_status = None
+        self._return_final_reason = ""
+        self._return_final_result = 0
+        self._return_needs_nest_recovery = False
+        self._return_completion_steps = []
         self._executed_waypoint_actions.clear()
         self._clear_task_failure()
 
@@ -5596,6 +5743,11 @@ class MissionManager:
 
         self._emit_wayline_progress(STATUS_IN_PROGRESS, current_step=24, percent=self._current_progress_percent())
         if active_mission and self._current_task_id:
+            self.report_return_home_info(
+                planned_path_points=[],
+                last_point_type=0,
+                flight_id=self._current_task_id,
+            )
             self._mark_return_pending(
                 self._interrupted_mission_final_status(),
                 "一键返航后回巢释放任务占用",

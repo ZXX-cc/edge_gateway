@@ -229,10 +229,53 @@ class MissionProgressBoundsTest(unittest.TestCase):
         ]
         self.assertTrue(final_events)
         self.assertEqual(final_events[-1]["data"]["result"], 322283)
+        self.assertTrue(any(event.get("method") == "return_home_info" for event in events))
         self.assertEqual(
             final_events[-1]["data"]["output"]["ext"]["break_point"]["break_reason"],
             1283,
         )
+
+    def test_passive_rtl_mode_reports_return_events(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_RUNNING
+        manager._current_task_id = "flight-passive-rtl"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}, {"seq": 2}]
+        manager._current_waypoint_idx = 1
+        manager._get_telemetry_snapshot = lambda: {"flight_mode": "RTL"}
+        manager._save_breakpoint_file = lambda reason="": None
+        manager._run_db_coroutine = lambda coro: coro.close() if hasattr(coro, "close") else None
+        manager.stop_mission_monitor = lambda: True
+
+        self.assertTrue(manager._handle_passive_return_mode())
+        self.assertEqual(manager._status, manager.MISSION_PAUSED)
+        self.assertEqual(manager._break_point["breakpoint_type"], "passive_auto_return")
+        self.assertEqual(manager._break_point["break_reason"], 773)
+        self.assertEqual(manager._break_point["flight_mode"], "RTL")
+
+        methods = [event.get("method") for event in events]
+        self.assertIn("flighttask_progress", methods)
+        self.assertIn("return_home_info", methods)
+        progress_events = [
+            event for event in events
+            if event.get("method") == "flighttask_progress"
+        ]
+        self.assertEqual(progress_events[-1]["data"]["result"], 321773)
+
+    def test_passive_rtl_mode_does_not_duplicate_existing_return(self):
+        events = []
+        manager = MissionManager()
+        manager.set_event_callback(events.append)
+        manager._status = manager.MISSION_RUNNING
+        manager._current_task_id = "flight-passive-rtl-duplicate"
+        manager._current_wayline = [{"seq": 0}, {"seq": 1}]
+        manager._current_waypoint_idx = 1
+        manager._battery_safety_action = "rtl"
+        manager._get_telemetry_snapshot = lambda: {"flight_mode": "RTL"}
+
+        self.assertFalse(manager._handle_passive_return_mode())
+        self.assertEqual(events, [])
 
     def test_return_release_can_use_disarmed_grounded_aircraft_when_dock_state_missing(self):
         events = []
