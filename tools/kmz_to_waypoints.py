@@ -18,6 +18,11 @@ MAV_CMD_NAV_WAYPOINT = 16
 MAV_CMD_NAV_LOITER_TIME = 19
 MAV_CMD_NAV_VTOL_TAKEOFF = 84
 MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
+DEFAULT_HOME_LAT = 43.9759961
+DEFAULT_HOME_LON = 125.3979932
+DEFAULT_HOME_ABSOLUTE_ALT = 194.92
+DEFAULT_HOME_RELATIVE_ALT = 0.0
+DEFAULT_TAKEOFF_ALT_OFFSET = 40.0
 
 
 class ConvertError(Exception):
@@ -109,6 +114,12 @@ def parse_float(text: str, field_name: str) -> float:
         return float(str(text).strip())
     except (TypeError, ValueError) as exc:
         raise ConvertError(f"{field_name} 不是有效数字: {text!r}") from exc
+
+
+def parse_optional_float(value, field_name: str) -> float | None:
+    if value in (None, ""):
+        return None
+    return parse_float(value, field_name)
 
 
 def parse_int(text: str, field_name: str) -> int:
@@ -226,6 +237,75 @@ def validate_kml(root: ET.Element) -> TakeoffRefPoint:
     takeoff_ref = first_text(root, "takeOffRefPoint")
     takeoff_agl = first_text(root, "takeOffRefPointAGLHeight", required=False)
     return parse_takeoff_ref_point(takeoff_ref, takeoff_agl)
+
+
+def strip_yaml_comment(text: str) -> str:
+    return text.split("#", 1)[0].strip().strip("'\"")
+
+
+def read_nest_takeoff_config(config_path: str) -> dict:
+    if not config_path:
+        return {}
+    path = Path(config_path).expanduser()
+    if not path.exists():
+        return {}
+
+    result: dict[str, float] = {}
+    stack: list[tuple[int, str]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#") or ":" not in raw_line:
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        key, value = raw_line.strip().split(":", 1)
+        key = key.strip()
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        parent_path = [item[1] for item in stack]
+        current_path = parent_path + [key]
+        if current_path[:3] == ["mission", "wayline", "nest_takeoff_point"] and len(current_path) == 4:
+            cleaned = strip_yaml_comment(value)
+            if cleaned:
+                result[key] = parse_float(cleaned, f"{config_path}.{'.'.join(current_path)}")
+        if not strip_yaml_comment(value):
+            stack.append((indent, key))
+    return result
+
+
+def validate_home_ref(ref: TakeoffRefPoint) -> None:
+    if not (-90 <= ref.lat <= 90 and -180 <= ref.lon <= 180):
+        raise ConvertError(f"HOME 经纬度超范围: lat={ref.lat}, lon={ref.lon}")
+    if ref.lat == 0.0 and ref.lon == 0.0:
+        raise ConvertError("HOME 经纬度不能同时为 0")
+
+
+def resolve_takeoff_settings(args) -> tuple[TakeoffRefPoint, float, float, dict]:
+    config = read_nest_takeoff_config(args.config)
+    home_lat = parse_optional_float(args.home_lat, "home_lat")
+    home_lon = parse_optional_float(args.home_lon, "home_lon")
+    home_alt = parse_optional_float(args.home_alt, "home_alt")
+    home_absolute_alt = parse_optional_float(args.home_absolute_alt, "home_absolute_alt")
+    takeoff_alt_offset = parse_optional_float(args.takeoff_alt_offset, "takeoff_alt_offset")
+
+    used_home = TakeoffRefPoint(
+        lat=home_lat if home_lat is not None else float(config.get("latitude", DEFAULT_HOME_LAT)),
+        lon=home_lon if home_lon is not None else float(config.get("longitude", DEFAULT_HOME_LON)),
+        alt=home_absolute_alt
+        if home_absolute_alt is not None
+        else float(config.get("absolute_altitude", DEFAULT_HOME_ABSOLUTE_ALT)),
+    )
+    validate_home_ref(used_home)
+    used_home_alt = home_alt if home_alt is not None else float(config.get("altitude", DEFAULT_HOME_RELATIVE_ALT))
+    used_offset = (
+        takeoff_alt_offset
+        if takeoff_alt_offset is not None
+        else float(config.get("takeoff_alt_offset", DEFAULT_TAKEOFF_ALT_OFFSET))
+    )
+    source = "cli" if home_lat is not None or home_lon is not None else ("config" if config else "default")
+    return used_home, used_home_alt, used_offset, {
+        "source": source,
+        "config_path": str(Path(args.config).expanduser()) if args.config else "",
+        "config_found": bool(config),
+    }
 
 
 def validate_wpml(root: ET.Element) -> tuple[ET.Element, str, str]:
@@ -425,15 +505,16 @@ def convert(args) -> dict:
     wpml_root = parse_xml_bytes(wpml_data, wpml_member)
 
     takeoff_ref = validate_kml(kml_root)
+    used_takeoff_ref, home_alt, takeoff_alt_offset, takeoff_source = resolve_takeoff_settings(args)
     folder, distance, duration = validate_wpml(wpml_root)
 
     warnings: list[str] = []
     source_waypoints = parse_wpml_waypoints(folder, warnings)
     items = build_wpl_items(
-        takeoff_ref,
+        used_takeoff_ref,
         source_waypoints,
-        takeoff_alt_offset=args.takeoff_alt_offset,
-        home_alt=args.home_alt,
+        takeoff_alt_offset=takeoff_alt_offset,
+        home_alt=home_alt,
     )
 
     write_waypoints(output_path, items)
@@ -442,7 +523,10 @@ def convert(args) -> dict:
         "output": str(output_path),
         "wpml_member": wpml_member,
         "kml_member": kml_member,
-        "takeoff_ref_point": asdict(takeoff_ref),
+        "takeoff_ref_point": asdict(used_takeoff_ref),
+        "kml_takeoff_ref_point": asdict(takeoff_ref),
+        "used_takeoff_ref_point": asdict(used_takeoff_ref),
+        "takeoff_ref_point_source": takeoff_source,
         "rules": {
             "frame": MAV_FRAME_GLOBAL_RELATIVE_ALT,
             "execute_height_mode": "relativeToStartPoint",
@@ -456,8 +540,9 @@ def convert(args) -> dict:
             "distance": parse_float(distance, "distance") if distance else None,
             "duration": parse_float(duration, "duration") if duration else None,
         },
-        "home_alt": args.home_alt,
-        "takeoff_alt_offset": args.takeoff_alt_offset,
+        "home_alt": home_alt,
+        "home_absolute_altitude": used_takeoff_ref.alt,
+        "takeoff_alt_offset": takeoff_alt_offset,
         "first_execute_height": source_waypoints[0].alt,
         "generated_count": len(items),
         "source_placemark_count": len(source_waypoints),
@@ -489,20 +574,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", required=True, help="输出 .waypoints 文件路径")
     parser.add_argument("--summary", default="", help="输出转换摘要 JSON；默认与 .waypoints 同名 .conversion.json")
     parser.add_argument("--log-file", default="", help="可选日志文件路径")
+    parser.add_argument("--config", default="config/gateway.yaml", help="读取固定 HOME/VTOL 起飞点的网关配置文件")
     parser.add_argument("--wpml-name", default="", help="KMZ 内 .wpml 文件名；多 .wpml 时必须指定")
     parser.add_argument("--kml-name", default="", help="KMZ 内 .kml 文件名；多 .kml 时必须指定")
     parser.add_argument(
         "--takeoff-alt-offset",
-        type=float,
-        default=40.0,
-        help="VTOL_TAKEOFF 高度 = 第一个 executeHeight - 该偏移，默认 40 米",
+        default="",
+        help="VTOL_TAKEOFF 高度 = 第一个 executeHeight - 该偏移；默认读配置，配置缺失时 40 米",
     )
     parser.add_argument(
         "--home-alt",
-        type=float,
-        default=0.0,
-        help="首行 HOME 任务项相对高度，默认 0 米",
+        default="",
+        help="首行 HOME 任务项相对高度；默认读配置，配置缺失时 0 米",
     )
+    parser.add_argument("--home-lat", default="", help="覆盖 HOME/VTOL 起飞点纬度")
+    parser.add_argument("--home-lon", default="", help="覆盖 HOME/VTOL 起飞点经度")
+    parser.add_argument("--home-absolute-alt", default="", help="覆盖 HOME GPS 海拔高，仅写入摘要，不写入 frame=3 航点高度")
     return parser
 
 
