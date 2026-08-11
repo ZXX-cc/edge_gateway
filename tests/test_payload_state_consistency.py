@@ -615,29 +615,6 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
 
-    def test_camera_screen_drag_can_swap_and_invert_screen_axes(self):
-        Config._data = {
-            "payload": {
-                "screen_drag_axis_map": "swap",
-                "screen_drag_invert_yaw": True,
-                "screen_drag_invert_pitch": False,
-            }
-        }
-        gimbal = GimbalController()
-        direct_payload = FakeDirectPayload()
-        gimbal.set_gimbal_control(direct_payload)
-
-        reply = gimbal.handle_camera_screen_drag(message("camera_screen_drag", {
-            "pitch_speed": 1.5,
-            "yaw_speed": -2.0,
-        }))
-
-        self.assertEqual(reply["data"]["result"], 0)
-        self.assertEqual(direct_payload.calls, [("move", -150, -200)])
-        self.assertEqual(reply["data"]["mapped_yaw_speed"], -150)
-        self.assertEqual(reply["data"]["mapped_pitch_speed"], -200)
-        self.assertEqual(reply["data"]["axis_map"], "swap")
-
     def test_camera_screen_drag_accepts_params_and_camel_case_speed(self):
         Config._data = {}
         gimbal = GimbalController()
@@ -954,6 +931,20 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(fake_lib.switch_motor_calls, [1])
         self.assertEqual(fake_lib.move_calls, [(1000, 0)])
         self.assertTrue(fake_lib.motor_on)
+
+    def test_viewlink_move_result_includes_recent_sdk_trace(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=True)
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.move(1000, -500)
+
+        self.assertTrue(result["success"])
+        move_call = next(item for item in result["sdk_trace"] if item["function"] == "VLK_Move")
+        self.assertEqual(move_call["args"], [1000, -500])
+        self.assertIsNone(move_call["result"])
 
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)

@@ -96,6 +96,7 @@ HTML = """<!doctype html>
           <button onclick="api('/api/live/local_mapping')">内网正射</button>
           <button class="warn" onclick="api('/api/live/stop')">停止推流</button>
           <button onclick="api('/api/live/capability')">查询能力</button>
+          <button onclick="api('/api/live/status')">直播状态</button>
         </div>
       </section>
       <section>
@@ -162,14 +163,23 @@ function reloadVideo() {
   const video = document.getElementById('video');
   if (player) { player.destroy(); player = null; }
   video.removeAttribute('src');
+  const sourceUrl = streamMode === 'hls' ? playUrl + '?t=' + Date.now() : playUrl;
   if (streamMode === 'hls' && video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = playUrl;
+    video.src = sourceUrl;
     video.play().catch(() => {});
   } else if (streamMode === 'hls' && window.Hls && Hls.isSupported()) {
-    player = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2 });
-    player.loadSource(playUrl);
+    player = new Hls({
+      lowLatencyMode: true,
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 2,
+      maxLiveSyncPlaybackRate: 1.5
+    });
+    player.loadSource(sourceUrl);
     player.attachMedia(video);
-    player.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    player.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => {});
+      if (Number.isFinite(video.duration)) video.currentTime = Math.max(0, video.duration - 0.5);
+    });
   } else if (window.mpegts && mpegts.getFeatureList().mseLivePlayback) {
     player = mpegts.createPlayer({ type: 'flv', isLive: true, url: playUrl });
     player.attachMediaElement(video);
@@ -465,11 +475,11 @@ class LocalRtspHlsProxy:
             "-f",
             "hls",
             "-hls_time",
-            "1",
+            "0.25",
             "-hls_list_size",
-            "4",
+            "6",
             "-hls_flags",
-            "delete_segments+append_list+omit_endlist",
+            "delete_segments+append_list+omit_endlist+independent_segments",
             "-hls_segment_filename",
             str(segment),
             str(playlist),
@@ -509,11 +519,20 @@ class LocalRtspHlsProxy:
 
     def status(self) -> dict[str, Any]:
         running = self.process is not None and self.process.poll() is None
+        playlist = self.root / "stream.m3u8"
+        segments = sorted(self.root.glob("segment_*.ts"))
+        latest_segment = segments[-1] if segments else None
         return {
             "running": running,
             "label": self.label,
             "rtsp_url": self.rtsp_url,
             "resolution": {"width": self.width, "height": self.height},
+            "hls_dir": str(self.root),
+            "playlist_exists": playlist.exists(),
+            "playlist_mtime": playlist.stat().st_mtime if playlist.exists() else 0,
+            "segment_count": len(segments),
+            "latest_segment": latest_segment.name if latest_segment else "",
+            "latest_segment_mtime": latest_segment.stat().st_mtime if latest_segment else 0,
         }
 
 
@@ -705,6 +724,14 @@ def make_handler(args, client: Dock3PanelClient, local_proxy: LocalRtspHlsProxy)
         if path == "/api/live/capability":
             rc, reply = request_services("live_capability_query", {}, status="ok")
             return {"ok": rc == 0, "reply": reply}
+
+        if path == "/api/live/status":
+            return {
+                "ok": True,
+                "active_label": state["active_label"],
+                "active_video_id": state["active_video_id"],
+                "local": local_proxy.status(),
+            }
 
         if path == "/api/drag":
             payload = {

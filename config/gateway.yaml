@@ -408,11 +408,6 @@ payload:
   frame_zoom_centering_speed_scale: 1200
   frame_zoom_centering_max_speed: 400
   frame_zoom_max_ratio: 30.0
-  # ViewLink 云台安装/视频方向可能导致屏幕拖动方向与 SDK yaw/pitch 不一致。
-  # normal: 屏幕左右 -> yaw，屏幕上下 -> pitch；swap: 屏幕左右 -> pitch，屏幕上下 -> yaw。
-  screen_drag_axis_map: "swap"
-  screen_drag_invert_yaw: false
-  screen_drag_invert_pitch: false
   devices:
     gimbal:
       name: "吊舱"

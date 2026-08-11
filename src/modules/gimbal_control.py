@@ -228,6 +228,7 @@ class GimbalControl:
             "message": "设备状态回调尚未注册",
         }
         self._last_dev_status = None
+        self._last_sdk_calls: list[dict] = []
         self._logged_dev_status_types: set[int] = set()
         self._dev_status_callback_disabled_logged = False
         self._connect_deadline = 0.0
@@ -312,8 +313,33 @@ class GimbalControl:
         """从 SDK 目录调用依赖 cwd 的 ViewLink SDK 函数。"""
         if not self._lib:
             raise RuntimeError("SDK 未加载")
+        call = {
+            "function": function_name,
+            "args": [self._sdk_arg_value(arg) for arg in args],
+            "timestamp": time.time(),
+        }
         with _sdk_working_directory(self._sdk_runtime_dir):
-            return getattr(self._lib, function_name)(*args)
+            result = getattr(self._lib, function_name)(*args)
+        call["result"] = self._sdk_arg_value(result)
+        self._last_sdk_calls.append(call)
+        self._last_sdk_calls = self._last_sdk_calls[-20:]
+        return result
+
+    @staticmethod
+    def _sdk_arg_value(value):
+        if hasattr(value, "value"):
+            return value.value
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def recent_sdk_calls(self, limit: int = 8) -> list[dict]:
+        """Return a copy of recent SDK calls for field diagnostics."""
+        return [dict(item) for item in self._last_sdk_calls[-max(1, int(limit)):]]
+
+    def _with_sdk_trace(self, result: dict, limit: int = 8) -> dict:
+        result["sdk_trace"] = self.recent_sdk_calls(limit)
+        return result
 
     def log(self, message: str, level: str = "INFO"):
         """日志输出"""
@@ -1085,11 +1111,11 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
-        return self._confirm_and_send_protocol(
+        return self._with_sdk_trace(self._confirm_and_send_protocol(
             "move",
             {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed},
             f"云台移动: yaw={yaw_speed}, pitch={pitch_speed}",
-        )
+        ))
 
     def stop(self) -> dict:
         """停止云台移动"""
@@ -1101,11 +1127,11 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Stop")
-        return self._confirm_and_send_protocol(
+        return self._with_sdk_trace(self._confirm_and_send_protocol(
             "move",
             {"yaw_speed": 0, "pitch_speed": 0},
             "云台已停止",
-        )
+        ))
 
     def home(self) -> dict:
         """云台归位（回到初始位置）"""
@@ -1123,7 +1149,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Home")
-        return self._confirm_and_send_protocol("home", {}, "云台正在归位")
+        return self._with_sdk_trace(self._confirm_and_send_protocol("home", {}, "云台正在归位"))
 
     def switch_motor(self, on: bool) -> dict:
         """打开或关闭云台电机。"""
@@ -1214,11 +1240,11 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_TurnTo", ctypes.c_double(yaw), ctypes.c_double(pitch))
-        return self._confirm_and_send_protocol(
+        return self._with_sdk_trace(self._confirm_and_send_protocol(
             "turn_to",
             {"yaw": yaw, "pitch": pitch},
             f"云台转向: yaw={yaw}°, pitch={pitch}°",
-        )
+        ))
 
     # ==================== 变焦控制 ====================
 
@@ -1735,6 +1761,7 @@ class GimbalControl:
             "dev_status_callback_registering": self._dev_status_registration_in_progress,
             "dev_status_registration_result": dict(self._dev_status_registration_result),
             "last_dev_status": dict(self._last_dev_status) if self._last_dev_status else None,
+            "recent_sdk_calls": self.recent_sdk_calls(),
         }
 
     # ==================== 回调设置 ====================
