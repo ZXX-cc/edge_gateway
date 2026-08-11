@@ -1670,7 +1670,7 @@ class EdgeGateway:
                 self.flight_area.update_aircraft_osd(aircraft_osd)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
             self.device.update_from_telemetry(osd_data)
-            self._report_dock_osd_if_due(force=True)
+            self._report_dock_osd_if_due()
 
             published_drone_osd = False
             for sub_device in self.device.get_all_sub_devices():

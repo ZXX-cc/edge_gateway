@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -36,6 +37,31 @@ class MavlinkTelemetryStateTest(unittest.TestCase):
         telemetry.configure_osd_rate(0.5)
 
         self.assertEqual(telemetry._osd_interval, 2.0)
+
+    def test_osd_generation_is_not_blocked_by_slow_callback(self):
+        telemetry = TelemetryProcessor()
+        telemetry.configure_osd_rate(20)
+        build_times = []
+        callback_times = []
+
+        def build_osd_data():
+            build_times.append(time.monotonic())
+            return {"sequence": len(build_times)}
+
+        def slow_callback(_osd_data):
+            callback_times.append(time.monotonic())
+            time.sleep(0.12)
+
+        telemetry.build_osd_data = build_osd_data
+        telemetry.set_callbacks(slow_callback)
+        telemetry.start()
+        try:
+            time.sleep(0.32)
+        finally:
+            telemetry.stop()
+
+        self.assertGreaterEqual(len(build_times), 4)
+        self.assertGreaterEqual(len(callback_times), 2)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@
 """
 import time
 import math
+import queue
 import threading
 from typing import Dict, Callable, Optional
 from src.utils.logger import get_logger
@@ -55,6 +56,8 @@ class TelemetryProcessor:
 
         # 定时推送线程
         self._osd_thread: Optional[threading.Thread] = None
+        self._osd_worker_thread: Optional[threading.Thread] = None
+        self._osd_queue: queue.Queue = queue.Queue(maxsize=1)
         self._running = False
         self._stop_event = threading.Event()
 
@@ -74,6 +77,9 @@ class TelemetryProcessor:
             return
         self._running = True
         self._stop_event.clear()
+        self._drain_osd_queue()
+        self._osd_worker_thread = threading.Thread(target=self._osd_worker, daemon=True)
+        self._osd_worker_thread.start()
         self._osd_thread = threading.Thread(target=self._osd_loop, daemon=True)
         self._osd_thread.start()
         logger.info("Telemetry OSD loop started: interval=%ss", self._osd_interval)
@@ -82,22 +88,28 @@ class TelemetryProcessor:
         """停止OSD定时推送线程"""
         self._running = False
         self._stop_event.set()
+        self._enqueue_osd_item(None)
         if self._osd_thread:
-            self._osd_thread.join(timeout=2.0)
+            if threading.current_thread() is not self._osd_thread:
+                self._osd_thread.join(timeout=2.0)
             self._osd_thread = None
+        if self._osd_worker_thread:
+            if threading.current_thread() is not self._osd_worker_thread:
+                self._osd_worker_thread.join(timeout=2.0)
+            self._osd_worker_thread = None
         logger.info("Telemetry OSD loop stopped")
 
     def _osd_loop(self):
-        """OSD定时推送循环"""
+        """OSD定时生成循环；耗时上报由后台 worker 处理。"""
         next_deadline = time.monotonic()
         while self._running:
             try:
                 osd_data = self.build_osd_data()
-                if self._osd_callback and osd_data:
+                if osd_data:
                     osd_data['timestamp'] = int(time.time() * 1000)
-                    self._osd_callback(osd_data)
+                    self._enqueue_osd_item(osd_data)
             except Exception as e:
-                logger.error(f"OSD push error: {e}")
+                logger.error(f"OSD build error: {e}")
             interval = max(float(self._osd_interval or 2.0), 0.1)
             next_deadline += interval
             delay = next_deadline - time.monotonic()
@@ -106,6 +118,49 @@ class TelemetryProcessor:
                 next_deadline += skipped * interval
                 delay = max(0.0, next_deadline - time.monotonic())
             self._stop_event.wait(delay)
+
+    def _osd_worker(self):
+        """消费定时生成的 OSD 快照并执行上报回调。"""
+        while self._running or not self._osd_queue.empty():
+            try:
+                osd_data = self._osd_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                if osd_data is None:
+                    return
+                if self._osd_callback:
+                    self._osd_callback(osd_data)
+            except Exception as e:
+                logger.error(f"OSD push error: {e}")
+            finally:
+                self._osd_queue.task_done()
+
+    def _enqueue_osd_item(self, osd_data: Optional[dict]) -> None:
+        """保留最新 OSD 快照；worker 慢时丢弃旧帧，避免补发过期遥测。"""
+        try:
+            self._osd_queue.put_nowait(osd_data)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self._osd_queue.get_nowait()
+            self._osd_queue.task_done()
+        except queue.Empty:
+            pass
+        try:
+            self._osd_queue.put_nowait(osd_data)
+        except queue.Full:
+            logger.warning("Drop OSD snapshot because worker queue is full")
+
+    def _drain_osd_queue(self) -> None:
+        while True:
+            try:
+                self._osd_queue.get_nowait()
+                self._osd_queue.task_done()
+            except queue.Empty:
+                return
 
     def configure_osd_rate(self, rate_hz) -> None:
         """按配置设置 OSD 上报频率；客户要求 2 秒一次时配置 0.5Hz。"""
