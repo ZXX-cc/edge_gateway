@@ -596,6 +596,7 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(reply["data"]["viewlink_result"]["tracking"], False)
 
     def test_camera_screen_drag_uses_gimbal_viewlink_move(self):
+        Config._data = {}
         gimbal = GimbalController()
         direct_payload = FakeDirectPayload()
         events = []
@@ -614,7 +615,31 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertEqual(events[-1]["method"], "payload_status_notify")
         self.assertEqual(events[-1]["data"]["payloads"][0]["last_control"]["method"], "camera_screen_drag")
 
+    def test_camera_screen_drag_can_swap_and_invert_screen_axes(self):
+        Config._data = {
+            "payload": {
+                "screen_drag_axis_map": "swap",
+                "screen_drag_invert_yaw": True,
+                "screen_drag_invert_pitch": False,
+            }
+        }
+        gimbal = GimbalController()
+        direct_payload = FakeDirectPayload()
+        gimbal.set_gimbal_control(direct_payload)
+
+        reply = gimbal.handle_camera_screen_drag(message("camera_screen_drag", {
+            "pitch_speed": 1.5,
+            "yaw_speed": -2.0,
+        }))
+
+        self.assertEqual(reply["data"]["result"], 0)
+        self.assertEqual(direct_payload.calls, [("move", -150, -200)])
+        self.assertEqual(reply["data"]["mapped_yaw_speed"], -150)
+        self.assertEqual(reply["data"]["mapped_pitch_speed"], -200)
+        self.assertEqual(reply["data"]["axis_map"], "swap")
+
     def test_camera_screen_drag_accepts_params_and_camel_case_speed(self):
+        Config._data = {}
         gimbal = GimbalController()
         direct_payload = FakeDirectPayload()
         gimbal.set_gimbal_control(direct_payload)

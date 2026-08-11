@@ -114,6 +114,15 @@ class GimbalController:
         self._ai_spotlight_enabled = False
         self._ai_spotlight_selection: Optional[Dict[str, Any]] = None
         self._drc_seq = 0
+        self._screen_drag_axis_map = str(
+            Config.get("payload.screen_drag_axis_map", "normal") or "normal"
+        ).strip().lower()
+        self._screen_drag_invert_yaw = self._bool_value(
+            Config.get("payload.screen_drag_invert_yaw", False), False
+        )
+        self._screen_drag_invert_pitch = self._bool_value(
+            Config.get("payload.screen_drag_invert_pitch", False), False
+        )
 
         # MAVLink连接引用(由外部注入)
         self._mavlink_conn = None
@@ -181,6 +190,18 @@ class GimbalController:
     def _viewlink_speed(value: float) -> int:
         # ViewLink SDK 使用 0.01 degree/s 为单位，Dock3/页面侧使用 degree/s。
         return max(-2000, min(2000, int(float(value or 0.0) * 100)))
+
+    def _screen_drag_viewlink_speeds(self, yaw_speed: float, pitch_speed: float) -> tuple[int, int]:
+        """Map screen drag speeds to ViewLink yaw/pitch speeds."""
+        yaw_value = float(yaw_speed or 0.0)
+        pitch_value = float(pitch_speed or 0.0)
+        if self._screen_drag_axis_map == "swap":
+            yaw_value, pitch_value = pitch_value, yaw_value
+        if self._screen_drag_invert_yaw:
+            yaw_value = -yaw_value
+        if self._screen_drag_invert_pitch:
+            pitch_value = -pitch_value
+        return self._viewlink_speed(yaw_value), self._viewlink_speed(pitch_value)
 
     @staticmethod
     def _move_result_success(result: dict) -> bool:
@@ -756,8 +777,7 @@ class GimbalController:
         if not connected:
             result = connect_result
         if connected:
-            yaw_spd = self._viewlink_speed(yaw_speed)
-            pitch_spd = self._viewlink_speed(pitch_speed)
+            yaw_spd, pitch_spd = self._screen_drag_viewlink_speeds(yaw_speed, pitch_speed)
             logger.info("ViewLink mapped: %s", build_viewlink_call("move", {
                 "yaw_speed": yaw_spd,
                 "pitch_speed": pitch_spd,
@@ -789,6 +809,11 @@ class GimbalController:
                 "locked": locked,
                 "pitch_speed": pitch_speed,
                 "yaw_speed": yaw_speed,
+                "mapped_yaw_speed": yaw_spd if connected else 0,
+                "mapped_pitch_speed": pitch_spd if connected else 0,
+                "axis_map": self._screen_drag_axis_map,
+                "invert_yaw": self._screen_drag_invert_yaw,
+                "invert_pitch": self._screen_drag_invert_pitch,
                 "viewlink_result": result,
             },
         )
