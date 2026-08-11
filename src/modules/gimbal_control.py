@@ -236,7 +236,11 @@ class GimbalControl:
         self._motion_watchdog_timeout = 1.0
         self._motion_watchdog_interval = 0.2
         self._motion_last_command_time = 0.0
+        self._motion_started_time = 0.0
+        self._motion_direction: tuple[int, int] = (0, 0)
+        self._motion_max_continuous_seconds = 8.0
         self._motion_active = False
+        self._motion_protection_blocked = False
         self._motion_watchdog_thread: Optional[threading.Thread] = None
 
         # 回调引用（防止被GC回收）
@@ -1090,11 +1094,38 @@ class GimbalControl:
         with self._lock:
             self._motion_active = False
             self._motion_last_command_time = 0.0
+            self._motion_started_time = 0.0
+            self._motion_direction = (0, 0)
+            self._motion_protection_blocked = False
 
-    def _mark_motion_command(self, moving: bool) -> None:
+    @staticmethod
+    def _motion_axis_sign(value: int) -> int:
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+        return 0
+
+    def _motion_direction_key(self, yaw_speed: int, pitch_speed: int) -> tuple[int, int]:
+        return (
+            self._motion_axis_sign(yaw_speed),
+            self._motion_axis_sign(pitch_speed),
+        )
+
+    def _mark_motion_command(self, moving: bool, yaw_speed: int = 0, pitch_speed: int = 0) -> None:
+        now = time.time()
         with self._lock:
             self._motion_active = bool(moving)
-            self._motion_last_command_time = time.time()
+            self._motion_last_command_time = now
+            if not self._motion_active:
+                self._motion_started_time = 0.0
+                self._motion_direction = (0, 0)
+                self._motion_protection_blocked = False
+            else:
+                direction = self._motion_direction_key(yaw_speed, pitch_speed)
+                if not self._motion_started_time or direction != self._motion_direction:
+                    self._motion_started_time = now
+                    self._motion_direction = direction
             if self._motion_active and (
                 self._motion_watchdog_thread is None
                 or not self._motion_watchdog_thread.is_alive()
@@ -1105,6 +1136,26 @@ class GimbalControl:
                     daemon=True,
                 )
                 self._motion_watchdog_thread.start()
+
+    def _continuous_motion_blocked(self, yaw_speed: int, pitch_speed: int) -> tuple[bool, str]:
+        if yaw_speed == 0 and pitch_speed == 0:
+            return False, ""
+        now = time.time()
+        direction = self._motion_direction_key(yaw_speed, pitch_speed)
+        with self._lock:
+            if self._motion_protection_blocked:
+                return True, "云台连续转动保护已触发，请先松手发送 0,0 后再继续控制"
+            if not self._motion_active or direction != self._motion_direction:
+                return False, ""
+            elapsed = now - self._motion_started_time if self._motion_started_time else 0.0
+            if elapsed < self._motion_max_continuous_seconds:
+                return False, ""
+            self._motion_protection_blocked = True
+            self._motion_active = False
+        return True, (
+            f"云台同方向连续转动超过 {self._motion_max_continuous_seconds:.1f}s，"
+            "已触发保护停止"
+        )
 
     def _motion_watchdog_loop(self) -> None:
         while True:
@@ -1157,8 +1208,18 @@ class GimbalControl:
             result["motor_on"] = False
             return result
 
+        blocked, block_message = self._continuous_motion_blocked(yaw_speed, pitch_speed)
+        if blocked:
+            self._call_sdk("VLK_Stop")
+            self.log(block_message, "WARN")
+            return self._with_sdk_trace(self._confirm_and_send_protocol(
+                "move",
+                {"yaw_speed": 0, "pitch_speed": 0, "protected": True},
+                block_message,
+            ))
+
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
-        self._mark_motion_command(yaw_speed != 0 or pitch_speed != 0)
+        self._mark_motion_command(yaw_speed != 0 or pitch_speed != 0, yaw_speed, pitch_speed)
         return self._with_sdk_trace(self._confirm_and_send_protocol(
             "move",
             {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed},
