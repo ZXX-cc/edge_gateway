@@ -56,6 +56,7 @@ class TelemetryProcessor:
         # 定时推送线程
         self._osd_thread: Optional[threading.Thread] = None
         self._running = False
+        self._stop_event = threading.Event()
 
         # 飞行时间累计
         self._flight_start_time = None
@@ -72,6 +73,7 @@ class TelemetryProcessor:
         if self._running:
             return
         self._running = True
+        self._stop_event.clear()
         self._osd_thread = threading.Thread(target=self._osd_loop, daemon=True)
         self._osd_thread.start()
         logger.info("Telemetry OSD loop started: interval=%ss", self._osd_interval)
@@ -79,6 +81,7 @@ class TelemetryProcessor:
     def stop(self):
         """停止OSD定时推送线程"""
         self._running = False
+        self._stop_event.set()
         if self._osd_thread:
             self._osd_thread.join(timeout=2.0)
             self._osd_thread = None
@@ -86,7 +89,7 @@ class TelemetryProcessor:
 
     def _osd_loop(self):
         """OSD定时推送循环"""
-        next_tick = time.monotonic()
+        next_deadline = time.monotonic()
         while self._running:
             try:
                 osd_data = self.build_osd_data()
@@ -95,12 +98,14 @@ class TelemetryProcessor:
                     self._osd_callback(osd_data)
             except Exception as e:
                 logger.error(f"OSD push error: {e}")
-            next_tick += self._osd_interval
-            sleep_seconds = next_tick - time.monotonic()
-            if sleep_seconds <= 0:
-                next_tick = time.monotonic()
-                continue
-            time.sleep(sleep_seconds)
+            interval = max(float(self._osd_interval or 2.0), 0.1)
+            next_deadline += interval
+            delay = next_deadline - time.monotonic()
+            if delay < 0:
+                skipped = int(abs(delay) // interval) + 1
+                next_deadline += skipped * interval
+                delay = max(0.0, next_deadline - time.monotonic())
+            self._stop_event.wait(delay)
 
     def configure_osd_rate(self, rate_hz) -> None:
         """按配置设置 OSD 上报频率；客户要求 2 秒一次时配置 0.5Hz。"""

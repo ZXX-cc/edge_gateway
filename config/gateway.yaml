@@ -629,6 +629,7 @@ retention:
 local_history:
   enabled: true # 是否保存本地历史日志
   dir: "logs/history" # 本地历史日志根目录
+  telemetry_io_queue_size: 1000 # OSD 数据库落库和历史 JSONL 后台写入队列长度；队列满会丢弃最旧本地记录，避免拖慢 2 秒上报节拍
   flight_telemetry_days: 7 # 飞机原始飞行历史遥测保留天数
   device_state_days: 7 # 设备状态变更历史保留天数
   flight_telemetry_granularity: "hour" # 飞机原始飞行遥测按小时拆文件：logs/history/flight_telemetry/YYYY-MM/YYYY-MM-DD_HH.jsonl

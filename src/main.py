@@ -34,10 +34,10 @@ sys.path.insert(0, str(project_root))
 from src.utils.config import Config, load_config
 from src.utils.logger import init_logger, get_logger
 from src.utils.message import MessageBuilder
-from src.utils.field_labels import format_with_labels
 from src.utils.production_readiness import validate_production_config
 from src.utils.runtime_overrides import build_runtime_overrides
 from src.utils.local_history_logger import LocalHistoryLogger
+from src.utils.telemetry_io_worker import TelemetryIoWorker
 from src.utils.mission_platform_snapshot import (
     flush_latest_mission_platform_snapshot,
     publish_platform_event_with_latest_snapshot,
@@ -82,13 +82,11 @@ from src.database.connection import (
     get_database_backend,
     init_database,
 )
-from src.database.telemetry_db import TelemetryDB
 from web.mavlink.telemetry.mode_code import derive_aircraft_mode_code_from_gateway_modules
 from web.mavlink.nest.property_mapping import build_dock3_properties_from_nest
 from src.state_machine import CommandAdmissionEngine, GatewayEventReducer, GatewayStateProvider
 
 logger = get_logger("main")
-drone_report_logger = get_logger("drone.report")
 
 
 def _json_safe(value: Any) -> Any:
@@ -340,6 +338,7 @@ class EdgeGateway:
         self.global_state: GatewayEventReducer = None
         self.command_admission: CommandAdmissionEngine = None
         self.history_logger: LocalHistoryLogger = None
+        self.telemetry_io_worker: TelemetryIoWorker = None
         self._startup_connections_ready = False
         self._main_mavlink_lazy_connect = False
         self._main_mavlink_start_lock = threading.Lock()
@@ -365,6 +364,12 @@ class EdgeGateway:
             # 后续同步/异步调用都会落到这里选定的 MongoDB 或 SQLite。
             configure_database(Config.get_database_config())
             self.history_logger = LocalHistoryLogger()
+            telemetry_io_queue_size = int(Config.get('local_history.telemetry_io_queue_size', 1000) or 1000)
+            self.telemetry_io_worker = TelemetryIoWorker(
+                SessionLocal,
+                self.history_logger,
+                max_queue_size=telemetry_io_queue_size,
+            )
 
             # 2. 初始化日志
             log_config = Config.get('logging', {})
@@ -377,6 +382,7 @@ class EdgeGateway:
                 for error in production_errors:
                     logger.error("Production readiness failed: %s", error)
                 return False
+            self.telemetry_io_worker.start()
 
             # 3. 初始化MQTT客户端
             logger.info("Initializing MQTT client...")
@@ -1444,6 +1450,8 @@ class EdgeGateway:
             self.mission.stop_mission_monitor()
         if self.telemetry:
             self.telemetry.stop()
+        if self.telemetry_io_worker:
+            self.telemetry_io_worker.stop()
         if self.dispatcher:
             self.dispatcher.stop()
         if self.nest_dispatcher:
@@ -1628,17 +1636,13 @@ class EdgeGateway:
         self.cloud_conn._start_request_cleaner()
 
         # 遥测回调
-        def persist_telemetry(device_sn: str, osd_data: dict):
-            try:
-                with SessionLocal() as session:
-                    TelemetryDB.save_telemetry_sync(session, device_sn, osd_data)
-                    session.commit()
-            except Exception as e:
-                logger.warning(
-                    "Failed to persist telemetry: device_sn=%s, error=%s",
+        def enqueue_telemetry_io(device_sn: str, osd_data: dict, *, history_source: str = None):
+            if self.telemetry_io_worker:
+                self.telemetry_io_worker.enqueue_telemetry(
                     device_sn,
-                    e,
-                    exc_info=True,
+                    osd_data,
+                    history_source=history_source,
+                    persist_database=True,
                 )
 
         def osd_cb(osd_data):
@@ -1657,11 +1661,11 @@ class EdgeGateway:
                     battery.get("capacity_percent") if isinstance(battery, dict) else "",
                 )
                 self._aircraft_telemetry_online_logged = True
-            drone_report_logger.info(
-                "aircraft_osd source=flight_controller payload=%s",
-                format_with_labels(aircraft_osd, max_length=5000),
-                extra={"console_silent": True},
-            )
+            if self.telemetry_io_worker:
+                self.telemetry_io_worker.enqueue_aircraft_osd_log(
+                    aircraft_osd,
+                    source='flight_controller',
+                )
             if self.flight_area:
                 self.flight_area.update_aircraft_osd(aircraft_osd)
             # 同步遥测数据到 DeviceManager（更新物模型OSD属性）
@@ -1671,19 +1675,11 @@ class EdgeGateway:
             published_drone_osd = False
             for sub_device in self.device.get_all_sub_devices():
                 if sub_device.online:
-                    persist_telemetry(sub_device.sn, aircraft_osd)
-                    if self.history_logger:
-                        self.history_logger.record_flight_telemetry(
-                            sub_device.sn, aircraft_osd, source='aircraft_osd'
-                        )
+                    enqueue_telemetry_io(sub_device.sn, aircraft_osd, history_source='aircraft_osd')
                     self.telemetry_reporter.report_osd(sub_device.sn, aircraft_osd)
                     published_drone_osd = True
             if not published_drone_osd:
-                persist_telemetry(gateway_sn, aircraft_osd)
-                if self.history_logger:
-                    self.history_logger.record_flight_telemetry(
-                        gateway_sn, aircraft_osd, source='aircraft_osd'
-                    )
+                enqueue_telemetry_io(gateway_sn, aircraft_osd, history_source='aircraft_osd')
 
         def state_cb(state_data):
             if self.history_logger:
