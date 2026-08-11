@@ -180,6 +180,15 @@
             <button id="stopPreviewBtn">停止预览</button>
             <button id="reloadPreviewBtn">重载画面</button>
           </div>
+          <div class="ptz-drag-bar">
+            <label><input id="ptzDragEnabled" type="checkbox" /> 拖动控制云台</label>
+            <label>
+              速度
+              <input id="ptzDragSpeed" type="range" min="1" max="20" step="1" value="8" />
+            </label>
+            <span id="ptzDragSpeedText">8 deg/s</span>
+            <span id="ptzDragStatus">未启用</span>
+          </div>
         </section>
         <section class="panel live-control-panel">
           <div class="section-title">

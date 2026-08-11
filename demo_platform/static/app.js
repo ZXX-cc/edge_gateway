@@ -7,6 +7,13 @@ let lastCommandResult = null;
 let retestLogs = [];
 let frameZoomDragStart = null;
 let frameZoomBox = null;
+let ptzDragState = null;
+let ptzDragTimer = null;
+let ptzDragCommandInFlight = false;
+let ptzLastCommandResult = null;
+
+const PTZ_DRAG_REPEAT_MS = 180;
+const PTZ_DRAG_STOP_PAYLOAD = {yaw_speed: 0, pitch_speed: 0};
 
 const keyStatusLabels = {
   waiting: "待验证",
@@ -930,26 +937,157 @@ function clearFrameZoomSelection() {
   setText("frameZoomBoxText", "未框选");
 }
 
+function ptzDragBaseData() {
+  return {
+    payload_index: $("zoomPayloadIndex").value.trim() || "52-0-0",
+    locked: false,
+  };
+}
+
+function ptzDragEnabled() {
+  return Boolean($("ptzDragEnabled")?.checked);
+}
+
+function setPtzDragStatus(text) {
+  setText("ptzDragStatus", text);
+}
+
+function ptzDragSpeedLimit() {
+  const input = $("ptzDragSpeed");
+  const value = Number(input?.value || 8);
+  return Number.isFinite(value) ? clamp(value, 1, 20) : 8;
+}
+
+function updatePtzDragSpeedLabel() {
+  setText("ptzDragSpeedText", `${ptzDragSpeedLimit().toFixed(0)} deg/s`);
+}
+
+function buildPtzDragPayload(speed) {
+  return {
+    ...ptzDragBaseData(),
+    ...speed,
+  };
+}
+
+async function sendPtzDragCommand(speed, {force = false} = {}) {
+  if (ptzDragCommandInFlight && !force) return;
+  ptzDragCommandInFlight = true;
+  try {
+    const res = await fetch("/api/command", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      keepalive: true,
+      body: JSON.stringify({
+        channel: "services",
+        method: "camera_screen_drag",
+        data: buildPtzDragPayload(speed),
+        need_reply: 0,
+        timeout: 2,
+      }),
+    });
+    ptzLastCommandResult = await res.json();
+    if (!ptzLastCommandResult.ok) {
+      setPtzDragStatus("拖动指令失败");
+    }
+  } catch (err) {
+    ptzLastCommandResult = {ok: false, error: err.message};
+    setPtzDragStatus(`拖动指令异常: ${err.message}`);
+  } finally {
+    ptzDragCommandInFlight = false;
+  }
+}
+
+function ptzSpeedFromPointer(event) {
+  const current = pointerInImage(event);
+  const state = ptzDragState;
+  const span = Math.max(80, Math.min(current.rect.width, current.rect.height) * 0.35);
+  const dx = current.x - state.start.x;
+  const dy = current.y - state.start.y;
+  const deadZone = 6;
+  const limit = ptzDragSpeedLimit();
+  return {
+    yaw_speed: Math.abs(dx) <= deadZone ? 0 : Number((clamp(dx / span, -1, 1) * limit).toFixed(2)),
+    pitch_speed: Math.abs(dy) <= deadZone ? 0 : Number((clamp(-dy / span, -1, 1) * limit).toFixed(2)),
+  };
+}
+
+function startPtzDragRepeat() {
+  stopPtzDragRepeat();
+  ptzDragTimer = window.setInterval(() => {
+    if (!ptzDragState) return;
+    sendPtzDragCommand(ptzDragState.speed);
+  }, PTZ_DRAG_REPEAT_MS);
+}
+
+function stopPtzDragRepeat() {
+  if (ptzDragTimer) {
+    window.clearInterval(ptzDragTimer);
+    ptzDragTimer = null;
+  }
+}
+
+function stopPtzDrag(reason = "已停止") {
+  if (!ptzDragState && !ptzDragTimer) return;
+  ptzDragState = null;
+  stopPtzDragRepeat();
+  setPtzDragStatus(reason);
+  sendPtzDragCommand(PTZ_DRAG_STOP_PAYLOAD, {force: true});
+}
+
+function updatePtzDrag(event) {
+  if (!ptzDragState) return;
+  ptzDragState.speed = ptzSpeedFromPointer(event);
+  setPtzDragStatus(`yaw ${ptzDragState.speed.yaw_speed}, pitch ${ptzDragState.speed.pitch_speed}`);
+}
+
 function setupFrameZoomSelection() {
   const stage = document.querySelector(".live-stage");
   if (!stage) return;
   stage.addEventListener("pointerdown", (event) => {
     if (!$("gimbalStream").classList.contains("active")) return;
+    if (ptzDragEnabled()) {
+      event.preventDefault();
+      clearFrameZoomSelection();
+      ptzDragState = {
+        pointerId: event.pointerId,
+        start: pointerInImage(event),
+        speed: {...PTZ_DRAG_STOP_PAYLOAD},
+      };
+      updatePtzDrag(event);
+      stage.setPointerCapture(event.pointerId);
+      sendPtzDragCommand(ptzDragState.speed, {force: true});
+      startPtzDragRepeat();
+      return;
+    }
     frameZoomDragStart = pointerInImage(event);
     updateFrameZoomSelection(frameZoomDragStart, frameZoomDragStart);
     stage.setPointerCapture(event.pointerId);
   });
   stage.addEventListener("pointermove", (event) => {
+    if (ptzDragState) {
+      updatePtzDrag(event);
+      return;
+    }
     if (!frameZoomDragStart) return;
     updateFrameZoomSelection(frameZoomDragStart, pointerInImage(event));
   });
   stage.addEventListener("pointerup", (event) => {
+    if (ptzDragState) {
+      stopPtzDrag("松手停止");
+      return;
+    }
     if (!frameZoomDragStart) return;
     updateFrameZoomSelection(frameZoomDragStart, pointerInImage(event));
     frameZoomDragStart = null;
   });
   stage.addEventListener("pointercancel", () => {
+    stopPtzDrag("拖动取消，已停止");
     frameZoomDragStart = null;
+  });
+  stage.addEventListener("pointerleave", () => stopPtzDrag("鼠标移出，已停止"));
+  window.addEventListener("blur", () => stopPtzDrag("页面失焦，已停止"));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopPtzDrag("页面隐藏，已停止");
   });
 }
 
@@ -1034,6 +1172,7 @@ function stopGimbalPreview() {
   placeholder.textContent = "点击开始预览";
   setText("liveSource", snapshot?.live?.gimbal_rtsp_url || "--");
   clearFrameZoomSelection();
+  stopPtzDrag("预览停止，云台已停止");
 }
 
 async function startDockLivePush() {
@@ -1177,8 +1316,14 @@ $("sendFocalLengthBtn").addEventListener("click", () => sendFocalLengthCommand()
 $("sendFrameZoomBtn").addEventListener("click", sendFrameZoomCommand);
 $("sendOverRangeZoomBtn").addEventListener("click", () => sendFocalLengthCommand(999, "超范围倍率测试"));
 $("clearFrameZoomBtn").addEventListener("click", clearFrameZoomSelection);
+$("ptzDragEnabled").addEventListener("change", () => {
+  document.querySelector(".live-stage")?.classList.toggle("ptz-drag-active", ptzDragEnabled());
+  if (!ptzDragEnabled()) stopPtzDrag("拖动控制已关闭");
+});
+$("ptzDragSpeed").addEventListener("input", updatePtzDragSpeedLabel);
 
 setupFrameZoomSelection();
+updatePtzDragSpeedLabel();
 renderActionCards();
 loadStatus();
 loadWorkflows();

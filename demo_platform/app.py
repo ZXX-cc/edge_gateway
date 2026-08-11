@@ -945,6 +945,14 @@ def api_gimbal_stream() -> Response:
         "warning",
         "-rtsp_transport",
         "tcp",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
         "-i",
         GIMBAL_RTSP_URL,
         "-an",
@@ -1000,7 +1008,11 @@ def api_gimbal_stream() -> Response:
     return Response(
         generate(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store, no-cache, no-transform",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1011,11 +1023,19 @@ def api_command():
     if not method:
         return jsonify({"ok": False, "error": "missing method"}), 400
     channel = str(body.get("channel", "services")).strip()
+    need_reply = 1 if body.get("need_reply", 1) else 0
     try:
-        record = publish_command(method, body.get("data", {}), channel, timeout=float(body.get("timeout", 8.0)))
+        record = publish_command(
+            method,
+            body.get("data", {}),
+            channel,
+            timeout=float(body.get("timeout", 8.0)),
+            need_reply=need_reply,
+        )
         business = command_business_summary(record)
         record.update(business)
-        return jsonify({"ok": business["business_success"], "record": record})
+        ok = bool(business["business_success"] or (need_reply == 0 and record.get("publish_rc") == 0))
+        return jsonify({"ok": ok, "record": record})
     except Exception as exc:
         append_retest_log({
             "source": "command",

@@ -522,6 +522,14 @@ button:disabled {
   user-select: none;
 }
 
+.live-stage.ptz-drag-active {
+  cursor: grab;
+}
+
+.live-stage.ptz-drag-active:active {
+  cursor: grabbing;
+}
+
 .live-stage img {
   width: 100%;
   height: 100%;
@@ -572,6 +580,36 @@ button:disabled {
 
 .live-controls button {
   min-width: 112px;
+}
+
+.ptz-drag-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ptz-drag-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ptz-drag-bar input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.ptz-drag-bar input[type="range"] {
+  width: 140px;
+}
+
+#ptzDragSpeedText,
+#ptzDragStatus {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .live-control-panel input {

@@ -233,6 +233,11 @@ class GimbalControl:
         self._dev_status_callback_disabled_logged = False
         self._connect_deadline = 0.0
         self._connect_timeout_seconds = 0.0
+        self._motion_watchdog_timeout = 1.0
+        self._motion_watchdog_interval = 0.2
+        self._motion_last_command_time = 0.0
+        self._motion_active = False
+        self._motion_watchdog_thread: Optional[threading.Thread] = None
 
         # 回调引用（防止被GC回收）
         self._conn_callback = None
@@ -791,6 +796,7 @@ class GimbalControl:
     def disconnect(self) -> dict:
         """断开连接"""
         result = {"success": True, "message": ""}
+        self._clear_motion_watchdog()
 
         if self._lib and self._connected:
             self._call_sdk("VLK_Disconnect")
@@ -1080,6 +1086,47 @@ class GimbalControl:
         """Confirm a 3.5.3 SDK command without sending legacy raw protocol frames."""
         return self._confirm_command_sent(message)
 
+    def _clear_motion_watchdog(self) -> None:
+        with self._lock:
+            self._motion_active = False
+            self._motion_last_command_time = 0.0
+
+    def _mark_motion_command(self, moving: bool) -> None:
+        with self._lock:
+            self._motion_active = bool(moving)
+            self._motion_last_command_time = time.time()
+            if self._motion_active and (
+                self._motion_watchdog_thread is None
+                or not self._motion_watchdog_thread.is_alive()
+            ):
+                self._motion_watchdog_thread = threading.Thread(
+                    target=self._motion_watchdog_loop,
+                    name="viewlink-motion-watchdog",
+                    daemon=True,
+                )
+                self._motion_watchdog_thread.start()
+
+    def _motion_watchdog_loop(self) -> None:
+        while True:
+            time.sleep(self._motion_watchdog_interval)
+            with self._lock:
+                active = self._motion_active
+                last_command_time = self._motion_last_command_time
+                timeout = self._motion_watchdog_timeout
+            if not active:
+                return
+            if time.time() - last_command_time < timeout:
+                continue
+            try:
+                if self._lib and self.is_connected(force=True):
+                    self._call_sdk("VLK_Stop")
+                    self.log(f"云台拖动 watchdog 超过 {timeout:.1f}s 未收到续发指令，已自动停止", "WARN")
+            except Exception as exc:
+                self.log(f"云台拖动 watchdog 自动停止失败: {exc}", "ERROR")
+            finally:
+                self._clear_motion_watchdog()
+                return
+
     # ==================== 云台控制 ====================
 
     def move(self, yaw_speed: int, pitch_speed: int) -> dict:
@@ -1111,6 +1158,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
+        self._mark_motion_command(yaw_speed != 0 or pitch_speed != 0)
         return self._with_sdk_trace(self._confirm_and_send_protocol(
             "move",
             {"yaw_speed": yaw_speed, "pitch_speed": pitch_speed},
@@ -1127,6 +1175,7 @@ class GimbalControl:
             return result
 
         self._call_sdk("VLK_Stop")
+        self._clear_motion_watchdog()
         return self._with_sdk_trace(self._confirm_and_send_protocol(
             "move",
             {"yaw_speed": 0, "pitch_speed": 0},
