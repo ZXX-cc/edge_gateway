@@ -100,6 +100,7 @@ alarm_logger = get_logger("alarm")
 nest_plc_logger = get_logger("nest_plc")
 
 NEST_COMMAND_TARGET_HOLD_SECONDS = 60.0
+NEST_TAKEOFF_POINT_CONFIG_PREFIX = "mission.wayline.nest_takeoff_point"
 
 
 def _config_bool(value: Any, default: bool = False) -> bool:
@@ -116,6 +117,16 @@ def _config_bool(value: Any, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "n", "off"}:
             return False
     return default
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return None
+    return parsed
 
 
 class SubDevice:
@@ -339,6 +350,49 @@ class DeviceManager:
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def _configured_dock_osd_position() -> Dict[str, Any]:
+        """Read fixed dock coordinates from the project nest takeoff-point config."""
+        prefix = NEST_TAKEOFF_POINT_CONFIG_PREFIX
+        source = {
+            "latitude": Config.get(f"{prefix}.latitude"),
+            "longitude": Config.get(f"{prefix}.longitude"),
+            "height": Config.get(
+                f"{prefix}.absolute_altitude",
+                Config.get(f"{prefix}.altitude"),
+            ),
+            "heading": Config.get(f"{prefix}.heading"),
+        }
+        return build_dock3_position_properties(source)
+
+    @staticmethod
+    def _is_empty_position_value(value: Any) -> bool:
+        parsed = _finite_float(value)
+        return parsed is not None and abs(parsed) <= 1e-7
+
+    @classmethod
+    def _apply_configured_dock_osd_position_defaults(cls, properties: Dict[str, Any]) -> None:
+        """Use configured dock coordinates as OSD defaults without overriding real nest updates."""
+        configured = cls._configured_dock_osd_position()
+        for key in ("longitude", "latitude", "height", "heading", "home_position_is_valid"):
+            if key not in configured:
+                continue
+            current = properties.get(key)
+            if current is None or cls._is_empty_position_value(current):
+                properties[key] = copy.deepcopy(configured[key])
+
+        configured_coordinate = configured.get("self_converge_coordinate")
+        current_coordinate = properties.get("self_converge_coordinate")
+        if isinstance(configured_coordinate, dict) and isinstance(current_coordinate, dict):
+            for key in ("longitude", "latitude", "height"):
+                if key not in configured_coordinate:
+                    continue
+                current = current_coordinate.get(key)
+                if current is None or cls._is_empty_position_value(current):
+                    current_coordinate[key] = copy.deepcopy(configured_coordinate[key])
+        elif isinstance(configured_coordinate, dict):
+            properties["self_converge_coordinate"] = copy.deepcopy(configured_coordinate)
+
     def _gateway_topology_keys(self) -> Set[Tuple[str, int, int]]:
         return {(self._gateway_domain, self._gateway_type, self._gateway_sub_type)}
 
@@ -357,7 +411,7 @@ class DeviceManager:
 
     def _init_properties(self) -> Dict[str, Any]:
         """初始化所有物模型属性（对齐DJI规范）"""
-        return {
+        properties = {
             # ---- 位置属性 (pushMode=0, 只读) ----
             'longitude': 0.0,
             'latitude': 0.0,
@@ -526,6 +580,8 @@ class DeviceManager:
             # ---- 用户体验 (pushMode=1, 可写rw) ----
             'user_experience_improvement': 0,   # 0:初始,1:拒绝,2:同意
         }
+        self._apply_configured_dock_osd_position_defaults(properties)
+        return properties
 
     # ========== 外部模块注入 ==========
 
@@ -963,6 +1019,7 @@ class DeviceManager:
         # to the wrong MQTT topic.
         dock_osd_fields = sorted(official_property_names(push_mode=0))
 
+        self._apply_configured_dock_osd_position_defaults(self._properties)
         osd = {
             field: copy.deepcopy(self._properties[field])
             for field in dock_osd_fields
