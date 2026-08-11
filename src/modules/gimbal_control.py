@@ -819,6 +819,21 @@ class GimbalControl:
         self.log(success_message)
         return {"success": True, "message": success_message}
 
+    def _ensure_motor_on(self) -> dict:
+        """Ensure the gimbal motor is enabled before physical movement commands."""
+        try:
+            if self._call_sdk("VLK_IsMotorOn") == 1:
+                return {"success": True, "message": "云台电机已打开", "motor_on": True}
+            self.log("云台电机关闭，正在打开电机", "WARN")
+            self._call_sdk("VLK_SwitchMotor", 1)
+            time.sleep(0.2)
+            motor_on = self._call_sdk("VLK_IsMotorOn") == 1
+            if motor_on:
+                return {"success": True, "message": "云台电机已打开", "motor_on": True}
+            return {"success": False, "message": "云台电机未打开", "motor_on": False}
+        except Exception as exc:
+            return {"success": False, "message": f"查询/打开云台电机失败: {exc}", "motor_on": False}
+
     def _connecting_result(self) -> dict:
         return {
             "success": False,
@@ -1063,6 +1078,12 @@ class GimbalControl:
         yaw_speed = max(-16383, min(16383, int(yaw_speed or 0)))
         pitch_speed = max(-16383, min(16383, int(pitch_speed or 0)))
 
+        motor = self._ensure_motor_on()
+        if not motor["success"]:
+            result["message"] = motor["message"]
+            result["motor_on"] = False
+            return result
+
         self._call_sdk("VLK_Move", yaw_speed, pitch_speed)
         return self._confirm_and_send_protocol(
             "move",
@@ -1093,6 +1114,12 @@ class GimbalControl:
         connected = self._require_connected()
         if not connected["success"]:
             result["message"] = connected["message"]
+            return result
+
+        motor = self._ensure_motor_on()
+        if not motor["success"]:
+            result["message"] = motor["message"]
+            result["motor_on"] = False
             return result
 
         self._call_sdk("VLK_Home")
@@ -1180,6 +1207,12 @@ class GimbalControl:
 
         yaw = float(yaw or 0.0)
         pitch = float(pitch or 0.0)
+        motor = self._ensure_motor_on()
+        if not motor["success"]:
+            result["message"] = motor["message"]
+            result["motor_on"] = False
+            return result
+
         self._call_sdk("VLK_TurnTo", ctypes.c_double(yaw), ctypes.c_double(pitch))
         return self._confirm_and_send_protocol(
             "turn_to",

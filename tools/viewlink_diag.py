@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import os
+import shutil
 import sys
 import time
 from ctypes import (
@@ -132,6 +133,11 @@ def main() -> int:
         default=".",
         help="runtime working directory for SDK logs; default keeps the command cwd",
     )
+    parser.add_argument(
+        "--reset-log-dir",
+        action="store_true",
+        help="remove work-dir/VLKLog before VLK_Init; useful because SDK 3.5.3 fails if it already exists",
+    )
     parser.add_argument("--callback", choices=["none", "cdecl", "stdcall"], default="cdecl")
     parser.add_argument(
         "--callback-body",
@@ -167,6 +173,9 @@ def main() -> int:
     os.chdir(work_dir)
     print(f"cwd.runtime={os.getcwd()}", flush=True)
     log_dir = os.path.join(os.getcwd(), "VLKLog")
+    if args.reset_log_dir and os.path.isdir(log_dir):
+        shutil.rmtree(log_dir)
+        print(f"log_dir.removed={log_dir}", flush=True)
     print(f"log_dir.expected={log_dir}", flush=True)
 
     lib = load_library(sdk_dir, args.loader)

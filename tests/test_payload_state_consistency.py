@@ -325,6 +325,7 @@ class FakeViewLinkLib:
         self.motor_on = True
         self.follow_mode = False
         self.tracking = False
+        self.switch_motor_calls = []
 
     def VLK_RegisterDevStatusCB(self, callback, user_param):
         self.register_dev_status_calls += 1
@@ -357,6 +358,7 @@ class FakeViewLinkLib:
         self.track_calls.append((x, y, video_width, video_height))
 
     def VLK_SwitchMotor(self, on):
+        self.switch_motor_calls.append(int(on))
         self.motor_on = bool(on)
 
     def VLK_IsMotorOn(self):
@@ -912,6 +914,21 @@ class PayloadStateConsistencyTest(unittest.TestCase):
         self.assertFalse(result["motor_on"])
         self.assertTrue(result["follow_mode"])
         self.assertTrue(result["tracking"])
+
+    def test_viewlink_move_switches_motor_on_before_physical_motion(self):
+        direct_payload = GimbalControl("/tmp", "127.0.0.1", 37260)
+        fake_lib = FakeViewLinkLib(connected=True)
+        fake_lib.motor_on = False
+        direct_payload._initialized = True
+        direct_payload._connected = True
+        direct_payload._lib = fake_lib
+
+        result = direct_payload.move(1000, 0)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(fake_lib.switch_motor_calls, [1])
+        self.assertEqual(fake_lib.move_calls, [(1000, 0)])
+        self.assertTrue(fake_lib.motor_on)
 
     def test_viewlink_device_status_callback_uses_binary_buffer_pointer(self):
         self.assertEqual(DevStatusCallback._argtypes_[1], ctypes.c_void_p)
