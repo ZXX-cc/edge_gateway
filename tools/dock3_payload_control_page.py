@@ -107,8 +107,8 @@ HTML = """<!doctype html>
         </div>
       </section>
       <section>
-        <h2>速度 <span id="speedText">2</span> degree/s</h2>
-        <input id="speed" type="range" min="0.5" max="10" step="0.5" value="2" oninput="speedText.textContent=this.value">
+        <h2>速度 <span id="speedText">10</span> degree/s</h2>
+        <input id="speed" type="range" min="0.5" max="20" step="0.5" value="10" oninput="speedText.textContent=this.value">
       </section>
       <section>
         <h2>变焦/画质</h2>
