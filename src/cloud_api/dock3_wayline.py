@@ -422,6 +422,7 @@ def _configured_kmz_nest_takeoff_point() -> Dict[str, float]:
     lat_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.latitude"
     lon_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.longitude"
     alt_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.altitude"
+    absolute_alt_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.absolute_altitude"
     offset_key = f"{KMZ_NEST_TAKEOFF_CONFIG_PREFIX}.takeoff_alt_offset"
     lat = Config.get(lat_key)
     lon = Config.get(lon_key)
@@ -437,6 +438,7 @@ def _configured_kmz_nest_takeoff_point() -> Dict[str, float]:
         "latitude": lat_f,
         "longitude": lon_f,
         "altitude": _to_float(Config.get(alt_key, 0.0), 0.0),
+        "absolute_altitude": _to_float(Config.get(absolute_alt_key, 0.0), 0.0),
         "takeoff_alt_offset": _to_float(
             Config.get(offset_key, DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS),
             DEFAULT_KMZ_TAKEOFF_ALT_OFFSET_METERS,
@@ -686,6 +688,7 @@ def _parse_kmz(path: str) -> Tuple[Dict[str, Any], List[dict], List[str]]:
             "latitude": nest_point["latitude"],
             "longitude": nest_point["longitude"],
             "altitude": nest_point["altitude"],
+            "absolute_altitude": nest_point["absolute_altitude"],
         },
         "takeoff_alt_offset": nest_point["takeoff_alt_offset"],
         "first_execute_height": source_waypoints[0]["altitude"],
