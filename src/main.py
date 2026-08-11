@@ -1580,6 +1580,13 @@ class EdgeGateway:
         if self.cloud_conn:
             self.device.set_cloud_connection(self.cloud_conn)
 
+        dock_osd_reported = self._report_dock_osd_if_due(force=True)
+        logger.info(
+            "Startup dock OSD report triggered: gateway_sn=%s, success=%s",
+            Config.get_gateway_sn(),
+            dock_osd_reported,
+        )
+
         if self._start_configured_organization_binding():
             return
 

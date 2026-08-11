@@ -614,6 +614,18 @@ class MQTTClient:
         topic = TopicBuilder.osd(device_sn)
         payload = MessageBuilder.build_osd(self.gateway_sn, data)
         payload = self._sanitize_publish_payload(topic, payload)
+        now = time.time()
+        console_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        console_time = f"{console_time}.{int((now % 1) * 1000):03d}"
+        print(
+            "[OSD publish] "
+            f"time={console_time} "
+            f"topic={topic} "
+            f"device_sn={device_sn} "
+            f"timestamp={payload.get('timestamp')} "
+            f"data_timestamp={(payload.get('data') or {}).get('timestamp') if isinstance(payload.get('data'), dict) else None}",
+            flush=True,
+        )
         if self._should_log_osd_sample(topic):
             logger.info(self._format_log_block("MQTT OSD SAMPLE", [
                 ("topic", topic),
