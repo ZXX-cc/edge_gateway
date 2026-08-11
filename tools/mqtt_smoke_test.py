@@ -18,6 +18,16 @@ def parse_payload(raw):
         raise argparse.ArgumentTypeError(f"payload must be JSON: {exc}") from exc
 
 
+def load_payload_file(path: str):
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            return parse_payload(fp.read())
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(f"payload file read failed: {exc}") from exc
+
+
 def parse_property_expectation(raw: str) -> tuple[str, int]:
     if "=" not in raw:
         raise argparse.ArgumentTypeError("property expectation must be NAME=RESULT")
@@ -41,6 +51,7 @@ def main():
     parser.add_argument("--channel", choices=["auto", *sorted(CHANNELS)], default="auto")
     parser.add_argument("--method", default="gateway_state_query")
     parser.add_argument("--payload", type=parse_payload, default={})
+    parser.add_argument("--payload-file", default="", help="从 JSON 文件读取 payload，避免 Windows 命令行转义问题")
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=1)
     parser.add_argument("--expect-result", type=int, action="append", default=[])
@@ -54,6 +65,11 @@ def main():
     parser.add_argument("--quiet-stale", action="store_true")
     parser.add_argument("--fail-on-stale", action="store_true")
     args = parser.parse_args()
+    if args.payload_file:
+        try:
+            args.payload = load_payload_file(args.payload_file)
+        except argparse.ArgumentTypeError as exc:
+            parser.error(str(exc))
     args.host, args.port, args.sn = resolve_mqtt_settings(args)
 
     allowed_results = set(args.expect_result) if args.expect_result else None
