@@ -344,6 +344,8 @@ class EdgeGateway:
         self._main_mavlink_start_lock = threading.Lock()
         self._main_mavlink_config = None
         self._nest_mavlink_config = None
+        self._last_nest_aircraft_online = None
+        self._nest_aircraft_seen_online = False
         self._organization_binding_retry_timer = None
         self._organization_binding_retry_attempt = 0
         self._organization_binding_pending_tid = ""
@@ -1058,6 +1060,54 @@ class EdgeGateway:
             logger.info("Main aircraft MAVLink dispatcher started on demand: reason=%s", reason)
             return True
 
+    def _stop_aircraft_mavlink_for_planned_offline(self, reason: str) -> None:
+        """Stop aircraft-side MAVLink reconnects when the dock reports the aircraft is off."""
+        with self._main_mavlink_start_lock:
+            if not self.mavlink_conn:
+                return
+            if not self.dispatcher and not self.mavlink_conn.is_connected():
+                return
+
+            if self.dispatcher:
+                try:
+                    self.dispatcher.stop()
+                except Exception as exc:
+                    logger.warning("Stop main aircraft MAVLink dispatcher failed: %s", exc, exc_info=True)
+
+            if self.mavlink_conn.is_connected():
+                logger.info("Stopping main aircraft MAVLink for planned offline: reason=%s", reason)
+            try:
+                self.mavlink_conn.disconnect()
+            except Exception as exc:
+                logger.warning("Disconnect main aircraft MAVLink failed: %s", exc, exc_info=True)
+
+            self._aircraft_telemetry_online_logged = False
+            self._refresh_state_machine_sources()
+
+    def _handle_aircraft_presence_from_nest(self, nest_data: dict) -> None:
+        if not isinstance(nest_data, dict) or "drone_heartbeat" not in nest_data:
+            return
+
+        aircraft_online = bool(nest_data.get("drone_heartbeat"))
+        if self._last_nest_aircraft_online is aircraft_online:
+            return
+        self._last_nest_aircraft_online = aircraft_online
+
+        if aircraft_online:
+            self._nest_aircraft_seen_online = True
+            return
+
+        if not self._nest_aircraft_seen_online:
+            logger.info(
+                "Ignoring startup aircraft offline hint before nest ever reports online"
+            )
+            return
+
+        use_separate_nest_mavlink = bool((self._nest_mavlink_config or {}).get("enabled"))
+        if not use_separate_nest_mavlink:
+            return
+        self._stop_aircraft_mavlink_for_planned_offline("nest_drone_heartbeat_false")
+
     def start(self) -> bool:
         """启动网关"""
         try:
@@ -1191,6 +1241,7 @@ class EdgeGateway:
         def nest_env_cb(nest_data):
             if self.device:
                 self.device.update_from_nest(nest_data)
+                self._handle_aircraft_presence_from_nest(nest_data)
                 # 机巢状态进入缓存后按 OSD 定频上报平台；这里做兜底节流，
                 # 避免收到高频机巢帧时突破客户要求的 2 秒上报节奏。
                 self._report_dock_osd_if_due()

@@ -1153,6 +1153,14 @@ class DeviceManager:
         从遥测处理器接收MAVLink遥测数据，更新OSD属性
         由 main.py 在 TelemetryProcessor.build_osd_data() 后调用
         """
+        if osd_data:
+            sub_device_online_changed = self._sync_sub_device_online(
+                True,
+                source="flight_controller_telemetry",
+            )
+            if sub_device_online_changed:
+                self.report_update_topo()
+
         updates = build_properties_from_osd(osd_data)
         updates = self._merge_updates_with_current(updates)
 
@@ -1205,7 +1213,12 @@ class DeviceManager:
                 self._ensure_aircraft_link_after_nest_drone_online()
             else:
                 self._aircraft_link_started_from_nest = False
-            self._sync_sub_device_online_from_nest(bool(nest_data.get('drone_heartbeat')))
+            sub_device_online_changed = self._sync_sub_device_online(
+                bool(nest_data.get('drone_heartbeat')),
+                source="nest_drone_heartbeat",
+            )
+            if sub_device_online_changed:
+                self.report_update_topo()
 
         if updates:
             self.update_properties(updates, notify=False)
@@ -1259,16 +1272,16 @@ class DeviceManager:
             extra={"console_silent": True},
         )
 
-    def _sync_sub_device_online_from_nest(self, online: bool):
-        """Use the nest 12004 aircraft heartbeat as the real child-device state."""
+    def _sync_sub_device_online(self, online: bool, *, source: str) -> bool:
+        """Use real aircraft presence signals to keep child-device topology fresh."""
         if not self._sub_devices:
-            return
+            return False
 
         changed = False
         now = time.time()
         for dev in self._sub_devices.values():
             if dev.online != online:
-                self._log_sub_device_online_change(dev, online, source="nest_drone_heartbeat")
+                self._log_sub_device_online_change(dev, online, source=source)
                 dev.online = online
                 changed = True
             if online:
@@ -1277,6 +1290,7 @@ class DeviceManager:
 
         if changed:
             self._refresh_sub_device_property(notify=False)
+        return changed
 
     def _ensure_aircraft_link_after_nest_drone_online(self) -> None:
         """Start the gateway-owned aircraft MAVLink link after startup sees the drone online.

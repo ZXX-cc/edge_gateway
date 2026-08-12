@@ -55,7 +55,8 @@ if "src.database.operation_db" not in sys.modules:
     operation_db.OperationDB = type("OperationDB", (), {})
     sys.modules["src.database.operation_db"] = operation_db
 
-from src.device.manager import DeviceManager  # noqa: E402
+from src.device.manager import DeviceManager, SubDevice  # noqa: E402
+from src.utils.config import Config  # noqa: E402
 from src.device.nest_hms_mapper import build_nest_hms_alarms, is_nest_hms_alarm  # noqa: E402
 from src.utils.dji_error_codes import DEVICE_COMMAND_TIMEOUT, DOCK_UNABLE_TO_RESPOND  # noqa: E402
 
@@ -133,13 +134,22 @@ def nest_snapshot(**overrides):
 
 class DeviceManagerNestSyncTest(unittest.TestCase):
     def setUp(self):
+        self._config_data = Config._data
+        Config._data = {
+            "gateway": {"sn": "EDGEGW001"},
+            "device": {"topology": {"device_secret": "gw-secret", "nonce": "gw-nonce"}},
+        }
         self.manager = DeviceManager()
         self.manager._nest_command_ack_timeout = 0.1
         self.manager._nest_command_state_timeout = 0.4
+        self.manager._topo_retry_limit = 0
         self.state_events = []
         self.events = []
         self.manager._state_callback = self.state_events.append
         self.manager._event_callback = self.events.append
+
+    def tearDown(self):
+        Config._data = self._config_data
 
     @staticmethod
     def _cover_msg(method="cover_open"):
@@ -269,6 +279,64 @@ class DeviceManagerNestSyncTest(unittest.TestCase):
         self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
         time.sleep(0.05)
         self.assertEqual(calls, ["nest_drone_heartbeat_online"])
+
+    def test_drone_heartbeat_online_reports_sub_device_topology(self):
+        self.manager.add_sub_device(SubDevice(
+            "DRONE001",
+            domain="0",
+            device_type=60,
+            sub_type=0,
+            index="A",
+            device_secret="drone-secret",
+            nonce="drone-nonce",
+        ))
+        self.events.clear()
+
+        self.manager.update_from_nest(nest_snapshot(drone_heartbeat=True))
+
+        update_topo_events = [
+            event for event in self.events
+            if event.get("method") == "update_topo"
+        ]
+        self.assertTrue(update_topo_events)
+        self.assertEqual(
+            update_topo_events[-1]["data"]["sub_devices"][0]["sn"],
+            "DRONE001",
+        )
+        self.assertEqual(
+            self.manager.get_property("sub_device")["device_online_status"],
+            1,
+        )
+
+    def test_aircraft_telemetry_reports_sub_device_topology_after_power_on(self):
+        self.manager.add_sub_device(SubDevice(
+            "DRONE001",
+            domain="0",
+            device_type=60,
+            sub_type=0,
+            index="A",
+            device_secret="drone-secret",
+            nonce="drone-nonce",
+        ))
+        self.events.clear()
+
+        self.manager.update_from_telemetry({
+            "latitude": 39.9,
+            "longitude": 116.3,
+            "height": 12.0,
+            "mode_code": 0,
+        })
+
+        update_topo_events = [
+            event for event in self.events
+            if event.get("method") == "update_topo"
+        ]
+        self.assertTrue(update_topo_events)
+        self.assertEqual(
+            update_topo_events[-1]["data"]["sub_devices"][0]["sn"],
+            "DRONE001",
+        )
+        self.assertTrue(self.manager.get_sub_device("DRONE001").online)
 
     def test_startup_nest_and_plc_heartbeat_false_do_not_report_hms_until_seen_online(self):
         with (
