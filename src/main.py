@@ -327,7 +327,7 @@ class EdgeGateway:
         self.cloud_conn: CloudConnectionManager = None
         self.telemetry_reporter: TelemetryReporter = None
         self._dock_osd_interval = 2.0
-        self._last_dock_osd_report_time = 0.0
+        self._last_dock_osd_report_monotonic = 0.0
         self.capability_reporter: CapabilityReporter = None
         self.log_mgr: LogManager = None
         self.flysafe: FlySafeManager = None
@@ -1272,14 +1272,20 @@ class EdgeGateway:
         """按统一 OSD 周期发布机场/机巢状态到平台。"""
         if not self.telemetry_reporter or not self.device:
             return False
-        current_time = time.time()
-        if not force and current_time - self._last_dock_osd_report_time < self._dock_osd_interval:
+        current_time = time.monotonic()
+        interval = max(float(self._dock_osd_interval or 2.0), 0.1)
+        if (
+            not force
+            and self._last_dock_osd_report_monotonic > 0
+            and current_time - self._last_dock_osd_report_monotonic < interval
+        ):
             return False
-        self._last_dock_osd_report_time = current_time
-        return self.telemetry_reporter.report_osd(
+        published = self.telemetry_reporter.report_osd(
             Config.get_gateway_sn(),
             self.device.build_dock3_dock_osd(include_payload=True),
         )
+        self._last_dock_osd_report_monotonic = current_time
+        return published
 
     def _build_aircraft_osd_for_report(self, osd_data: dict) -> dict:
         """Return aircraft OSD enriched with real payload state, without faking fields."""
