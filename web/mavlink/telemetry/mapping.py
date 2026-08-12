@@ -383,24 +383,74 @@ def _battery_detail_items(telemetry: Dict[str, Any], capacity_percent: int) -> l
         for index, item in enumerate(source):
             if not isinstance(item, dict):
                 continue
-            detail = {
-                "capacity_percent": _bounded_int(
-                    item.get("capacity_percent", item.get("batteryRemaining", capacity_percent)), 0, 100
-                ),
-                "index": _bounded_int(item.get("index", index), 0),
-            }
-            sn = item.get("sn", item.get("serial_number", item.get("serialNumber")))
-            if sn is not None:
-                detail["sn"] = str(sn)
-            items.append(detail)
+            items.append(_battery_detail_item(item, index, capacity_percent, telemetry=telemetry))
         if items:
             return items
 
-    detail = {"capacity_percent": capacity_percent, "index": 0}
-    sn = telemetry.get("battery_sn", telemetry.get("battery_serial_number", telemetry.get("batterySerialNumber")))
-    if sn is not None:
-        detail["sn"] = str(sn)
-    return [detail]
+    return [_battery_detail_item(telemetry, 0, capacity_percent)]
+
+
+def _battery_detail_item(
+    source: Dict[str, Any],
+    fallback_index: int,
+    fallback_capacity_percent: int,
+    *,
+    telemetry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    parent = telemetry or source
+    voltage = _battery_voltage_mv(
+        source.get("voltage_mv"),
+        source.get("voltage_mV"),
+        source.get("battery_voltage_mv"),
+        source.get("batteryVoltageMv"),
+        source.get("voltage"),
+        source.get("battery_voltage"),
+        source.get("batteryVoltage"),
+        parent.get("voltage_mv") if parent is not source else None,
+        parent.get("voltage_mV") if parent is not source else None,
+        parent.get("battery_voltage_mv") if parent is not source else None,
+        parent.get("batteryVoltageMv") if parent is not source else None,
+        parent.get("voltage") if parent is not source else None,
+    )
+    return {
+        "capacity_percent": _bounded_int(
+            source.get("capacity_percent", source.get("batteryRemaining", fallback_capacity_percent)), 0, 100
+        ),
+        "index": _bounded_int(source.get("index", fallback_index), 0),
+        "sn": _text_value(
+            source.get("sn"),
+            source.get("serial_number"),
+            source.get("serialNumber"),
+            source.get("battery_sn"),
+            source.get("battery_serial_number"),
+            source.get("batterySerialNumber"),
+            parent.get("battery_sn") if parent is not source else None,
+            parent.get("battery_serial_number") if parent is not source else None,
+            parent.get("batterySerialNumber") if parent is not source else None,
+        ),
+        "type": _non_negative_int(source.get("type"), source.get("battery_type"), source.get("batteryType"), 0) or 0,
+        "sub_type": _non_negative_int(
+            source.get("sub_type"),
+            source.get("subType"),
+            source.get("battery_sub_type"),
+            source.get("batterySubType"),
+            0,
+        ) or 0,
+        "firmware_version": _text_value(
+            source.get("firmware_version"),
+            source.get("firmwareVersion"),
+            source.get("version"),
+        ),
+        "loop_times": _non_negative_int(source.get("loop_times"), source.get("loopTimes"), source.get("cycle_count"), 0) or 0,
+        "voltage": voltage if voltage is not None else 0,
+        "temperature": _finite_number(source.get("temperature", source.get("temp", 0.0)), 0.0),
+        "high_voltage_storage_days": _non_negative_int(
+            source.get("high_voltage_storage_days"),
+            source.get("highVoltageStorageDays"),
+            source.get("storage_days"),
+            0,
+        ) or 0,
+    }
 
 
 def _limit_value(*values: Any) -> Optional[float]:
@@ -431,6 +481,25 @@ def _non_negative_int(*values: Any) -> Optional[int]:
         if parsed is not None:
             return max(0, int(parsed))
     return None
+
+
+def _battery_voltage_mv(*values: Any) -> Optional[int]:
+    for value in values:
+        if value is None:
+            continue
+        parsed = _finite_number(value, None)
+        if parsed is None or parsed < 0:
+            continue
+        return int(parsed * 1000) if parsed < 1000 else int(parsed)
+    return None
+
+
+def _text_value(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        return str(value)
+    return ""
 
 
 def _finite_number(value: Any, default: float) -> float:

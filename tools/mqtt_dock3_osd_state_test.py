@@ -223,8 +223,14 @@ def validate_drone_osd(payload: Dict[str, Any], gateway_sn: str) -> List[str]:
                 continue
             check_field(item, "capacity_percent", int, errors, min_value=0, max_value=100)
             check_field(item, "index", int, errors, min_value=0)
-            if "sn" in item and not isinstance(item.get("sn"), str):
-                errors.append(f"data.battery.batteries[{index}].sn expected str")
+            check_field(item, "sn", str, errors)
+            check_field(item, "type", int, errors, min_value=0)
+            check_field(item, "sub_type", int, errors, min_value=0)
+            check_field(item, "firmware_version", str, errors)
+            check_field(item, "loop_times", int, errors, min_value=0)
+            check_field(item, "voltage", int, errors, min_value=0)
+            check_field(item, "temperature", "number", errors)
+            check_field(item, "high_voltage_storage_days", int, errors, min_value=0)
 
     cameras = data.get("cameras")
     if cameras is not None:

@@ -263,7 +263,7 @@ mission:
     enabled: true # 航线末航点到达后执行真实返航闭环
     auto_return_home: true # 调用真实飞控 RTL/QRTL，不生成模拟完成
     auto_land: false # 固定翼真机默认不主动切 QLAND/LAND
-    nest_recovery: true # 非固定翼且已确认降落后才夹紧、关盖、恢复充电
+    nest_recovery: false # 客户机型返航后由设备自身完成关舱/下电/充电恢复，网关不主动下发机巢恢复动作
     retry_count: 3 # 飞控/机巢命令失败后的最大尝试次数
     retry_interval_seconds: 2.0 # 两次尝试之间的等待时间
 

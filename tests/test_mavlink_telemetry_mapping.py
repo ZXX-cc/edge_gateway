@@ -240,7 +240,18 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
             "return_home_power": 35,
             "remain_flight_time": 600,
             "landing_power": 18,
-            "batteries": [{"capacity_percent": 88, "index": 1, "sn": "BAT001"}],
+            "batteries": [{
+                "capacity_percent": 88,
+                "index": 1,
+                "sn": "BAT001",
+                "type": 2,
+                "sub_type": 3,
+                "firmware_version": "01.02.0304",
+                "loop_times": 42,
+                "voltage": 24100,
+                "temperature": 36.5,
+                "high_voltage_storage_days": 7,
+            }],
         })
 
         osd = build_osd_data(telemetry)
@@ -250,7 +261,37 @@ class MavlinkTelemetryMappingTest(unittest.TestCase):
         self.assertEqual(osd["battery"]["remain_flight_time"], 600)
         self.assertEqual(osd["battery"]["return_home_power"], 35)
         self.assertEqual(osd["battery"]["landing_power"], 18)
-        self.assertEqual(osd["battery"]["batteries"], [{"capacity_percent": 88, "index": 1, "sn": "BAT001"}])
+        self.assertEqual(osd["battery"]["batteries"], [{
+            "capacity_percent": 88,
+            "index": 1,
+            "sn": "BAT001",
+            "type": 2,
+            "sub_type": 3,
+            "firmware_version": "01.02.0304",
+            "loop_times": 42,
+            "voltage": 24100,
+            "temperature": 36.5,
+            "high_voltage_storage_days": 7,
+        }])
+
+    def test_osd_default_battery_detail_has_dock3_shape(self):
+        telemetry = new_telemetry_state()
+        telemetry.update({"batteryRemaining": 76, "voltage": 22.8})
+
+        osd = build_osd_data(telemetry)
+
+        self.assertEqual(osd["battery"]["batteries"], [{
+            "capacity_percent": 76,
+            "index": 0,
+            "sn": "",
+            "type": 0,
+            "sub_type": 0,
+            "firmware_version": "",
+            "loop_times": 0,
+            "voltage": 22800,
+            "temperature": 0.0,
+            "high_voltage_storage_days": 0,
+        }])
 
     def test_osd_return_home_power_accepts_legacy_alias_and_clamps(self):
         telemetry = new_telemetry_state()
